@@ -1,0 +1,3 @@
+geometry_msgs/Pose pose_ref
+geometry_msgs/Pose pose_des
+geometry_msgs/Pose pose_curr

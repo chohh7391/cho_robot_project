@@ -1,0 +1,10 @@
+# Define the goal
+geometry_msgs/Pose target_pose
+float32 duration
+bool relative
+---
+# Define the result
+bool is_completed
+---
+# Define a feedback message
+float32 percent_complete

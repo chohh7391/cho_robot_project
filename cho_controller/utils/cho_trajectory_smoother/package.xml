@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_trajectory_smoother</name>
+  <version>1.0.0</version>
+  <description>Time-optimized trajectory generation for KIMM</description>
+
+  <maintainer email="kim87@kimm.re.kr">Sanghyun Kim</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Build dependencies -->
+  <build_depend>eigen3_cmake_module</build_depend>
+  <build_depend>eigenpy</build_depend>
+  <build_depend>eigen3</build_depend>
+
+  <!-- Execution dependencies -->
+  <exec_depend>eigen3_cmake_module</exec_depend>
+  <exec_depend>eigenpy</exec_depend>
+  <exec_depend>eigen3</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

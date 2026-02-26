@@ -1,0 +1,9 @@
+# goal
+string model_name  # 'act', 'diffusion_policy', 'gr00t' ...
+string control_mode  # 'position', 'velocity', 'effort'
+---
+# result
+bool is_completed
+---
+# feedback
+float32 percent_complete

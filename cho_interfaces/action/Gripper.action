@@ -1,0 +1,5 @@
+bool grasp
+---
+bool is_completed
+---
+float64 current_width

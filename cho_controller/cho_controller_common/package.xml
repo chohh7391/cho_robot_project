@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_controller_common</name>
+  <version>1.0.0</version>
+  <description>HQP controller for KIMM</description>
+
+  <maintainer email="kim87@kimm.re.kr">Sanghyun Kim</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Build dependencies -->
+  <build_depend>pinocchio</build_depend>
+  <build_depend>eiquadprog</build_depend>
+  <build_depend>boost</build_depend>
+  <build_depend>cho_trajectory_smoother</build_depend>
+
+  <!-- Execution dependencies -->
+  <exec_depend>pinocchio</exec_depend>
+  <exec_depend>eiquadprog</exec_depend>
+  <exec_depend>boost</exec_depend>
+  <exec_depend>cho_trajectory_smoother</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
