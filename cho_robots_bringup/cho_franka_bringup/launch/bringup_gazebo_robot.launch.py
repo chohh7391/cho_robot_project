@@ -30,8 +30,8 @@ def render_xacro(context: LaunchContext, robot_type, load_gripper, franka_hand):
             'gazebo': 'true',
             'ee_id': franka_hand_str,
             'gazebo_effort': 'true', # if you want position control mode, change to false
-            'special_connection': 'ft_sensor',
-            'xyz_ee': "0 0 0.038",
+            # 'special_connection': 'ft_sensor',
+            # 'xyz_ee': "0 0 0.038",
         }
     )
     
@@ -102,13 +102,13 @@ def generate_launch_description():
         ('gripper_controller', True),
         # choose one controller
         # ('ik_controller', True), # position controller
-        # ('gravity_compensation_controller', True), # effort controller
-        # ('joint_space_impedance_controller', True), # effort controller
-        # ('task_space_impedance_controller', True), # effort controller
-        # ('operational_space_controller', True), # effort controller
-        # ('joint_space_qp_controller', True), # effort controller
-        ('task_space_qp_controller', True), # effort controller
-        # ('vla_controller', True), # position/effort controller
+        # ('gravity_compensation_controller', False), # effort controller
+        ('joint_space_impedance_controller', False), # effort controller
+        # ('task_space_impedance_controller', False), # effort controller
+        ('operational_space_controller', True), # effort controller
+        # ('joint_space_qp_controller', False), # effort controller
+        # ('task_space_qp_controller', False), # effort controller
+        # ('vla_controller', False), # position/effort controller
     ]
 
     # 리스트 컴프리헨션으로 Spawner 노드들을 한 번에 생성

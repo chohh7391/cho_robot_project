@@ -23,7 +23,8 @@ def generate_launch_description():
         Command([
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution([pkg_description, "urdf", "fr3_with_ft_sensor", "fr3_franka_hand.urdf"]),
+            PathJoinSubstitution([pkg_description, "urdf", "fr3", "fr3_franka_hand.urdf"]),
+            # PathJoinSubstitution([pkg_description, "urdf", "fr3_with_ft_sensor", "fr3_franka_hand.urdf"]),
         ]),
         value_type=str
     )
@@ -48,7 +49,6 @@ def generate_launch_description():
         output="screen",
     )
 
-    # 4. 컨트롤러 스포너 생성 로직 (리스트 컴프리헨션으로 간결화)
     controllers_to_spawn = [
         # defualt controllers
         ('joint_state_broadcaster', True),
@@ -56,13 +56,13 @@ def generate_launch_description():
         ('gripper_controller', True),
         # choose one controller
         # ('ik_controller', True), # position controller
-        # ('gravity_compensation_controller', True), # effort controller
-        # ('joint_space_impedance_controller', True), # effort controller
-        # ('task_space_impedance_controller', True), # effort controller
+        # ('gravity_compensation_controller', False), # effort controller
+        ('joint_space_impedance_controller', False), # effort controller
+        # ('task_space_impedance_controller', False), # effort controller
         ('operational_space_controller', True), # effort controller
         # ('joint_space_qp_controller', False), # effort controller
-        # ('task_space_qp_controller', True), # effort controller
-        # ('vla_controller', True), # position/effort controller
+        # ('task_space_qp_controller', False), # effort controller
+        # ('vla_controller', False), # position/effort controller
     ]
 
     spawner_nodes = [
