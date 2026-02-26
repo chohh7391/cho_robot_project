@@ -66,7 +66,7 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
 
 ## Bringup
 
-- real
+- real (change **robot ip** in cho_franka_bringup/config/real/franka.config.yaml)
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_real_robot.launch.py

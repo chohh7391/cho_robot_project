@@ -64,90 +64,33 @@ def generate_robot_nodes(context):
             FindPackageShare('cho_franka_bringup'), 'config', 'real', 'controllers.yaml'
         ])]
 
-        # 2. [ACTIVE] 컨트롤러 스폰
-        # Gripper
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['gripper_controller', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
+        controllers_to_spawn = [
+            # defualt controllers
+            ('joint_state_broadcaster', True),
+            ('simulation_gripper_controller', True),
+            ('gripper_controller', True),
+            # choose one controller
+            # ('ik_controller', True), # position controller
+            # ('gravity_compensation_controller', False), # effort controller
+            ('joint_space_impedance_controller', False), # effort controller
+            # ('task_space_impedance_controller', False), # effort controller
+            ('operational_space_controller', True), # effort controller
+            # ('joint_space_qp_controller', False), # effort controller
+            # ('task_space_qp_controller', False), # effort controller
+            # ('vla_controller', False), # position/effort controller
+        ]
 
-        # Gravity Compensation
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['gravity_compensation_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['ik_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['joint_space_impedance_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['task_space_impedance_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        # Operational Space
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['operational_space_controller', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['joint_space_qp_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['task_space_qp_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
-
-        nodes.append(Node(
-            package='controller_manager',
-            executable='spawner',
-            namespace=namespace,
-            arguments=['vla_controller', '--inactive', '--controller-manager-timeout', '30'],
-            parameters=common_params,
-            output='screen',
-        ))
+        # 리스트 컴프리헨션으로 Spawner 노드들을 생성하여 nodes 리스트에 추가
+        nodes.extend([
+            Node(
+                package='controller_manager',
+                executable='spawner',
+                namespace=namespace,
+                arguments=[name] + (['--inactive'] if not active else []) + ['--controller-manager-timeout', '30'],
+                parameters=common_params,
+                output='screen',
+            ) for name, active in controllers_to_spawn
+        ])
 
     # RViz 실행 로직
     if any(str(config.get('use_rviz', 'false')).lower() == 'true' for config in configs.values()):
