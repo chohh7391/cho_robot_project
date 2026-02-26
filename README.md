@@ -1,25 +1,39 @@
-# Version
-- libfranka: 0.20.3
-- franka_ros2: v2.2.0
+# Cho Robot Project
+This repository provides a General Robot Control Framework for ROS2 Humble.
 
 # Installation
 
 - dependencies
 ```bash
-sudo apt update
-sudo apt install libpoco-dev libignition-gazebo6-dev ros-humble-joint-state-broadcaster ros-humble-xacro ros-humble-ament-cmake-clang-format ros-humble-eigenpy ros-humble-hardware-interface ros-humble-pinocchio ros-humble-eiquadprog ros-humble-controller-manager ros-humble-moveit-core ros-humble-ros2-control-test-assets ros-humble-franka-description ros-humble-ros-gz-sim ros-humble-ros2-control ros-humble-ros2-controllers ros-humble-ign-ros2-control ros-humble-gz-ros2-control ros-humble-py-trees ros-humble-py-trees-ros ros-humble-ros-gz-bridge ros-humble-ros2-control-cmake
+sudo apt update && sudo apt install -y \
+libpoco-dev libignition-gazebo6-dev ros-humble-joint-state-broadcaster \
+ros-humble-xacro ros-humble-ament-cmake-clang-format ros-humble-eigenpy \
+ros-humble-hardware-interface ros-humble-pinocchio ros-humble-eiquadprog \
+ros-humble-controller-manager ros-humble-moveit-core \
+ros-humble-ros2-control-test-assets ros-humble-franka-description \
+ros-humble-ros-gz-sim ros-humble-ros2-control ros-humble-ros2-controllers \
+ros-humble-ign-ros2-control ros-humble-gz-ros2-control \
+ros-humble-py-trees ros-humble-py-trees-ros ros-humble-ros-gz-bridge \
+ros-humble-ros2-control-cmake
 ```
 
 - libfranka
 ```bash
+cd ~/Downloads
 wget https://github.com/frankarobotics/libfranka/releases/download/0.20.3/libfranka_0.20.3_jammy_amd64.deb
 sudo dpkg -i libfranka_0.20.3_jammy_amd64.deb
 ```
 
+- download repository
+```bash
+cd ~/
+mkdir -p ros2_ws/src
+git clone --recursive git@github.com:chohh7391/cho_robot_project.git
+```
+
 - qpOASES
 ```bash
-cd qpOASES
-rm -rf build
+cd ~/ros2_ws/src/cho_robot_project/qpOASES
 mkdir build && cd build
 cmake ..
 sudo make install
@@ -48,33 +62,33 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
 ```
 
 # Run
-- bringup real
+
+## Bringup
+
+- real
 ```bash
 ros2 launch cho_franka_bringup bringup_real_robot.launch.py
 ```
 
-- bringup gazebo
+- gazebo
 ```bash
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py
 ```
 
-- bringup mujoco
+- mujoco
 ```bash
 ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py
 ```
 
-- bringup mujoco
+## Client
+- run general action client
 ```bash
-export MUJOCO_DIR=$HOME/mujoco-3.5.0
-
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/action_client.py
 ```
 
-- run action client
+- run vla action client
 ```bash
-python3 /home/home/ros2_ws/src/cho_robot_project/cho_task_manager/python/action_client.py
-```
-```bash
-python3 /home/home/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py
 ```
 
 - run Behavior Tree
@@ -82,18 +96,19 @@ python3 /home/home/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_act
 # real
 ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=false
 
-# gazebo
+# simulation
 ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=true
 ```
 
-- log desired * current pose
+## Log
+- log desired & current pose
 ```bash
 ros2 bag record /log/ee_pose
 ```
 
 - plot /log/ee_pose
 ```bash
-python3 /home/home/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py
 ```
 
 # Trouble Shooting
@@ -102,13 +117,9 @@ python3 /home/home/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_po
 export IGN_IP=127.0.0.1
 ```
 
-- mock_franka_gripper.py: Executable not found
+- initial build error
 ```bash
-chmod +x cho_robots_bringup/cho_franka_bringup/scripts/mock_franka_gripper.py
-```
-
-- build error
-```bash
+# repeat this
 source install/setup.bash
 colcon build --symlink-install
 ```
