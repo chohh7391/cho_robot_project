@@ -1,11 +1,11 @@
 [submodule "franka_ros2"]
-	path = franka_ros2
+	path = extern/franka_ros2
 	url = https://github.com/frankaemika/franka_ros2.git
 	branch = humble
 [submodule "mujoco_ros2_control"]
-	path = mujoco_ros2_control
+	path = extern/mujoco_ros2_control
 	url = https://github.com/moveit/mujoco_ros2_control.git
 	branch = humble
 [submodule "qpOASES"]
-	path = qpOASES
+	path = extern/qpOASES
 	url = https://github.com/coin-or/qpOASES.git
