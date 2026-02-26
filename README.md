@@ -24,21 +24,6 @@ wget https://github.com/frankarobotics/libfranka/releases/download/0.20.3/libfra
 sudo dpkg -i libfranka_0.20.3_jammy_amd64.deb
 ```
 
-- download repository
-```bash
-cd ~/
-mkdir -p ros2_ws/src
-git clone --recursive git@github.com:chohh7391/cho_robot_project.git
-```
-
-- qpOASES
-```bash
-cd ~/ros2_ws/src/cho_robot_project/qpOASES
-mkdir build && cd build
-cmake ..
-sudo make install
-```
-
 - mujoco
 ```bash
 sudo mkdir -p /opt/mujoco
@@ -53,8 +38,24 @@ echo 'export PATH=$PATH:$MUJOCO_DIR/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
+- download repository
+```bash
+cd ~/
+mkdir -p ros2_ws/src
+git clone --recursive git@github.com:chohh7391/cho_robot_project.git
+```
+
+- qpOASES
+```bash
+cd cho_robot_project/qpOASES
+mkdir build && cd build
+cmake ..
+sudo make install
+```
+
 - build
 ```bash
+cd ~/ros2_ws
 # for simulation
 colcon build --symlink-install
 # for real
@@ -67,47 +68,56 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
 
 - real
 ```bash
+source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_real_robot.launch.py
 ```
 
 - gazebo
 ```bash
+source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py
 ```
 
 - mujoco
 ```bash
+source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py
 ```
 
 ## Client
 - run general action client
 ```bash
+source ~/ros2_ws/install/setup.bash
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/action_client.py
 ```
 
 - run vla action client
 ```bash
+source ~/ros2_ws/install/setup.bash
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py
 ```
 
 - run Behavior Tree
 ```bash
 # real
+source ~/ros2_ws/install/setup.bash
 ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=false
 
 # simulation
+source ~/ros2_ws/install/setup.bash
 ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=true
 ```
 
 ## Log
 - log desired & current pose
 ```bash
+source ~/ros2_ws/install/setup.bash
 ros2 bag record /log/ee_pose
 ```
 
 - plot /log/ee_pose
 ```bash
+source ~/ros2_ws/install/setup.bash
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py
 ```
 
@@ -119,6 +129,7 @@ export IGN_IP=127.0.0.1
 
 - initial build error
 ```bash
+cd ~/ros2_ws
 # repeat this
 source install/setup.bash
 colcon build --symlink-install
