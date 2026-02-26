@@ -47,7 +47,7 @@ git clone --recursive git@github.com:chohh7391/cho_robot_project.git
 
 - qpOASES
 ```bash
-cd cho_robot_project/qpOASES
+cd cho_robot_project/extern/qpOASES
 mkdir build && cd build
 cmake ..
 sudo make install
