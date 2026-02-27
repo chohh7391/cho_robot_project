@@ -42,6 +42,7 @@ source ~/.bashrc
 ```bash
 cd ~/
 mkdir -p ros2_ws/src
+cd ros2_ws/src
 git clone --recursive git@github.com:chohh7391/cho_robot_project.git
 ```
 
