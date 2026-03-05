@@ -3,5 +3,3 @@ install/
 log/
 .vscode/
 *.pyc
-
-extern/qpOASES/build/
