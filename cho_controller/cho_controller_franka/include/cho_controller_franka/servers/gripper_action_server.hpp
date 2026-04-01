@@ -25,6 +25,11 @@ public:
         const std::shared_ptr<GripperGoalHandle> goal_handle) override;
 
     bool compute(const rclcpp::Time& current_time, State & state) override;
+
+private:
+    bool is_waiting_{false};
+    bool saved_success_status_{false};
+    rclcpp::Time wait_start_time_;
 };
 
 } // namespace franka

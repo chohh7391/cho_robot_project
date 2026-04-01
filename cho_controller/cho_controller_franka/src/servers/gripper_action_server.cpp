@@ -43,7 +43,7 @@ void GripperActionServer::handle_accepted(
   control_running_ = true;
 }
 
-bool GripperActionServer::compute(const rclcpp::Time & /*current_time*/, State & state)
+bool GripperActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
   if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) {
     return false;
@@ -55,6 +55,9 @@ bool GripperActionServer::compute(const rclcpp::Time & /*current_time*/, State &
     state.gripper_has_goal = true; // 컨트롤러에게 새로운 명령 실행을 알림
     state.gripper_has_result = false; // 결과 플래그 초기화
     initialized_ = true;
+
+    is_waiting_ = false;
+    initialized_ = true;
   }
 
   // Check for cancellation first
@@ -63,6 +66,7 @@ bool GripperActionServer::compute(const rclcpp::Time & /*current_time*/, State &
     result_msg_->is_completed = false; // Populate result
     goal_handle_->canceled(result_msg_);
     control_running_ = false;
+    is_waiting_ = false;
     goal_handle_.reset(); // Release the handle
     return false; // Indicate computation related to this goal has stopped
   }
@@ -71,24 +75,37 @@ bool GripperActionServer::compute(const rclcpp::Time & /*current_time*/, State &
   feedback_msg_->current_width = state.gripper_current_width;
   // goal_handle_->publish_feedback(feedback_msg_);
 
-  // success
-  if (state.gripper_has_result) {
-    state.gripper_has_result = false;
-    if (state.gripper_success) {
-        RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded.", action_name_.c_str());
-        result_msg_->is_completed = true;
-        goal_handle_->succeed(result_msg_);
-        control_running_ = false;
-        goal_handle_.reset();
-        return true;
-    } else {
-        RCLCPP_WARN(node_->get_logger(), "[%s] Goal Aborted/Failed.", action_name_.c_str());
-        result_msg_->is_completed = false;
-        // goal_handle_->abort(result_msg_); // this is right
-        goal_handle_->succeed(result_msg_); // for test
-        control_running_ = false;
-        goal_handle_.reset();
-        return false;
+  // 1단계: Action Client로부터 결과를 갓 전달받았을 때 (대기 시작)
+  if (state.gripper_has_result && !is_waiting_) {
+    state.gripper_has_result = false;      // 플래그 초기화
+    saved_success_status_ = state.gripper_success; // 성공 여부 임시 저장
+    wait_start_time_ = current_time;       // 현재 시간 기록
+    is_waiting_ = true;                    // 대기 상태 돌입
+    
+    RCLCPP_INFO(node_->get_logger(), "[%s] Gripper finished moving. Waiting for 1.0s...", action_name_.c_str());
+  }
+
+  // 2단계: 1초 대기하는 동안 계속 실행되는 부분
+  if (is_waiting_) {
+    // 기록해둔 시간과 현재 시간의 차이가 1.0초 이상인지 확인 (Non-blocking)
+    if ((current_time - wait_start_time_).seconds() >= 1.0) {
+      
+      // 1초가 지났으므로 최종 결과 반환
+      if (saved_success_status_) {
+          RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded after 1s delay.", action_name_.c_str());
+          result_msg_->is_completed = true;
+          goal_handle_->succeed(result_msg_);
+      } else {
+          RCLCPP_WARN(node_->get_logger(), "[%s] Goal Aborted/Failed after 1s delay.", action_name_.c_str());
+          result_msg_->is_completed = false;
+          // goal_handle_->abort(result_msg_); // 원래는 이게 맞음
+          goal_handle_->succeed(result_msg_);  // 사용자의 테스트용 코드 유지
+      }
+      
+      is_waiting_ = false;
+      control_running_ = false;
+      goal_handle_.reset();
+      return true;
     }
   }
  
