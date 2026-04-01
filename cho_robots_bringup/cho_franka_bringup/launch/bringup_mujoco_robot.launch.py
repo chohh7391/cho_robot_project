@@ -20,8 +20,8 @@ def generate_launch_description():
     )
 
     xacro_file = os.path.join(description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf')
+    # xacro_file = os.path.join(description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf')
     
-    # [최적화 1] 더 이상 필요 없는 xacro.parse() 정적 로드 코드 삭제 (Command가 대신함)
     robot_description = {
         'robot_description': ParameterValue(
             Command(['xacro ', xacro_file, ' control_mode:=', LaunchConfiguration('control_mode')]),
@@ -39,6 +39,7 @@ def generate_launch_description():
             robot_description,
             controller_config_file,
             {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')},
+            # {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3_with_ft_sensor', 'scene.xml')},
         ]
     )
 

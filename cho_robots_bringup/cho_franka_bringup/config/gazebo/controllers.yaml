@@ -70,7 +70,7 @@
     ros__parameters:
       joints:
         - fr3_finger_joint1
-      interface_name: effort # or position
+      interface_name: effort # position or effort
 
 /**:
   ik_controller:

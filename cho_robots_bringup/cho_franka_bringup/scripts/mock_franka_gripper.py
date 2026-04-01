@@ -34,7 +34,7 @@ class MockFrankaGripper(Node):
     def grasp_callback(self, goal_handle):
         self.get_logger().info(f"Received Grasp Goal: width={goal_handle.request.width}")
         
-        self.publish_finger_effort(-2.5) # N
+        self.publish_finger_effort(-100.0) # N
         
         goal_handle.succeed()
         result = Grasp.Result()
@@ -44,7 +44,7 @@ class MockFrankaGripper(Node):
     def move_callback(self, goal_handle):
         self.get_logger().info(f"Received Move Goal: width={goal_handle.request.width}")
         
-        self.publish_finger_effort(2.5) # N
+        self.publish_finger_effort(100.0) # N
         
         goal_handle.succeed()
         result = Move.Result()
