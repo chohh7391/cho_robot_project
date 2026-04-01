@@ -1,103 +1,80 @@
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, GroupAction
-from launch.event_handlers import OnProcessStart
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, GroupAction, ExecuteProcess
+from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+import xacro
+from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # 1. 설정 및 인자 선언
-    pkg_description = FindPackageShare('cho_franka_description')
-    pkg_bringup = FindPackageShare('cho_franka_bringup')
 
-    use_sim_time = LaunchConfiguration('use_sim_time')
-    
-    declare_use_sim_time = DeclareLaunchArgument(
-        'use_sim_time', default_value='true', description='Use simulation (Gazebo/MuJoCo) clock if true'
-    )
+    description_path = os.path.join(get_package_share_directory('cho_franka_description'))
+    bringup_path = os.path.join(get_package_share_directory('cho_franka_bringup'))
 
-    # 2. 로봇 설명 (URDF/Xacro)
-    robot_description_content = ParameterValue(
-        Command([
-            PathJoinSubstitution([FindExecutable(name="xacro")]),
-            " ",
-            PathJoinSubstitution([pkg_description, "urdf", "fr3", "fr3_franka_hand.urdf"]),
-            # PathJoinSubstitution([pkg_description, "urdf", "fr3_with_ft_sensor", "fr3_franka_hand.urdf"]),
-        ]),
-        value_type=str
-    )
-    robot_description = {"robot_description": robot_description_content}
+    xacro_file = os.path.join(description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf')
+    doc = xacro.parse(open(xacro_file))
+    xacro.process_doc(doc)
+    robot_description = {'robot_description': doc.toxml()}
 
-    # 3. 노드 정의
-    robot_state_publisher_node = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        parameters=[robot_description, {"use_sim_time": use_sim_time}],
-    )
+    controller_config_file = os.path.join(bringup_path, 'config', 'mujoco', 'controllers.yaml')
 
-    control_node = Node(
-        package="controller_manager",
-        executable="ros2_control_node",
+    node_mujoco_ros2_control = Node(
+        package='mujoco_ros2_control',
+        executable='mujoco_ros2_control',
+        output='screen',
         parameters=[
-            robot_description, # ros2_control_node에도 description이 필요한 경우가 많음
-            PathJoinSubstitution([pkg_bringup, 'config', 'mujoco', 'controllers.yaml']),
-            {"use_sim_time": use_sim_time}
-        ],
-        remappings=[("~/robot_description", "/robot_description")],
-        output="screen",
+            robot_description,
+            controller_config_file,
+            {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')},
+        ]
     )
 
-    controllers_to_spawn = [
-        # defualt controllers
-        ('joint_state_broadcaster', True),
-        ('simulation_gripper_controller', True),
-        ('gripper_controller', True),
-        # choose one controller
-        # ('ik_controller', True), # position controller
-        # ('gravity_compensation_controller', False), # effort controller
-        ('joint_space_impedance_controller', False), # effort controller
-        # ('task_space_impedance_controller', False), # effort controller
-        ('operational_space_controller', True), # effort controller
-        # ('joint_space_qp_controller', False), # effort controller
-        # ('task_space_qp_controller', False), # effort controller
-        # ('vla_controller', False), # position/effort controller
-    ]
+    node_robot_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        parameters=[robot_description]
+    )
 
-    spawner_nodes = [
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=[name, '--controller-manager', '/controller_manager'] + (['--inactive'] if not active else []),
-            parameters=[{"use_sim_time": use_sim_time}]
-        ) for name, active in controllers_to_spawn
-    ]
+    load_joint_state_controller = ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active',
+             'joint_state_broadcaster'],
+        output='screen'
+    )
 
-    # 5. 이벤트 핸들러 (그룹화하여 관리)
-    delayed_actions = RegisterEventHandler(
-        event_handler=OnProcessStart(
-            target_action=control_node,
-            on_start=spawner_nodes + [
-                Node(
-                    package='cho_franka_bringup',
-                    executable='mock_franka_gripper.py',
-                    parameters=[{"use_sim_time": use_sim_time}]
-                )
-            ]
-        )
+    mock_gripper = Node(
+        package='cho_franka_bringup',
+        executable='mock_franka_gripper.py',
+        parameters=[{'use_sim_time': True}]
+    )
+
+    load_osc_controller = ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active', 'operational_space_controller'],
+        output='screen'
+    )
+
+    load_gripper_controller = ExecuteProcess(
+        cmd=['ros2', 'control', 'load_controller', '--set-state', 'active', 'gripper_controller'],
+        output='screen'
     )
 
     return LaunchDescription([
-        declare_use_sim_time,
-        robot_state_publisher_node,
-        control_node,
-        delayed_actions,
-        # RViz 등은 병렬로 띄워도 무방함
-        Node(
-            package='rviz2',
-            executable='rviz2',
-            arguments=['--display-config', PathJoinSubstitution([pkg_description, 'rviz', 'visualize_franka.rviz']), '-f', 'base'],
-            parameters=[{"use_sim_time": use_sim_time}]
+        RegisterEventHandler(
+            event_handler=OnProcessStart(
+                target_action=node_mujoco_ros2_control,
+                on_start=[load_joint_state_controller],
+            )
         ),
+        RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=load_joint_state_controller,
+                on_exit=[load_osc_controller, load_gripper_controller],
+            )
+        ),
+        node_mujoco_ros2_control,
+        mock_gripper,
+        node_robot_state_publisher,
     ])

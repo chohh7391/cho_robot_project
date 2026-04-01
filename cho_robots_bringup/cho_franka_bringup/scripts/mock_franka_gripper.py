@@ -17,13 +17,10 @@ class MockFrankaGripper(Node):
             10
         )
         
-        # 가짜 Action Server들 생성
         self._grasp_server = ActionServer(
             self, Grasp, '/franka_gripper/grasp', self.grasp_callback)
         self._move_server = ActionServer(
             self, Move, '/franka_gripper/move', self.move_callback)
-            
-        # 가짜 Stop Service 생성
         self._stop_srv = self.create_service(
             Trigger, '/franka_gripper/stop', self.stop_callback)
             
@@ -37,7 +34,7 @@ class MockFrankaGripper(Node):
     def grasp_callback(self, goal_handle):
         self.get_logger().info(f"Received Grasp Goal: width={goal_handle.request.width}")
         
-        self.publish_finger_effort(-2.5) # -10N
+        self.publish_finger_effort(-2.5) # N
         
         goal_handle.succeed()
         result = Grasp.Result()
@@ -47,7 +44,7 @@ class MockFrankaGripper(Node):
     def move_callback(self, goal_handle):
         self.get_logger().info(f"Received Move Goal: width={goal_handle.request.width}")
         
-        self.publish_finger_effort(2.5) # 10N
+        self.publish_finger_effort(2.5) # N
         
         goal_handle.succeed()
         result = Move.Result()
@@ -59,6 +56,7 @@ class MockFrankaGripper(Node):
         response.success = True
         response.message = "Stopped"
         return response
+
 
 def main(args=None):
     rclpy.init(args=args)

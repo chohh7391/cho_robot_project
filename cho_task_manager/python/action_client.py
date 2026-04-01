@@ -73,7 +73,7 @@ class ControlSuiteShell(cmd.Cmd):
 
         # Wait for Servers
         for ac in [
-            self.joint_space_action_client,
+            # self.joint_space_action_client,
             self.task_space_action_client,
             self.gripper_action_client,
         ]:

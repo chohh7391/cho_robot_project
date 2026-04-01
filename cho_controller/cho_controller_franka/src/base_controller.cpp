@@ -59,25 +59,49 @@ CallbackReturn FrankaBaseController::on_init()
 
 CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State& /*previous_state*/) {
 
-    auto parameters_client = std::make_shared<rclcpp::AsyncParametersClient>(
-        get_node(), "robot_state_publisher");
+    bool has_local_urdf = false;
+
+    if (!get_node()->has_parameter("robot_description")) {
+        get_node()->declare_parameter<std::string>("robot_description", "");
+    }
     
-    if (!parameters_client->wait_for_service(std::chrono::seconds(5))) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Service robot_state_publisher not available");
+    robot_description_ = get_node()->get_parameter("robot_description").as_string();
+
+    if (!robot_description_.empty()) {
+        has_local_urdf = true;
+        RCLCPP_INFO(get_node()->get_logger(), "Got robot_description from local parameter.");
+    }
+
+    if (!has_local_urdf) {
+        RCLCPP_INFO(get_node()->get_logger(), "Local robot_description is empty. Requesting from robot_state_publisher...");
+        
+        auto parameters_client = std::make_shared<rclcpp::AsyncParametersClient>(
+            get_node(), "robot_state_publisher");
+        
+        if (!parameters_client->wait_for_service(std::chrono::seconds(5))) {
+            RCLCPP_ERROR(get_node()->get_logger(), "Service robot_state_publisher not available");
+            return CallbackReturn::FAILURE;
+        }
+
+        auto future = parameters_client->get_parameters({"robot_description"});
+        auto result = future.get(); // Gazebo 환경에서는 데드락이 걸리지 않음
+        
+        if (result.empty() || result[0].value_to_string().empty()) {
+            RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description from robot_state_publisher");
+            return CallbackReturn::FAILURE;
+        }
+        
+        robot_description_ = result[0].value_to_string();
+        RCLCPP_INFO(get_node()->get_logger(), "Got robot_description from robot_state_publisher.");
+    }
+
+    try {
+        bringup_type_ = get_node()->get_parameter("bringup_type").as_string();
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_node()->get_logger(), "Failed to get bringup_type: %s", e.what());
         return CallbackReturn::FAILURE;
     }
 
-    auto future = parameters_client->get_parameters({"robot_description"});
-    auto result = future.get();
-    
-    if (result.empty()) {
-        RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description");
-        return CallbackReturn::FAILURE;
-    }
-    
-    bringup_type_ = get_node()->get_parameter("bringup_type").as_string();
-
-    robot_description_ = result[0].value_to_string();
     robot_type_ = cho_controller::franka::getRobotNameFromDescription(robot_description_, get_node()->get_logger());
 
     robot_ = std::make_shared<RobotWrapper>(robot_description_, true, false);
