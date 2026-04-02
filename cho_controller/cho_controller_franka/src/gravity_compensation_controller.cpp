@@ -42,7 +42,7 @@ controller_interface::return_type GravityCompensationController::update(
   }
 
   // calculate desired torque
-  Vector7d torque_desired = state_.G;
+  Vector7d torque_desired = state_.nle;
   
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);

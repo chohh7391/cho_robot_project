@@ -63,7 +63,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   posture_gain.setZero();
   
   // 시뮬레이션용 높은 게인 (팔 7개만 설정, 나머지는 0)
-  posture_gain.head(num_dof_) << 4000., 4000., 4000., 4000., 4000., 4000., 4000.; 
+  posture_gain.head(num_dof_) << 4000., 4000., 4000., 4000., 4000., 4000., 4000.;
 
   task_joint_posture_->Kp(posture_gain);
   task_joint_posture_->Kd(2.0 * posture_gain.cwiseSqrt());
@@ -75,7 +75,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   time_ = 0.0;
   tsid_ = std::make_shared<InverseDynamicsFormulationAccForce>("tsid", *robot_);
   tsid_->computeProblemData(time_, state_.q, state_.v);
-  data_ = tsid_->data(); // overwrite
+  data_ = tsid_->data();
 
   // solver
   solver_ = SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog");
@@ -170,11 +170,9 @@ controller_interface::return_type TaskSpaceQPController::update(
     int model_na = robot_->na();
     cho_controller::common::trajectory::TrajectorySample sample_posture_full(model_na);
 
-    // 7개(팔)만 복사
     sample_posture_full.pos.head(num_dof_) = sample_posture_7d.pos;
     sample_posture_full.vel.head(num_dof_) = sample_posture_7d.vel;
     
-    // 나머지 2개(그리퍼)는 0으로 채움
     sample_posture_full.pos.tail(model_na - num_dof_).setZero();
     sample_posture_full.vel.tail(model_na - num_dof_).setZero();
 
@@ -203,11 +201,14 @@ controller_interface::return_type TaskSpaceQPController::update(
       acc_arm.setZero();
   }
 
-  // 최종 토크 = M*ddq + C + G - Damping
-  torque_desired = M_modified * acc_arm;
-  // torque_desired += state_.coriolis_arm; // 참고 코드의 robot_nle_
-  torque_desired += state_.G; 
-  torque_desired -= Kd_joint * state_.v_arm;
+  // // 최종 토크 = M*ddq + C + G - Damping
+  // torque_desired = M_modified * acc_arm;
+  // torque_desired += state_.nle; 
+  // torque_desired -= Kd_joint * state_.v_arm;
+
+  // test
+  torque_desired = state_.M_arm * acc_arm;
+  torque_desired += state_.nle;
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);

@@ -111,7 +111,7 @@ controller_interface::return_type JointSpaceImpedanceController::update(
     k_gains_.cwiseProduct(state_.q_arm_des - state_.q_arm) + 
     d_gains_.cwiseProduct(state_.v_arm_des - dq_filtered_);
 
-  torque_desired += state_.G; // gravity compensation
+  torque_desired += state_.nle; // gravity compensation
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);

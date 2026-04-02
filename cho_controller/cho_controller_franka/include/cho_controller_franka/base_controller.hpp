@@ -52,7 +52,7 @@ struct State {
     pinocchio::SE3 H_ee;
     Eigen::MatrixXd M;
     Matrix7d M_arm;
-    Vector7d G;
+    Vector7d nle;
     pinocchio::Data::Matrix6x J;
     Eigen::Matrix<double, 6, 7> J_arm;
     

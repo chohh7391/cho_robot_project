@@ -20,12 +20,12 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_type', default_value='fr3'),
         DeclareLaunchArgument('namespace', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        # MuJoCo 코드와 동일하게 position, torque, special로 구분
+        DeclareLaunchArgument('vla', default_value='false'),
         DeclareLaunchArgument(
             'control_mode',
             default_value='torque',
-            description='Choose control mode: position, torque, or special',
-            choices=['position', 'torque', 'special']
+            description='Choose control mode: position, torque',
+            choices=['position', 'torque']
         ),
     ]
 
@@ -59,6 +59,7 @@ def generate_launch_description():
         robot_type_str = LaunchConfiguration('robot_type').perform(context)
         load_gripper_str = LaunchConfiguration('load_gripper').perform(context)
         franka_hand_str = LaunchConfiguration('franka_hand').perform(context)
+        is_vla = LaunchConfiguration('vla').perform(context)
         mode = LaunchConfiguration('control_mode').perform(context)
 
         # --- Xacro 파싱 (모드에 따른 gazebo_effort 자동 설정) ---
@@ -108,18 +109,19 @@ def generate_launch_description():
             ('task_space_qp_controller', False),
         ]
         
-        special_controller_lists = [('vla_controller', True)]
+        vla_controller_lists = [('vla_controller', True)]
 
         target_list = []
-        if mode == 'position':
-            target_list = position_controller_lists
-        elif mode == 'torque':
-            target_list = torque_controller_lists
-        elif mode == 'special':
-            target_list = special_controller_lists
+        if is_vla == 'true':
+            target_list = vla_controller_lists
+        else:
+            if mode == 'position':
+                target_list = position_controller_lists
+            elif mode == 'torque':
+                target_list = torque_controller_lists
 
         controllers_config = PathJoinSubstitution([pkg_bringup, 'config', 'gazebo', 'controllers.yaml'])
-
+        
         # 선택된 모드의 컨트롤러들 스폰
         load_target_controllers = [
             Node(

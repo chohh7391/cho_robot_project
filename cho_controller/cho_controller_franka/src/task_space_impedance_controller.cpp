@@ -137,7 +137,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   Vector7d torque_null = (I - J_world_T * j_eef_inv) * u_null_torque;
 
   // 6. 최종 토크 합산
-  Vector7d torque_desired = torque_motion + torque_null + state_.G;
+  Vector7d torque_desired = torque_motion + torque_null + state_.nle;
 
   // 7. 안전 클리핑 및 전송
   FrankaBaseController::clip_torque(torque_desired);

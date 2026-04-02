@@ -173,7 +173,7 @@ controller_interface::return_type JointSpaceQPController::update(
   // ----------------------------------------------------
   Vector7d torque_desired;
   torque_desired = M_modified * acc_arm;
-  torque_desired += state_.G; 
+  torque_desired += state_.nle; 
   torque_desired -= Kd_joint * dq_filtered_;
 
   FrankaBaseController::clip_torque(torque_desired);

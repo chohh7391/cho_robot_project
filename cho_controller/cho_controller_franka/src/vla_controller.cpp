@@ -96,21 +96,21 @@ controller_interface::return_type VLAController::update(
   const Vector7d & q = state_.q_arm;              // 7x1 Joint Position
   const Vector7d & v = state_.v_arm;              // 7x1 Joint Velocity
 
+  Vector7d torque_desired = Vector7d::Zero();
+
+  Eigen::MatrixXd M_inv = M.llt().solve(Matrix7d::Identity());
+  Eigen::Matrix<double, 6, 6> A = J * M_inv * J.transpose();
+  
+  A.diagonal().array() += 1e-4;
+  
+  Eigen::Matrix<double, 6, 6> lambda = A.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
+
+  Vector6d error; // [pos_error; rot_error]
+  error.head<3>() = H_ee.rotation().transpose() * (state_.H_ee_des.translation() - H_ee.translation());
+  pinocchio::SE3::Matrix3 R_err = H_ee.rotation().transpose() * state_.H_ee_des.rotation();
+  error.tail<3>() = pinocchio::log3(R_err);
+
   if (control_mode_ == "effort") {
-    Vector7d torque_desired = Vector7d::Zero();
-
-    Eigen::MatrixXd M_inv = M.llt().solve(Matrix7d::Identity());
-    Eigen::Matrix<double, 6, 6> A = J * M_inv * J.transpose();
-    
-    A.diagonal().array() += 1e-4;
-    
-    Eigen::Matrix<double, 6, 6> lambda = A.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
-
-    Vector6d error; // [pos_error; rot_error]
-    error.head<3>() = H_ee.rotation().transpose() * (state_.H_ee_des.translation() - H_ee.translation());
-    pinocchio::SE3::Matrix3 R_err = H_ee.rotation().transpose() * state_.H_ee_des.rotation();
-    error.tail<3>() = pinocchio::log3(R_err);
-
     Vector6d v_curr = J * v;
     Vector6d v_des = Vector6d::Zero(); // Setpoint 제어이므로 목표 속도는 0 가정
     Vector6d error_dot = v_des - v_curr;
@@ -125,7 +125,7 @@ controller_interface::return_type VLAController::update(
     Vector7d tau_0 = kn_stiffness_ * (q_nom - q) - kn_damping_ * v;
     Vector7d tau_null = N_T * tau_0;
 
-    torque_desired = J.transpose() * F_task + tau_null + state_.G;
+    torque_desired = J.transpose() * F_task + tau_null + state_.nle;
 
     // 토크 클리핑
     FrankaBaseController::clip_torque(torque_desired);
@@ -140,6 +140,27 @@ controller_interface::return_type VLAController::update(
 
   } else { 
     // TODO: position control
+    Vector6d v_des = kp_task_ * error;
+
+    double lambda = 0.01;
+    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+    JJt.diagonal().array() += lambda;
+    Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
+
+    Vector7d dq_des = J_pinv * v_des;
+
+    Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
+    Vector7d q_err = state_.q_arm_init - q;
+    Vector7d dq_null = kn_stiffness_ * q_err;
+
+    dq_des += N * dq_null;
+
+    double dt = period.seconds();
+    Vector7d q_cmd = q + dq_des * dt;
+
+    for (int i = 0; i < num_dof_; ++i) {
+      command_interfaces_[i].set_value(q_cmd(i));
+    }
   }
 
   return controller_interface::return_type::OK;

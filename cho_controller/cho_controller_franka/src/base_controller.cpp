@@ -213,7 +213,7 @@ void FrankaBaseController::update_joint_states()
 void FrankaBaseController::compute_all_terms()
 {
     robot_->computeAllTerms(data_, state_.q, state_.v);
-    state_.G = robot_->nonLinearEffects(data_).head(num_dof_);
+    state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     state_.M = robot_->mass(data_);
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
@@ -222,7 +222,7 @@ void FrankaBaseController::compute_all_terms()
     state_.J_arm = state_.J.leftCols(num_dof_);
     
     if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
-        state_.G = compute_hand_gravity();
+        state_.nle = compute_hand_gravity();
     }
 }
 

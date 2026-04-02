@@ -113,7 +113,7 @@ controller_interface::return_type OperationalSpaceController::update(
   Vector7d tau_0 = kn_stiffness_ * (q_nom - q) - kn_damping_ * v;
   Vector7d tau_null = N_T * tau_0;
 
-  torque_desired = J.transpose() * F_task + tau_null + state_.G;
+  torque_desired = J.transpose() * F_task + tau_null + state_.nle;
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
