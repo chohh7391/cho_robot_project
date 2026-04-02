@@ -168,7 +168,7 @@
     ros__parameters:
       robot_type: "fr3"
       bringup_type: "gazebo"
-      control_mode: "position"
+      control_mode: "effort" # "position" or "effort"
       kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
       kd_task: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
       kn_stiffness: 10.0

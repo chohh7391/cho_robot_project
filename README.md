@@ -84,6 +84,7 @@ ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=posi
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
+# before execution, change control_mode in controller config
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_mode:=position
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_mode:=torque
 ```
