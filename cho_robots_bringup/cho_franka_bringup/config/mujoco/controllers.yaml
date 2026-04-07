@@ -96,8 +96,8 @@
     ros__parameters:
       robot_type: "fr3"
       bringup_type: "mujoco"
-      k_gains: [800.0, 800.0, 800.0, 800.0, 200.0, 200.0, 100.0]
-      d_gains: [40.0, 40.0, 40.0, 40.0, 28.0, 28.0, 20.0]
+      k_gains: [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
+      d_gains: [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
       mass: 0.73
       center_of_mass: [-0.1, 0.0, 0.03]
       load_inertia: [0.001, 0.0, 0.0,
@@ -109,7 +109,7 @@
     ros__parameters:
       robot_type: "fr3"
       bringup_type: "mujoco"
-      kp_task: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
+      kp_task: [1500.0, 1500.0, 1500.0, 40.0, 40.0, 40.0]
       kp_null: 10.0
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       mass: 0.73
@@ -156,7 +156,7 @@
     ros__parameters:
       robot_type: "fr3"
       bringup_type: "mujoco"
-      kp_task: [150.0, 150.0, 150.0, 800.0, 800.0, 800.0]
+      kp_task: [200.0, 200.0, 200.0, 800.0, 800.0, 800.0]
       mass: 0.73
       center_of_mass: [-0.1, 0.0, 0.03]
       load_inertia: [0.001, 0.0, 0.0,

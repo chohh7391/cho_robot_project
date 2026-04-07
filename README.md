@@ -14,7 +14,11 @@ ros-humble-ros2-control-test-assets ros-humble-franka-description \
 ros-humble-ros-gz-sim ros-humble-ros2-control ros-humble-ros2-controllers \
 ros-humble-ign-ros2-control ros-humble-gz-ros2-control \
 ros-humble-py-trees ros-humble-py-trees-ros ros-humble-ros-gz-bridge \
-ros-humble-ros2-control-cmake
+ros-humble-ros2-control-cmake libgrpc++-dev protobuf-compiler-grpc
+```
+
+```bash
+pip3 install grpcio
 ```
 
 - libfranka
@@ -94,7 +98,7 @@ ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_
 source ~/ros2_ws/install/setup.bash
 
 # position control mode
-ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py  control_mode:=position
+ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=position
 
 # torque control mode
 ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque

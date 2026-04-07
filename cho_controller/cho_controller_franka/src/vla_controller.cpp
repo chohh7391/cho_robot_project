@@ -98,7 +98,7 @@ controller_interface::return_type VLAController::update(
 
   Vector7d torque_desired = Vector7d::Zero();
 
-  Eigen::MatrixXd M_inv = M.llt().solve(Matrix7d::Identity());
+  Matrix7d M_inv = M.llt().solve(Matrix7d::Identity());
   Eigen::Matrix<double, 6, 6> A = J * M_inv * J.transpose();
   
   A.diagonal().array() += 1e-4;

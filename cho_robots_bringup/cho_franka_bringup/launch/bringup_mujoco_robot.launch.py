@@ -87,8 +87,8 @@ def generate_launch_description():
             ('joint_space_impedance_controller', False),
             ('task_space_impedance_controller', False),
             ('operational_space_controller', False),
-            ('joint_space_qp_controller', True),
-            ('task_space_qp_controller', False),
+            ('joint_space_qp_controller', False),
+            ('task_space_qp_controller', True),
         ]
         special_controller_lists = [('vla_controller', True)]
 

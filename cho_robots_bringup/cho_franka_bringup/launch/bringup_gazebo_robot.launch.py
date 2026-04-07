@@ -104,9 +104,9 @@ def generate_launch_description():
             ('gravity_compensation_controller', False),
             ('joint_space_impedance_controller', False),
             ('task_space_impedance_controller', False),
-            ('operational_space_controller', True), # 필요에 따라 기본 Active 설정 변경 가능
+            ('operational_space_controller', False),
             ('joint_space_qp_controller', False),
-            ('task_space_qp_controller', False),
+            ('task_space_qp_controller', True),
         ]
         
         vla_controller_lists = [('vla_controller', True)]

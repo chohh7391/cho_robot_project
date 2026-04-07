@@ -1,6 +1,7 @@
 import cmd
 import sys
 import threading
+import numpy as np
 
 import rclpy
 from rclpy.action import ActionClient
@@ -92,15 +93,27 @@ class ControlSuiteShell(cmd.Cmd):
         goal.duration = 5.0
         goal.target_joints = JointState()
 
-        goal.target_joints.position = [
-            1.0,
-            -0.4,
-            -0.2,
-            -2.0,
-            0.0,
-            1.8,
-            0.0
-        ]
+        if arg.strip() == "0":
+            goal.target_joints.position = [
+                0.0,
+                -np.pi/4,
+                0.0,
+                -3/4*np.pi,
+                0.0,
+                np.pi/2,
+                np.pi/4,
+            ]
+        elif arg.strip() == "1":
+            goal.target_joints.position = [
+                0.0,
+                -0.2,
+                0.0,
+                -1.5,
+                0.0,
+                1.5,
+                0.0
+            ]
+
         if self._send_goal_and_wait(self.joint_space_action_client, goal):
             print("action succeed")
         else:
@@ -113,8 +126,7 @@ class ControlSuiteShell(cmd.Cmd):
         goal.relative = False
 
         if arg.strip() == "0":
-            # ARM ONLY
-            print("Only arm control")
+            goal.relative = False
             goal.target_pose.position.x = 0.2
             goal.target_pose.position.y = -0.2
             goal.target_pose.position.z = 0.5
@@ -122,10 +134,9 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w = 0.0
-            # goal.relative = True
+            
         elif arg.strip() == "1":
-            # ARM ONLY
-            print("Only arm control")
+            goal.relative = False
             goal.target_pose.position.x = 0.2
             goal.target_pose.position.y = 0.2
             goal.target_pose.position.z = 0.6
@@ -133,7 +144,17 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w = 0.0
-            # goal.relative = True
+
+        elif arg.strip() == "2":
+            goal.relative = True
+            goal.target_pose.position.x = 0.0
+            goal.target_pose.position.y = 0.0
+            goal.target_pose.position.z = -0.2
+            goal.target_pose.orientation.x = 1.0
+            goal.target_pose.orientation.y = 0.0
+            goal.target_pose.orientation.z = 0.0
+            goal.target_pose.orientation.w = 0.0
+            
 
         if self._send_goal_and_wait(self.task_space_action_client, goal):
             print("action succeed")

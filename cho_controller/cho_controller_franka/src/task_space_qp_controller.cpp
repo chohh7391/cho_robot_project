@@ -201,14 +201,14 @@ controller_interface::return_type TaskSpaceQPController::update(
       acc_arm.setZero();
   }
 
-  // // 최종 토크 = M*ddq + C + G - Damping
-  // torque_desired = M_modified * acc_arm;
-  // torque_desired += state_.nle; 
-  // torque_desired -= Kd_joint * state_.v_arm;
+  // 최종 토크 = M*ddq + C + G - Damping
+  torque_desired = M_modified * acc_arm;
+  torque_desired += state_.nle; 
+  torque_desired -= Kd_joint * state_.v_arm;
 
-  // test
-  torque_desired = state_.M_arm * acc_arm;
-  torque_desired += state_.nle;
+  // test for real
+  // torque_desired = state_.M_arm * acc_arm;
+  // torque_desired += state_.nle;
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
