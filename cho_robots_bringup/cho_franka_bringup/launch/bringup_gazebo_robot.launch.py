@@ -1,13 +1,16 @@
 import os
+import tempfile
+import yaml
+import xacro
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription, LaunchContext
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, IncludeLaunchDescription
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-import xacro
 
 def generate_launch_description():
     pkg_description = get_package_share_directory('cho_franka_description')
@@ -27,6 +30,16 @@ def generate_launch_description():
             description='Choose control mode: position, torque',
             choices=['position', 'torque']
         ),
+        DeclareLaunchArgument(
+            'controller_name',
+            default_value='task_space_impedance_controller',
+            description='Which controller to activate initially'
+        ),
+        DeclareLaunchArgument(
+            'bringup_type',
+            default_value='gazebo',
+            description='Global bringup type injected to all controllers'
+        )
     ]
 
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
@@ -61,9 +74,11 @@ def generate_launch_description():
         franka_hand_str = LaunchConfiguration('franka_hand').perform(context)
         is_vla = LaunchConfiguration('vla').perform(context)
         mode = LaunchConfiguration('control_mode').perform(context)
+        
+        ctrl_name = LaunchConfiguration('controller_name').perform(context)
+        b_type = LaunchConfiguration('bringup_type').perform(context)
 
-        # --- Xacro 파싱 (모드에 따른 gazebo_effort 자동 설정) ---
-        # position 모드일 때만 effort 제어를 끄고(false), 나머지는 켭니다(true)
+        # --- Xacro 파싱 ---
         gazebo_effort_str = 'false' if mode == 'position' else 'true'
 
         xacro_path = os.path.join(
@@ -97,47 +112,76 @@ def generate_launch_description():
             output='screen',
         )
 
-        # --- 컨트롤러 그룹핑 (MuJoCo 코드와 동일한 구조) ---
-        position_controller_lists = [('ik_controller', True)]
-        
-        torque_controller_lists = [
-            ('gravity_compensation_controller', False),
-            ('joint_space_impedance_controller', False),
-            ('task_space_impedance_controller', False),
-            ('operational_space_controller', False),
-            ('joint_space_qp_controller', False),
-            ('task_space_qp_controller', True),
-        ]
-        
-        vla_controller_lists = [('vla_controller', True)]
+        # ---------------------------------------------------------
+        # [핵심 로직] Payload 파일 + 동적 파라미터를 하나의 YAML로 완벽하게 병합
+        # ---------------------------------------------------------
+        active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
 
-        target_list = []
-        if is_vla == 'true':
-            target_list = vla_controller_lists
-        else:
-            if mode == 'position':
-                target_list = position_controller_lists
-            elif mode == 'torque':
-                target_list = torque_controller_lists
-
-        controllers_config = PathJoinSubstitution([pkg_bringup, 'config', 'gazebo', 'controllers.yaml'])
-        
-        # 선택된 모드의 컨트롤러들 스폰
-        load_target_controllers = [
-            Node(
-                package='controller_manager',
-                executable='spawner',
-                arguments=[name] if active else [name, '--inactive'],
-                parameters=[controllers_config, use_sim_time],
-                output='screen'
-            ) for name, active in target_list
+        position_controllers = ['ik_controller']
+        torque_controllers = [
+            'gravity_compensation_controller',
+            'joint_space_impedance_controller',
+            'task_space_impedance_controller',
+            'operational_space_controller',
+            'joint_space_qp_controller',
+            'task_space_qp_controller'
         ]
+
+        controllers_to_load = position_controllers if mode == 'position' else torque_controllers
+        
+        if active_ctrl and active_ctrl not in controllers_to_load:
+            controllers_to_load.append(active_ctrl)
+
+        internal_mode = 'effort' if mode == 'torque' else mode
+
+        # 1. payload.yaml 파일 읽어오기
+        payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
+        with open(payload_config_path, 'r') as f:
+            dynamic_params_dict = yaml.safe_load(f) or {}
+
+        if '/**' not in dynamic_params_dict:
+            dynamic_params_dict['/**'] = {}
+
+        # 2. 동적 파라미터(bringup_type, control_mode) 덮어쓰기
+        for ctrl in controllers_to_load:
+            if ctrl not in dynamic_params_dict['/**']:
+                dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
+            elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
+                dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
+                
+            dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
+            dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
+
+        # 3. 완성된 단일 임시 YAML 파일 생성
+        temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
+        yaml.dump(dynamic_params_dict, temp_yaml_file)
+        temp_yaml_file.close()
+
+        # ---------------------------------------------------------
+        # Spawner 노드 생성 ( '-p' 옵션을 통해 Gazebo 내부로 파라미터 강제 푸시 )
+        # ---------------------------------------------------------
+        load_target_controllers = []
+        for name in controllers_to_load:
+            # -p 옵션은 spawner가 시작되기 전 controller_manager로 파라미터를 전송합니다!
+            spawner_args = [name, '-p', temp_yaml_file.name]
+            if name != active_ctrl:
+                spawner_args.append('--inactive')
+                
+            load_target_controllers.append(
+                Node(
+                    package='controller_manager',
+                    executable='spawner',
+                    arguments=spawner_args,
+                    parameters=[use_sim_time], # 파라미터 리스트에서는 YAML 파일 제거
+                    output='screen'
+                )
+            )
 
         # 항상 켜져야 하는 공통 컨트롤러들
         common_controllers = [
-            Node(package='controller_manager', executable='spawner', arguments=['joint_state_broadcaster'], parameters=[controllers_config, use_sim_time], output='screen'),
-            Node(package='controller_manager', executable='spawner', arguments=['simulation_gripper_controller'], parameters=[controllers_config, use_sim_time], output='screen'),
-            Node(package='controller_manager', executable='spawner', arguments=['gripper_controller'], parameters=[controllers_config, use_sim_time], output='screen'),
+            Node(package='controller_manager', executable='spawner', arguments=['joint_state_broadcaster', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
+            Node(package='controller_manager', executable='spawner', arguments=['simulation_gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
+            Node(package='controller_manager', executable='spawner', arguments=['gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
         ]
 
         mock_gripper = Node(
@@ -147,7 +191,6 @@ def generate_launch_description():
             output='screen'
         )
 
-        # 로봇 스폰이 끝난 후 공통 컨트롤러 + 타겟 컨트롤러 + Mock 그리퍼 실행
         delayed_controller_spawner = RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=spawn_robot,

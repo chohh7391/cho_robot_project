@@ -1,0 +1,8 @@
+# config/payload.yaml
+/**:
+  ros__parameters:
+    mass: 0.73
+    center_of_mass: [-0.1, 0.0, 0.03]
+    load_inertia: [0.001, 0.0, 0.0,
+                   0.0, 0.0025, 0.0,
+                   0.0, 0.0, 0.0017]

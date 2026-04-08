@@ -76,7 +76,6 @@
   ik_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
       kd_task: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
 
@@ -84,98 +83,53 @@
   gravity_compensation_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   joint_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       k_gains: [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
       d_gains: [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   task_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       kp_task: [1500.0, 1500.0, 1500.0, 40.0, 40.0, 40.0]
       kp_null: 10.0
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   operational_space_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       kp_task: [900.0, 900.0, 900.0, 7200.0, 7200.0, 7200.0]
       kd_task: [60.0, 60.0, 60.0, 33.9, 33.9, 33.9]
       kn_stiffness: 10.0
       kn_damping: 2.0
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   gripper_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
 
 /**:
   joint_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       kp_joint: [4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0]
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   task_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       kp_task: [200.0, 200.0, 200.0, 800.0, 800.0, 800.0]
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
 
 /**:
   vla_controller:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
-      control_mode: "effort"
       kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
       kd_task: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
       kn_stiffness: 10.0
       kn_damping: 2.0
-      mass: 0.73
-      center_of_mass: [-0.1, 0.0, 0.03]
-      load_inertia: [0.001, 0.0, 0.0,
-                     0.0, 0.0025, 0.0,
-                     0.0, 0.0, 0.0017]
-  

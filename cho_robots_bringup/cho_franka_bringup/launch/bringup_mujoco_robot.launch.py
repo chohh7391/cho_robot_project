@@ -1,4 +1,7 @@
 import os
+import tempfile
+import yaml
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction
 from launch.event_handlers import OnProcessExit, OnProcessStart
@@ -12,15 +15,30 @@ def generate_launch_description():
     description_path = os.path.join(get_package_share_directory('cho_franka_description'))
     bringup_path = os.path.join(get_package_share_directory('cho_franka_bringup'))
 
-    control_mode_arg = DeclareLaunchArgument(
-        'control_mode',
-        default_value='torque',
-        description='Choose control mode: position, torque, or special',
-        choices=['position', 'torque', 'special']
-    )
+    declared_arguments = [
+        DeclareLaunchArgument(
+            'control_mode',
+            default_value='torque',
+            description='Choose control mode: position, torque'
+        ),
+        DeclareLaunchArgument(
+            'controller_name',
+            default_value='task_space_impedance_controller',
+            description='Which controller to activate initially'
+        ),
+        DeclareLaunchArgument(
+            'vla',
+            default_value='false',
+            description='If true, forces vla_controller to be the active controller'
+        ),
+        DeclareLaunchArgument(
+            'bringup_type',
+            default_value='mujoco',
+            description='Global bringup type injected to all controllers'
+        )
+    ]
 
     xacro_file = os.path.join(description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf')
-    # xacro_file = os.path.join(description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf')
     
     robot_description = {
         'robot_description': ParameterValue(
@@ -30,17 +48,12 @@ def generate_launch_description():
     }
 
     controller_config_file = os.path.join(bringup_path, 'config', 'mujoco', 'controllers.yaml')
+    payload_config_file = os.path.join(bringup_path, 'config', 'payload.yaml')
 
-    node_mujoco_ros2_control = Node(
-        package='mujoco_ros2_control',
-        executable='mujoco_ros2_control',
-        output='screen',
-        parameters=[
-            robot_description,
-            controller_config_file,
-            {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')},
-            # {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3_with_ft_sensor', 'scene.xml')},
-        ]
+    mock_gripper = Node(
+        package='cho_franka_bringup',
+        executable='mock_franka_gripper.py',
+        parameters=[{'use_sim_time': True}]
     )
 
     node_robot_state_publisher = Node(
@@ -50,13 +63,6 @@ def generate_launch_description():
         parameters=[robot_description]
     )
 
-    mock_gripper = Node(
-        package='cho_franka_bringup',
-        executable='mock_franka_gripper.py',
-        parameters=[{'use_sim_time': True}]
-    )
-
-    # [최적화 2] ExecuteProcess 대신 ROS 2 표준 spawner 사용
     load_joint_state_controller = Node(
         package='controller_manager',
         executable='spawner',
@@ -78,59 +84,98 @@ def generate_launch_description():
         output='screen'
     )
 
-    def setup_controllers_based_on_mode(context, *args, **kwargs):
+    def setup_control_environment(context, *args, **kwargs):
         mode = LaunchConfiguration('control_mode').perform(context)
+        ctrl_name = LaunchConfiguration('controller_name').perform(context)
+        is_vla = LaunchConfiguration('vla').perform(context)
+        b_type = LaunchConfiguration('bringup_type').perform(context)
 
-        position_controller_lists = [('ik_controller', True)]
-        torque_controller_lists = [
-            ('gravity_compensation_controller', False),
-            ('joint_space_impedance_controller', False),
-            ('task_space_impedance_controller', False),
-            ('operational_space_controller', False),
-            ('joint_space_qp_controller', False),
-            ('task_space_qp_controller', True),
-        ]
-        special_controller_lists = [('vla_controller', True)]
+        active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
 
-        target_list = []
-        if mode == 'position':
-            target_list = position_controller_lists
-        elif mode == 'torque':
-            target_list = torque_controller_lists
-        elif mode == 'special':
-            target_list = special_controller_lists
-
-        # [최적화 3] spawner를 사용한 동적 컨트롤러 로드
-        load_target_controllers = [
-            Node(
-                package='controller_manager',
-                executable='spawner',
-                arguments=[name] if active else [name, '--inactive'],
-                output='screen'
-            ) for name, active in target_list
+        position_controllers = ['ik_controller']
+        torque_controllers = [
+            'gravity_compensation_controller',
+            'joint_space_impedance_controller',
+            'task_space_impedance_controller',
+            'operational_space_controller',
+            'joint_space_qp_controller',
+            'task_space_qp_controller'
         ]
 
-        all_controllers_to_load = load_target_controllers + [load_simulation_gripper_controller, load_gripper_controller]
+        controllers_to_load = position_controllers if mode == 'position' else torque_controllers
+        
+        if active_ctrl and active_ctrl not in controllers_to_load:
+            controllers_to_load.append(active_ctrl)
 
-        return [
+        # ---------------------------------------------------------
+        # [핵심 수정] 동적으로 /** 와일드카드가 포함된 YAML 파일을 생성합니다.
+        # ---------------------------------------------------------
+        dynamic_params_dict = {'/**': {}}
+        internal_mode = 'effort' if mode == 'torque' else mode
+
+        for ctrl in controllers_to_load:
+            dynamic_params_dict['/**'][ctrl] = {
+                'ros__parameters': {
+                    'bringup_type': b_type,
+                    'control_mode': internal_mode
+                }
+            }
+
+        # 임시 YAML 파일 생성 (Launch 파서가 읽은 후 OS가 나중에 알아서 삭제합니다)
+        temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
+        yaml.dump(dynamic_params_dict, temp_yaml_file)
+        temp_yaml_file.close()
+        # ---------------------------------------------------------
+
+        # Mujoco Node 생성 시 동적 생성한 temp_yaml_file의 경로를 전달
+        node_mujoco_ros2_control = Node(
+            package='mujoco_ros2_control',
+            executable='mujoco_ros2_control',
+            output='screen',
+            parameters=[
+                robot_description,
+                controller_config_file,
+                payload_config_file,
+                temp_yaml_file.name, # 동적 파라미터 YAML 파일 주입!
+                {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')}
+            ]
+        )
+
+        spawner_nodes = []
+        for name in controllers_to_load:
+            args = [name] if name == active_ctrl else [name, '--inactive']
+            spawner_nodes.append(
+                Node(
+                    package='controller_manager',
+                    executable='spawner',
+                    arguments=args,
+                    output='screen'
+                )
+            )
+
+        all_spawners = spawner_nodes + [load_simulation_gripper_controller, load_gripper_controller]
+
+        event_handlers = [
+            RegisterEventHandler(
+                event_handler=OnProcessStart(
+                    target_action=node_mujoco_ros2_control,
+                    on_start=[load_joint_state_controller],
+                )
+            ),
             RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=load_joint_state_controller,
-                    on_exit=all_controllers_to_load,
+                    on_exit=all_spawners,
                 )
             )
         ]
 
-    return LaunchDescription([
-        control_mode_arg,
-        node_mujoco_ros2_control,
-        mock_gripper,
-        node_robot_state_publisher,
-        RegisterEventHandler(
-            event_handler=OnProcessStart(
-                target_action=node_mujoco_ros2_control,
-                on_start=[load_joint_state_controller],
-            )
-        ),
-        OpaqueFunction(function=setup_controllers_based_on_mode)
-    ])
+        return [node_mujoco_ros2_control] + event_handlers
+
+    return LaunchDescription(
+        declared_arguments + [
+            mock_gripper,
+            node_robot_state_publisher,
+            OpaqueFunction(function=setup_control_environment)
+        ]
+    )

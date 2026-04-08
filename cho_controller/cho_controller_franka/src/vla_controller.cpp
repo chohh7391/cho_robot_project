@@ -171,6 +171,9 @@ bool VLAController::assign_parameters() {
   auto kd_vec = get_node()->get_parameter("kd_task").as_double_array();
   std::string mode = get_node()->get_parameter("control_mode").as_string();
 
+  RCLCPP_ERROR(get_node()->get_logger(), 
+                 "control_mode: '%s'", mode.c_str());
+
   if (mode != "position" && mode != "velocity" && mode != "effort") {
     RCLCPP_ERROR(get_node()->get_logger(), 
                  "Invalid control_mode: '%s'. Must be 'position', 'velocity', or 'effort'.", mode.c_str());
