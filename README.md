@@ -71,6 +71,23 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
 
 ## Bringup
 
+### Available controllers
+
+- position controllers
+    - ik_controller
+
+- torque controllers
+    - gravity_compensation_controller
+    - joint_space_impedance_controller
+    - task_space_impedance_controller
+    - operational_space_controller
+    - joint_space_qp_controller
+    - task_space_qp_controller
+
+
+
+### Bringup Robot in Real or Simulation
+
 - real (change **robot ip** in cho_franka_bringup/config/real/franka.config.yaml)
 ```bash
 source ~/ros2_ws/install/setup.bash
@@ -82,10 +99,10 @@ ros2 launch cho_franka_bringup bringup_real_robot.launch.py
 source ~/ros2_ws/install/setup.bash
 
 # position control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position controller_name:={controller_name}
 
 # torque control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque controller_name:={controller_name}
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
@@ -98,10 +115,10 @@ ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_
 source ~/ros2_ws/install/setup.bash
 
 # position control mode
-ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=position
+ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=position controller_name:={controller_name}
 
 # torque control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque controller_name:={controller_name}
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
