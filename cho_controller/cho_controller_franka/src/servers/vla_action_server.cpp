@@ -60,19 +60,43 @@ void VLAActionServer::handle_accepted(
 
     model_name_ = goal->model_name;
 
+    // [추가된 부분] 새로운 제어가 시작되기 전에 RT 버퍼를 '유효하지 않음(Invalid)' 상태로 초기화
+    VLACommand empty_cmd;
+    empty_cmd.is_valid = false;
+    vla_cmd_buffer_.writeFromNonRT(empty_cmd);
+
     initialized_ = false;
     control_running_ = true;
 }
 
 bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
+    static bool is_pub_activated = false;
+    if (!is_pub_activated) {
+        ee_pose_pub_->on_activate();
+        is_pub_activated = true;
+    }
+
+    static int pub_counter = 0;
+    if (++pub_counter % 10 == 0) { 
+        std_msgs::msg::Float64MultiArray obs_msg;
+        Eigen::Matrix4d H = state.H_ee.toHomogeneousMatrix();
+        obs_msg.data.resize(16);
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                obs_msg.data[i * 4 + j] = H(i, j);
+            }
+        }
+        ee_pose_pub_->publish(obs_msg);
+    }
+
     if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) return false;
 
     VLACommand const * cmd = vla_cmd_buffer_.readFromRT();
 
     if (!cmd || !cmd->is_valid || cmd->target_poses.empty()) {
         state.H_ee_ref = state.H_ee_init;
-        return true; 
+        return true;
     }
 
     if (!initialized_) {
@@ -110,6 +134,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         RCLCPP_INFO(node_->get_logger(), "[%s] Goal Canceled", action_name_.c_str());
         result_msg_->is_completed = false; // Populate result
         goal_handle_->canceled(result_msg_);
+        state.H_ee_init = state.H_ee;
         control_running_ = false;
         goal_handle_.reset(); // Release the handle
         return false; // Indicate computation related to this goal has stopped
@@ -147,6 +172,11 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 }
 
 void VLAActionServer::process_vla_action(const cho_interfaces::msg::ActionChunk::SharedPtr msg) {
+
+    if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) {
+        return;
+    }
+    
     VLACommand new_cmd;
     new_cmd.is_relative = msg->relative;
     new_cmd.chunk_receive_time = node_->now();
@@ -162,7 +192,9 @@ void VLAActionServer::process_vla_action(const cho_interfaces::msg::ActionChunk:
 
     chunk_size_ = msg->chunk_size;
     if (msg->arm_action.size() != static_cast<size_t>(chunk_size_ * dim)) {
-        RCLCPP_ERROR(node_->get_logger(), "VLA Action data size mismatch!");
+        RCLCPP_ERROR(node_->get_logger(), 
+            "VLA Action data size mismatch! expected: %d (chunk:%d * dim:%d), got: %zu. rotation_type: '%s'", 
+            chunk_size_ * dim, chunk_size_, dim, msg->arm_action.size(), msg->rotation_type.c_str());
         return;
     }
 

@@ -94,7 +94,7 @@ class VLAActionTester(Node):
                 v2 = rot_mat[:, 1] # 두 번째 컬럼
                 arm_actions.extend(v1.tolist() + v2.tolist())
 
-            gripper_actions.append(1.0) # Open
+            gripper_actions.append(-1.0) # Open
 
         msg.arm_action = arm_actions
         msg.gripper_action = gripper_actions
