@@ -12,7 +12,7 @@ ROBOT1: # Arbitrary identifier for the first robot (a Mnemonic)
   robot_type: "fr3" # Reserved for future use, unique arm (i.e. robot model) identifier
   arm_prefix: "" # Reserved for future use (e.g., robot unique prefix)
   fake_sensor_commands: "false" # Enable fake sensor commands for simulation
-  joint_state_rate: 100 # Publishing rate for joint states (Hz)
+  joint_state_rate: 1000 # Publishing rate for joint states (Hz)
   load_gripper: "true" # Enable Franka Gripper ("true" or "false")
   namespace: "" # Namespace for robot, any string (empty string allowed - meaningful names recommended)
   robot_ip: "172.16.0.2" # Robot’s IP address or hostname
