@@ -129,7 +129,7 @@
   vla_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
-      kd_task: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+      kp_task: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
+      kd_task: [20.0, 20.0, 20.0, 10.9545, 10.9545, 10.9545]
       kn_stiffness: 10.0
-      kn_damping: 2.0
+      kn_damping: 6.3246

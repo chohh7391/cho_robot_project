@@ -7,10 +7,6 @@ void VLAActionServer::init() {
 
     BaseActionServer::init();
 
-    ee_pose_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-        "/vla/observation/ee_pose",
-        10
-    );
     vla_action_sub_= node_->create_subscription<cho_interfaces::msg::ActionChunk>(
         "/vla/action/ee_pose",
         10,
@@ -73,21 +69,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
     static bool is_pub_activated = false;
     if (!is_pub_activated) {
-        ee_pose_pub_->on_activate();
         is_pub_activated = true;
-    }
-
-    static int pub_counter = 0;
-    if (++pub_counter % 10 == 0) { 
-        std_msgs::msg::Float64MultiArray obs_msg;
-        Eigen::Matrix4d H = state.H_ee.toHomogeneousMatrix();
-        obs_msg.data.resize(16);
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                obs_msg.data[i * 4 + j] = H(i, j);
-            }
-        }
-        ee_pose_pub_->publish(obs_msg);
     }
 
     if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) return false;

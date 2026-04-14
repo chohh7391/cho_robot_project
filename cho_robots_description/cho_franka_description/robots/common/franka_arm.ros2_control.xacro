@@ -58,7 +58,6 @@
         </joint>
       </xacro:macro>
 
-
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint1" initial_position="0.0"/>
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint2" initial_position="${-pi/4}"/>
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint3" initial_position="0.0"/>
@@ -66,6 +65,14 @@
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint5" initial_position="0.0"/>
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint6" initial_position="${pi/2}"/>
       <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint7" initial_position="${pi/4}"/>
+
+      <!-- <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint1" initial_position="-0.3202889859676361"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint2" initial_position="0.5399062633514404"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint3" initial_position="0.3390618860721588"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint4" initial_position="-1.862808346748352"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint5" initial_position="-0.24342849850654602"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint6" initial_position="2.361226797103882"/>
+      <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_joint7" initial_position="0.30928418040275574"/> -->
       <xacro:if value="${gazebo and hand}">
         <xacro:configure_joint joint_name="${arm_prefix}${robot_type}_finger_joint1" initial_position="0.0" is_gripper="true" />
       </xacro:if>

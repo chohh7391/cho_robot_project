@@ -55,16 +55,16 @@ class ControlSuiteShell(cmd.Cmd):
         self.joint_space_action_client = ActionClient(
             self.node,
             JointSpace,
-            # "/controller_action_server/joint_space_impedance_controller",
-            "/controller_action_server/joint_space_qp_controller",
+            "/controller_action_server/joint_space_impedance_controller",
+            # "/controller_action_server/joint_space_qp_controller",
         )
         self.task_space_action_client = ActionClient(
             self.node,
             TaskSpace,
             # "/controller_action_server/ik_controller",
-            # "/controller_action_server/task_space_impedance_controller",
+            "/controller_action_server/task_space_impedance_controller",
             # "/controller_action_server/operational_space_controller",
-            "/controller_action_server/task_space_qp_controller",
+            # "/controller_action_server/task_space_qp_controller",
         )
         self.gripper_action_client = ActionClient(
             self.node,
@@ -112,6 +112,26 @@ class ControlSuiteShell(cmd.Cmd):
                 0.0,
                 1.5,
                 0.0
+            ]
+        elif arg.strip() == "2":
+            goal.target_joints.position = [
+                -0.3202889859676361,
+                0.5399062633514404,
+                0.3390618860721588,
+                -1.862808346748352,
+                -0.24342849850654602,
+                2.361226797103882,
+                0.30928418040275574
+            ]
+        elif arg.strip() == "3":
+            goal.target_joints.position = [
+                -0.46396875381469727,
+                0.6291446089744568,
+                0.4975337088108063,
+                -1.9110225439071655,
+                -0.4653533399105072,
+                2.424884796142578,
+                0.85429847240448
             ]
 
         if self._send_goal_and_wait(self.joint_space_action_client, goal):
