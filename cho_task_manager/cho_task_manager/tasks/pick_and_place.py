@@ -49,7 +49,9 @@ def create_pick_and_place_tree() -> py_trees.behaviour.Behaviour:
         # 물체 위(Approach)로 이동
         TaskSpaceActionBehavior(
             name="Approach_Object", 
-            target_pose=make_pose(0.4, 0.0, 0.6), 
+            target_pose=make_pose(
+                position=[0.4, 0.0, 0.6],
+            ), 
             relative=False, 
             controller_name=ControllerNames.TASK_QP,
             duration=3.0
@@ -82,7 +84,9 @@ def create_pick_and_place_tree() -> py_trees.behaviour.Behaviour:
         # 놓을 위치 위(Approach)로 이동
         TaskSpaceActionBehavior(
             name="Move_To_Drop_Zone", 
-            target_pose=make_pose(0.4, -0.3, 0.6), 
+            target_pose=make_pose(
+                position=[0.4, -0.3, 0.6]
+            ), 
             relative=False, 
             controller_name=ControllerNames.TASK_QP,
             duration=4.0

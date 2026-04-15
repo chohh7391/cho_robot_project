@@ -1,20 +1,31 @@
 import py_trees_ros
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
-from cho_task_manager.tasks.pick_and_place import create_pick_and_place_tree
+from cho_task_manager.tasks import (
+    create_pick_and_place_tree,
+    create_forge_tree,
+)
+
 
 def main():
     rclpy.init()
 
     node = rclpy.create_node("task_manager_node")
+
+    node.declare_parameter("task", "pick_and_place")
     
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
+    task = node.get_parameter("task").get_parameter_value().string_value
+
     node.get_logger().info(f"--- Running in {'SIMULATION' if use_sim_time else 'REAL'} mode ---")
     
-    root = create_pick_and_place_tree()
-    # create your task tree in tasks folder like pick_and_place.py
-    # root = create_??_tree()
-
+    if task.lower() == "pick_and_place":
+        root = create_pick_and_place_tree()
+    elif task.lower() == "forge":
+        root = create_forge_tree()
+    else:
+        raise ValueError(f"Invalid task: {task}")
+    
     # Create BehaviourTree
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
@@ -39,6 +50,7 @@ def main():
     finally:
         tree.shutdown()
         rclpy.try_shutdown()
+
 
 if __name__ == '__main__':
     main()

@@ -7,6 +7,13 @@ void VLAActionServer::init() {
 
     BaseActionServer::init();
 
+    success_service_ = node_->create_service<std_srvs::srv::Trigger>(
+        "/vla/trigger_success",
+        std::bind(&VLAActionServer::handle_success_trigger, this, std::placeholders::_1, std::placeholders::_2)
+    );
+
+    notify_completion_client_ = node_->create_client<std_srvs::srv::Trigger>("/controller_action_server/vla_controller/notify_completion");
+
     vla_action_sub_= node_->create_subscription<cho_interfaces::msg::ActionChunk>(
         "/vla/action/ee_pose",
         10,
@@ -126,18 +133,22 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     double elapsed_time_sec = (current_time - start_time_).seconds();
 
     // success condition
-    // TODO: task success condition
-    // subscribe success condition (user input)
-    
-    // if (elapsed_time_sec > 60.0) {
-    //     RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f(pos), %f(ori)", action_name_.c_str(), translation_error_norm, rotation_error_norm);
-    //     result_msg_->is_completed = true;
-    //     goal_handle_->succeed(result_msg_);
-    //     state.H_ee_init = state.H_ee;
-    //     control_running_ = false;
-    //     goal_handle_.reset();
-    //     return true; // Indicate goal completion
-    // }
+    if (task_success_flag_.load()) {
+        RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded by User Input.", action_name_.c_str());
+        
+        result_msg_->is_completed = true;
+        goal_handle_->succeed(result_msg_);
+        
+        state.H_ee_init = state.H_ee; 
+        state.H_ee_des = state.H_ee;
+        
+        control_running_ = false;
+        task_success_flag_.store(false);
+        trigger_bt_completion(true);
+        goal_handle_.reset();
+        
+        return true;
+    }
 
     // time-out condition
     if (elapsed_time_sec > 60.0) {
@@ -146,6 +157,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         goal_handle_->abort(result_msg_);
         state.H_ee_init = state.H_ee;
         control_running_ = false;
+        trigger_bt_completion(false);
         goal_handle_.reset();
         return false; // Indicate goal failure
     }
@@ -269,6 +281,29 @@ void VLAActionServer::call_gripper(const bool grasp) {
     auto msg = GripperAction::Goal();
     msg.grasp = grasp;
     gripper_client_->async_send_goal(msg);
+}
+
+void VLAActionServer::handle_success_trigger(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+    // 성공 플래그를 true로 변경
+    task_success_flag_.store(true);
+    
+    // 사용자(Client)에게 확실한 응답을 줌
+    response->success = true;
+    response->message = "Task success signal received and applied.";
+    
+    RCLCPP_INFO(node_->get_logger(), "User triggered task success via Service!");
+}
+
+void VLAActionServer::trigger_bt_completion(bool success) {
+    if (!notify_completion_client_->wait_for_service(std::chrono::seconds(0))) {
+        return; // BT 노드가 아직 안 켜졌으면 무시
+    }
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    notify_completion_client_->async_send_request(request);
+    RCLCPP_INFO(node_->get_logger(), "Sent completion signal to BT node.");
 }
 
 } // namespace franka

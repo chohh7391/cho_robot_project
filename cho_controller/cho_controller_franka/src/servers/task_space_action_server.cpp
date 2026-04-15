@@ -102,7 +102,7 @@ bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & s
     Eigen::Vector3d rot_error_vec = pinocchio::log3(R_diff);
     double rotation_error_norm = rot_error_vec.norm();
     
-    if (elapsed_time_sec > duration_ + 1.0 && translation_error_norm < 5e-3 && rotation_error_norm < 3e-2) {
+    if (elapsed_time_sec > duration_ + 1.0 && translation_error_norm < 2e-2 && rotation_error_norm < 3e-2) {
         RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f(pos), %f(ori)", action_name_.c_str(), translation_error_norm, rotation_error_norm);
         result_msg_->is_completed = true;
         goal_handle_->succeed(result_msg_);

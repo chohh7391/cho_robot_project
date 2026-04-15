@@ -10,6 +10,8 @@
 #include <Eigen/Geometry>
 #include "cho_interfaces/action/gripper.hpp"
 #include "cho_controller_common/trajectory/trajectory_se3.hpp"
+#include <std_srvs/srv/trigger.hpp>
+
 
 namespace cho_controller {
 namespace franka {
@@ -72,6 +74,17 @@ protected:
     void process_vla_action(const cho_interfaces::msg::ActionChunk::SharedPtr msg);
 
     void call_gripper(const bool grasp);
+
+    // User input (success condition)
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr success_service_;
+    std::atomic<bool> task_success_flag_{false};
+    void handle_success_trigger(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+    
+    // notify vla completion
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr notify_completion_client_;
+    void trigger_bt_completion(bool success);
 }; 
 
 } // namespace franka

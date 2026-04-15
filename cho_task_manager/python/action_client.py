@@ -62,9 +62,9 @@ class ControlSuiteShell(cmd.Cmd):
             self.node,
             TaskSpace,
             # "/controller_action_server/ik_controller",
-            # "/controller_action_server/task_space_impedance_controller",
+            "/controller_action_server/task_space_impedance_controller",
             # "/controller_action_server/operational_space_controller",
-            "/controller_action_server/task_space_qp_controller",
+            # "/controller_action_server/task_space_qp_controller",
         )
         self.gripper_action_client = ActionClient(
             self.node,
@@ -170,6 +170,16 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.position.x = 0.0
             goal.target_pose.position.y = 0.0
             goal.target_pose.position.z = -0.2
+            goal.target_pose.orientation.x = 1.0
+            goal.target_pose.orientation.y = 0.0
+            goal.target_pose.orientation.z = 0.0
+            goal.target_pose.orientation.w = 0.0
+
+        elif arg.strip() == "3":
+            goal.relative = False
+            goal.target_pose.position.x = 0.6
+            goal.target_pose.position.y = 0.0
+            goal.target_pose.position.z = 0.05 + 0.047
             goal.target_pose.orientation.x = 1.0
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0

@@ -7,7 +7,11 @@ class ControllerNames(str, Enum):
     
     # Task Space Controllers
     OPERATIONAL_SPACE = 'operational_space_controller'
+    TASK_IMPEDANCE = 'task_space_impedance_controller'
     TASK_QP = 'task_space_qp_controller'
+
+    # VLA
+    VLA = 'vla_controller'
     
     # Others
     GRAVITY_COMPENSATION = 'gravity_compensation_controller'

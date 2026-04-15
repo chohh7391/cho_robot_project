@@ -206,10 +206,6 @@ controller_interface::return_type TaskSpaceQPController::update(
   torque_desired += state_.nle; 
   torque_desired -= Kd_joint * state_.v_arm;
 
-  // test for real
-  // torque_desired = state_.M_arm * acc_arm;
-  // torque_desired += state_.nle;
-
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
 

@@ -6,14 +6,15 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-
+        DeclareLaunchArgument('task', default_value='pick_and_place'),
         Node(
             package='cho_task_manager',
             executable='task_manager_node',
             name='task_manager_node',
             output='screen',
             parameters=[{
-                'use_sim_time': LaunchConfiguration('use_sim_time')
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'task': LaunchConfiguration('task'),
             }]
         )
     ])
