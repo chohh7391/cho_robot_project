@@ -68,5 +68,5 @@ def plot_results(bag_db_path):
     plt.show()
 
 if __name__ == "__main__":
-    log_file_path = "/home/home//rosbag2_2026_04_02-14_55_50/rosbag2_2026_04_02-14_55_50_0.db3"
+    log_file_path = "/home/home/rosbag_logs/rosbag2_2026_04_16-14_17_20/rosbag2_2026_04_16-14_17_20_0.db3"
     plot_results(log_file_path)

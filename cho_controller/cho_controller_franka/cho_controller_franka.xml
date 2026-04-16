@@ -1,0 +1,56 @@
+<library path="cho_controller_franka">
+    <class name="cho_controller_franka/IKController"
+           type="cho_controller::franka::IKController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The inverse kinematics controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/GravityCompensationController"
+           type="cho_controller::franka::GravityCompensationController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The gravity compensation controller only sends zero torques so that the robot does gravity compensation
+        </description>
+    </class>
+    <class name="cho_controller_franka/JointSpaceImpedanceController"
+           type="cho_controller::franka::JointSpaceImpedanceController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The joint space impedance controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/TaskSpaceImpedanceController"
+           type="cho_controller::franka::TaskSpaceImpedanceController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The task space impedance controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/OperationalSpaceController"
+           type="cho_controller::franka::OperationalSpaceController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The operational space controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/GripperController"
+           type="cho_controller::franka::GripperController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The Gripper controller demonstrates the use of the Robot gripper.
+        </description>
+    </class>
+    <class name="cho_controller_franka/JointSpaceQPController"
+           type="cho_controller::franka::JointSpaceQPController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The joint space qp controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/TaskSpaceQPController"
+           type="cho_controller::franka::TaskSpaceQPController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The task space qp controller
+        </description>
+    </class>
+    <class name="cho_controller_franka/VLAController"
+           type="cho_controller::franka::VLAController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The VLA controller
+        </description>
+    </class>
+</library>
