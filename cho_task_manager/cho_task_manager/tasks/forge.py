@@ -20,6 +20,9 @@ FORGE_FRANKA_APPROACH_POSE = make_pose(
     position=[0.6, 0.0, 0.05 + 0.047 + 0.1],
     orientation=[1.0, 0.0, 0.0, 0.0]
 )
+FORGE_FRANKA_APPROACH_JOINT_POSITION = make_joint_state(
+    [-0.3202889859676361,0.5399062633514404,0.3390618860721588,-1.862808346748352,-0.24342849850654602,2.361226797103882,0.30928418040275574]
+)
 
 # ==========================================
 # 🧠 Pick and Place 트리 조립
@@ -45,31 +48,56 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         GripperActionBehavior(name="Open_Gripper_Init", grasp=False)
     ])
 
-    # 2. Approach to fixed object
+    # # 2. Approach to fixed object
+    # approach_seq = py_trees.composites.Sequence(name="2_Approach_Fixed_Object", memory=True)
+    # approach_seq.add_children([
+    #     SwitchControllerServiceBehavior(
+    #         name="Switch_To_Task_Impedance",
+    #         activate=[ControllerNames.TASK_IMPEDANCE],
+    #         deactivate=[ControllerNames.JOINT_IMPEDANCE]
+    #     ),
+    #     TaskSpaceActionBehavior(
+    #         name="Approach_Object",
+    #         target_pose=FORGE_FRANKA_APPROACH_POSE,
+    #         relative=False,
+    #         controller_name=ControllerNames.TASK_IMPEDANCE,
+    #         duration=5.0
+    #     ),
+    #     GripperActionBehavior(name="Close_Gripper", grasp=True),
+    # ])
+
+    # # 3. Start VLA Controller
+    # vla_seq = py_trees.composites.Sequence(name="3_Start_VLA", memory=True)
+    # vla_seq.add_children([
+    #     SwitchControllerServiceBehavior(
+    #         name="Switch_To_VLA",
+    #         activate=[ControllerNames.VLA],
+    #         deactivate=[ControllerNames.TASK_IMPEDANCE]
+    #     ),
+    #     VLACompletionWaiterBehavior(
+    #         name="Wait_For_VLA_Completion"
+    #     )
+    # ])
+
+    # 2. Approach to fixed object (test)
     approach_seq = py_trees.composites.Sequence(name="2_Approach_Fixed_Object", memory=True)
     approach_seq.add_children([
-        SwitchControllerServiceBehavior(
-            name="Switch_To_Task_Impedance",
-            activate=[ControllerNames.TASK_IMPEDANCE],
-            deactivate=[ControllerNames.JOINT_IMPEDANCE]
-        ),
-        TaskSpaceActionBehavior(
+        JointSpaceActionBehavior(
             name="Approach_Object",
-            target_pose=FORGE_FRANKA_APPROACH_POSE,
-            relative=False,
-            controller_name=ControllerNames.TASK_IMPEDANCE,
+            target_joints=FORGE_FRANKA_APPROACH_JOINT_POSITION,
+            controller_name=ControllerNames.JOINT_IMPEDANCE,
             duration=5.0
         ),
         GripperActionBehavior(name="Close_Gripper", grasp=True),
     ])
 
-    # 3. Start VLA Controller
+    # 3. Start VLA Controller (test)
     vla_seq = py_trees.composites.Sequence(name="3_Start_VLA", memory=True)
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
             activate=[ControllerNames.VLA],
-            deactivate=[ControllerNames.TASK_IMPEDANCE]
+            deactivate=[ControllerNames.JOINT_IMPEDANCE]
         ),
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
