@@ -67,6 +67,20 @@ colcon build --symlink-install
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
 ```
 
+# PC1 & PC2 Setting
+- PC1: run controller with action server
+- PC2: call action server
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up  # login with same account
+```
+- check IP of two PCs
+```bash
+tailscale ip -4
+```
+
+
 # Run
 
 ## Bringup
@@ -149,6 +163,31 @@ ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=false
 source ~/ros2_ws/install/setup.bash
 ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=true
 ```
+
+## Run with 2 PC
+- PC1: run controller with action server
+- PC2: call action server
+
+
+1. run server (PC2), don't quit this terminal
+```bash
+fastdds discovery --server-id 0 -l <PC2_IP> -p 11811
+```
+
+2. bringup (PC1)
+```bash
+export ROS_DISCOVERY_SERVER="<PC2_IP>:11811"
+source ~/ros2_ws/install/setup.bash
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:={control_mode} controller_name:={controller_name}
+```
+
+3. call control command (PC2)
+```bash
+export ROS_DISCOVERY_SERVER="<PC2_IP>:11811"
+source ~/ros2_ws/install/setup.bash
+python3 cho_task_manager/python/action_client.py
+```
+
 
 ## Log
 - log desired & current pose
