@@ -88,7 +88,7 @@ tailscale ip -4
 ### Available controllers
 
 - position controllers
-    - ik_controller
+    - ik_controller (TODO: make this controller stable)
 
 - torque controllers
     - gravity_compensation_controller
@@ -105,7 +105,17 @@ tailscale ip -4
 - real (change **robot ip** in cho_franka_bringup/config/real/franka.config.yaml)
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch cho_franka_bringup bringup_real_robot.launch.py
+
+# position control mode
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=position controller_name:={controller_name}
+
+# torque control mode
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque controller_name:={controller_name}
+
+# vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
+# before execution, change control_mode in controller config
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py vla:=true control_mode:=position
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py vla:=true control_mode:=torque
 ```
 
 - gazebo
@@ -140,23 +150,27 @@ ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py vla:=true control_
 ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py vla:=true control_mode:=torque
 ```
 
-## Client
+## Test
 - run general action client
 ```bash
 source ~/ros2_ws/install/setup.bash
+# change code for using desired controller before run
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/action_client.py
 ```
 
 - run vla action client
 ```bash
 source ~/ros2_ws/install/setup.bash
+# real
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py
+# simulation
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py --ros-args -p use_sim_time:=true
 ```
 
 - run Behavior Tree
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch cho_task_manager run_task_manager.launch.py
+ros2 launch cho_task_manager run_task_manager.launch.py task:=<YOUR_TASK>
 ```
 
 ## Run with 2 PC
@@ -194,7 +208,7 @@ ros2 bag record /log/ee_pose
 - plot /log/ee_pose
 ```bash
 source ~/ros2_ws/install/setup.bash
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py --path <DB3_PATH>
 ```
 
 # Trouble Shooting
