@@ -167,6 +167,15 @@ python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_clien
 python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py --ros-args -p use_sim_time:=true
 ```
 
+- run vla action with csv
+```bash
+source ~/ros2_ws/install/setup.bash
+# real
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_with_csv.py --csv_path <CSV_PATH> --hz <INFERENCE_HZ> --chunk_size <CHUNK_SIZE>
+# simulation
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_with_csv.py --csv_path <CSV_PATH> --hz <INFERENCE_HZ> --chunk_size <CHUNK_SIZE> --ros-args -p use_sim_time:=true
+```
+
 - run Behavior Tree
 ```bash
 source ~/ros2_ws/install/setup.bash
