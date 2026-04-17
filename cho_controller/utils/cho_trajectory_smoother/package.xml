@@ -2,9 +2,9 @@
 <package format="3">
   <name>cho_trajectory_smoother</name>
   <version>1.0.0</version>
-  <description>Time-optimized trajectory generation for KIMM</description>
+  <description>Time-optimized trajectory generation/description>
 
-  <maintainer email="kim87@kimm.re.kr">Sanghyun Kim</maintainer>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>BSD</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
