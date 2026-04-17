@@ -18,10 +18,12 @@ namespace franka {
 
 struct VLACommand {
     std::vector<pinocchio::SE3> target_poses;
-    std::vector<double> gripper_widths;
+    std::vector<double> gripper_actions;
     bool is_relative {false};
+    rclcpp::Time action_chunk_send_time;
+    
     bool is_valid {false};
-    rclcpp::Time chunk_receive_time;
+    rclcpp::Time action_chunk_receive_time;
 };
 
 
@@ -49,6 +51,8 @@ public:
 
     bool compute(const rclcpp::Time& current_time, State & state) override;
 
+    Eigen::Matrix3d convertRotationMatrix(const std::vector<double> & orientation, const string & rotation_type);
+
 protected:
     std::string model_name_;
     bool is_relative_ {false};
@@ -64,12 +68,14 @@ protected:
 
     realtime_tools::RealtimeBuffer<VLACommand> vla_cmd_buffer_;
     int chunk_size_;
-    const double inference_dt_ = 0.0666;
+    double inference_dt_;
     double dt_;
     const double ema_factor_ = 0.2;
 
     int current_step_idx_ = -1;
     double last_chunk_time_sec_ = -1.0;
+
+    pinocchio::SE3 last_commanded_pose_ = pinocchio::SE3::Identity();
     
     void process_vla_action(const cho_interfaces::msg::ActionChunk::SharedPtr msg);
 

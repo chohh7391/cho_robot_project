@@ -5,5 +5,5 @@ bool relative
 string rotation_type # euler, axis_angle, rotation6d, quaternion
 
 int32 chunk_size
-float64[] arm_action
-float32[] gripper_action
+float64[] arm_actions
+float32[] gripper_actions

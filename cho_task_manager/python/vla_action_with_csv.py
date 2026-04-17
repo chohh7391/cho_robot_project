@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 class VLAActionCSVTester(Node):
-    def __init__(self, csv_path, hz=12.0, chunk_size=16):
+    def __init__(self, csv_path, hz=15.0, chunk_size=16):
         super().__init__('vla_action_csv_tester')
 
         self.test_rotation_type = "axis_angle" 
@@ -60,7 +60,7 @@ class VLAActionCSVTester(Node):
         self._action_client.wait_for_server()
         goal_msg = VisionLanguageAction.Goal()
         goal_msg.model_name = f"tester_{self.test_rotation_type}_csv"
-        goal_msg.control_mode = "effort"
+        goal_msg.inference_frequency = 15.0
 
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
@@ -84,7 +84,7 @@ class VLAActionCSVTester(Node):
             self.timer.cancel() # 퍼블리시 타이머 종료
             
             # 5초 후 서비스를 호출하는 단발성(one-shot) 타이머 생성
-            self.trigger_timer = self.create_timer(5.0, self.delayed_trigger_callback)
+            self.trigger_timer = self.create_timer(0.5, self.delayed_trigger_callback)
             return
 
         msg = ActionChunk()
@@ -117,8 +117,8 @@ class VLAActionCSVTester(Node):
             else:
                 gripper_actions.append(1.0) 
 
-        msg.arm_action = arm_actions
-        msg.gripper_action = gripper_actions
+        msg.arm_actions = arm_actions
+        msg.gripper_actions = gripper_actions
 
         self.publisher_.publish(msg)
         self.current_row += rows_to_read

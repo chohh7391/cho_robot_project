@@ -13,7 +13,7 @@ class VLAActionTester(Node):
         super().__init__('vla_action_tester')
 
         # "axis_angle", "euler", "quaternion", "rotation6d"
-        self.test_rotation_type = "rotation6d" 
+        self.test_rotation_type = "quaternion" 
         self.is_relative = True
 
         self._action_client = ActionClient(self, VisionLanguageAction, '/controller_action_server/vla_controller')
@@ -21,7 +21,7 @@ class VLAActionTester(Node):
         
         self.count = 0
         self.chunk_size = 16
-        self.inference_dt = 1/12
+        self.inference_dt = 1/15
         self.dt = self.inference_dt / self.chunk_size
         self.goal_accepted = False
         self.timer = None
@@ -33,7 +33,7 @@ class VLAActionTester(Node):
         self._action_client.wait_for_server()
         goal_msg = VisionLanguageAction.Goal()
         goal_msg.model_name = f"tester_{self.test_rotation_type}"
-        goal_msg.control_mode = "effort"
+        goal_msg.inference_frequency = 15.0
 
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
@@ -96,8 +96,8 @@ class VLAActionTester(Node):
 
             gripper_actions.append(-1.0) # Open
 
-        msg.arm_action = arm_actions
-        msg.gripper_action = gripper_actions
+        msg.arm_actions = arm_actions
+        msg.gripper_actions = gripper_actions
 
         self.publisher_.publish(msg)
         self.get_logger().info(f'Published {self.test_rotation_type} chunk {self.count}')

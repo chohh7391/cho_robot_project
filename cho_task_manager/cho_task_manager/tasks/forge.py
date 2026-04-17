@@ -3,7 +3,6 @@ from cho_task_manager.behaviors.action import (
     JointSpaceActionBehavior,
     TaskSpaceActionBehavior,
     GripperActionBehavior,
-    VLAActionBehavior,
 )
 from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
@@ -12,6 +11,9 @@ from cho_task_manager.behaviors.service import (
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose, make_down_pose, make_up_pose
 from cho_task_manager.utils.controller_names import ControllerNames
 
+FRANKA_HOME_POSITION = make_joint_state(
+    [0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785]
+)
 
 FORGE_FRANKA_DEFAULT_POSITION = make_joint_state(
     [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
@@ -101,7 +103,8 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         ),
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
-        )
+        ),
+        py_trees.timers.Timer(name="Wait_2_Seconds", duration=2.0)
     ])
 
     # 4. finish
@@ -114,11 +117,11 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         ),
         JointSpaceActionBehavior(
             name="Go_Home_Final",
-            target_joints=FORGE_FRANKA_DEFAULT_POSITION,
+            target_joints=FRANKA_HOME_POSITION,
             controller_name=ControllerNames.JOINT_IMPEDANCE,
             duration=5.0
         ),
-        GripperActionBehavior(name="Close_Gripper", grasp=False),
+        GripperActionBehavior(name="Open_Gripper", grasp=False),
     ])
 
     mission_sequence.add_children([init_seq, approach_seq, vla_seq, finish_seq])

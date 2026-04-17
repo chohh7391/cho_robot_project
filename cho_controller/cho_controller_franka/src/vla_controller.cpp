@@ -86,8 +86,7 @@ controller_interface::return_type VLAController::update(
   if (action_server_ && action_server_->is_running()) {
     action_server_->compute(time, state_);
   } else {
-    state_.H_ee_ref = state_.H_ee_init;
-    state_.H_ee_des = state_.H_ee_ref;
+    state_.H_ee_des = state_.H_ee_init;  // when activate vla controller, H_ee_init is set to H_ee;
   }
 
   const Matrix7d & M = state_.M_arm;              // 7x7 Mass Matrix

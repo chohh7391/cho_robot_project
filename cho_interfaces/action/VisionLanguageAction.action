@@ -1,6 +1,6 @@
 # goal
 string model_name  # 'act', 'diffusion_policy', 'gr00t' ...
-string control_mode  # 'position', 'velocity', 'effort'
+float32 inference_frequency
 ---
 # result
 bool is_completed
