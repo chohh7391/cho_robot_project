@@ -18,7 +18,7 @@ ros-humble-ros2-control-cmake libgrpc++-dev protobuf-compiler-grpc
 ```
 
 ```bash
-pip3 install grpcio
+pip3 install grpcio pandas
 ```
 
 - libfranka
