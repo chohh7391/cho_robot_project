@@ -2,7 +2,7 @@
 <package format="3">
   <name>cho_trajectory_smoother</name>
   <version>1.0.0</version>
-  <description>Time-optimized trajectory generation/description>
+  <description>Time-optimized trajectory generation/description</description>
 
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>BSD</license>

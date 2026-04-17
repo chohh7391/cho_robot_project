@@ -74,11 +74,6 @@ void VLAActionServer::handle_accepted(
 
 bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
-    static bool is_pub_activated = false;
-    if (!is_pub_activated) {
-        is_pub_activated = true;
-    }
-
     if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) return false;
 
     VLACommand const * cmd = vla_cmd_buffer_.readFromRT();
