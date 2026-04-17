@@ -155,13 +155,8 @@ python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_clien
 
 - run Behavior Tree
 ```bash
-# real
 source ~/ros2_ws/install/setup.bash
-ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=false
-
-# simulation
-source ~/ros2_ws/install/setup.bash
-ros2 launch cho_task_manager run_task_manager.launch.py use_sim_time:=true
+ros2 launch cho_task_manager run_task_manager.launch.py
 ```
 
 ## Run with 2 PC
