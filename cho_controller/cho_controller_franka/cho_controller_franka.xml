@@ -1,4 +1,10 @@
 <library path="cho_controller_franka">
+    <class name="cho_controller_franka/EEStateBroadcaster"
+           type="cho_controller::franka::EEStateBroadcaster" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            End-Effector State broadcaster
+        </description>
+    </class>
     <class name="cho_controller_franka/IKController"
            type="cho_controller::franka::IKController" base_class_type="controller_interface::ControllerInterface">
         <description>

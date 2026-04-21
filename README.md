@@ -14,11 +14,11 @@ ros-humble-ros2-control-test-assets ros-humble-franka-description \
 ros-humble-ros-gz-sim ros-humble-ros2-control ros-humble-ros2-controllers \
 ros-humble-ign-ros2-control ros-humble-gz-ros2-control \
 ros-humble-py-trees ros-humble-py-trees-ros ros-humble-ros-gz-bridge \
-ros-humble-ros2-control-cmake libgrpc++-dev protobuf-compiler-grpc
+ros-humble-ros2-control-cmake
 ```
 
 ```bash
-pip3 install grpcio pandas
+pip3 install pandas
 ```
 
 - libfranka

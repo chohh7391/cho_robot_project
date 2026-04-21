@@ -180,6 +180,7 @@ def generate_launch_description():
         # 항상 켜져야 하는 공통 컨트롤러들
         common_controllers = [
             Node(package='controller_manager', executable='spawner', arguments=['joint_state_broadcaster', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
+            Node(package='controller_manager', executable='spawner', arguments=['ee_state_broadcaster', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
             Node(package='controller_manager', executable='spawner', arguments=['simulation_gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
             Node(package='controller_manager', executable='spawner', arguments=['gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
         ]

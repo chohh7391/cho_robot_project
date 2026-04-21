@@ -35,6 +35,7 @@ find_package(cho_interfaces REQUIRED)
 add_library(${PROJECT_NAME} SHARED
     # controllers
     src/base_controller.cpp
+    src/ee_state_broadcaster.cpp
     src/ik_controller.cpp
     src/gravity_compensation_controller.cpp
     src/gripper_controller.cpp
