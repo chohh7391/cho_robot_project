@@ -70,6 +70,13 @@ def generate_launch_description():
         output='screen'
     )
 
+    load_ee_state_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['ee_state_broadcaster'],
+        output='screen'
+    )
+
     load_simulation_gripper_controller = Node(
         package='controller_manager',
         executable='spawner',
@@ -159,7 +166,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 event_handler=OnProcessStart(
                     target_action=node_mujoco_ros2_control,
-                    on_start=[load_joint_state_controller],
+                    on_start=[load_joint_state_controller, load_ee_state_controller],
                 )
             ),
             RegisterEventHandler(
