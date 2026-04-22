@@ -213,8 +213,8 @@ void GripperController::graspGripper() {
   // bic pen: 0.008 < 0.015 - 0.005  is a fail
   // mini flashlight 0.30 > 0.015 + 0.010 is a fail
   franka_msgs::action::Grasp::Goal grasp_goal;
-  grasp_goal.width = 0.015;
-  grasp_goal.speed = 0.05;
+  grasp_goal.width = 0.01;
+  grasp_goal.speed = 0.03;
   grasp_goal.force = 100.0;
   grasp_goal.epsilon.inner = 0.005;  // 10mm or less == fail !
   grasp_goal.epsilon.outer = 0.010;  // 25mm or more == fail !

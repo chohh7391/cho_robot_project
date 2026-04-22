@@ -92,7 +92,7 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, State & 
   double error_norm = (state.q_arm_ref - state.q_arm.head(num_dof_)).norm();
 
   // success
-  if (elapsed_time_sec > goal_handle_->get_goal()->duration && error_norm < 1e-2) {
+  if (elapsed_time_sec > goal_handle_->get_goal()->duration && error_norm < 5e-2 /*1e-3*/) {
     RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f", action_name_.c_str(), error_norm);
     result_msg_->is_completed = true;
     goal_handle_->succeed(result_msg_);

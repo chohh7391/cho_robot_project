@@ -143,7 +143,7 @@ def generate_robot_nodes(context):
             )
 
         # 공통 컨트롤러들 (항상 켜져야 하는 것들)
-        for common_ctrl in ['gripper_controller', 'ee_state_broadcaster']: 
+        for common_ctrl in ['gripper_controller']: 
             nodes.append(
                 Node(
                     package='controller_manager',

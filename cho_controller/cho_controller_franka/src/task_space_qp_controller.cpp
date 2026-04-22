@@ -63,7 +63,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   posture_gain.setZero();
   
   // 시뮬레이션용 높은 게인 (팔 7개만 설정, 나머지는 0)
-  posture_gain.head(num_dof_) << 4000., 4000., 4000., 4000., 4000., 4000., 4000.;
+  posture_gain.head(num_dof_) << 400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0;
 
   task_joint_posture_->Kp(posture_gain);
   task_joint_posture_->Kd(2.0 * posture_gain.cwiseSqrt());

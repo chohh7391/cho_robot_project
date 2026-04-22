@@ -98,8 +98,8 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
       } else {
           RCLCPP_WARN(node_->get_logger(), "[%s] Goal Aborted/Failed after 1s delay.", action_name_.c_str());
           result_msg_->is_completed = false;
-          // goal_handle_->abort(result_msg_); // 원래는 이게 맞음
-          goal_handle_->succeed(result_msg_);  // 사용자의 테스트용 코드 유지
+          goal_handle_->abort(result_msg_); // 원래는 이게 맞음
+          // goal_handle_->succeed(result_msg_);  // 사용자의 테스트용 코드 유지
       }
       
       is_waiting_ = false;
