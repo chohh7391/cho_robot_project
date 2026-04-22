@@ -19,7 +19,7 @@ FORGE_FRANKA_DEFAULT_POSITION = make_joint_state(
     [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
 )
 FORGE_FRANKA_APPROACH_POSE = make_pose(
-    position=[0.6, 0.0, 0.05 + 0.047 + 0.1],
+    position=[0.5965810418128967,0.03358021751046181, 0.05 + 0.047 + 0.3],
     orientation=[1.0, 0.0, 0.0, 0.0]
 )
 FORGE_FRANKA_APPROACH_JOINT_POSITION = make_joint_state(
@@ -42,7 +42,7 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
             deactivate=[ControllerNames.VLA]
         ),
         JointSpaceActionBehavior(
-            name="Approach_Object",
+            name="Go_Home_Init",
             target_joints=FORGE_FRANKA_DEFAULT_POSITION,
             controller_name=ControllerNames.JOINT_IMPEDANCE,
             duration=5.0
@@ -84,10 +84,16 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
     # 2. Approach to fixed object (test)
     approach_seq = py_trees.composites.Sequence(name="2_Approach_Fixed_Object", memory=True)
     approach_seq.add_children([
-        JointSpaceActionBehavior(
+        SwitchControllerServiceBehavior(
+            name="Switch_To_Task_QP",
+            activate=[ControllerNames.TASK_QP],
+            deactivate=[ControllerNames.JOINT_IMPEDANCE]
+        ),
+        TaskSpaceActionBehavior(
             name="Approach_Object",
-            target_joints=FORGE_FRANKA_APPROACH_JOINT_POSITION,
-            controller_name=ControllerNames.JOINT_IMPEDANCE,
+            target_pose=FORGE_FRANKA_APPROACH_POSE,
+            relative=False,
+            controller_name=ControllerNames.TASK_QP,
             duration=5.0
         ),
         GripperActionBehavior(name="Close_Gripper", grasp=True),
@@ -99,7 +105,7 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
             activate=[ControllerNames.VLA],
-            deactivate=[ControllerNames.JOINT_IMPEDANCE]
+            deactivate=[ControllerNames.TASK_QP]
         ),
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
@@ -124,7 +130,8 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         GripperActionBehavior(name="Open_Gripper", grasp=False),
     ])
 
-    mission_sequence.add_children([init_seq, approach_seq, vla_seq, finish_seq])
+    mission_sequence.add_children([init_seq, approach_seq, vla_seq])
+    # mission_sequence.add_children([init_seq, approach_seq, vla_seq, finish_seq])
 
     root = py_trees.decorators.OneShot(
         child=mission_sequence,
