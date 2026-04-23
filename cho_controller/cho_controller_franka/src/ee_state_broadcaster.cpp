@@ -4,18 +4,6 @@
 namespace cho_controller {
 namespace franka {
 
-controller_interface::InterfaceConfiguration
-EEStateBroadcaster::command_interface_configuration() const
-{
-    // broadcaster는 command interface 없음
-    return {controller_interface::interface_configuration_type::NONE};
-}
-
-CallbackReturn EEStateBroadcaster::on_init()
-{
-    return FrankaBaseController::on_init();
-}
-
 CallbackReturn EEStateBroadcaster::on_configure(
     const rclcpp_lifecycle::State & previous_state)
 {
@@ -30,42 +18,34 @@ CallbackReturn EEStateBroadcaster::on_configure(
 }
 
 controller_interface::return_type EEStateBroadcaster::update(
-    const rclcpp::Time & time, const rclcpp::Duration & period)
+    const rclcpp::Time & time,
+    const rclcpp::Duration & period)
 {
     if (FrankaBaseController::update(time, period) != controller_interface::return_type::OK) {
         return controller_interface::return_type::ERROR;
     }
 
-    const auto & H  = state_.H_ee;
-    const auto & J  = state_.J_arm;   // 6x7, LOCAL frame
-    const auto & dq = state_.v_arm;
-
-    // ── Pose ──────────────────────────────────────────────────────────────
+    // ── Pose ─────────────────────────────────────────────────────────────
     geometry_msgs::msg::PoseStamped pose_msg;
     pose_msg.header.stamp    = time;
     pose_msg.header.frame_id = "world";
 
-    pose_msg.pose.position.x = H.translation()(0);
-    pose_msg.pose.position.y = H.translation()(1);
-    pose_msg.pose.position.z = H.translation()(2);
+    pose_msg.pose.position.x = state_.H_ee.translation()(0);
+    pose_msg.pose.position.y = state_.H_ee.translation()(1);
+    pose_msg.pose.position.z = state_.H_ee.translation()(2);
 
-    Eigen::Quaterniond q(H.rotation());
+    Eigen::Quaterniond q(state_.H_ee.rotation());
     pose_msg.pose.orientation.x = q.x();
     pose_msg.pose.orientation.y = q.y();
     pose_msg.pose.orientation.z = q.z();
     pose_msg.pose.orientation.w = q.w();
 
     // ── Twist (world-aligned) ─────────────────────────────────────────────
-    // J_arm은 LOCAL frame → world-aligned로 변환 후 J*dq
-    Eigen::Matrix<double, 6, 7> J_world;
-    J_world.topRows<3>()    = H.rotation() * J.topRows<3>();
-    J_world.bottomRows<3>() = H.rotation() * J.bottomRows<3>();
-
-    Vector6d twist = J_world * dq;
+    Vector6d twist = state_.J_arm * state_.v_arm;
 
     geometry_msgs::msg::TwistStamped twist_msg;
     twist_msg.header.stamp    = time;
-    twist_msg.header.frame_id = "world";
+    twist_msg.header.frame_id = "fr3_link0";
 
     twist_msg.twist.linear.x  = twist(0);
     twist_msg.twist.linear.y  = twist(1);

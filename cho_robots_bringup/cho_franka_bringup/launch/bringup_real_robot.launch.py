@@ -77,7 +77,7 @@ def generate_robot_nodes(context):
     if '/**' not in dynamic_params_dict:
         dynamic_params_dict['/**'] = {}
 
-    for ctrl in controllers_to_load:
+    for ctrl in controllers_to_load + ['ee_state_broadcaster']:
         if ctrl not in dynamic_params_dict['/**']:
             dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
         elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
@@ -143,7 +143,7 @@ def generate_robot_nodes(context):
             )
 
         # 공통 컨트롤러들 (항상 켜져야 하는 것들)
-        for common_ctrl in ['gripper_controller']: 
+        for common_ctrl in ['gripper_controller', 'ee_state_broadcaster']:
             nodes.append(
                 Node(
                     package='controller_manager',

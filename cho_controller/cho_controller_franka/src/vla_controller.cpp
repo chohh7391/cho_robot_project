@@ -125,6 +125,8 @@ controller_interface::return_type VLAController::update(
     Vector7d tau_null = N_T * tau_0;
 
     torque_desired = J.transpose() * F_task + tau_null + state_.nle;
+    // for test
+    // torque_desired = state_.nle;
 
     // 토크 클리핑
     FrankaBaseController::clip_torque(torque_desired);
