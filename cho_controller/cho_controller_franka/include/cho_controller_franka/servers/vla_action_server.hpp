@@ -90,7 +90,7 @@ protected:
     
     // notify vla completion
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr notify_completion_client_;
-    void trigger_bt_completion(bool success);
+    void trigger_bt_completion();
 }; 
 
 } // namespace franka

@@ -169,7 +169,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         state.H_ee_des = state.H_ee;
         control_running_ = false;
         task_success_flag_.store(false);
-        trigger_bt_completion(true);
+        trigger_bt_completion();
         goal_handle_.reset();
         return true;
     }
@@ -180,7 +180,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         goal_handle_->abort(result_msg_);
         state.H_ee_init = state.H_ee;
         control_running_ = false;
-        trigger_bt_completion(false);
+        trigger_bt_completion();
         goal_handle_.reset();
         return false; 
     }
@@ -303,7 +303,7 @@ void VLAActionServer::handle_success_trigger(
     RCLCPP_INFO(node_->get_logger(), "User triggered task success via Service!");
 }
 
-void VLAActionServer::trigger_bt_completion(bool success) {
+void VLAActionServer::trigger_bt_completion() {
     if (!notify_completion_client_->wait_for_service(std::chrono::seconds(0))) {
         return; // BT 노드가 아직 안 켜졌으면 무시
     }

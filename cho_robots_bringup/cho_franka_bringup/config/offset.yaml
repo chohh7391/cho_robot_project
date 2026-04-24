@@ -1,0 +1,5 @@
+# config/payload.yaml
+/**:
+  ros__parameters:
+    tip_offset: [0.0, 0.0, 0.1034]
+

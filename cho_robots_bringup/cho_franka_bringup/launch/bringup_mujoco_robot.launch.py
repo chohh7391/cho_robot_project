@@ -120,21 +120,45 @@ def generate_launch_description():
         dynamic_params_dict = {'/**': {}}
         internal_mode = 'effort' if mode == 'torque' else mode
 
-        for ctrl in controllers_to_load:
-            dynamic_params_dict['/**'][ctrl] = {
-                'ros__parameters': {
-                    'bringup_type': b_type,
-                    'control_mode': internal_mode
-                }
-            }
+        def deep_merge(base: dict, override: dict) -> dict:
+            for key, val in override.items():
+                if key in base and isinstance(base[key], dict) and isinstance(val, dict):
+                    deep_merge(base[key], val)
+                else:
+                    base[key] = val
+            return base
 
-        # 임시 YAML 파일 생성 (Launch 파서가 읽은 후 OS가 나중에 알아서 삭제합니다)
+        offset_config_file = os.path.join(bringup_path, 'config', 'offset.yaml')
+
+        dynamic_params_dict = {'/**': {}}
+        if os.path.exists(payload_config_file):
+            with open(payload_config_file, 'r') as f:
+                dynamic_params_dict = yaml.safe_load(f) or {}
+
+        if os.path.exists(offset_config_file):
+            with open(offset_config_file, 'r') as f:
+                offset_params_dict = yaml.safe_load(f) or {}
+            dynamic_params_dict = deep_merge(dynamic_params_dict, offset_params_dict)
+
+        if '/**' not in dynamic_params_dict:
+            dynamic_params_dict['/**'] = {}
+
+        for ctrl in controllers_to_load:
+            if ctrl not in dynamic_params_dict['/**']:
+                dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
+            elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
+                dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
+
+            dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
+            dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
+
         temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
         yaml.dump(dynamic_params_dict, temp_yaml_file)
         temp_yaml_file.close()
         # ---------------------------------------------------------
 
-        # Mujoco Node 생성 시 동적 생성한 temp_yaml_file의 경로를 전달
+        # Mujoco Node에서는 payload_config_file을 별도로 넘기던 것을
+        # 이제 temp_yaml_file에 통합되었으므로 제거
         node_mujoco_ros2_control = Node(
             package='mujoco_ros2_control',
             executable='mujoco_ros2_control',
@@ -142,8 +166,7 @@ def generate_launch_description():
             parameters=[
                 robot_description,
                 controller_config_file,
-                payload_config_file,
-                temp_yaml_file.name, # 동적 파라미터 YAML 파일 주입!
+                temp_yaml_file.name,  # payload + offset + 동적 파라미터 통합
                 {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')}
             ]
         )
