@@ -112,10 +112,9 @@ protected:
     pinocchio::Data data_;
     State state_;
 
-    std::string ee_name_ = "fr3_hand";
+    std::string ee_name_ = "fr3_hand_tcp";
     pinocchio::FrameIndex ee_id_;
     Vector3d ee_offset_ {0.0, 0.0, 0.0};
-    pinocchio::SE3 tip_transform_;
 
     double time_;
     int na_, nv_, nq_;

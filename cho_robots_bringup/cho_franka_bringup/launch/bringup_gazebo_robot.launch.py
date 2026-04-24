@@ -146,21 +146,6 @@ def generate_launch_description():
         with open(payload_config_path, 'r') as f:
             dynamic_params_dict = yaml.safe_load(f) or {}
 
-        # ✅ offset.yaml 병합 추가
-        offset_config_path = os.path.join(pkg_bringup, 'config', 'offset.yaml')
-        with open(offset_config_path, 'r') as f:
-            offset_params_dict = yaml.safe_load(f) or {}
-
-        def deep_merge(base: dict, override: dict) -> dict:
-            for key, val in override.items():
-                if key in base and isinstance(base[key], dict) and isinstance(val, dict):
-                    deep_merge(base[key], val)
-                else:
-                    base[key] = val
-            return base
-
-        dynamic_params_dict = deep_merge(dynamic_params_dict, offset_params_dict)
-
         # 2. 동적 파라미터(bringup_type, control_mode) 덮어쓰기
         for ctrl in controllers_to_load:
             if ctrl not in dynamic_params_dict['/**']:

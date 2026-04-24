@@ -128,17 +128,10 @@ def generate_launch_description():
                     base[key] = val
             return base
 
-        offset_config_file = os.path.join(bringup_path, 'config', 'offset.yaml')
-
         dynamic_params_dict = {'/**': {}}
         if os.path.exists(payload_config_file):
             with open(payload_config_file, 'r') as f:
                 dynamic_params_dict = yaml.safe_load(f) or {}
-
-        if os.path.exists(offset_config_file):
-            with open(offset_config_file, 'r') as f:
-                offset_params_dict = yaml.safe_load(f) or {}
-            dynamic_params_dict = deep_merge(dynamic_params_dict, offset_params_dict)
 
         if '/**' not in dynamic_params_dict:
             dynamic_params_dict['/**'] = {}

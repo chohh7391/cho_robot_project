@@ -110,7 +110,8 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
         ),
-        py_trees.timers.Timer(name="Wait_2_Seconds", duration=2.0)
+        py_trees.timers.Timer(name="Wait_2_Seconds", duration=1.0),
+        GripperActionBehavior(name="Open_Gripper", grasp=False),
     ])
 
     # 4. finish

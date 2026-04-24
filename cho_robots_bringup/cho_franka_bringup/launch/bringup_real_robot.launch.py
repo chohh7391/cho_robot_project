@@ -68,7 +68,6 @@ def generate_robot_nodes(context):
     # ---------------------------------------------------------
     pkg_bringup = get_package_share_directory('cho_franka_bringup')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
-    offset_config_path = os.path.join(pkg_bringup, 'config', 'offset.yaml')
 
     def deep_merge(base: dict, override: dict) -> dict:
         for key, val in override.items():
@@ -82,11 +81,6 @@ def generate_robot_nodes(context):
     if os.path.exists(payload_config_path):
         with open(payload_config_path, 'r') as f:
             dynamic_params_dict = yaml.safe_load(f) or {}
-
-    if os.path.exists(offset_config_path):
-        with open(offset_config_path, 'r') as f:
-            offset_params_dict = yaml.safe_load(f) or {}
-        dynamic_params_dict = deep_merge(dynamic_params_dict, offset_params_dict)
 
     if '/**' not in dynamic_params_dict:
         dynamic_params_dict['/**'] = {}

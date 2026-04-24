@@ -50,15 +50,37 @@ def get_pose_data(db_path, start_t=None, end_t=None):
 
 def plot_results(bag_db_path, start_t, end_t):
     data = get_pose_data(bag_db_path, start_t, end_t)
-    if data is None: return
+    # 필터링 후 데이터가 완전히 비었을 경우를 방지
+    if data is None or len(data[0]) == 0:
+        print("조건에 맞는 시간대의 데이터가 없습니다.")
+        return
     
     t, d_pos, c_pos, d_q, c_q = data
 
-    # Orientation Error (Degrees)
-    rot_d = R.from_quat(d_q)
-    rot_c = R.from_quat(c_q)
-    # 두 회전 사이의 차이 계산
+    # ---------------------------------------------------------
+    # [수정된 부분] 쿼터니언 (Zero-norm) 에러 예외 처리
+    # ---------------------------------------------------------
+    # 1. 벡터의 크기(norm) 계산
+    norm_d = np.linalg.norm(d_q, axis=1)
+    norm_c = np.linalg.norm(c_q, axis=1)
+
+    # 2. 크기가 0에 가까운(초기화 안 된) 쓰레기값 인덱스 마스크 생성
+    invalid_mask = (norm_d < 1e-6) | (norm_c < 1e-6)
+
+    # 3. scipy 에러를 피하기 위해 임시로 유효한 쿼터니언([0,0,0,1])으로 복사 및 덮어쓰기
+    d_q_safe = np.copy(d_q)
+    c_q_safe = np.copy(c_q)
+    d_q_safe[invalid_mask] = [0.0, 0.0, 0.0, 1.0]
+    c_q_safe[invalid_mask] = [0.0, 0.0, 0.0, 1.0]
+
+    # 4. 회전 에러 계산
+    rot_d = R.from_quat(d_q_safe)
+    rot_c = R.from_quat(c_q_safe)
     error_rot = (rot_c.inv() * rot_d).magnitude() * (180.0 / np.pi)
+
+    # 5. 초기화 안 된 유효하지 않은 데이터 구간은 그래프에서 무시되도록 NaN 처리
+    error_rot[invalid_mask] = np.nan
+    # ---------------------------------------------------------
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
     coords = ['X', 'Y', 'Z']
@@ -80,7 +102,7 @@ def plot_results(bag_db_path, start_t, end_t):
     if len(t) > 0:
         plt.xlim(t[0], t[-1])
 
-    plt.suptitle(f'Tracking Performance: {bag_db_path}\nRange: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]}s', fontsize=15)
+    plt.suptitle(f'Tracking Performance: {bag_db_path}\nRange: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]:.2f}s', fontsize=15)
     plt.tight_layout()
     plt.show()
 

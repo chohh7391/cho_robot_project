@@ -28,7 +28,7 @@ controller_interface::return_type EEStateBroadcaster::update(
     // ── Pose ─────────────────────────────────────────────────────────────
     geometry_msgs::msg::PoseStamped pose_msg;
     pose_msg.header.stamp    = time;
-    pose_msg.header.frame_id = "world";
+    pose_msg.header.frame_id = "fr3_link0";
 
     pose_msg.pose.position.x = state_.H_ee.translation()(0);
     pose_msg.pose.position.y = state_.H_ee.translation()(1);
