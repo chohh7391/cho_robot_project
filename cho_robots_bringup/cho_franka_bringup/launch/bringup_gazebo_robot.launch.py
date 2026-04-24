@@ -39,6 +39,11 @@ def generate_launch_description():
             'bringup_type',
             default_value='gazebo',
             description='Global bringup type injected to all controllers'
+        ),
+        DeclareLaunchArgument(
+            'world',
+            default_value='empty.sdf',
+            description='Name of the Gazebo world file to load (e.g., custom_world.sdf)'
         )
     ]
 
@@ -48,8 +53,10 @@ def generate_launch_description():
     os.environ['GZ_SIM_RESOURCE_PATH'] = os.path.dirname(pkg_description)
     gazebo_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')),
-        launch_arguments={'gz_args': '-r empty.sdf'}.items(),
+            os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')
+        ),
+        # 하드코딩된 문자열 대신 LaunchConfiguration 리스트로 연결
+        launch_arguments={'gz_args': ['-r ', LaunchConfiguration('world')]}.items(),
     )
 
     clock_bridge = Node(

@@ -115,6 +115,7 @@ protected:
     std::string ee_name_ = "fr3_hand";
     pinocchio::FrameIndex ee_id_;
     Vector3d ee_offset_ {0.0, 0.0, 0.0};
+    pinocchio::SE3 tip_transform_;
 
     double time_;
     int na_, nv_, nq_;

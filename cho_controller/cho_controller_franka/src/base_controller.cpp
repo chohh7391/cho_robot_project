@@ -50,6 +50,13 @@ CallbackReturn FrankaBaseController::on_init()
         auto_declare<double>("mass", 0.0);
         auto_declare<std::vector<double>>("center_of_mass", {0.0, 0.0, 0.0});
         auto_declare<std::vector<double>>("load_inertia", {0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001});
+        auto offset_vec = get_node()->get_parameter("tip_offset").as_double_array();
+        tip_transform_ = pinocchio::SE3::Identity();
+        tip_transform_.translation() = Eigen::Vector3d(offset_vec[0], offset_vec[1], offset_vec[2]);
+        ee_offset_ = tip_transform_.translation();
+
+        RCLCPP_INFO(get_node()->get_logger(), "Fingertip offset applied: x=%.4f, y=%.4f, z=%.4f", 
+                    offset_vec[0], offset_vec[1], offset_vec[2]);
     } catch (const std::exception& e) {
         fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
         return CallbackReturn::ERROR;
@@ -215,12 +222,18 @@ void FrankaBaseController::compute_all_terms()
     robot_->computeAllTerms(data_, state_.q, state_.v);
     state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     state_.M = robot_->mass(data_);
+
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
     
     state_.M_arm = state_.M.topLeftCorner(num_dof_, num_dof_);
     state_.J_arm = state_.J.leftCols(num_dof_);
-    
+
+    // apply offset
+    state_.H_ee = state_.H_ee * tip_transform_;
+    state_.J = tip_transform_.inverse().toActionMatrix() * state_.J;
+    state_.J_arm = state_.J.leftCols(num_dof_);
+
     if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
         state_.nle = compute_hand_gravity();
     }
