@@ -19,7 +19,7 @@ FORGE_FRANKA_DEFAULT_POSITION = make_joint_state(
     [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
 )
 FORGE_FRANKA_APPROACH_POSE = make_pose(
-    position=[0.5965810418128967,0.03358021751046181, 0.05 + 0.047],
+    position=[0.6, 0.0, 0.05 + 0.025 + 0.047],
     orientation=[1.0, 0.0, 0.0, 0.0]
 )
 FORGE_FRANKA_APPROACH_JOINT_POSITION = make_joint_state(

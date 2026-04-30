@@ -567,11 +567,10 @@
   <link name="ft_sensor">
     <inertial>
       <mass value="0.24"/>
-      <origin xyz="0 0 0.0175"/>
+      <origin xyz="0 0 0"/>
       <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
     </inertial>
     <visual>
-      <origin rpy="0 0 0" xyz="0 0 0.0175"/>
       <geometry>
         <cylinder length="0.035" radius="0.035"/>
       </geometry>
@@ -584,13 +583,13 @@
   <joint name="flange_to_ft_sensor" type="fixed">
     <parent link="fr3_link8"/>
     <child link="ft_sensor"/>
-    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <origin rpy="0 0 0" xyz="0 0 0.0175"/>
   </joint>
 
   <joint name="fr3_hand_joint" type="fixed">
     <parent link="ft_sensor"/>
     <child link="fr3_hand"/>
-    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0.035"/>
+    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0.0175"/>
   </joint>
 
   <link name="fr3_hand">

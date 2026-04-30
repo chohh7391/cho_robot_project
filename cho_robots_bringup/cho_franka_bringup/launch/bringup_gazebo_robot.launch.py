@@ -102,6 +102,8 @@ def generate_launch_description():
                 'gazebo': 'true',
                 'ee_id': franka_hand_str,
                 'gazebo_effort': gazebo_effort_str,
+                'special_connection': 'ft_sensor',
+                'xyz_ee': '0 0 0.0175',
             }
         )
         

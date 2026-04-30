@@ -58,7 +58,6 @@
   joint_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
-      bringup_type: "mujoco"
       joints:
         - fr3_joint1
         - fr3_joint2
@@ -137,7 +136,7 @@
   vla_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_task: [100.0, 100.0, 100.0, 30.0, 30.0, 30.0]
-      kd_task: [20.0, 20.0, 20.0, 10.9545, 10.9545, 10.9545]
+      kp_task: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+      kd_task: [47.539, 47.539, 47.539, 10.583, 10.583, 10.583]
       kn_stiffness: 10.0
       kn_damping: 6.3246

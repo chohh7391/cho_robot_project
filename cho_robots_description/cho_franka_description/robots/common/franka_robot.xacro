@@ -55,14 +55,13 @@
     <xacro:unless value="${special_connection == ''}">
       <link name="${special_connection}">
         <inertial>
-          <mass value="0.24"/>
-          <origin xyz="0 0 0.019"/>
+          <mass value="0.24"/> <!-- Adjust mass based on your sensor specs -->
+          <origin xyz="0 0 0"/>
           <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
         </inertial>
         <visual>
-          <origin xyz="0 0 0.019" rpy="0 0 0"/>
           <geometry>
-            <cylinder radius="0.035" length="0.038"/>
+            <cylinder radius="0.035" length="0.035"/>
           </geometry>
           <material name="sensor_material">
             <color rgba="0.1 0.1 0.1 1.0"/>
@@ -71,9 +70,9 @@
       </link>
 
       <joint name="flange_to_${special_connection}" type="fixed">
-        <parent link="${arm_prefix}${robot_type}_link8"/> 
+        <parent link="${arm_prefix}${robot_type}_link8"/> <!-- This is the end-effector flange -->
         <child link="${special_connection}"/>
-        <origin xyz="0 0 0" rpy="0 0 0"/> 
+        <origin xyz="0 0 0.0175"/> <!-- Adjust based on sensor position -->
       </joint>
     </xacro:unless>
 
