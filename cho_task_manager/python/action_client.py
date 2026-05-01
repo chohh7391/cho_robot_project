@@ -55,8 +55,8 @@ class ControlSuiteShell(cmd.Cmd):
         self.joint_space_action_client = ActionClient(
             self.node,
             JointSpace,
-            "/controller_action_server/joint_space_impedance_controller",
-            # "/controller_action_server/joint_space_qp_controller",
+            # "/controller_action_server/joint_space_impedance_controller",
+            "/controller_action_server/joint_space_qp_controller",
         )
         self.task_space_action_client = ActionClient(
             self.node,
