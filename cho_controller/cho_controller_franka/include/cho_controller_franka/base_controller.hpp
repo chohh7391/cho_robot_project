@@ -99,6 +99,7 @@ public:
     void update_joint_states();
     void compute_all_terms();
     Vector7d compute_hand_gravity();
+    void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
 protected:

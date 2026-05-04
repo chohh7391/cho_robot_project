@@ -81,8 +81,8 @@ controller_interface::return_type IKController::update(
 
   // [수정 2] Differential IK 핵심 로직 시작
   const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Body Jacobian
-  const pinocchio::SE3 & H_ee = state_.H_ee;      
-  const Vector7d & q = state_.q_arm;              
+  const pinocchio::SE3 & H_ee = state_.H_ee;
+  const Vector7d & q = state_.q_arm;
 
   // 1. Task Space Error 계산 (Local Frame 기준)
   Vector6d error; 
@@ -115,7 +115,8 @@ controller_interface::return_type IKController::update(
   double dt = period.seconds();
   Vector7d q_cmd = q + dq_des * dt;
 
-  // (선택 사항) q_cmd가 관절 한계(Joint Limit)를 넘지 않도록 클리핑하는 로직을 추가하면 더 안전합니다.
+  // apply joint limit
+  FrankaBaseController::clip_position(q_cmd);
 
   // 7. 하드웨어로 Position Command 전송
   for (int i = 0; i < num_dof_; ++i) {

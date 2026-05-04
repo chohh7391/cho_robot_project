@@ -37,8 +37,8 @@ private:
   Eigen::Matrix<double, 6, 6> kd_task_;
   
   // Null-space Gains
-  double kn_stiffness_ {10.0};
-  double kn_damping_ {2.0};
+  double kn_stiffness_;
+  double kn_damping_;
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 };

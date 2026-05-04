@@ -254,6 +254,11 @@ Vector7d FrankaBaseController::compute_hand_gravity()
     return tau_hand;
 }
 
+void FrankaBaseController::clip_position(Vector7d & position, const double eps)
+{
+    position = position.array().max(state_.q_arm.array() - eps).min(state_.q_arm.array() + eps);
+}
+
 void FrankaBaseController::clip_torque(Vector7d & torque)
 {
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
