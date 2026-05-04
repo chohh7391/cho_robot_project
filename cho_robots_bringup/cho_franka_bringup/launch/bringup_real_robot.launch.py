@@ -108,7 +108,7 @@ def generate_robot_nodes(context):
 
         # ---- (A) URDF 생성 (xacro) ----
         urdf_path = PathJoinSubstitution([
-            FindPackageShare('franka_description'),
+            FindPackageShare('cho_franka_description'),
             'robots', robot_type_str, f'{robot_type_str}.urdf.xacro',
         ]).perform(context)
 
@@ -122,7 +122,6 @@ def generate_robot_nodes(context):
                 'hand':                 load_gripper_str,
                 'use_fake_hardware':    use_fake_hw_str,
                 'fake_sensor_commands': fake_sensor_cmds_str,
-                # ✅ 추가된 두 mapping
                 'special_connection':   'ft_sensor',
                 'xyz_ee':               '0 0 0.0175',
             },
