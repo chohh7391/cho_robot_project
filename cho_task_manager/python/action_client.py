@@ -61,8 +61,8 @@ class ControlSuiteShell(cmd.Cmd):
         self.task_space_action_client = ActionClient(
             self.node,
             TaskSpace,
-            # "/controller_action_server/ik_controller",
-            "/controller_action_server/task_space_impedance_controller",
+            "/controller_action_server/ik_controller",
+            # "/controller_action_server/task_space_impedance_controller",
             # "/controller_action_server/operational_space_controller",
             # "/controller_action_server/task_space_qp_controller",
         )

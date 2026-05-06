@@ -31,8 +31,8 @@ CallbackReturn JointSpaceImpedanceController::on_init()
   }
 
   try {
-    auto_declare<std::vector<double>>("k_gains", {});
-    auto_declare<std::vector<double>>("d_gains", {});
+    auto_declare<std::vector<double>>("kp_joint", {});
+    auto_declare<std::vector<double>>("kd_joint", {});
   } catch (const std::exception& e) {
     fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
     return CallbackReturn::ERROR;
@@ -47,21 +47,21 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     return CallbackReturn::FAILURE;
   }
 
-  auto k_gains = get_node()->get_parameter("k_gains").as_double_array();
-  auto d_gains = get_node()->get_parameter("d_gains").as_double_array();
+  auto kp_joint = get_node()->get_parameter("kp_joint").as_double_array();
+  auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
 
-  if (k_gains.empty() || k_gains.size() != static_cast<uint>(num_dof_)) {
-    RCLCPP_FATAL(get_node()->get_logger(), "Invalid k_gains parameter");
+  if (kp_joint.empty() || kp_joint.size() != static_cast<uint>(num_dof_)) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kp_joint parameter");
     return CallbackReturn::FAILURE;
   }
-  if (d_gains.empty() || d_gains.size() != static_cast<uint>(num_dof_)) {
-    RCLCPP_FATAL(get_node()->get_logger(), "Invalid d_gains parameter");
+  if (kd_joint.empty() || kd_joint.size() != static_cast<uint>(num_dof_)) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kd_joint parameter");
     return CallbackReturn::FAILURE;
   }
 
   for (int i = 0; i < num_dof_; ++i) {
-    k_gains_(i) = k_gains.at(i);
-    d_gains_(i) = d_gains.at(i);
+    kp_joint_(i) = kp_joint.at(i);
+    kd_joint_(i) = kd_joint.at(i);
   }
   
   dq_filtered_.setZero();
@@ -108,8 +108,8 @@ controller_interface::return_type JointSpaceImpedanceController::update(
   const double kAlpha = 0.99;
   dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
   torque_desired = 
-    k_gains_.cwiseProduct(state_.q_arm_des - state_.q_arm) + 
-    d_gains_.cwiseProduct(state_.v_arm_des - dq_filtered_);
+    kp_joint_.cwiseProduct(state_.q_arm_des - state_.q_arm) + 
+    kd_joint_.cwiseProduct(state_.v_arm_des - dq_filtered_);
 
   torque_desired += state_.nle; // gravity compensation
 

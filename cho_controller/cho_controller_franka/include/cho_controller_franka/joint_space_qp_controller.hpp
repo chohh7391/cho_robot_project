@@ -46,10 +46,6 @@ private:
   std::shared_ptr<TaskJointPosture> task_joint_posture_;
   std::shared_ptr<InverseDynamicsFormulationAccForce> tsid_; 
   SolverHQPBase * solver_;
-
-  Vector7d dq_filtered_;
-  VectorXd kp_joint_;
-  VectorXd kd_joint_;
 };
 
 } // namespace franka

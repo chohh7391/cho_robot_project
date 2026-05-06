@@ -51,10 +51,6 @@ private:
   SolverHQPBase * solver_;
   
   bool reset_default_ctrl_;
-
-  // OSC Gains (6x6 Matrices)
-  VectorXd kp_task_;
-  VectorXd kd_task_;
 };
 
 } // namespace franka

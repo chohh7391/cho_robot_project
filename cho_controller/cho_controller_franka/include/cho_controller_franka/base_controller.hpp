@@ -131,6 +131,22 @@ protected:
     const Eigen::Matrix<double, 7, 1> torque_limits_ {87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0};
 
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
+
+    // gains
+    // joint space
+    Vector7d kp_joint_;
+    Vector7d kd_joint_;
+    // task space
+    Vector6d kp_task_;
+    Vector6d kd_task_;
+    // null space
+    double kp_null_;
+    double kd_null_;
+
+    // varibles for controllers
+    Vector7d dq_filtered_;
+    Vector7d default_dof_pos_;
+
 };
 
 } // namespace franka

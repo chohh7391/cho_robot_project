@@ -24,23 +24,17 @@ public:
     controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
+    bool assign_parameters();
+
     std::shared_ptr<VLAActionServer> action_server_;
     std::string control_mode_;
 
-    bool assign_parameters();
-
-    bool reset_default_ctrl_;
-
-    // Task Space Impedance Gains
     double ema_factor_;
-    
-    // OSC Gains (6x6 Matrices)
-    Eigen::Matrix<double, 6, 6> kp_task_;
-    Eigen::Matrix<double, 6, 6> kd_task_;
-    
-    // Null-space Gains
-    double kn_stiffness_ ;
-    double kn_damping_;
+
+    Vector6d default_kp_task_;
+    Vector6d default_kd_task_;
+    Vector6d current_kp_task_;
+    Vector6d current_kd_task_;
 };
 
 } // namespace franka

@@ -30,12 +30,6 @@ public:
     controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-    Vector7d dq_;
-    Vector7d dq_filtered_;
-    Vector7d k_gains_;
-    Vector7d d_gains_;
-    double elapsed_time_{0.0};
-
     std::shared_ptr<JointSpaceActionServer> action_server_;
 };
 

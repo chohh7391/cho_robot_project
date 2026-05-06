@@ -32,7 +32,9 @@ CallbackReturn TaskSpaceImpedanceController::on_init() {
 
   try {
     auto_declare<std::vector<double>>("kp_task", {});
+    auto_declare<std::vector<double>>("kd_task", {});
     auto_declare<double>("kp_null", 10.0);
+    auto_declare<double>("kd_null", 1.0);
     auto_declare<std::vector<double>>("default_dof_pos", {});
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
@@ -113,9 +115,6 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   Vector6d task_wrench;
   task_wrench = kp_task_.cwiseProduct(delta_pose) - kd_task_.cwiseProduct(ee_vel);
 
-  // // deadzone
-  // if (task_wrench.abs() < dead_zone_threshold)
-
   // 4. Motion Torque
   Vector7d torque_motion = J_T * task_wrench;
 
@@ -150,27 +149,26 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 }
 
 bool TaskSpaceImpedanceController::assign_parameters() {
-  auto kp_task_param = get_node()->get_parameter("kp_task").as_double_array();
-  auto kp_null_param = get_node()->get_parameter("kp_null").as_double();
-  auto kd_null_param = get_node()->get_parameter("kd_null").as_double();
-  auto default_dof_pos_param = get_node()->get_parameter("default_dof_pos").as_double_array();
-  auto default_dead_zone_param = get_node()->get_parameter("default_dead_zone").as_double_array();
+  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
+  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_null = get_node()->get_parameter("kp_null").as_double();
+  auto kd_null = get_node()->get_parameter("kd_null").as_double();
+  auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
 
-  if (kp_task_param.size() != 6) {
-    RCLCPP_ERROR(get_node()->get_logger(), "kp_task size must be 6, but got %zu", kp_task_param.size());
+  if (kp_task.size() != 6 || kd_task.size() != 6) {
+    RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
-  if (default_dof_pos_param.size() != num_dof_) {
-    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, kp_task_param.size());
+  if (default_dof_pos.size() != num_dof_) {
+    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }
   
-  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task_param.data());
-  kd_task_ = 0.1 * 2.0 * kp_task_.cwiseSqrt();
-  kp_null_ = kp_null_param;
-  kd_null_ = kd_null_param;
-  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos_param.data());
-  default_dead_zone_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(default_dead_zone_param.data());
+  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
+  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
+  kp_null_ = kp_null;
+  kd_null_ = kd_null;
+  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
 
   return true;
 }

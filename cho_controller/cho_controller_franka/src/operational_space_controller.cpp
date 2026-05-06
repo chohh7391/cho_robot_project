@@ -33,8 +33,8 @@ CallbackReturn OperationalSpaceController::on_init() {
   try {
     auto_declare<std::vector<double>>("kp_task", {});
     auto_declare<std::vector<double>>("kd_task", {});
-    auto_declare<double>("kn_stiffness", 0.0);
-    auto_declare<double>("kn_damping", 0.0);
+    auto_declare<double>("kp_null", 10.0);
+    auto_declare<double>("kd_null", 1.0);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -56,6 +56,19 @@ CallbackReturn OperationalSpaceController::on_configure(
 
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/operational_space_controller");
   action_server_->init();
+
+  dq_filtered_.setZero();
+
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn OperationalSpaceController::on_activate(
+    const rclcpp_lifecycle::State& previous_state) {
+  if (FrankaBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
+    return CallbackReturn::FAILURE;
+  }
+
+  dq_filtered_.setZero();
 
   return CallbackReturn::SUCCESS;
 }
@@ -81,7 +94,18 @@ controller_interface::return_type OperationalSpaceController::update(
   // calculate desired torque
   Vector7d torque_desired;
 
-  const Matrix7d & M = state_.M_arm;              // 7x7 Mass Matrix
+  const double kAlpha = 0.99;
+  dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
+
+  Matrix7d & M = state_.M_arm;
+  // practical terms for better simulation behavior (reduce oscillation)
+  M(4, 4) *= 6.0;
+  M(5, 5) *= 6.0;
+  M(6, 6) *= 10.0;
+  kd_joint_ = 2.0 * sqrt(5.0) * Vector7d::Ones();
+  kd_joint_(4) = 0.2;
+  kd_joint_(5) = 0.2;
+  kd_joint_(6) = 0.2;
   const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Jacobian
   const pinocchio::SE3 & H_ee = state_.H_ee;      // Current EE Pose
   const Vector7d & q = state_.q_arm;              // 7x1 Joint Position
@@ -90,7 +114,7 @@ controller_interface::return_type OperationalSpaceController::update(
   Eigen::MatrixXd M_inv = M.llt().solve(Matrix7d::Identity());
   Eigen::Matrix<double, 6, 6> A = J * M_inv * J.transpose();
   
-  A.diagonal().array() += 1e-4; 
+  A.diagonal().array() += 1e-4;
   
   Eigen::Matrix<double, 6, 6> lambda = A.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
 
@@ -100,9 +124,10 @@ controller_interface::return_type OperationalSpaceController::update(
   error.tail<3>() = pinocchio::log3(R_err);
 
   Vector6d v_curr = J * v;
-  Vector6d v_des = Vector6d::Zero(); // Setpoint 제어이므로 목표 속도는 0 가정
+  Vector6d v_des = Vector6d::Zero();
   Vector6d error_dot = v_des - v_curr;
-  Vector6d desired_acc = kp_task_ * error + kd_task_ * error_dot;
+  // Vector6d desired_acc = kp_task_ * error + kd_task_ * error_dot;
+  Vector6d desired_acc = kp_task_.cwiseProduct(error) + kd_task_.cwiseProduct(error_dot);
   Vector6d F_task = lambda * desired_acc;
 
   Eigen::Matrix<double, 7, 6> J_trans_lambda = J.transpose() * lambda;
@@ -110,10 +135,11 @@ controller_interface::return_type OperationalSpaceController::update(
 
   Matrix7d N_T = Matrix7d::Identity() - J_trans_lambda * J_M_inv;
   Vector7d q_nom = state_.q_arm_init;
-  Vector7d tau_0 = kn_stiffness_ * (q_nom - q) - kn_damping_ * v;
+  Vector7d tau_0 = kp_null_ * (q_nom - q) - kd_null_ * v;
   Vector7d tau_null = N_T * tau_0;
 
   torque_desired = J.transpose() * F_task + tau_null + state_.nle;
+  torque_desired -= kd_joint_.cwiseProduct(dq_filtered_); // Damping term for stability
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
@@ -127,19 +153,21 @@ controller_interface::return_type OperationalSpaceController::update(
 }
 
 bool OperationalSpaceController::assign_parameters() {
-  auto kp_vec = get_node()->get_parameter("kp_task").as_double_array();
-  auto kd_vec = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
+  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_null = get_node()->get_parameter("kp_null").as_double();
+  auto kd_null = get_node()->get_parameter("kd_null").as_double();
 
-  if (kp_vec.size() != 6 || kd_vec.size() != 6) {
+  if (kp_task.size() != 6 || kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
-  
-  kp_task_ = Eigen::Matrix<double, 6, 1>::Map(kp_vec.data()).asDiagonal();
-  kd_task_ = Eigen::Matrix<double, 6, 1>::Map(kd_vec.data()).asDiagonal();
 
-  kn_stiffness_ = get_node()->get_parameter("kn_stiffness").as_double();
-  kn_damping_ = get_node()->get_parameter("kn_damping").as_double();
+  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
+  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
+
+  kp_null_ = kp_null;
+  kd_null_ = kd_null;
 
   return true;
 }

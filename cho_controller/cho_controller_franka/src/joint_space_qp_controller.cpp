@@ -30,8 +30,8 @@ CallbackReturn JointSpaceQPController::on_init()
   }
 
   try {
-    auto_declare<std::vector<double>>("k_gains", {});
-    auto_declare<std::vector<double>>("d_gains", {});
+    auto_declare<std::vector<double>>("kp_joint", {});
+    auto_declare<std::vector<double>>("kd_joint", {});
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception thrown during init stage with message: %s", e.what());
     return CallbackReturn::ERROR;
@@ -52,7 +52,7 @@ CallbackReturn JointSpaceQPController::on_configure(
   // 1. Posture Task 초기화
   task_joint_posture_ = std::make_shared<TaskJointPosture>("task-posture", *robot_);
   task_joint_posture_->Kp(kp_joint_);
-  task_joint_posture_->Kd(2.0*task_joint_posture_->Kp().cwiseSqrt());
+  task_joint_posture_->Kd(kd_joint_);
 
   // 2. TSID Formulation 초기화
   double time_ = 0.0;
@@ -107,10 +107,10 @@ controller_interface::return_type JointSpaceQPController::update(
   M_modified(5, 5) *= 6.0;
   M_modified(6, 6) *= 10.0;
 
-  Eigen::Matrix<double, 7, 7> Kd_joint = Eigen::Matrix<double, 7, 7>::Identity() * (2.0 * sqrt(5.0));
-  Kd_joint(4, 4) = 0.2;
-  Kd_joint(5, 5) = 0.2;
-  Kd_joint(6, 6) = 0.2;
+  Vector7d kd_joint_modified = 2.0 * sqrt(5.0) * Vector7d::Ones();
+  kd_joint_modified(4) = 0.2;
+  kd_joint_modified(5) = 0.2;
+  kd_joint_modified(6) = 0.2;
 
   // ----------------------------------------------------
   // Action Server 궤적 추종
@@ -174,7 +174,7 @@ controller_interface::return_type JointSpaceQPController::update(
   Vector7d torque_desired;
   torque_desired = M_modified * acc_arm;
   torque_desired += state_.nle; 
-  torque_desired -= Kd_joint * dq_filtered_;
+  torque_desired -= kd_joint_modified.cwiseProduct(dq_filtered_);
 
   FrankaBaseController::clip_torque(torque_desired);
   
@@ -186,23 +186,21 @@ controller_interface::return_type JointSpaceQPController::update(
 }
 
 bool JointSpaceQPController::assign_parameters() {
-  auto kp_joint_param = get_node()->get_parameter("kp_joint").as_double_array();
+  auto kp_joint = get_node()->get_parameter("kp_joint").as_double_array();
+  auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
 
-  if (kp_joint_param.empty() || kp_joint_param.size() != static_cast<uint>(num_dof_)) {
+  if (kp_joint.empty() || kp_joint.size() != static_cast<uint>(num_dof_)) {
     RCLCPP_FATAL(get_node()->get_logger(), "Invalid kp_joint parameter");
     return false;
   }
-
-  // [중요] 로봇 모델의 전체 관절 수(9개)에 맞춰 리사이즈
-  int model_na = robot_->na(); 
-  if (kp_joint_.size() != model_na) {
-      kp_joint_.resize(model_na);
-      kp_joint_.setZero(); 
+  if (kd_joint.empty() || kd_joint.size() != static_cast<uint>(num_dof_)) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kd_joint parameter");
+    return false;
   }
 
-  // 7개 값만 복사
   for (int i = 0; i < num_dof_; ++i) {
-    kp_joint_(i) = kp_joint_param.at(i);
+    kp_joint_(i) = kp_joint.at(i);
+    kd_joint_(i) = kd_joint.at(i);
   }
   
   return true;

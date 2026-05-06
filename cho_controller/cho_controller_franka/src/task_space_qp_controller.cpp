@@ -31,6 +31,9 @@ CallbackReturn TaskSpaceQPController::on_init() {
 
   try {
     auto_declare<std::vector<double>>("kp_task", {});
+    auto_declare<std::vector<double>>("kd_task", {});
+    auto_declare<std::vector<double>>("kp_joint", {});
+    auto_declare<std::vector<double>>("kd_joint", {});
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -52,21 +55,14 @@ CallbackReturn TaskSpaceQPController::on_configure(
   // 1. SE3 Task 초기화
   task_se3_equality_ = std::make_shared<TaskSE3Equality>("task-se3", *robot_, ee_name_, ee_offset_);
   task_se3_equality_->Kp(kp_task_);
-  task_se3_equality_->Kd(2.0*task_se3_equality_->Kp().cwiseSqrt());
+  task_se3_equality_->Kd(kd_task_);
 
   // 2. Posture Task 초기화 (Default Control용)
   // [수정] Gain 벡터 크기를 로봇 전체 관절 수(9개)로 설정
   task_joint_posture_ = std::make_shared<TaskJointPosture>("task-posture", *robot_);
   
-  int model_na = robot_->na();
-  Eigen::VectorXd posture_gain(model_na);
-  posture_gain.setZero();
-  
-  // 시뮬레이션용 높은 게인 (팔 7개만 설정, 나머지는 0)
-  posture_gain.head(num_dof_) << 400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0;
-
-  task_joint_posture_->Kp(posture_gain);
-  task_joint_posture_->Kd(2.0 * posture_gain.cwiseSqrt());
+  task_joint_posture_->Kp(kp_joint_);
+  task_joint_posture_->Kd(kd_joint_);
 
   traj_posture_cubic_ = std::make_shared<TrajectoryEuclidianCubic>("traj_posture");
   reset_default_ctrl_ = true;
@@ -94,6 +90,8 @@ CallbackReturn TaskSpaceQPController::on_activate(
     return CallbackReturn::FAILURE;
   }
 
+  dq_filtered_.setZero();
+
   // 초기 시작 시 기본적으로 Default 모드(Posture) 진입
   tsid_->removeTask("task-se3");
   tsid_->addMotionTask(*task_joint_posture_, 1.0, 0);
@@ -116,15 +114,18 @@ controller_interface::return_type TaskSpaceQPController::update(
   // ----------------------------------------------------
   // 실무적 보정 항 (발작 방지용 Practical Terms)
   // ----------------------------------------------------
+  const double kAlpha = 0.99;
+  dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
+
   Eigen::Matrix<double, 7, 7> M_modified = state_.M_arm;
   M_modified(4, 4) *= 6.0;
   M_modified(5, 5) *= 6.0;
   M_modified(6, 6) *= 10.0;
 
-  Eigen::Matrix<double, 7, 7> Kd_joint = Eigen::Matrix<double, 7, 7>::Identity() * (2.0 * sqrt(5.0));
-  Kd_joint(4, 4) = 0.2;
-  Kd_joint(5, 5) = 0.2;
-  Kd_joint(6, 6) = 0.2;
+  Vector7d kd_joint_modified = 2.0 * sqrt(5.0) * Vector7d::Ones();
+  kd_joint_modified(4) = 0.2;
+  kd_joint_modified(5) = 0.2;
+  kd_joint_modified(6) = 0.2;
 
   // ----------------------------------------------------
   // 제어 모드 선택 (Action vs Default)
@@ -204,7 +205,7 @@ controller_interface::return_type TaskSpaceQPController::update(
   // 최종 토크 = M*ddq + C + G - Damping
   torque_desired = M_modified * acc_arm;
   torque_desired += state_.nle; 
-  torque_desired -= Kd_joint * state_.v_arm;
+  torque_desired -= kd_joint_modified.cwiseProduct(dq_filtered_);
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
@@ -218,18 +219,32 @@ controller_interface::return_type TaskSpaceQPController::update(
 }
 
 bool TaskSpaceQPController::assign_parameters() {
-  auto kp_task_param = get_node()->get_parameter("kp_task").as_double_array();
+  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
+  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_joint = get_node()->get_parameter("kp_joint").as_double_array();
+  auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
 
-  if (kp_task_param.size() != 6) {
-    RCLCPP_ERROR(get_node()->get_logger(), "kp_task must be size 6");
+  if (kp_task.size() != 6 || kd_task.size() != 6) {
+    RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
+    return false;
+  }
+  if (kp_joint.empty() || kp_joint.size() != static_cast<uint>(num_dof_)) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kp_joint parameter");
+    return false;
+  }
+  if (kd_joint.empty() || kd_joint.size() != static_cast<uint>(num_dof_)) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kd_joint parameter");
     return false;
   }
 
-  if (kp_task_.size() != 6) kp_task_.resize(6);
+  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
+  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
 
-  for (int i = 0; i < 6; ++i) {
-    kp_task_(i) = kp_task_param.at(i);
+  for (int i = 0; i < num_dof_; ++i) {
+    kp_joint_(i) = kp_joint.at(i);
+    kd_joint_(i) = kd_joint.at(i);
   }
+
   return true;
 }
 

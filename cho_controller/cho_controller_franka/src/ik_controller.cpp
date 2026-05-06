@@ -32,9 +32,9 @@ CallbackReturn IKController::on_init() {
 
   try {
     auto_declare<std::vector<double>>("kp_task", {});
-    auto_declare<std::vector<double>>("kd_task", {}); // IK에서는 보통 안 쓰지만 호환성을 위해 둡니다.
-    auto_declare<double>("kn_stiffness", 0.0);
-    auto_declare<double>("kn_damping", 0.0);
+    auto_declare<std::vector<double>>("kd_task", {});
+    auto_declare<double>("kp_null", 0.0);
+    auto_declare<double>("kd_null", 0.0);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -92,7 +92,7 @@ controller_interface::return_type IKController::update(
 
   // 2. Desired Task Velocity (P Control)
   // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
-  Vector6d v_des = kp_task_ * error;
+  Vector6d v_des = kp_task_.cwiseProduct(error);
 
   // 3. Damped Least Squares (DLS) 의사역행렬 계산
   // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다 (Pink 컨트롤러의 하위호환 역할).
@@ -107,7 +107,7 @@ controller_interface::return_type IKController::update(
   // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
   Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
   Vector7d q_err = state_.q_arm_init - q; // 초기 자세로 돌아가려는 힘
-  Vector7d dq_null = kn_stiffness_ * q_err; // kn_stiffness_를 P-gain처럼 사용
+  Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
   
   dq_des += N * dq_null;
 
@@ -127,19 +127,20 @@ controller_interface::return_type IKController::update(
 }
 
 bool IKController::assign_parameters() {
-  auto kp_vec = get_node()->get_parameter("kp_task").as_double_array();
-  auto kd_vec = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
+  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
+  auto kp_null = get_node()->get_parameter("kp_null").as_double();
+  auto kd_null = get_node()->get_parameter("kd_null").as_double();
 
-  if (kp_vec.size() != 6 || kd_vec.size() != 6) {
+  if (kp_task.size() != 6 || kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
   
-  kp_task_ = Eigen::Matrix<double, 6, 1>::Map(kp_vec.data()).asDiagonal();
-  kd_task_ = Eigen::Matrix<double, 6, 1>::Map(kd_vec.data()).asDiagonal();
-
-  kn_stiffness_ = get_node()->get_parameter("kn_stiffness").as_double();
-  kn_damping_ = get_node()->get_parameter("kn_damping").as_double();
+  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
+  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
+  kp_null_ = kp_null;
+  kd_null_ = kd_null;
 
   return true;
 }
