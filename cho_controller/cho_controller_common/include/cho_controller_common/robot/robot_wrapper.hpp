@@ -82,7 +82,9 @@ public:
 
     void frameClassicAcceleration(const Data & data, const Model::FrameIndex index, Motion & frameAcceleration) const;
 
-    void frameJacobianLocal(Data & data, const Model::FrameIndex index, Data::Matrix6x & J)  ;
+    void frameJacobianLocal(Data & data, const Model::FrameIndex index, Data::Matrix6x & J);
+
+    void frameJacobianWorldAligned(Data & data, const Model::FrameIndex index, Data::Matrix6x & J);
 
 
 protected:

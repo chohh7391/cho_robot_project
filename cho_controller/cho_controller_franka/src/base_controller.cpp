@@ -119,6 +119,7 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     state_.q_init.setZero(nq_);
     state_.v_init.setZero(nv_);
     state_.J.setZero(6, nv_);
+    state_.J_world.setZero(6, nv_);
 
     pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
 
@@ -218,9 +219,11 @@ void FrankaBaseController::compute_all_terms()
 
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
+    robot_->frameJacobianWorldAligned(data_, ee_id_, state_.J_world);
     
     state_.M_arm = state_.M.topLeftCorner(num_dof_, num_dof_);
     state_.J_arm = state_.J.leftCols(num_dof_);
+    state_.J_arm_world = state_.J_world.leftCols(num_dof_);
 
     if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
         state_.nle = compute_hand_gravity();

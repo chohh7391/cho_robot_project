@@ -55,6 +55,8 @@ struct State {
     Vector7d nle;
     pinocchio::Data::Matrix6x J;
     Eigen::Matrix<double, 6, 7> J_arm;
+    pinocchio::Data::Matrix6x J_world;
+    Eigen::Matrix<double, 6, 7> J_arm_world;
     
     // initial state
     VectorXd q_init;

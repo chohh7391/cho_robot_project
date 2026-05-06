@@ -37,6 +37,7 @@ private:
   double kp_null_;
   double kd_null_;
   Vector7d default_dof_pos_;
+  Vector6d default_dead_zone_;
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 };

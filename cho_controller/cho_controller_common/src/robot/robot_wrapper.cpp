@@ -180,6 +180,11 @@ namespace cho_controller {
 
                 return pinocchio::getFrameJacobian(m_model, data, index, pinocchio::LOCAL, J) ;
             }
+
+            void RobotWrapper::frameJacobianWorldAligned(Data & data, const Model::FrameIndex index, Data::Matrix6x & J)
+            {
+                return pinocchio::getFrameJacobian(m_model, data, index, pinocchio::LOCAL_WORLD_ALIGNED, J);
+            }
         }
     }
 }

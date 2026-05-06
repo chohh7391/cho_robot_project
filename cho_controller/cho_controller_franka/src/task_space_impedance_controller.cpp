@@ -82,17 +82,15 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   const Matrix7d & M = state_.M_arm;
   Matrix7d M_inv = M.inverse();
   
-  // 🌟 핵심 수정: Local Jacobian을 World-Aligned Jacobian으로 변환
-  Eigen::Matrix<double, 6, 7> J_local = state_.J_arm;
   Eigen::Matrix3d R_curr = state_.H_ee.rotation();
   
   Eigen::Matrix<double, 6, 6> R_spatial = Eigen::Matrix<double, 6, 6>::Zero();
   R_spatial.topLeftCorner(3, 3) = R_curr;
   R_spatial.bottomRightCorner(3, 3) = R_curr;
-  
-  // J_world = R_spatial * J_local (이제 모든 역학 계산은 J_world를 사용합니다)
-  Eigen::Matrix<double, 6, 7> J_world = R_spatial * J_local;
-  Eigen::Matrix<double, 7, 6> J_world_T = J_world.transpose();
+
+  Eigen::Matrix<double, 6, 7> J = state_.J_arm_world;
+  Eigen::Matrix<double, 7, 6> J_T = J.transpose();
+
 
   // 2. Pose Error 계산 (World frame 기준)
   Vector3d pos_error = state_.H_ee_des.translation() - state_.H_ee.translation();
@@ -111,19 +109,22 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   delta_pose.tail<3>() = rot_error;
 
   // 3. Task Wrench 계산 (World frame 기준)
-  Vector6d ee_vel = J_world * state_.v_arm;
+  Vector6d ee_vel = J * state_.v_arm;
   Vector6d task_wrench;
   task_wrench = kp_task_.cwiseProduct(delta_pose) - kd_task_.cwiseProduct(ee_vel);
 
-  // 4. Motion Torque
-  Vector7d torque_motion = J_world_T * task_wrench;
+  // // deadzone
+  // if (task_wrench.abs() < dead_zone_threshold)
 
-  // 5. Null-space 계산 (동일하게 J_world 사용)
-  Eigen::Matrix<double, 6, 6> Lambda = (J_world * M_inv * J_world_T).inverse();
-  Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J_world * M_inv;
+  // 4. Motion Torque
+  Vector7d torque_motion = J_T * task_wrench;
+
+  Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J_T).inverse();
+  Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
 
   // Null-space 가속도 지령
-  Vector7d q_error = state_.q_arm_init - state_.q_arm;
+  Vector7d q_error = default_dof_pos_ - state_.q_arm;
+  // Vector7d q_error = state_.q_arm_init - state_.q_arm; 
   for(int i = 0; i < 7; ++i) {
       q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
   }
@@ -134,7 +135,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 
   // Null-space Projection
   Matrix7d I = Matrix7d::Identity();
-  Vector7d torque_null = (I - J_world_T * j_eef_inv) * u_null_torque;
+  Vector7d torque_null = (I - J_T * j_eef_inv) * u_null_torque;
 
   // 6. 최종 토크 합산
   Vector7d torque_desired = torque_motion + torque_null + state_.nle;
@@ -151,7 +152,9 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 bool TaskSpaceImpedanceController::assign_parameters() {
   auto kp_task_param = get_node()->get_parameter("kp_task").as_double_array();
   auto kp_null_param = get_node()->get_parameter("kp_null").as_double();
+  auto kd_null_param = get_node()->get_parameter("kd_null").as_double();
   auto default_dof_pos_param = get_node()->get_parameter("default_dof_pos").as_double_array();
+  auto default_dead_zone_param = get_node()->get_parameter("default_dead_zone").as_double_array();
 
   if (kp_task_param.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task size must be 6, but got %zu", kp_task_param.size());
@@ -163,10 +166,11 @@ bool TaskSpaceImpedanceController::assign_parameters() {
   }
   
   kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task_param.data());
-  kd_task_ = 0.4 * 2.0 * kp_task_.cwiseSqrt();
+  kd_task_ = 0.1 * 2.0 * kp_task_.cwiseSqrt();
   kp_null_ = kp_null_param;
-  kd_null_ = 2.0 * std::sqrt(kp_null_);
+  kd_null_ = kd_null_param;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos_param.data());
+  default_dead_zone_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(default_dead_zone_param.data());
 
   return true;
 }
