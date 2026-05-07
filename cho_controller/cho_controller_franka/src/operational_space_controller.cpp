@@ -35,6 +35,7 @@ CallbackReturn OperationalSpaceController::on_init() {
     auto_declare<std::vector<double>>("kd_task", {});
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
+    auto_declare<std::vector<double>>("default_dof_pos", {});
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -134,12 +135,12 @@ controller_interface::return_type OperationalSpaceController::update(
   Eigen::Matrix<double, 6, 7> J_M_inv = J * M_inv;
 
   Matrix7d N_T = Matrix7d::Identity() - J_trans_lambda * J_M_inv;
-  Vector7d q_nom = state_.q_arm_init;
+  Vector7d q_nom = default_dof_pos_;
   Vector7d tau_0 = kp_null_ * (q_nom - q) - kd_null_ * v;
   Vector7d tau_null = N_T * tau_0;
 
   torque_desired = J.transpose() * F_task + tau_null + state_.nle;
-  torque_desired -= kd_joint_.cwiseProduct(dq_filtered_); // Damping term for stability
+  torque_desired -= kd_joint_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
@@ -157,17 +158,22 @@ bool OperationalSpaceController::assign_parameters() {
   auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
   auto kd_null = get_node()->get_parameter("kd_null").as_double();
+  auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
 
   if (kp_task.size() != 6 || kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
+  if (default_dof_pos.size() != num_dof_) {
+    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
+    return false;
+  }
 
   kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
   kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
-
   kp_null_ = kp_null;
   kd_null_ = kd_null;
+  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
 
   return true;
 }

@@ -35,6 +35,7 @@ CallbackReturn IKController::on_init() {
     auto_declare<std::vector<double>>("kd_task", {});
     auto_declare<double>("kp_null", 0.0);
     auto_declare<double>("kd_null", 0.0);
+    auto_declare<std::vector<double>>("default_dof_pos", {});
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -106,7 +107,7 @@ controller_interface::return_type IKController::update(
 
   // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
   Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
-  Vector7d q_err = state_.q_arm_init - q; // 초기 자세로 돌아가려는 힘
+  Vector7d q_err = default_dof_pos_ - q; // 초기 자세로 돌아가려는 힘
   Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
   
   dq_des += N * dq_null;
@@ -131,9 +132,14 @@ bool IKController::assign_parameters() {
   auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
   auto kd_null = get_node()->get_parameter("kd_null").as_double();
+  auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
 
   if (kp_task.size() != 6 || kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
+    return false;
+  }
+  if (default_dof_pos.size() != num_dof_) {
+    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }
   
@@ -141,6 +147,7 @@ bool IKController::assign_parameters() {
   kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
   kp_null_ = kp_null;
   kd_null_ = kd_null;
+  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
 
   return true;
 }

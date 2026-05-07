@@ -123,7 +123,6 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 
   // Null-space 가속도 지령
   Vector7d q_error = default_dof_pos_ - state_.q_arm;
-  // Vector7d q_error = state_.q_arm_init - state_.q_arm; 
   for(int i = 0; i < 7; ++i) {
       q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
   }
