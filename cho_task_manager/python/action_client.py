@@ -62,9 +62,9 @@ class ControlSuiteShell(cmd.Cmd):
             self.node,
             TaskSpace,
             # "/controller_action_server/ik_controller",
-            # "/controller_action_server/task_space_impedance_controller",
+            "/controller_action_server/task_space_impedance_controller",
             # "/controller_action_server/operational_space_controller",
-            "/controller_action_server/task_space_qp_controller",
+            # "/controller_action_server/task_space_qp_controller",
         )
         self.gripper_action_client = ActionClient(
             self.node,
