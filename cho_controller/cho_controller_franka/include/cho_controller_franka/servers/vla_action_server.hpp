@@ -11,6 +11,7 @@
 #include "cho_interfaces/action/gripper.hpp"
 #include "cho_controller_common/trajectory/trajectory_se3.hpp"
 #include <std_srvs/srv/trigger.hpp>
+#include <ruckig/ruckig.hpp>
 
 
 namespace cho_controller {
@@ -75,7 +76,6 @@ protected:
     int current_step_idx_ = -1;
     double last_chunk_time_sec_ = -1.0;
 
-    pinocchio::SE3 last_commanded_pose_ = pinocchio::SE3::Identity();
     
     void process_vla_action(const cho_interfaces::msg::ActionChunk::SharedPtr msg);
 
@@ -91,6 +91,15 @@ protected:
     // notify vla completion
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr notify_completion_client_;
     void trigger_bt_completion();
+
+    // for ruckig
+    ruckig::Ruckig<3> ruckig_{0.001};
+    ruckig::InputParameter<3>  ruckig_input_;
+    ruckig::OutputParameter<3> ruckig_output_;
+    const std::array<double,3> max_velocity_     {0.5,  0.5,  0.5};
+    const std::array<double,3> max_acceleration_ {3.0,  3.0,  3.0};
+    const std::array<double,3> max_jerk_         {30.0, 30.0, 30.0};
+    const double timeout_sec_ = 60.0;  // 하드코딩 대신 멤버로
 }; 
 
 } // namespace franka
