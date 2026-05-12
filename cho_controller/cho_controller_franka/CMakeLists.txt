@@ -31,7 +31,6 @@ find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(cho_controller_common REQUIRED)
 find_package(cho_interfaces REQUIRED)
-find_package(ruckig REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
     # controllers

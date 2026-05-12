@@ -67,6 +67,12 @@ def plot_results(bag_db_path, start_t, end_t):
     # 2. 크기가 0에 가까운(초기화 안 된) 쓰레기값 인덱스 마스크 생성
     invalid_mask = (norm_d < 1e-6) | (norm_c < 1e-6)
 
+    # ---------------------------------------------------------
+    # [새로 추가할 부분] 위치 데이터(Position)도 쓰레기값 구간을 NaN으로 처리
+    d_pos[invalid_mask] = np.nan
+    c_pos[invalid_mask] = np.nan
+    # ---------------------------------------------------------
+
     # 3. scipy 에러를 피하기 위해 임시로 유효한 쿼터니언([0,0,0,1])으로 복사 및 덮어쓰기
     d_q_safe = np.copy(d_q)
     c_q_safe = np.copy(c_q)
