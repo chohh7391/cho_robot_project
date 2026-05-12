@@ -118,25 +118,25 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // 4. Motion Torque
   Vector7d torque_motion = J_T * task_wrench;
 
-  Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J_T).inverse();
-  Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
+  // Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J_T).inverse();
+  // Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
 
-  // Null-space 가속도 지령
-  Vector7d q_error = default_dof_pos_ - state_.q_arm;
-  for(int i = 0; i < 7; ++i) {
-      q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
-  }
-  Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+  // // Null-space 가속도 지령
+  // Vector7d q_error = default_dof_pos_ - state_.q_arm;
+  // for(int i = 0; i < 7; ++i) {
+  //     q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+  // }
+  // Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
 
-  // Null-space 토크 변환
-  Vector7d u_null_torque = M * u_null_accel;
+  // // Null-space 토크 변환
+  // Vector7d u_null_torque = M * u_null_accel;
 
-  // Null-space Projection
-  Matrix7d I = Matrix7d::Identity();
-  Vector7d torque_null = (I - J_T * j_eef_inv) * u_null_torque;
+  // // Null-space Projection
+  // Matrix7d I = Matrix7d::Identity();
+  // Vector7d torque_null = (I - J_T * j_eef_inv) * u_null_torque;
 
   // 6. 최종 토크 합산
-  Vector7d torque_desired = torque_motion + torque_null + state_.nle;
+  Vector7d torque_desired = torque_motion /*+ torque_null*/ + state_.nle;
 
   // 7. 안전 클리핑 및 전송
   FrankaBaseController::clip_torque(torque_desired);

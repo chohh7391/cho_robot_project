@@ -131,15 +131,15 @@ controller_interface::return_type OperationalSpaceController::update(
   Vector6d desired_acc = kp_task_.cwiseProduct(error) + kd_task_.cwiseProduct(error_dot);
   Vector6d F_task = lambda * desired_acc;
 
-  Eigen::Matrix<double, 7, 6> J_trans_lambda = J.transpose() * lambda;
-  Eigen::Matrix<double, 6, 7> J_M_inv = J * M_inv;
+  // Eigen::Matrix<double, 7, 6> J_trans_lambda = J.transpose() * lambda;
+  // Eigen::Matrix<double, 6, 7> J_M_inv = J * M_inv;
 
-  Matrix7d N_T = Matrix7d::Identity() - J_trans_lambda * J_M_inv;
-  Vector7d q_nom = default_dof_pos_;
-  Vector7d tau_0 = kp_null_ * (q_nom - q) - kd_null_ * v;
-  Vector7d tau_null = N_T * tau_0;
+  // Matrix7d N_T = Matrix7d::Identity() - J_trans_lambda * J_M_inv;
+  // Vector7d q_nom = default_dof_pos_;
+  // Vector7d tau_0 = kp_null_ * (q_nom - q) - kd_null_ * v;
+  // Vector7d tau_null = N_T * tau_0;
 
-  torque_desired = J.transpose() * F_task + tau_null + state_.nle;
+  torque_desired = J.transpose() * F_task /*+ tau_null*/ + state_.nle;
   torque_desired -= kd_joint_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
   // clip torque
