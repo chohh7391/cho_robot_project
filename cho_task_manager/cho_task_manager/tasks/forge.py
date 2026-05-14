@@ -37,7 +37,7 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
     init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
     init_seq.add_children([
         SwitchControllerServiceBehavior(
-            name="Switch_To_Task_Impedance",
+            name="Switch_To_Joint_Impedance",
             activate=[ControllerNames.JOINT_IMPEDANCE],
             deactivate=[ControllerNames.VLA]
         ),
@@ -85,15 +85,15 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
     approach_seq = py_trees.composites.Sequence(name="2_Approach_Fixed_Object", memory=True)
     approach_seq.add_children([
         SwitchControllerServiceBehavior(
-            name="Switch_To_Task_Impedance",
-            activate=[ControllerNames.TASK_IMPEDANCE],
+            name="Switch_To_Task_QP",
+            activate=[ControllerNames.TASK_QP],
             deactivate=[ControllerNames.JOINT_IMPEDANCE]
         ),
         TaskSpaceActionBehavior(
             name="Approach_Object",
             target_pose=FORGE_FRANKA_APPROACH_POSE,
             relative=False,
-            controller_name=ControllerNames.TASK_IMPEDANCE,
+            controller_name=ControllerNames.TASK_QP,
             duration=5.0
         ),
         GripperActionBehavior(name="Close_Gripper", grasp=True),
@@ -105,7 +105,7 @@ def create_forge_tree() -> py_trees.behaviour.Behaviour:
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
             activate=[ControllerNames.VLA],
-            deactivate=[ControllerNames.TASK_IMPEDANCE]
+            deactivate=[ControllerNames.TASK_QP]
         ),
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
