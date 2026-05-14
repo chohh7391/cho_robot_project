@@ -214,8 +214,12 @@ void FrankaBaseController::update_joint_states()
 void FrankaBaseController::compute_all_terms()
 {
     robot_->computeAllTerms(data_, state_.q, state_.v);
-    state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     state_.M = robot_->mass(data_);
+    if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
+        state_.nle = compute_hand_gravity();
+    } else {
+        state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
+    }
 
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
@@ -224,10 +228,6 @@ void FrankaBaseController::compute_all_terms()
     state_.M_arm = state_.M.topLeftCorner(num_dof_, num_dof_);
     state_.J_arm = state_.J.leftCols(num_dof_);
     state_.J_arm_world = state_.J_world.leftCols(num_dof_);
-
-    if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
-        state_.nle = compute_hand_gravity();
-    }
 }
 
 Vector7d FrankaBaseController::compute_hand_gravity()
