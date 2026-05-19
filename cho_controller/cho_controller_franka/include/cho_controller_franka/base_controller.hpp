@@ -100,13 +100,14 @@ public:
 
     void update_joint_states();
     void compute_all_terms();
-    Vector7d compute_hand_gravity();
+    Vector7d compute_hand_nle();
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
 protected:
     std::string robot_type_;
     std::string robot_description_;
+    std::string robot_arm_description_;
 
     std::string bringup_type_;
     
@@ -114,6 +115,11 @@ protected:
     pinocchio::Model model_;
     pinocchio::Data data_;
     State state_;
+
+    // robot arm
+    std::shared_ptr<cho_controller::common::robot::RobotWrapper> robot_arm_;
+    pinocchio::Model arm_model_;
+    pinocchio::Data arm_data_;
 
     std::string ee_name_ = "fr3_hand_tcp";
     pinocchio::FrameIndex ee_id_;

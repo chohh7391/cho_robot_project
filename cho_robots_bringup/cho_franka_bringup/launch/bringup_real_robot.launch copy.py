@@ -3,7 +3,6 @@ import os
 import tempfile
 import yaml
 import xacro
-import copy # 추가: dict 깊은 복사를 위해 사용
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -66,21 +65,33 @@ def generate_robot_nodes(context):
     internal_mode = 'effort' if mode == 'torque' else mode
 
     # ------------------------------------------------------------------
-    # 3. Payload 기본 파라미터 로드 (루프 밖에서 1번만)
+    # 3. Payload + 동적 파라미터 병합 → 임시 YAML
     # ------------------------------------------------------------------
     pkg_bringup = get_package_share_directory('cho_franka_bringup')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
 
-    base_dynamic_params_dict = {}
+    dynamic_params_dict = {}
     if os.path.exists(payload_config_path):
         with open(payload_config_path, 'r') as f:
-            base_dynamic_params_dict = yaml.safe_load(f) or {}
+            dynamic_params_dict = yaml.safe_load(f) or {}
 
-    if '/**' not in base_dynamic_params_dict:
-        base_dynamic_params_dict['/**'] = {}
+    if '/**' not in dynamic_params_dict:
+        dynamic_params_dict['/**'] = {}
+
+    for ctrl in controllers_to_load + ['ee_state_broadcaster']:
+        if ctrl not in dynamic_params_dict['/**']:
+            dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
+        elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
+            dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type']  = b_type
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode']  = internal_mode
+
+    temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
+    yaml.dump(dynamic_params_dict, temp_yaml_file)
+    temp_yaml_file.close()
 
     # ------------------------------------------------------------------
-    # 4. 로봇별 노드 생성
+    # 4. 로봇별 노드 생성 (franka.launch.py 의존성 제거 → 직접 구성)
     # ------------------------------------------------------------------
     nodes = []
 
@@ -101,7 +112,6 @@ def generate_robot_nodes(context):
             'robots', robot_type_str, f'{robot_type_str}.urdf.xacro',
         ]).perform(context)
 
-        # 전체(Arm + Hand) Description
         robot_description = xacro.process_file(
             urdf_path,
             mappings={
@@ -117,44 +127,7 @@ def generate_robot_nodes(context):
             },
         ).toprettyxml(indent='  ')
 
-        # NLE 계산을 위한 Arm Only Description (hand: false 강제 적용)
-        arm_description = xacro.process_file(
-            urdf_path,
-            mappings={
-                'ros2_control':         'true',
-                'robot_type':           robot_type_str,
-                'arm_prefix':           arm_prefix_str,
-                'robot_ip':             robot_ip_str,
-                'hand':                 'false',
-                'use_fake_hardware':    use_fake_hw_str,
-                'fake_sensor_commands': fake_sensor_cmds_str,
-                'special_connection':   'ft_sensor',
-                'xyz_ee':               '0 0 0.0175',
-            },
-        ).toprettyxml(indent='  ')
-
-        # ---- (B) 로봇별 파라미터 병합 → 임시 YAML 파일 생성 ----
-        robot_params_dict = copy.deepcopy(base_dynamic_params_dict)
-
-        for ctrl in controllers_to_load + ['ee_state_broadcaster']:
-            if ctrl not in robot_params_dict['/**']:
-                robot_params_dict['/**'][ctrl] = {'ros__parameters': {}}
-            elif 'ros__parameters' not in robot_params_dict['/**'][ctrl]:
-                robot_params_dict['/**'][ctrl]['ros__parameters'] = {}
-            robot_params_dict['/**'][ctrl]['ros__parameters']['bringup_type']  = b_type
-            robot_params_dict['/**'][ctrl]['ros__parameters']['control_mode']  = internal_mode
-
-        # contain arm only description for accurate nle computation
-        robot_params_dict['/**']['ros__parameters'] = \
-            robot_params_dict['/**'].get('ros__parameters', {})
-        robot_params_dict['/**']['ros__parameters']['robot_arm_description'] = arm_description
-
-        # 로봇 전용 개별 Temp YAML 생성 (여러 대 로봇 구동 시 충돌 방지)
-        temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
-        yaml.dump(robot_params_dict, temp_yaml_file)
-        temp_yaml_file.close()
-
-        # ---- (C) controllers.yaml 경로 ----
+        # ---- (B) controllers.yaml 경로 ----
         controllers_yaml = PathJoinSubstitution([
             FindPackageShare('cho_franka_bringup'), 'config', 'real', 'controllers.yaml'
         ]).perform(context)
@@ -164,7 +137,7 @@ def generate_robot_nodes(context):
             'franka_gripper/joint_states',
         ]
 
-        # ---- (D) Franka 코어 노드 ----
+        # ---- (C) Franka 코어 노드 (구 franka.launch.py 내용 직접 이식) ----
         nodes += [
             Node(
                 package='robot_state_publisher',
@@ -229,7 +202,7 @@ def generate_robot_nodes(context):
             ),
         ]
 
-        # ---- (E) 선택된 컨트롤러 Spawner (-p 옵션으로 임시 YAML 주입) ----
+        # ---- (D) 선택된 컨트롤러 Spawner (-p 옵션으로 임시 YAML 주입) ----
         for name in controllers_to_load:
             spawner_args = [name, '-p', temp_yaml_file.name]
             if name != active_ctrl:
@@ -243,7 +216,7 @@ def generate_robot_nodes(context):
                 output='screen',
             ))
 
-        # ---- (F) 항상 켜져야 하는 공통 컨트롤러들 ----
+        # ---- (E) 항상 켜져야 하는 공통 컨트롤러들 ----
         for common_ctrl in ['gripper_controller', 'ee_state_broadcaster']:
             nodes.append(Node(
                 package='controller_manager',

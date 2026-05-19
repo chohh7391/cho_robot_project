@@ -47,6 +47,7 @@ CallbackReturn FrankaBaseController::on_init()
     try {
         auto_declare<std::string>("bringup_type", "");
         auto_declare<std::string>("robot_type", "");
+        auto_declare<std::string>("robot_arm_description", "");
         auto_declare<double>("mass", 0.0);
         auto_declare<std::vector<double>>("center_of_mass", {0.0, 0.0, 0.0});
         auto_declare<std::vector<double>>("load_inertia", {0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001});
@@ -112,6 +113,20 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     nv_ = robot_->nv();
     na_ = robot_->na();
 
+    if (bringup_type_ == "real" || bringup_type_ == "gazebo") {
+        robot_arm_description_ = get_node()->get_parameter("robot_arm_description").as_string();
+
+        if (robot_arm_description_.empty()) {
+            RCLCPP_ERROR(get_node()->get_logger(), "robot_arm_description is empty. Cannot compute hand NLE.");
+            return CallbackReturn::FAILURE;
+        }
+
+        robot_arm_ = std::make_shared<RobotWrapper>(robot_arm_description_, true, false);
+        arm_model_ = robot_arm_->model();
+        arm_data_  = pinocchio::Data(arm_model_);
+        RCLCPP_INFO(get_node()->get_logger(), "Arm-only model loaded successfully.");
+    }
+
     // find End-Effector Frame ID
     ee_id_ = model_.getFrameId(ee_name_);
     state_.q.setZero(nq_);
@@ -122,14 +137,6 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     state_.J_world.setZero(6, nv_);
 
     pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
-
-    // gravity compensation parameter
-    mass_ = get_node()->get_parameter("mass").as_double();
-    auto com_vec = get_node()->get_parameter("center_of_mass").as_double_array();
-    auto inertia_vec = get_node()->get_parameter("load_inertia").as_double_array();
-
-    std::copy_n(com_vec.begin(), std::min(com_vec.size(), size_t(3)), center_of_mass_.begin());
-    std::copy_n(inertia_vec.begin(), std::min(inertia_vec.size(), size_t(9)), load_inertia_.begin());
 
     RCLCPP_INFO(get_node()->get_logger(), "FrankaBaseController Configured successfully.");
     return CallbackReturn::SUCCESS;
@@ -215,46 +222,42 @@ void FrankaBaseController::compute_all_terms()
 {
     robot_->computeAllTerms(data_, state_.q, state_.v);
     state_.M = robot_->mass(data_);
+
     if (bringup_type_ == "real" || bringup_type_ == "gazebo") {
-        state_.nle = - compute_hand_gravity();
+        state_.nle = compute_hand_nle();
     } else {
+        // mujoco: libfranka 자동보상 없으므로 full NLE 그대로
         state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     }
 
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
     robot_->frameJacobianWorldAligned(data_, ee_id_, state_.J_world);
-    
+
     state_.M_arm = state_.M.topLeftCorner(num_dof_, num_dof_);
     state_.J_arm = state_.J.leftCols(num_dof_);
     state_.J_arm_world = state_.J_world.leftCols(num_dof_);
 }
 
-Vector7d FrankaBaseController::compute_hand_gravity()
+Vector7d FrankaBaseController::compute_hand_nle()
 {
-    Vector7d tau_hand;
-    Eigen::Vector3d gravity_world(0, 0, -9.81);
+    // full NLE: arm_C + arm_g + hand_C + hand_g
+    Vector7d nle_full = robot_->nonLinearEffects(data_).head(num_dof_);
 
-    if (bringup_type_ == "gazebo") {
-        gravity_world = Eigen::Vector3d(0, 0, -1.0);
-    }
-    
-    Eigen::Matrix<double, 6, 1> wrench_local;
-    wrench_local.setZero();
+    // arm-only NLE: arm_C + arm_g
+    robot_arm_->computeAllTerms(arm_data_, state_.q_arm, state_.v_arm);
+    Vector7d nle_arm = arm_data_.nle.head(num_dof_);
+    Vector7d g_arm   = arm_data_.g.head(num_dof_);
 
-    Eigen::Matrix3d R_ee = state_.H_ee.rotation();
-    
-    Eigen::Vector3d gravity_local = R_ee.transpose() * gravity_world;
-    
-    Eigen::Vector3d force_local = mass_ * gravity_local;
-    wrench_local.head<3>() = force_local;
-    
-    Eigen::Vector3d com_local(center_of_mass_[0], center_of_mass_[1], center_of_mass_[2]);
-    wrench_local.tail<3>() = com_local.cross(force_local);
+    const double gravity_scale = (bringup_type_ == "gazebo") ? (1.0 / 9.81) : 1.0;
 
-    tau_hand = (state_.J_arm.transpose() * wrench_local);
-    
-    return tau_hand;
+    Vector7d g_full  = robot_->GeneralizedGravity(data_).head(num_dof_);
+    Vector7d hand_g  = g_full - g_arm;   // hand gravity only
+    Vector7d full_C  = nle_full - g_full; // full Coriolis (arm + hand)
+
+    // 최종: full Coriolis + hand gravity * scale
+    // arm gravity는 libfranka/gazebo가 자동 보상
+    return full_C + hand_g * gravity_scale;
 }
 
 void FrankaBaseController::clip_position(Vector7d & position, const double eps)
