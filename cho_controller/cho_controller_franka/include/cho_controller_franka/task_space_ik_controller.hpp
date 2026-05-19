@@ -17,7 +17,7 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 using TaskSpaceAction = cho_interfaces::action::TaskSpace;
 using TaskSpaceGoalHandle = rclcpp_action::ServerGoalHandle<TaskSpaceAction>;
 
-class IKController : public FrankaBaseController
+class TaskSpaceIKController : public FrankaBaseController
 {
 public:
   using Vector7d = Eigen::Matrix<double, 7, 1>;

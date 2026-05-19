@@ -28,7 +28,7 @@
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
 
-      ik_controller:
+      task_space_ik_controller:
         type: cho_controller_franka/IKController
 
       gravity_compensation_controller:
@@ -93,7 +93,7 @@
       robot_type: "fr3"
 
 /**:
-  ik_controller:
+  task_space_ik_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]

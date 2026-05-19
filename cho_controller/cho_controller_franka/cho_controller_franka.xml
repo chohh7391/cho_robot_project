@@ -5,8 +5,8 @@
             End-Effector State broadcaster
         </description>
     </class>
-    <class name="cho_controller_franka/IKController"
-           type="cho_controller::franka::IKController" base_class_type="controller_interface::ControllerInterface">
+    <class name="cho_controller_franka/TaskSpaceIKController"
+           type="cho_controller::franka::TaskSpaceIKController" base_class_type="controller_interface::ControllerInterface">
         <description>
             The inverse kinematics controller
         </description>

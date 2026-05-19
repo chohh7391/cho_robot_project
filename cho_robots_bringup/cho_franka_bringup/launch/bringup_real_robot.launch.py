@@ -49,7 +49,7 @@ def generate_robot_nodes(context):
     # ------------------------------------------------------------------
     # 2. 컨트롤러 목록 결정
     # ------------------------------------------------------------------
-    position_controllers = ['ik_controller']
+    position_controllers = ['task_space_ik_controller']
     torque_controllers = [
         'gravity_compensation_controller',
         'joint_space_impedance_controller',

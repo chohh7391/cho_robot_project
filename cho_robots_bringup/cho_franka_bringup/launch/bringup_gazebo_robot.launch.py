@@ -126,7 +126,7 @@ def generate_launch_description():
         # ---------------------------------------------------------
         active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
 
-        position_controllers = ['ik_controller']
+        position_controllers = ['task_space_ik_controller']
         torque_controllers = [
             'gravity_compensation_controller',
             'joint_space_impedance_controller',

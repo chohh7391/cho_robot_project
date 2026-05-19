@@ -1,4 +1,4 @@
-#include "cho_controller_franka/ik_controller.hpp"
+#include "cho_controller_franka/task_space_ik_controller.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
 
 #include <cassert>
@@ -13,19 +13,18 @@ namespace cho_controller {
 namespace franka {
 
 controller_interface::InterfaceConfiguration
-IKController::command_interface_configuration() const
+TaskSpaceIKController::command_interface_configuration() const
 {
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
 
-  // [수정 1] Command Interface를 'effort'에서 'position'으로 변경합니다.
   for (int i = 1; i <= num_dof_; ++i) {
     config.names.push_back(robot_type_ + "_joint" + std::to_string(i) + "/position");
   }
   return config;
 }
 
-CallbackReturn IKController::on_init() {
+CallbackReturn TaskSpaceIKController::on_init() {
   if (FrankaBaseController::on_init() != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
@@ -44,7 +43,7 @@ CallbackReturn IKController::on_init() {
   return CallbackReturn::SUCCESS;
 }
 
-CallbackReturn IKController::on_configure(
+CallbackReturn TaskSpaceIKController::on_configure(
     const rclcpp_lifecycle::State& previous_state)
 {
   if (!assign_parameters()) {
@@ -56,13 +55,13 @@ CallbackReturn IKController::on_configure(
   }
 
   // 액션 서버 이름도 목적에 맞게 변경하시면 좋습니다.
-  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/ik_controller");
+  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_ik_controller");
   action_server_->init();
 
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::return_type IKController::update(
+controller_interface::return_type TaskSpaceIKController::update(
   const rclcpp::Time& time,
   const rclcpp::Duration& period)
 {
@@ -127,7 +126,7 @@ controller_interface::return_type IKController::update(
   return controller_interface::return_type::OK;
 }
 
-bool IKController::assign_parameters() {
+bool TaskSpaceIKController::assign_parameters() {
   auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
   auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
@@ -157,5 +156,5 @@ bool IKController::assign_parameters() {
 
 #include "pluginlib/class_list_macros.hpp"
 // NOLINTNEXTLINE
-PLUGINLIB_EXPORT_CLASS(cho_controller::franka::IKController,
+PLUGINLIB_EXPORT_CLASS(cho_controller::franka::TaskSpaceIKController,
                        controller_interface::ControllerInterface)

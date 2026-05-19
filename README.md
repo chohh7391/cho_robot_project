@@ -88,7 +88,7 @@ tailscale ip -4
 ### Available controllers
 
 - position controllers
-    - ik_controller (TODO: make this controller stable)
+    - task_space_ik_controller (TODO: make this controller stable)
 
 - torque controllers
     - gravity_compensation_controller

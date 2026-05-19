@@ -26,8 +26,8 @@
       simulation_gripper_controller:
         type: forward_command_controller/ForwardCommandController
 
-      ik_controller:
-        type: cho_controller_franka/IKController
+      task_space_ik_controller:
+        type: cho_controller_franka/TaskSpaceIKController
 
       gravity_compensation_controller:
         type: cho_controller_franka/GravityCompensationController
@@ -90,7 +90,7 @@
       robot_type: "fr3"
 
 /**:
-  ik_controller:
+  task_space_ik_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
