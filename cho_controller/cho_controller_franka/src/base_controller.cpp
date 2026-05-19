@@ -215,8 +215,8 @@ void FrankaBaseController::compute_all_terms()
 {
     robot_->computeAllTerms(data_, state_.q, state_.v);
     state_.M = robot_->mass(data_);
-    if (bringup_type_ == "real" ||  bringup_type_ == "gazebo") {
-        state_.nle = compute_hand_gravity();
+    if (bringup_type_ == "real" || bringup_type_ == "gazebo") {
+        state_.nle = - compute_hand_gravity();
     } else {
         state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     }
@@ -233,10 +233,10 @@ void FrankaBaseController::compute_all_terms()
 Vector7d FrankaBaseController::compute_hand_gravity()
 {
     Vector7d tau_hand;
-    Eigen::Vector3d gravity_world(0, 0, 9.81);
+    Eigen::Vector3d gravity_world(0, 0, -9.81);
 
     if (bringup_type_ == "gazebo") {
-        gravity_world = Eigen::Vector3d(0, 0, 1.0);
+        gravity_world = Eigen::Vector3d(0, 0, -1.0);
     }
     
     Eigen::Matrix<double, 6, 1> wrench_local;
