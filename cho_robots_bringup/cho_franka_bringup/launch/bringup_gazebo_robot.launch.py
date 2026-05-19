@@ -106,16 +106,6 @@ def generate_launch_description():
                 'xyz_ee': '0 0 0.0175',
             }
         )
-
-        arm_doc = xacro.process_file(
-            xacro_path,
-            mappings={
-                'robot_type': robot_type_str,
-                'hand': 'false',
-                'gazebo': 'true',
-                'gazebo_effort': gazebo_effort_str,
-            }
-        )
         
         robot_state_publisher = Node(
             package='robot_state_publisher',
@@ -167,11 +157,6 @@ def generate_launch_description():
                 
             dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
             dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
-
-        # contain arm only description for accurate nle computation
-        dynamic_params_dict['/**']['ros__parameters'] = \
-            dynamic_params_dict['/**'].get('ros__parameters', {})
-        dynamic_params_dict['/**']['ros__parameters']['robot_arm_description'] = arm_doc.toxml()
 
         # 3. 완성된 단일 임시 YAML 파일 생성
         temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')

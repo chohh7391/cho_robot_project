@@ -6,6 +6,7 @@ class ControllerNames(str, Enum):
     JOINT_QP = 'joint_space_qp_controller'
     
     # Task Space Controllers
+    IK = 'ik_controller'
     OPERATIONAL_SPACE = 'operational_space_controller'
     TASK_IMPEDANCE = 'task_space_impedance_controller'
     TASK_QP = 'task_space_qp_controller'
