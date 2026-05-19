@@ -114,8 +114,8 @@ ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
-ros2 launch cho_franka_bringup bringup_real_robot.launch.py vla:=true control_mode:=position
-ros2 launch cho_franka_bringup bringup_real_robot.launch.py vla:=true control_mode:=torque
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=position vla:=true
+ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque vla:=true
 ```
 
 - gazebo
@@ -130,8 +130,8 @@ ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torq
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_mode:=position
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py vla:=true control_mode:=torque
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position vla:=true
+ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque vla:=true
 ```
 
 - mujoco
@@ -146,8 +146,8 @@ ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torq
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
-ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py vla:=true control_mode:=position
-ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py vla:=true control_mode:=torque
+ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=position vla:=true
+ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=torque vla:=true
 ```
 
 ## Test
