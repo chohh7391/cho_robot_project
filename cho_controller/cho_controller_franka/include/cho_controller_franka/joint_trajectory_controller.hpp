@@ -1,24 +1,14 @@
 #pragma once
 
-#include <string>
-
-#include <Eigen/Eigen>
-#include <controller_interface/controller_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
 #include "cho_controller_franka/base_controller.hpp"
-#include "cho_interfaces/action/joint_space.hpp"
-#include "cho_controller_franka/servers/joint_space_action_server.hpp"
 
 
 namespace cho_controller {
 namespace franka {
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
-using JointSpaceAction = cho_interfaces::action::JointSpace;
-using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
 
-class JointSpaceImpedanceController : public FrankaBaseController
+class JointTrajectoryController : public FrankaBaseController
 {
 public:
     using Vector7d = Eigen::Matrix<double, 7, 1>;
@@ -31,7 +21,20 @@ public:
     controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-    std::shared_ptr<JointSpaceActionServer> action_server_;
+    // --- Trajectory parameters (per joint) ---
+    Vector7d traj_f_hz_;    // frequency [Hz]
+    Vector7d traj_rho_;     // sin coefficient
+    Vector7d traj_delta_;   // cos coefficient
+
+    double   traj_duration_ {0.0};   // 0 → run indefinitely
+    rclcpp::Time traj_start_time_;
+
+    void setup_trajectory_params();
+    Vector7d compute_desired_q(double tau) const;
+
+    // --- Control ---
+    // Joint PD with gravity/NLE compensation
+    // Gains declared via base class: kp_joint_, kd_joint_
 };
 
 } // namespace franka

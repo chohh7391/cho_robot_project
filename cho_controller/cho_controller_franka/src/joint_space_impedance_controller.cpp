@@ -9,6 +9,7 @@
 #include <Eigen/Eigen>
 #include "cho_controller_franka/servers/joint_space_action_server.hpp"
 
+
 namespace cho_controller {
 namespace franka {
 
@@ -34,7 +35,7 @@ CallbackReturn JointSpaceImpedanceController::on_init()
     auto_declare<std::vector<double>>("kp_joint", {});
     auto_declare<std::vector<double>>("kd_joint", {});
   } catch (const std::exception& e) {
-    fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
+    RCLCPP_ERROR(get_node()->get_logger(), "Exception thrown during init stage with message: %s", e.what());
     return CallbackReturn::ERROR;
   }
   return CallbackReturn::SUCCESS;
@@ -64,8 +65,6 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     kd_joint_(i) = kd_joint.at(i);
   }
   
-  dq_filtered_.setZero();
-
   action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "/controller_action_server/joint_space_impedance_controller");
   action_server_->init();
 

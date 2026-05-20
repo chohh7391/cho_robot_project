@@ -55,14 +55,14 @@ class ControlSuiteShell(cmd.Cmd):
         self.joint_space_action_client = ActionClient(
             self.node,
             JointSpace,
-            # "/controller_action_server/joint_space_impedance_controller",
-            "/controller_action_server/joint_space_qp_controller",
+            "/controller_action_server/joint_space_impedance_controller",
+            # "/controller_action_server/joint_space_qp_controller",
         )
         self.task_space_action_client = ActionClient(
             self.node,
             TaskSpace,
-            "/controller_action_server/task_space_ik_controller",
-            # "/controller_action_server/task_space_impedance_controller",
+            # "/controller_action_server/task_space_ik_controller",
+            "/controller_action_server/task_space_impedance_controller",
             # "/controller_action_server/operational_space_controller",
             # "/controller_action_server/task_space_qp_controller",
         )
@@ -74,7 +74,7 @@ class ControlSuiteShell(cmd.Cmd):
 
         # Wait for Servers
         for ac in [
-            # self.joint_space_action_client,
+            self.joint_space_action_client,
             self.task_space_action_client,
             self.gripper_action_client,
         ]:

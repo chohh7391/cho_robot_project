@@ -50,6 +50,8 @@ add_library(${PROJECT_NAME} SHARED
     src/servers/task_space_action_server.cpp
     src/servers/gripper_action_server.cpp
     src/servers/vla_action_server.cpp
+    # extras
+    src/joint_trajectory_controller.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include

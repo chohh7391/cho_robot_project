@@ -44,6 +44,12 @@ def generate_launch_description():
             'world',
             default_value='empty.sdf',
             description='Name of the Gazebo world file to load (e.g., custom_world.sdf)'
+        ),
+        DeclareLaunchArgument(
+            'ee_name',
+            default_value='fr3_hand_tcp',
+            description='Name of End-Effector',
+            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
         )
     ]
 
@@ -84,6 +90,7 @@ def generate_launch_description():
         
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
+        ee_name = LaunchConfiguration('ee_name').perform(context)
 
         # --- Xacro 파싱 ---
         gazebo_effort_str = 'false' if mode == 'position' else 'true'
@@ -133,7 +140,9 @@ def generate_launch_description():
             'task_space_impedance_controller',
             'operational_space_controller',
             'joint_space_qp_controller',
-            'task_space_qp_controller'
+            'task_space_qp_controller',
+            # extra controllers
+            'joint_trajectory_controller'
         ]
 
         controllers_to_load = position_controllers if mode == 'position' else torque_controllers
@@ -157,6 +166,7 @@ def generate_launch_description():
                 
             dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
             dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
+            dynamic_params_dict['/**'][ctrl]['ros__parameters']['ee_name'] = ee_name
 
         # 3. 완성된 단일 임시 YAML 파일 생성
         temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')

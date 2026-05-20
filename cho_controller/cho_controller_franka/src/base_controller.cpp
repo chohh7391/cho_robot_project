@@ -35,8 +35,10 @@ FrankaBaseController::state_interface_configuration() const
 
     if (bringup_type_ != "real") {
         // gripper
-        config.names.push_back(robot_type_ + "_finger_joint1" + "/position");
-        config.names.push_back(robot_type_ + "_finger_joint1" + "/velocity");
+        if (nq_ > num_dof_) {
+            config.names.push_back(robot_type_ + "_finger_joint1" + "/position");
+            config.names.push_back(robot_type_ + "_finger_joint1" + "/velocity");
+        }
     }
     
     return config;
@@ -47,6 +49,7 @@ CallbackReturn FrankaBaseController::on_init()
     try {
         auto_declare<std::string>("bringup_type", "");
         auto_declare<std::string>("robot_type", "");
+        auto_declare<std::string>("ee_name", "");
         auto_declare<double>("mass", 0.0);
         auto_declare<std::vector<double>>("center_of_mass", {0.0, 0.0, 0.0});
         auto_declare<std::vector<double>>("load_inertia", {0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001});
@@ -113,7 +116,13 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     na_ = robot_->na();
 
     // find End-Effector Frame ID
+    ee_name_ = get_node()->get_parameter("ee_name").as_string();
     ee_id_ = model_.getFrameId(ee_name_);
+    if (ee_id_ == model_.frames.size()) {
+        RCLCPP_ERROR(get_node()->get_logger(), "End-effector frame '%s' does not exist in URDF!", ee_name_.c_str());
+        return CallbackReturn::FAILURE;
+    }
+
     state_.q.setZero(nq_);
     state_.v.setZero(nv_);
     state_.q_init.setZero(nq_);
@@ -121,7 +130,7 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     state_.J.setZero(6, nv_);
     state_.J_world.setZero(6, nv_);
 
-    pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
+    // pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
 
     // gravity compensation parameter
     mass_ = get_node()->get_parameter("mass").as_double();
@@ -143,8 +152,7 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.v_init = state_.v;
   state_.q_arm_init = state_.q_arm;
   state_.v_arm_init = state_.v_arm;
-  state_.q_gripper_init = state_.q_gripper;
-
+  if (nq_ > num_dof_) state_.q_gripper_init = state_.q_gripper;
   state_.H_ee_init = state_.H_ee;
 
   return CallbackReturn::SUCCESS;
@@ -161,23 +169,23 @@ controller_interface::return_type FrankaBaseController::update(
     update_joint_states();
     compute_all_terms();
 
-    auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
-        msg.position.x = pose.translation()(0);
-        msg.position.y = pose.translation()(1);
-        msg.position.z = pose.translation()(2);
-        Eigen::Quaterniond q(pose.rotation());
-        msg.orientation.x = q.x();
-        msg.orientation.y = q.y();
-        msg.orientation.z = q.z();
-        msg.orientation.w = q.w();
-    };
+    // auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
+    //     msg.position.x = pose.translation()(0);
+    //     msg.position.y = pose.translation()(1);
+    //     msg.position.z = pose.translation()(2);
+    //     Eigen::Quaterniond q(pose.rotation());
+    //     msg.orientation.x = q.x();
+    //     msg.orientation.y = q.y();
+    //     msg.orientation.z = q.z();
+    //     msg.orientation.w = q.w();
+    // };
 
-    auto pose_log_msg = cho_interfaces::msg::PoseLog();
-    fill_pose(pose_log_msg.pose_ref, state_.H_ee_ref);
-    fill_pose(pose_log_msg.pose_des, state_.H_ee_des);
-    fill_pose(pose_log_msg.pose_curr, state_.H_ee);
+    // auto pose_log_msg = cho_interfaces::msg::PoseLog();
+    // fill_pose(pose_log_msg.pose_ref, state_.H_ee_ref);
+    // fill_pose(pose_log_msg.pose_des, state_.H_ee_des);
+    // fill_pose(pose_log_msg.pose_curr, state_.H_ee);
 
-    pose_log_pub_->publish(pose_log_msg);
+    // pose_log_pub_->publish(pose_log_msg);
 
     return controller_interface::return_type::OK;
 }
@@ -188,7 +196,11 @@ void FrankaBaseController::update_joint_states()
     if (bringup_type_ == "real") {
         num_interface = num_dof_; // real franka hardware does not have finger interface
     } else {
-        num_interface = num_dof_ + 1;
+        if (nq_ > num_dof_) {
+            num_interface = num_dof_ + 1;
+        } else {
+            num_interface = num_dof_;
+        }
     }
     // arm
     for (auto i = 0; i < num_interface; ++i) {
@@ -201,13 +213,16 @@ void FrankaBaseController::update_joint_states()
         state_.q(i) = position_interface.get_value();
         state_.v(i) = velocity_interface.get_value();
     }
-    // mimic
-    state_.q(num_dof_+1) = state_.q(num_dof_);
-    state_.v(num_dof_+1) = state_.v(num_dof_);
-    state_.q_gripper = state_.q.tail(2);
-    state_.v_gripper = state_.v.tail(2);
     state_.q_arm = state_.q.head(num_dof_);
     state_.v_arm = state_.v.head(num_dof_);
+
+    // mimic
+    if (nq_ > num_dof_) {
+        state_.q(num_dof_+1) = state_.q(num_dof_);
+        state_.v(num_dof_+1) = state_.v(num_dof_);
+        state_.q_gripper = state_.q.tail(2);
+        state_.v_gripper = state_.v.tail(2);
+    }
 }
     
 
