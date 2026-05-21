@@ -67,6 +67,11 @@ CallbackReturn JointTrajectoryController::on_configure(
     f_hz_.setZero();
     rho_.setZero();
     delta_.setZero();
+
+    dq_filtered_.setZero();
+
+    // Build trajectory parameters around the current joint config
+    setup_trajectory_params();
     
     return CallbackReturn::SUCCESS;
 }
@@ -78,18 +83,17 @@ CallbackReturn JointTrajectoryController::on_activate(
         return CallbackReturn::FAILURE;
     }
 
-    // Build trajectory parameters around the current joint config
-    setup_trajectory_params();
+    f_hz_.setZero();
+    rho_.setZero();
+    delta_.setZero();
+
+    dq_filtered_.setZero();
 
     // Mark start time
     traj_start_time_ = get_node()->now();
 
     state_.q_arm_des = state_.q_arm_init;
     state_.v_arm_des = state_.v_arm_init;
-
-    RCLCPP_INFO(get_node()->get_logger(),
-                "JointTrajectoryController activated. Duration: %.1f s (0 = infinite)",
-                traj_duration_);
 
     return CallbackReturn::SUCCESS;
 }
@@ -103,28 +107,23 @@ controller_interface::return_type JointTrajectoryController::update(
 
     // Elapsed time
     double tau = (time - traj_start_time_).seconds();
-    RCLCPP_INFO(get_node()->get_logger(), "tau: %.1f s", tau);
 
     compute_desired_q(tau); // calculate state_.q_arm_des
     state_.v_arm_des = Vector7d::Zero();
 
-    // PD Control
-    const Vector7d q_err = state_.q_arm_des - state_.q_arm;
-    const Vector7d dq_err = state_.v_arm_des - state_.v_arm;
+    const double kAlpha = 0.99;
+    dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
+    Vector7d torque_desired = 
+        kp_joint_.cwiseProduct(state_.q_arm_des - state_.q_arm) + 
+        kd_joint_.cwiseProduct(state_.v_arm_des - dq_filtered_);
 
-    double q_err_norm = q_err.norm();
-    double dq_err_norm = dq_err.norm();
+    torque_desired += state_.nle; // gravity compensation
 
-    RCLCPP_INFO(get_node()->get_logger(), "q_err: %f", q_err_norm);
-    RCLCPP_INFO(get_node()->get_logger(), "dq_err: %f", dq_err_norm);
-
-    Vector7d tau_cmd = kp_joint_.cwiseProduct(q_err) + kd_joint_.cwiseProduct(dq_err);
-    tau_cmd += state_.nle;
-
-    clip_torque(tau_cmd);
+    // clip torque
+    FrankaBaseController::clip_torque(torque_desired);
 
     for (int i = 0; i < num_dof_; ++i) {
-        command_interfaces_[i].set_value(tau_cmd(i));
+        command_interfaces_[i].set_value(torque_desired(i));
     }
 
     return controller_interface::return_type::OK;

@@ -64,6 +64,8 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     kp_joint_(i) = kp_joint.at(i);
     kd_joint_(i) = kd_joint.at(i);
   }
+
+  dq_filtered_.setZero();
   
   action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "/controller_action_server/joint_space_impedance_controller");
   action_server_->init();
