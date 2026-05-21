@@ -41,7 +41,7 @@ controller_interface::return_type EEStateBroadcaster::update(
     pose_msg.pose.orientation.w = q.w();
 
     // ── Twist (world-aligned) ─────────────────────────────────────────────
-    Vector6d twist = state_.J_arm * state_.v_arm;
+    Vector6d twist = state_.J_arm_world * state_.v_arm;
 
     geometry_msgs::msg::TwistStamped twist_msg;
     twist_msg.header.stamp    = time;
