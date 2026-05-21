@@ -43,6 +43,7 @@ def generate_robot_nodes(context):
     ctrl_name = LaunchConfiguration('controller_name').perform(context)
     is_vla    = LaunchConfiguration('vla').perform(context)
     b_type    = LaunchConfiguration('bringup_type').perform(context)
+    ee_name   = LaunchConfiguration('ee_name').perform(context)
 
     active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
 
@@ -58,9 +59,17 @@ def generate_robot_nodes(context):
         'joint_space_qp_controller',
         'task_space_qp_controller',
     ]
+    
     controllers_to_load = position_controllers if mode == 'position' else torque_controllers
     if active_ctrl and active_ctrl not in controllers_to_load:
         controllers_to_load.append(active_ctrl)
+
+    # (중요) 파라미터를 주입할 모든 컨트롤러 명시
+    all_controllers_to_param = controllers_to_load + [
+        'joint_state_broadcaster',
+        'ee_state_broadcaster',
+        'gripper_controller'
+    ]
 
     internal_mode = 'effort' if mode == 'torque' else mode
 
@@ -78,13 +87,16 @@ def generate_robot_nodes(context):
     if '/**' not in dynamic_params_dict:
         dynamic_params_dict['/**'] = {}
 
-    for ctrl in controllers_to_load + ['ee_state_broadcaster']:
+    # all_controllers_to_param에 있는 모든 컨트롤러(ee_state_broadcaster 포함)에 파라미터 주입
+    for ctrl in all_controllers_to_param:
         if ctrl not in dynamic_params_dict['/**']:
             dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
         elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
             dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
+            
         dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type']  = b_type
         dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode']  = internal_mode
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['ee_name']       = ee_name
 
     temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
     yaml.dump(dynamic_params_dict, temp_yaml_file)
@@ -137,7 +149,7 @@ def generate_robot_nodes(context):
             'franka_gripper/joint_states',
         ]
 
-        # ---- (C) Franka 코어 노드 (구 franka.launch.py 내용 직접 이식) ----
+        # ---- (C) Franka 코어 노드 ----
         nodes += [
             Node(
                 package='robot_state_publisher',
@@ -171,11 +183,12 @@ def generate_robot_nodes(context):
                 }],
                 output='screen',
             ),
+            # joint_state_broadcaster (임시 YAML 파라미터 적용)
             Node(
                 package='controller_manager',
                 executable='spawner',
                 namespace=namespace,
-                arguments=['joint_state_broadcaster', '--controller-manager-timeout', '30'],
+                arguments=['joint_state_broadcaster', '-p', temp_yaml_file.name, '--controller-manager-timeout', '30'],
                 output='screen',
             ),
             Node(
@@ -216,19 +229,18 @@ def generate_robot_nodes(context):
                 output='screen',
             ))
 
-        # ---- (E) 항상 켜져야 하는 공통 컨트롤러들 ----
+        # ---- (E) 항상 켜져야 하는 공통 컨트롤러들 (-p 옵션으로 임시 YAML 주입) ----
         for common_ctrl in ['gripper_controller', 'ee_state_broadcaster']:
             nodes.append(Node(
                 package='controller_manager',
                 executable='spawner',
                 namespace=namespace,
-                arguments=[common_ctrl, '-p', temp_yaml_file.name,
-                           '--controller-manager-timeout', '30'],
+                arguments=[common_ctrl, '-p', temp_yaml_file.name, '--controller-manager-timeout', '30'],
                 output='screen',
             ))
 
     # ------------------------------------------------------------------
-    # 5. RViz (use_rviz=true 인 config 가 하나라도 있으면)
+    # 5. RViz
     # ------------------------------------------------------------------
     if any(str(c.get('use_rviz', 'false')).lower() == 'true' for c in configs.values()):
         nodes.append(Node(
@@ -273,6 +285,12 @@ def generate_launch_description():
             'bringup_type',
             default_value='real',
             description='Global bringup type injected to all controllers',
+        ),
+        DeclareLaunchArgument(
+            'ee_name',
+            default_value='fr3_hand_tcp',
+            description='Name of End-Effector',
+            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
         ),
         OpaqueFunction(function=generate_robot_nodes),
     ])
