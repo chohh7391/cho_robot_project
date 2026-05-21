@@ -150,6 +150,13 @@ def generate_launch_description():
         if active_ctrl and active_ctrl not in controllers_to_load:
             controllers_to_load.append(active_ctrl)
 
+        all_controllers_to_param = controllers_to_load + [
+            'joint_state_broadcaster',
+            'ee_state_broadcaster',
+            'simulation_gripper_controller',
+            'gripper_controller'
+        ]
+
         internal_mode = 'effort' if mode == 'torque' else mode
 
         # 1. payload.yaml 파일 읽어오기
@@ -158,7 +165,7 @@ def generate_launch_description():
             dynamic_params_dict = yaml.safe_load(f) or {}
 
         # 2. 동적 파라미터(bringup_type, control_mode) 덮어쓰기
-        for ctrl in controllers_to_load:
+        for ctrl in all_controllers_to_param:
             if ctrl not in dynamic_params_dict['/**']:
                 dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
             elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:

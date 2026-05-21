@@ -63,6 +63,10 @@ CallbackReturn JointTrajectoryController::on_configure(
         kd_joint_(i) = kd_joint.at(i);
     }
     traj_duration_ = traj_duration;
+
+    f_hz_.setZero();
+    rho_.setZero();
+    delta_.setZero();
     
     return CallbackReturn::SUCCESS;
 }
@@ -99,32 +103,23 @@ controller_interface::return_type JointTrajectoryController::update(
 
     // Elapsed time
     double tau = (time - traj_start_time_).seconds();
-    if (tau < 0.0) tau = 0.0;
-    
-    bool is_finished = (traj_duration_ > 0.0 && tau >= traj_duration_);
-    if (is_finished) {
-        tau = traj_duration_;
-    }
+    RCLCPP_INFO(get_node()->get_logger(), "tau: %.1f s", tau);
 
-    // 2. 위치 (q_des) 계산
-    const Vector7d q_des = compute_desired_q(tau);
+    compute_desired_q(tau); // calculate state_.q_arm_des
+    state_.v_arm_des = Vector7d::Zero();
 
-    // 3. 속도 (dq_des) 계산
-    Vector7d dq_des = Vector7d::Zero(); // 기본값 0
-    for (int i = 0; i < num_dof_; ++i) {
-        const double w   = 2.0 * M_PI * traj_f_hz_(i);
-        const double sw  = std::sin(w * tau);
-        const double cw  = std::cos(w * tau);
-        dq_des(i) = traj_rho_(i) * w * cw - traj_delta_(i) * w * sw;
-    }
+    // PD Control
+    const Vector7d q_err = state_.q_arm_des - state_.q_arm;
+    const Vector7d dq_err = state_.v_arm_des - state_.v_arm;
 
-    // PD + NLE compensation
-    const Vector7d q_err  = q_des  - state_.q_arm;
-    const Vector7d dq_err = dq_des - state_.v_arm;
+    double q_err_norm = q_err.norm();
+    double dq_err_norm = dq_err.norm();
 
-    Vector7d tau_cmd = kp_joint_.cwiseProduct(q_err)
-                     + kd_joint_.cwiseProduct(dq_err)
-                     + state_.nle;
+    RCLCPP_INFO(get_node()->get_logger(), "q_err: %f", q_err_norm);
+    RCLCPP_INFO(get_node()->get_logger(), "dq_err: %f", dq_err_norm);
+
+    Vector7d tau_cmd = kp_joint_.cwiseProduct(q_err) + kd_joint_.cwiseProduct(dq_err);
+    tau_cmd += state_.nle;
 
     clip_torque(tau_cmd);
 
@@ -135,58 +130,61 @@ controller_interface::return_type JointTrajectoryController::update(
     return controller_interface::return_type::OK;
 }
 
-// ---------------------------------------------------------------------------
-// setup_trajectory_params  (same table as original JointDataTrajectory)
-// ---------------------------------------------------------------------------
 void JointTrajectoryController::setup_trajectory_params()
 {
-    traj_f_hz_.setZero();
-    traj_rho_.setZero();
-    traj_delta_.setZero();
-
     struct Term { int k; double A; double phi; };
     const double f0 = 0.2; // base frequency [Hz]
 
     std::map<int, std::vector<Term>> table;
-    table[1] = { {1, 0.10, 0.0},        {2, 0.05, M_PI / 2} };
-    table[2] = { {2, 0.25, 0.0},        {1, 0.05, M_PI / 2} };
-    table[3] = { {1, 0.20, 0.0},        {4, 0.05, M_PI / 2} };
-    table[4] = { {2, 0.18, 0.0},        {4, 0.08, 0.0}       };
-    table[5] = { {1, 0.30, 0.0}                               };
-    table[6] = { {2, 0.10, 0.0},        {4, 0.07, M_PI / 2} };
-    table[7] = { {1, 0.25, 0.0}, {2, 0.20, 0.0},
-                 {2, 0.05, M_PI / 2}, {4, 0.08, M_PI / 2}   };
+    table[1] = { {1, 0.10, 0.0}, {2, 0.05, M_PI/2} };
+    table[2] = { {2, 0.25, 0.0}, {1, 0.05, M_PI/2} };
+    table[3] = { {1, 0.20, 0.0}, {4, 0.05, M_PI/2} };
+    table[4] = { {2, 0.18, 0.0}, {4, 0.08, 0.0} };
+    table[5] = { {1, 0.30, 0.0} };
+    table[6] = { {2, 0.10, 0.0}, {4, 0.07, M_PI/2} };
+    table[7] = { {1, 0.25, 0.0}, {2, 0.20, 0.0}, {2, 0.05, M_PI/2}, {4, 0.08, M_PI/2} };
 
     for (int j = 1; j <= num_dof_; ++j) {
         auto it = table.find(j);
-        if (it == table.end() || it->second.empty()) continue;
+        if (it == table.end() || it->second.empty()) {
+            // 해당 조인트에 항이 없으면 0 유지
+            continue;
+        }
+        const auto &cands = it->second;
 
-        // Pick the term with the largest amplitude
-        const Term * best = &it->second[0];
-        for (const auto & t : it->second) {
+        // max-amplitude 선택
+        const Term* best = &cands[0];
+        for (const auto& t : cands) {
             if (t.A > best->A) best = &t;
         }
 
-        const int idx     = j - 1;
-        traj_f_hz_(idx)  = f0 * static_cast<double>(best->k);
-        traj_rho_(idx)   = best->A * std::cos(best->phi);
-        traj_delta_(idx) = best->A * std::sin(best->phi);
+        const int idx = j - 1;
+        f_hz_(idx)  = f0 * static_cast<double>(best->k);
+        rho_(idx)   = best->A * std::cos(best->phi);
+        delta_(idx) = best->A * std::sin(best->phi);
     }
 }
 
 // ---------------------------------------------------------------------------
 // compute_desired_q
 // ---------------------------------------------------------------------------
-Vector7d JointTrajectoryController::compute_desired_q(double tau) const
+void JointTrajectoryController::compute_desired_q(double & tau)
 {
-    Vector7d q = state_.q_arm_init;
+    if (tau <= 0.0) {
+        state_.q_arm_des = state_.q_arm_init;
+        return;
+    }
+    if (traj_duration_ > 0.0 && tau > traj_duration_) {
+        tau = traj_duration_;
+    }
+
+    state_.q_arm_des = state_.q_arm_init;
     for (int i = 0; i < num_dof_; ++i) {
-        const double w  = 2.0 * M_PI * traj_f_hz_(i);
+        const double w  = 2.0 * M_PI * f_hz_(i);
         const double sw = std::sin(w * tau);
         const double cw = std::cos(w * tau);
-        q(i) += traj_rho_(i) * sw + traj_delta_(i) * cw;
+        state_.q_arm_des(i) += rho_(i) * sw + delta_(i) * cw;
     }
-    return q;
 }
 
 

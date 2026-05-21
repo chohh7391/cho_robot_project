@@ -116,7 +116,7 @@ protected:
     pinocchio::Data data_;
     State state_;
 
-    std::string ee_name_ = "fr3_hand_tcp";
+    std::string ee_name_;
     pinocchio::FrameIndex ee_id_;
     Vector3d ee_offset_ {0.0, 0.0, 0.0};
 

@@ -22,15 +22,15 @@ public:
 
 private:
     // --- Trajectory parameters (per joint) ---
-    Vector7d traj_f_hz_;    // frequency [Hz]
-    Vector7d traj_rho_;     // sin coefficient
-    Vector7d traj_delta_;   // cos coefficient
+    Vector7d f_hz_;    // frequency [Hz]
+    Vector7d rho_;     // sin coefficient
+    Vector7d delta_;   // cos coefficient
 
     double   traj_duration_ {0.0};   // 0 → run indefinitely
     rclcpp::Time traj_start_time_;
 
     void setup_trajectory_params();
-    Vector7d compute_desired_q(double tau) const;
+    void compute_desired_q(double & tau);
 
     // --- Control ---
     // Joint PD with gravity/NLE compensation
