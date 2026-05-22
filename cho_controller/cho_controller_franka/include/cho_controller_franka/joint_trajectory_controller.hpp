@@ -41,8 +41,8 @@ private:
     // you can implement data saving function here.
     bool is_saved_{false};
     // std::vector<std::array<double, ?>> log_buffer_;
-    // void log_all_terms();
-    // void save_log_to_file();
+    void log_all_terms(const double world_time_s, const double tau, const Vector7d & torque_desired);
+    void save_log_to_file();
 };
 
 } // namespace franka

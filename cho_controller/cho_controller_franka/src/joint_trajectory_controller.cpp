@@ -126,13 +126,15 @@ controller_interface::return_type JointTrajectoryController::update(
 {
     if (FrankaBaseController::update(time, period) != controller_interface::return_type::OK) {
         return controller_interface::return_type::ERROR;
-    } 
+    }
+
+    double tau = 0.0;
 
     if (!is_started_) {
         state_.q_arm_des = state_.q_arm_init;
         state_.v_arm_des = Vector7d::Zero();
     } else {
-        double tau = (time - start_time_).seconds();
+        tau = (time - start_time_).seconds();
         compute_desired_q(tau);
         state_.v_arm_des = Vector7d::Zero();
     }
@@ -153,7 +155,7 @@ controller_interface::return_type JointTrajectoryController::update(
     }
 
     if (is_started_ && !is_saved_) {
-        log_all_terms(tau, torque_desired);
+        log_all_terms(time.seconds(), tau, torque_desired);
     }
 
     return controller_interface::return_type::OK;
@@ -217,14 +219,21 @@ void JointTrajectoryController::compute_desired_q(double & tau)
     }
 }
 
-void JointTrajectoryController::log_all_terms()
+void JointTrajectoryController::log_all_terms(const double world_time_s, const double tau, const Vector7d & torque_desired)
 {
     // TODO: log all terms except FT or L
+    // world_time_s is need, because FT data will be saved in another code.
+
+    if (tau >= duration_ && !is_saved_) {
+        save_log_to_file();
+        is_saved_ = true; // 중복 저장 방지
+    }
 }
 
 void JointTrajectoryController::save_log_to_file()
 {
     // TODO: save all terms except FT or L, where is appended in log_all_terms()
+    RCLCPP_INFO(get_node()->get_logger(), "save complete!");
 }
 
 } // namespace franka
