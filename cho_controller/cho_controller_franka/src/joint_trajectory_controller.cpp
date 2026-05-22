@@ -93,6 +93,7 @@ CallbackReturn JointTrajectoryController::on_activate(
 
     dq_filtered_.setZero();
     is_started_ = false;
+    is_saved_ = false;
 
     state_.q_arm_des = state_.q_arm_init;
     state_.v_arm_des = state_.v_arm_init;
@@ -149,6 +150,10 @@ controller_interface::return_type JointTrajectoryController::update(
 
     for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(torque_desired(i));
+    }
+
+    if (is_started_ && !is_saved_) {
+        log_all_terms(tau, torque_desired);
     }
 
     return controller_interface::return_type::OK;
@@ -212,7 +217,15 @@ void JointTrajectoryController::compute_desired_q(double & tau)
     }
 }
 
+void JointTrajectoryController::log_all_terms()
+{
+    // TODO: log all terms except FT or L
+}
 
+void JointTrajectoryController::save_log_to_file()
+{
+    // TODO: save all terms except FT or L, where is appended in log_all_terms()
+}
 
 } // namespace franka
 } // namespace cho_controller

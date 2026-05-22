@@ -34,9 +34,15 @@ private:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
     void start_srv_cb(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                       std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-
+    
     void setup_trajectory_params();
     void compute_desired_q(double & tau);
+
+    // you can implement data saving function here.
+    bool is_saved_{false};
+    // std::vector<std::array<double, ?>> log_buffer_;
+    // void log_all_terms();
+    // void save_log_to_file();
 };
 
 } // namespace franka
