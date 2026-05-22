@@ -130,7 +130,8 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     state_.J.setZero(6, nv_);
     state_.J_world.setZero(6, nv_);
 
-    // pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
+    pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
+    joint_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::JointLog>("/log/joint_pos", 10);
 
     // gravity compensation parameter
     mass_ = get_node()->get_parameter("mass").as_double();
@@ -169,23 +170,9 @@ controller_interface::return_type FrankaBaseController::update(
     update_joint_states();
     compute_all_terms();
 
-    // auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
-    //     msg.position.x = pose.translation()(0);
-    //     msg.position.y = pose.translation()(1);
-    //     msg.position.z = pose.translation()(2);
-    //     Eigen::Quaterniond q(pose.rotation());
-    //     msg.orientation.x = q.x();
-    //     msg.orientation.y = q.y();
-    //     msg.orientation.z = q.z();
-    //     msg.orientation.w = q.w();
-    // };
-
-    // auto pose_log_msg = cho_interfaces::msg::PoseLog();
-    // fill_pose(pose_log_msg.pose_ref, state_.H_ee_ref);
-    // fill_pose(pose_log_msg.pose_des, state_.H_ee_des);
-    // fill_pose(pose_log_msg.pose_curr, state_.H_ee);
-
-    // pose_log_pub_->publish(pose_log_msg);
+    // logging
+    log_ee_pose();
+    log_joint_pos();
 
     return controller_interface::return_type::OK;
 }
@@ -286,6 +273,43 @@ void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 void FrankaBaseController::clip_torque(Vector7d & torque)
 {
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
+}
+
+void FrankaBaseController::log_ee_pose()
+{
+    auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
+        msg.position.x = pose.translation()(0);
+        msg.position.y = pose.translation()(1);
+        msg.position.z = pose.translation()(2);
+        Eigen::Quaterniond q(pose.rotation());
+        msg.orientation.x = q.x();
+        msg.orientation.y = q.y();
+        msg.orientation.z = q.z();
+        msg.orientation.w = q.w();
+    };
+
+    auto pose_log_msg = cho_interfaces::msg::PoseLog();
+    fill_pose(pose_log_msg.pose_ref, state_.H_ee_ref);
+    fill_pose(pose_log_msg.pose_des, state_.H_ee_des);
+    fill_pose(pose_log_msg.pose_curr, state_.H_ee);
+
+    pose_log_pub_->publish(pose_log_msg);
+}
+
+void FrankaBaseController::log_joint_pos()
+{
+    auto joint_pos_log_msg = cho_interfaces::msg::JointLog();
+
+    // 1. Desired joint positions 메모리 할당 및 값 복사
+    joint_pos_log_msg.pos_des.position.resize(state_.q_arm_des.size());
+    Eigen::VectorXd::Map(&joint_pos_log_msg.pos_des.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
+
+    // 2. Current joint positions 메모리 할당 및 값 복사
+    joint_pos_log_msg.pos_curr.position.resize(state_.q_arm.size());
+    Eigen::VectorXd::Map(&joint_pos_log_msg.pos_curr.position[0], state_.q_arm.size()) = state_.q_arm;
+
+    // 3. 퍼블리시
+    joint_log_pub_->publish(joint_pos_log_msg);
 }
 
 } // namespace franka

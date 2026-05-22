@@ -27,6 +27,7 @@
 #include <Eigen/Eigen>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <cho_interfaces/msg/pose_log.hpp>
+#include <cho_interfaces/msg/joint_log.hpp>
 
 using namespace std;
 using namespace Eigen;
@@ -105,6 +106,9 @@ public:
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
+    void log_ee_pose();
+    void log_joint_pos();
+
 protected:
     std::string robot_type_;
     std::string robot_description_;
@@ -132,6 +136,7 @@ protected:
     const Eigen::Matrix<double, 7, 1> torque_limits_ {87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0};
 
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
+    rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
 
     // gains
     // joint space

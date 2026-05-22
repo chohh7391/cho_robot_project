@@ -1,0 +1,2 @@
+sensor_msgs/JointState pos_des
+sensor_msgs/JointState pos_curr
