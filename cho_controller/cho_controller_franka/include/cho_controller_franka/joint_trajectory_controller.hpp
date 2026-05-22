@@ -38,6 +38,8 @@ private:
     void setup_trajectory_params();
     void compute_desired_q(double & tau);
 
+    
+
     // you can implement data saving function here.
     bool is_saved_{false};
     // std::vector<std::array<double, ?>> log_buffer_;

@@ -223,6 +223,8 @@ void JointTrajectoryController::log_all_terms(const double world_time_s, const d
 {
     // TODO: log all terms except FT or L
     // world_time_s is need, because FT data will be saved in another code.
+    // FT data subscription is not recommend, because control loop can be delayed.
+    // save separately, and merge using timestamp.
 
     if (tau >= duration_ && !is_saved_) {
         save_log_to_file();
