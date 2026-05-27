@@ -55,6 +55,9 @@
       vla_controller:
         type: cho_controller_franka/VLAController
 
+      joint_trajectory_controller:
+        type: cho_controller_franka/JointTrajectoryController
+
 
 /**:
   franka_robot_state_broadcaster:
@@ -106,8 +109,8 @@
   joint_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_joint: [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
-      kd_joint: [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
+      kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]  # [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
+      kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]  # [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
 
 /**:
   task_space_impedance_controller:
@@ -156,3 +159,11 @@
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
       default_kd_task: [34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719]
+
+/**:
+  joint_trajectory_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]
+      kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]
+      duration: 6.0

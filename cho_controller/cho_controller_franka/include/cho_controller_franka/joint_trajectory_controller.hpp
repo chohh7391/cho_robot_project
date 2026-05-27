@@ -9,6 +9,13 @@ namespace franka {
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
+struct HarmonicTerm {
+    double k;
+    double rho_val;
+    double sigma_val;
+    double phi_val;
+};
+
 class JointTrajectoryController : public FrankaBaseController
 {
 public:
@@ -26,6 +33,7 @@ private:
     Vector7d f_hz_;    // frequency [Hz]
     Vector7d rho_;     // sin coefficient
     Vector7d delta_;   // cos coefficient
+    std::map<double, std::vector<HarmonicTerm>> active_params_;
 
     double duration_;
     rclcpp::Time start_time_;

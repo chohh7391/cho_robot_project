@@ -163,38 +163,23 @@ controller_interface::return_type JointTrajectoryController::update(
 
 void JointTrajectoryController::setup_trajectory_params()
 {
-    struct Term { int k; double A; double phi; };
-    const double f0 = 0.2; // base frequency [Hz]
+    active_params_.clear();
 
-    std::map<int, std::vector<Term>> table;
-    table[1] = { {1, 0.10, 0.0}, {2, 0.05, M_PI/2} };
-    table[2] = { {2, 0.25, 0.0}, {1, 0.05, M_PI/2} };
-    table[3] = { {1, 0.20, 0.0}, {4, 0.05, M_PI/2} };
-    table[4] = { {2, 0.18, 0.0}, {4, 0.08, 0.0} };
-    table[5] = { {1, 0.30, 0.0} };
-    table[6] = { {2, 0.10, 0.0}, {4, 0.07, M_PI/2} };
-    table[7] = { {1, 0.25, 0.0}, {2, 0.20, 0.0}, {2, 0.05, M_PI/2}, {4, 0.08, M_PI/2} };
+    // 논문 Table II 정밀 반영 
+    active_params_[2] = { {2, M_PI/12.0, 0.0, 0.0} }; // k를 2로 수정
+    active_params_[3] = { {2, M_PI/8.0,  0.0, 0.0} };
+    active_params_[4] = { {2, M_PI/16.0, 0.0, 0.0} };
+    
+    // Joint 5: k=1(sin) 성분 pi/3, k=6(cos) 성분 pi/32 
+    active_params_[5] = { {1, M_PI/3.0, 0.0, 0.0}, {6, 0.0, M_PI/32.0, 0.0} };
+    
+    // Joint 6: k=1(sin) 성분 pi/4, k=8(cos) 성분 pi/6 
+    active_params_[6] = { {1, M_PI/4.0, 0.0, 0.0}, {8, 0.0, M_PI/64.0, 0.0} };
+    
+    // Joint 7: k=1(sin) 성분 pi/2, k=4(cos) 성분 pi/16 
+    active_params_[7] = { {1, M_PI/2.0, 0.0, 0.0}, {4, 0.0, M_PI/16.0, 0.0} };
 
-    // 각 조인트에서 진폭이 가장 큰 항 하나를 선택해 파라미터 세팅
-    for (int j = 1; j <= num_dof_; ++j) {
-        auto it = table.find(j);
-        if (it == table.end() || it->second.empty()) {
-            // 해당 조인트에 항이 없으면 0 유지
-            continue;
-        }
-        const auto &cands = it->second;
-
-        // max-amplitude 선택
-        const Term* best = &cands[0];
-        for (const auto& t : cands) {
-            if (t.A > best->A) best = &t;
-        }
-
-        const int idx = j - 1;
-        f_hz_(idx)  = f0 * static_cast<double>(best->k);
-        rho_(idx)   = best->A * std::cos(best->phi);
-        delta_(idx) = best->A * std::sin(best->phi);
-    }
+    f_hz_.setConstant(0.33); 
 }
 
 // ---------------------------------------------------------------------------
@@ -210,13 +195,31 @@ void JointTrajectoryController::compute_desired_q(double & tau)
         tau = duration_;
     }
 
-    state_.q_arm_des = state_.q_arm_init;
-    for (int i = 0; i < num_dof_; ++i) {
-        const double w  = 2.0 * M_PI * f_hz_(i);
-        const double sw = std::sin(w * tau);
-        const double cw = std::cos(w * tau);
-        state_.q_arm_des(i) += rho_(i) * sw + delta_(i) * cw;
+    // 논문 기본 주파수 f = 0.33 Hz (T=6s 기준 동작 2회 반복) [cite: 298]
+    const double wf_base = 2.0 * M_PI * f_hz_(0);
+
+        // progress가 1.0일 때 다시 0으로 돌아오도록 2.0 * M_PI 적용
+    double progress = std::clamp(tau / duration_, 0.0, 1.0);
+    double fade = 0.5 * (1.0 - std::cos(2.0 * M_PI * progress)); // 주기를 2배로!
+
+    Eigen::VectorXd q = state_.q_arm_init; 
+
+    // 각 조인트 i에 대해 논문 식 (25) 계산 
+    for (auto const& [joint_num, harmonics] : active_params_) {
+        int idx = joint_num - 1; // 1-based to 0-based
+        if (idx >= num_dof_) continue;
+
+        double sum_disp = 0.0;
+        for (const auto& h : harmonics) {
+            // 헤더의 변수명 h.phi_val, h.rho_val, h.sigma_val 사용 
+            double angle = h.k * wf_base * tau + h.phi_val;
+            sum_disp += h.rho_val * std::sin(angle) + h.sigma_val * std::cos(angle);
+        }
+        // 시작 시 충격을 방지하기 위해 fade 가중치를 곱함 
+        q(idx) += sum_disp * fade;
     }
+    state_.q_arm_des = q;
+
 }
 
 void JointTrajectoryController::log_all_terms(const double world_time_s, const double tau, const Vector7d & torque_desired)
