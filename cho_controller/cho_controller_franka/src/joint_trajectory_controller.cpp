@@ -147,6 +147,9 @@ controller_interface::return_type JointTrajectoryController::update(
 
     torque_desired += state_.nle; // gravity compensation
 
+    // clip velocity
+    FrankaBaseController::clip_velocity();
+
     // clip torque
     FrankaBaseController::clip_torque(torque_desired);
 
@@ -177,7 +180,7 @@ void JointTrajectoryController::setup_trajectory_params()
     active_params_[6] = { {1, M_PI/4.0, 0.0, 0.0}, {8, 0.0, M_PI/64.0, 0.0} };
     
     // Joint 7: k=1(sin) 성분 pi/2, k=4(cos) 성분 pi/16 
-    active_params_[7] = { {1, M_PI/3.0, 0.0, 0.0}, {2, 0.0, M_PI/24.0, 0.0} };
+    active_params_[7] = { {1, M_PI/2.5, 0.0, 0.0}, {4, 0.0, M_PI/16.0, 0.0} };
 
     f_hz_.setConstant(0.33); 
 }
@@ -195,12 +198,24 @@ void JointTrajectoryController::compute_desired_q(double & tau)
         tau = duration_;
     }
 
-    // 논문 기본 주파수 f = 0.33 Hz (T=6s 기준 동작 2회 반복) [cite: 298]
+    // 논문 기본 주파수 f = 0.33 Hz (T=6s 기준 동작 2회 반복) [cite: 300]
     const double wf_base = 2.0 * M_PI * f_hz_(0);
 
-        // progress가 1.0일 때 다시 0으로 돌아오도록 2.0 * M_PI 적용
-    double progress = std::clamp(tau / duration_, 0.0, 1.0);
-    double fade = 0.5 * (1.0 - std::cos(2.0 * M_PI * progress)); // 주기를 2배로!
+    // --- [수정] 논문 규격을 반영한 C4-Smooth 사다리꼴 Fade 프로파일 모사 ---
+    double fade = 1.0;
+    const double ramp_time = 1.0; // 시작과 종료 시 부드럽게 가감속할 시간 (1초)
+
+    if (tau < ramp_time) {
+        // 1. 시작 구간: 0초부터 ramp_time까지 매끄럽게 가속 (0.0 -> 1.0)
+        fade = 0.5 * (1.0 - std::cos(M_PI * tau / ramp_time));
+    } else if (tau > duration_ - ramp_time) {
+        // 2. 종료 구간: 마칠 때 매끄럽게 감속 (1.0 -> 0.0) 
+        double t_end = duration_ - tau;
+        fade = 0.5 * (1.0 - std::cos(M_PI * t_end / ramp_time));
+    } else {
+        // 3. 중간 구간: Table II에 지정된 진폭을 100% 온전하게 유지하며 진동
+        fade = 1.0;
+    }
 
     Eigen::VectorXd q = state_.q_arm_init; 
 
@@ -218,8 +233,8 @@ void JointTrajectoryController::compute_desired_q(double & tau)
         // 시작 시 충격을 방지하기 위해 fade 가중치를 곱함 
         q(idx) += sum_disp * fade;
     }
-    state_.q_arm_des = q;
 
+    state_.q_arm_des = q;
 }
 
 void JointTrajectoryController::log_all_terms(const double world_time_s, const double tau, const Vector7d & torque_desired)
