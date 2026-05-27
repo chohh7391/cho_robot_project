@@ -164,6 +164,6 @@
   joint_trajectory_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]
+      kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 10.0]
       kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]
       duration: 6.0

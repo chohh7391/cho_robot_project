@@ -177,7 +177,7 @@ void JointTrajectoryController::setup_trajectory_params()
     active_params_[6] = { {1, M_PI/4.0, 0.0, 0.0}, {8, 0.0, M_PI/64.0, 0.0} };
     
     // Joint 7: k=1(sin) 성분 pi/2, k=4(cos) 성분 pi/16 
-    active_params_[7] = { {1, M_PI/2.0, 0.0, 0.0}, {4, 0.0, M_PI/16.0, 0.0} };
+    active_params_[7] = { {1, M_PI/3.0, 0.0, 0.0}, {2, 0.0, M_PI/24.0, 0.0} };
 
     f_hz_.setConstant(0.33); 
 }

@@ -1,2 +1,2 @@
-sensor_msgs/JointState pos_des
-sensor_msgs/JointState pos_curr
+sensor_msgs/JointState desired_state
+sensor_msgs/JointState current_state

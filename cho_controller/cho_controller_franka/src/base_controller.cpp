@@ -301,12 +301,16 @@ void FrankaBaseController::log_joint_pos()
     auto joint_pos_log_msg = cho_interfaces::msg::JointLog();
 
     // 1. Desired joint positions 메모리 할당 및 값 복사
-    joint_pos_log_msg.pos_des.position.resize(state_.q_arm_des.size());
-    Eigen::VectorXd::Map(&joint_pos_log_msg.pos_des.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
+    joint_pos_log_msg.desired_state.position.resize(state_.q_arm_des.size());
+    Eigen::VectorXd::Map(&joint_pos_log_msg.desired_state.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
 
     // 2. Current joint positions 메모리 할당 및 값 복사
-    joint_pos_log_msg.pos_curr.position.resize(state_.q_arm.size());
-    Eigen::VectorXd::Map(&joint_pos_log_msg.pos_curr.position[0], state_.q_arm.size()) = state_.q_arm;
+    joint_pos_log_msg.current_state.position.resize(state_.q_arm.size());
+    Eigen::VectorXd::Map(&joint_pos_log_msg.current_state.position[0], state_.q_arm.size()) = state_.q_arm;
+
+    // 3. Current joint velocities 메모리 할당 및 값 복사
+    joint_pos_log_msg.current_state.velocity.resize(state_.v_arm.size());
+    Eigen::VectorXd::Map(&joint_pos_log_msg.current_state.velocity[0], state_.v_arm.size()) = state_.v_arm;
 
     // 3. 퍼블리시
     joint_log_pub_->publish(joint_pos_log_msg);

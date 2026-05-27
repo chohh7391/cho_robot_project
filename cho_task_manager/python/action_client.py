@@ -106,11 +106,11 @@ class ControlSuiteShell(cmd.Cmd):
         elif arg.strip() == "1":
             goal.target_joints.position = [
                 0.0,
-                -0.2,
                 0.0,
-                -1.5,
                 0.0,
-                1.5,
+                -1.57,
+                0.0,
+                2.355,
                 0.0
             ]
         elif arg.strip() == "2":
