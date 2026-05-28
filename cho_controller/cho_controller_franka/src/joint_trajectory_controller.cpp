@@ -147,9 +147,6 @@ controller_interface::return_type JointTrajectoryController::update(
 
     torque_desired += state_.nle; // gravity compensation
 
-    // clip velocity
-    FrankaBaseController::clip_velocity();
-
     // clip torque
     FrankaBaseController::clip_torque(torque_desired);
 
