@@ -7,6 +7,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('task', default_value='pick_and_place'),
+        DeclareLaunchArgument('debug_tree', default_value='true'),
+        DeclareLaunchArgument('print_tree', default_value='true'),
         Node(
             package='cho_task_manager',
             executable='task_manager_node',
@@ -15,6 +17,8 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'task': LaunchConfiguration('task'),
+                'debug_tree': LaunchConfiguration('debug_tree'),
+                'print_tree': LaunchConfiguration('print_tree'),
             }]
         )
     ])

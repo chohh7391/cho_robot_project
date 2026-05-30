@@ -3,14 +3,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
-from cho_task_manager.utils.controller_names import ControllerNames
+from cho_task_manager.utils.controller_names import valid_controller_action_names
 
 
 class BaseActionBehavior(py_trees.behaviour.Behaviour):
     def __init__(self, name: str, action_type, action_name: str):
         super().__init__(name)
 
-        valid_controllers = [f"/controller_action_server/{c.value}" for c in ControllerNames]
+        valid_controllers = valid_controller_action_names()
         assert str(action_name) in valid_controllers, \
             f"Invalid controller name: '{action_name}'. Must be one of {valid_controllers}"
         
@@ -23,6 +23,7 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         self.get_result_future = None
         self.goal_handle = None
         self.cb_group = None
+        self.server_available = False
 
     def setup(self, **kwargs):
         """Action Client 공통 셋업"""
@@ -35,10 +36,26 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
             callback_group=self.cb_group
         )
         self.node.get_logger().info(f"[{self.name}] Waiting for {self.action_name} Server...")
-        self.client.wait_for_server(timeout_sec=3.0)
+        self.server_available = self.client.wait_for_server(timeout_sec=3.0)
+        if not self.server_available:
+            self.node.get_logger().warn(
+                f"[{self.name}] Action server not available during setup: {self.action_name}"
+            )
+        return True
 
     def send_action_goal(self, goal_msg):
         """자식 클래스의 initialise()에서 호출할 핵심 헬퍼 함수"""
+        if not self.client.wait_for_server(timeout_sec=0.1):
+            self.node.get_logger().error(
+                f"[{self.name}] Action server not available: {self.action_name}"
+            )
+            self.server_available = False
+            self.send_goal_future = None
+            self.get_result_future = None
+            self.goal_handle = None
+            return
+
+        self.server_available = True
         self.node.get_logger().info(f"[{self.name}] Sending Goal...")
         self.send_goal_future = self.client.send_goal_async(goal_msg)
         self.get_result_future = None

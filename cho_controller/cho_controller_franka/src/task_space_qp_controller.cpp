@@ -65,7 +65,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   task_joint_posture_->Kd(kd_joint_);
 
   traj_posture_cubic_ = std::make_shared<TrajectoryEuclidianCubic>("traj_posture");
-  reset_default_ctrl_ = true;
+  control_mode_ = QPControlMode::DEFAULT;
 
   // task space inverse dynamics
   time_ = 0.0;
@@ -92,10 +92,9 @@ CallbackReturn TaskSpaceQPController::on_activate(
 
   dq_filtered_.setZero();
 
-  // 초기 시작 시 기본적으로 Default 모드(Posture) 진입
   tsid_->removeTask("task-se3");
-  tsid_->addMotionTask(*task_joint_posture_, 1.0, 0);
-  reset_default_ctrl_ = true;
+  tsid_->removeTask("task-posture");
+  control_mode_ = QPControlMode::UNINITIALIZED;
 
   return CallbackReturn::SUCCESS;
 }
@@ -131,53 +130,31 @@ controller_interface::return_type TaskSpaceQPController::update(
   // 제어 모드 선택 (Action vs Default)
   // ----------------------------------------------------
   if (action_server_ && action_server_->is_running()) {
-    
-    // [1. Task Space Control (Action Running)]
-    if (!reset_default_ctrl_) { // 이전 상태가 Default 였다면 SE3 모드로 스위칭
-      tsid_->removeTask("task-posture");
-      tsid_->addMotionTask(*task_se3_equality_, 1.0, 0);
-      reset_default_ctrl_ = true; // 액션 종료 시 다시 Default 진입을 위해 세팅
+
+    if (control_mode_ != QPControlMode::ACTION) {
+      switch_to_action_control();
     }
 
-    action_server_->compute(time, state_);
-    auto trajectory_sample = action_server_->trajectory_->computeNext();
-    
-    // SE3 Task는 Cartesian Space이므로 차원 문제 없음 (일반적으로 12차원)
-    state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
-    state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
-    task_se3_equality_->setReference(trajectory_sample);
+    if (!action_server_->compute(time, state_)) {
+      switch_to_default_control(time);
+      update_default_control_reference(time);
+    } else {
+      auto trajectory_sample = action_server_->trajectory_->computeNext();
+
+      state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
+      state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(
+        trajectory_sample.pos.segment<9>(3).data());
+      task_se3_equality_->setReference(trajectory_sample);
+    }
 
   } else {
     
     // [2. Default Control (Hold Posture)]
-    if (reset_default_ctrl_) {
-      tsid_->removeTask("task-se3");
-      tsid_->addMotionTask(*task_joint_posture_, 1e-5, 1); // Weight 낮춤
-
-      // 현재 자세를 목표로 0.1초짜리 짧은 궤적 생성
-      traj_posture_cubic_->setInitSample(state_.q_arm);
-      traj_posture_cubic_->setDuration(0.1);
-      traj_posture_cubic_->setStartTime(time.seconds());
-      traj_posture_cubic_->setGoalSample(state_.q_arm);
-
-      RCLCPP_INFO(get_node()->get_logger(), "State Reset: Switched to Default Control (Posture Hold)");
-      reset_default_ctrl_ = false;
+    if (control_mode_ != QPControlMode::DEFAULT) {
+      switch_to_default_control(time);
     }
 
-    traj_posture_cubic_->setCurrentTime(time.seconds());
-    auto sample_posture_7d = traj_posture_cubic_->computeNext();
-
-    // [수정] 9개짜리(전체 관절 수) 샘플 생성하여 Posture Task에 전달
-    int model_na = robot_->na();
-    cho_controller::common::trajectory::TrajectorySample sample_posture_full(model_na);
-
-    sample_posture_full.pos.head(num_dof_) = sample_posture_7d.pos;
-    sample_posture_full.vel.head(num_dof_) = sample_posture_7d.vel;
-    
-    sample_posture_full.pos.tail(model_na - num_dof_).setZero();
-    sample_posture_full.vel.tail(model_na - num_dof_).setZero();
-
-    task_joint_posture_->setReference(sample_posture_full);
+    update_default_control_reference(time);
   }
 
   // ----------------------------------------------------
@@ -216,6 +193,46 @@ controller_interface::return_type TaskSpaceQPController::update(
   }
 
   return controller_interface::return_type::OK;
+}
+
+void TaskSpaceQPController::switch_to_action_control()
+{
+  tsid_->removeTask("task-posture");
+  tsid_->addMotionTask(*task_se3_equality_, 1.0, 0);
+  control_mode_ = QPControlMode::ACTION;
+  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control.");
+}
+
+void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
+{
+  tsid_->removeTask("task-se3");
+  tsid_->removeTask("task-posture");
+  tsid_->addMotionTask(*task_joint_posture_, 1e-5, 0);
+
+  traj_posture_cubic_->setInitSample(state_.q_arm);
+  traj_posture_cubic_->setDuration(0.1);
+  traj_posture_cubic_->setStartTime(time.seconds());
+  traj_posture_cubic_->setGoalSample(state_.q_arm);
+
+  control_mode_ = QPControlMode::DEFAULT;
+  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP default posture hold.");
+}
+
+void TaskSpaceQPController::update_default_control_reference(const rclcpp::Time & time)
+{
+  traj_posture_cubic_->setCurrentTime(time.seconds());
+  auto sample_posture_7d = traj_posture_cubic_->computeNext();
+
+  int model_na = robot_->na();
+  cho_controller::common::trajectory::TrajectorySample sample_posture_full(model_na);
+
+  sample_posture_full.pos.head(num_dof_) = sample_posture_7d.pos;
+  sample_posture_full.vel.head(num_dof_) = sample_posture_7d.vel;
+
+  sample_posture_full.pos.tail(model_na - num_dof_).setZero();
+  sample_posture_full.vel.tail(model_na - num_dof_).setZero();
+
+  task_joint_posture_->setReference(sample_posture_full);
 }
 
 bool TaskSpaceQPController::assign_parameters() {

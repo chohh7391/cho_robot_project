@@ -27,7 +27,7 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
     def _service_callback(self, request, response):
         """클라이언트가 호출했을 때 실행되는 콜백"""
         self.signal_received = True
-        self.node.get_logger().info(f"[{self.name}] Signal Received!")
+        self.node.get_logger().info(f"[{self.name}] Signal received.")
         return self.fill_response(request, response)
 
     def fill_response(self, request, response):

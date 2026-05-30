@@ -42,6 +42,9 @@ private:
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 
   bool assign_parameters();
+  void switch_to_action_control();
+  void switch_to_default_control(const rclcpp::Time & time);
+  void update_default_control_reference(const rclcpp::Time & time);
 
   std::shared_ptr<TaskSE3Equality> task_se3_equality_;
   std::shared_ptr<TaskJointPosture> task_joint_posture_; // for default control
@@ -50,7 +53,12 @@ private:
   std::shared_ptr<InverseDynamicsFormulationAccForce> tsid_; 
   SolverHQPBase * solver_;
   
-  bool reset_default_ctrl_;
+  enum class QPControlMode {
+    UNINITIALIZED,
+    DEFAULT,
+    ACTION,
+  };
+  QPControlMode control_mode_;
 };
 
 } // namespace franka

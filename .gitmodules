@@ -4,8 +4,8 @@
 	branch = humble
 [submodule "mujoco_ros2_control"]
 	path = extern/mujoco_ros2_control
-	url = https://github.com/moveit/mujoco_ros2_control.git
-	branch = humble
+	url = https://github.com/ros-controls/mujoco_ros2_control.git
+	branch = main
 [submodule "qpOASES"]
 	path = extern/qpOASES
 	url = https://github.com/coin-or/qpOASES.git

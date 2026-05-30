@@ -1,7 +1,10 @@
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from geometry_msgs.msg import Pose
 from cho_interfaces.action import TaskSpace
-from cho_task_manager.utils.controller_names import ControllerNames
+from cho_task_manager.utils.controller_names import (
+    ControllerNames,
+    controller_action_name,
+)
 
 
 class TaskSpaceActionBehavior(BaseActionBehavior):
@@ -13,7 +16,7 @@ class TaskSpaceActionBehavior(BaseActionBehavior):
         duration: float=5.0,
         controller_name: str = ControllerNames.TASK_QP,
     ):
-        super().__init__(name, TaskSpace, f"/controller_action_server/{controller_name}")
+        super().__init__(name, TaskSpace, controller_action_name(controller_name))
         self.target_pose = target_pose
         self.duration = duration
         self.relative = relative

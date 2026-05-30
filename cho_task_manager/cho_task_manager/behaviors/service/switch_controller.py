@@ -2,29 +2,54 @@ import py_trees
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
 from controller_manager_msgs.srv import SwitchController
 from builtin_interfaces.msg import Duration 
+from cho_task_manager.utils.controller_names import (
+    SWITCH_CONTROLLER_SERVICE,
+    controller_name_value,
+)
 
 
 class SwitchControllerServiceBehavior(BaseServiceBehavior):
-    def __init__(self, name: str, activate: list, deactivate: list):
-        super().__init__(name, SwitchController, '/controller_manager/switch_controller')
+    def __init__(
+        self,
+        name: str,
+        activate: list,
+        deactivate: list,
+        strict: bool = True,
+        activate_asap: bool = True,
+        timeout_sec: int = 2,
+    ):
+        super().__init__(name, SwitchController, SWITCH_CONTROLLER_SERVICE)
         self.activate = activate
         self.deactivate = deactivate
+        self.strict = strict
+        self.activate_asap = activate_asap
+        self.timeout_sec = timeout_sec
 
-    def initialise(self):
+    def make_request(self):
         req = SwitchController.Request()
-        req.activate_controllers = self.activate
-        req.deactivate_controllers = self.deactivate
-        req.strictness = SwitchController.Request.BEST_EFFORT
-        req.activate_asap = True
-        req.timeout = Duration(sec=2, nanosec=0)
+        req.activate_controllers = [
+            controller_name_value(controller) for controller in self.activate
+        ]
+        req.deactivate_controllers = [
+            controller_name_value(controller) for controller in self.deactivate
+        ]
+        req.strictness = (
+            SwitchController.Request.STRICT
+            if self.strict
+            else SwitchController.Request.BEST_EFFORT
+        )
+        req.activate_asap = self.activate_asap
+        req.timeout = Duration(sec=self.timeout_sec, nanosec=0)
+        return req
 
-        self.send_service_request(req)
-
-    def process_response(self, result):
+    def handle_response(self, result):
         """SwitchController의 결과(result.ok) 판별"""
         if result.ok:
             self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
             return py_trees.common.Status.SUCCESS
         else:
-            self.node.get_logger().error(f"[{self.name}] Failed to switch controllers!")
+            self.node.get_logger().error(
+                f"[{self.name}] Failed to switch controllers. "
+                f"activate={self.activate}, deactivate={self.deactivate}"
+            )
             return py_trees.common.Status.FAILURE

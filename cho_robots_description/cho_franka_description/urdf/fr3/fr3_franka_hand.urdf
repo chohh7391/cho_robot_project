@@ -743,7 +743,8 @@
 
   <ros2_control name="MujocoSystem" type="system">
     <hardware>
-      <plugin>mujoco_ros2_control/MujocoSystem</plugin>
+      <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+      <param name="mujoco_model">$(find cho_franka_description)/xml/fr3/scene.xml</param>
     </hardware>
 
     <joint name="fr3_joint1">
@@ -852,8 +853,8 @@
     </joint>
 
     <joint name="fr3_finger_joint1">
-      <!-- <command_interface name="position"/>
-      <command_interface name="velocity"/> -->
+      <command_interface name="position"/>
+      <command_interface name="velocity"/>
       <command_interface name="effort"/>
       <state_interface name="position"><param name="initial_value">0.04</param></state_interface>
       <state_interface name="velocity"/>

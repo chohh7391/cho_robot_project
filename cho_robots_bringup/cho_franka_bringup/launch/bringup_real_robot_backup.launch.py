@@ -1,5 +1,7 @@
 import importlib.util
 import os
+import tempfile
+import yaml
 import xacro
 
 from ament_index_python.packages import get_package_share_directory
@@ -8,40 +10,26 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
-    RegisterEventHandler,
     Shutdown,
 )
 from launch.conditions import IfCondition, UnlessCondition
-from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 # ---------------------------------------------------------------------------
-# cho_franka_bringup launch utility loading
+# load_yaml 유틸 (franka_bringup의 launch_utils.py 재활용)
 # ---------------------------------------------------------------------------
-package_share = get_package_share_directory('cho_franka_bringup')
+package_share = get_package_share_directory('franka_bringup')
 utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+    os.path.join(package_share, '..', '..', 'lib', 'franka_bringup', 'utils')
 )
 launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
 spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
 launch_utils = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch_utils)
 load_yaml = launch_utils.load_yaml
-create_controller_spawner = launch_utils.create_controller_spawner
-create_controller_spawners = launch_utils.create_controller_spawners
-create_runtime_param_file = launch_utils.create_runtime_param_file
-create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
-get_initial_active_controller = launch_utils.get_initial_active_controller
-get_switchable_controllers = launch_utils.get_switchable_controllers
-
-REAL_ALWAYS_ACTIVE_CONTROLLERS = [
-    'joint_state_broadcaster',
-    'ee_state_broadcaster',
-    'gripper_controller',
-]
 
 
 def generate_robot_nodes(context):
@@ -51,35 +39,71 @@ def generate_robot_nodes(context):
     config_file = LaunchConfiguration('robot_config_file').perform(context)
     configs = load_yaml(config_file)
 
-    mode = LaunchConfiguration('control_mode').perform(context)
+    mode      = LaunchConfiguration('control_mode').perform(context)
     ctrl_name = LaunchConfiguration('controller_name').perform(context)
-    use_vla = LaunchConfiguration('vla').perform(context)
-    b_type = LaunchConfiguration('bringup_type').perform(context)
-    ee_name = LaunchConfiguration('ee_name').perform(context)
+    is_vla    = LaunchConfiguration('vla').perform(context)
+    b_type    = LaunchConfiguration('bringup_type').perform(context)
+    ee_name   = LaunchConfiguration('ee_name').perform(context)
+
+    active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
 
     # ------------------------------------------------------------------
-    # 2. Controller preparation policy
+    # 2. 컨트롤러 목록 결정
     # ------------------------------------------------------------------
-    initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
-    switchable_controllers = get_switchable_controllers(
-        control_mode=mode,
-        use_vla=use_vla,
-        requested_controller=ctrl_name,
-        extra_torque_controllers=['joint_trajectory_controller'],
-    )
+    position_controllers = ['task_space_ik_controller']
+    torque_controllers = [
+        'gravity_compensation_controller',
+        'joint_space_impedance_controller',
+        'task_space_impedance_controller',
+        'operational_space_controller',
+        'joint_space_qp_controller',
+        'task_space_qp_controller',
+    ]
+    
+    controllers_to_load = position_controllers if mode == 'position' else torque_controllers
+    if active_ctrl and active_ctrl not in controllers_to_load:
+        controllers_to_load.append(active_ctrl)
 
+    # (중요) 파라미터를 주입할 모든 컨트롤러 명시
+    all_controllers_to_param = controllers_to_load + [
+        'joint_state_broadcaster',
+        'ee_state_broadcaster',
+        'gripper_controller'
+    ]
+
+    internal_mode = 'effort' if mode == 'torque' else mode
+
+    # ------------------------------------------------------------------
+    # 3. Payload + 동적 파라미터 병합 → 임시 YAML
+    # ------------------------------------------------------------------
     pkg_bringup = get_package_share_directory('cho_franka_bringup')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
-    runtime_param_file = create_runtime_param_file(
-        payload_config_path=payload_config_path,
-        controller_names=REAL_ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers,
-        bringup_type=b_type,
-        control_mode=mode,
-        ee_name=ee_name,
-    )
+
+    dynamic_params_dict = {}
+    if os.path.exists(payload_config_path):
+        with open(payload_config_path, 'r') as f:
+            dynamic_params_dict = yaml.safe_load(f) or {}
+
+    if '/**' not in dynamic_params_dict:
+        dynamic_params_dict['/**'] = {}
+
+    # all_controllers_to_param에 있는 모든 컨트롤러(ee_state_broadcaster 포함)에 파라미터 주입
+    for ctrl in all_controllers_to_param:
+        if ctrl not in dynamic_params_dict['/**']:
+            dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
+        elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
+            dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
+            
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type']  = b_type
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode']  = internal_mode
+        dynamic_params_dict['/**'][ctrl]['ros__parameters']['ee_name']       = ee_name
+
+    temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
+    yaml.dump(dynamic_params_dict, temp_yaml_file)
+    temp_yaml_file.close()
 
     # ------------------------------------------------------------------
-    # 3. 로봇별 노드 생성 (franka.launch.py 의존성 제거 → 직접 구성)
+    # 4. 로봇별 노드 생성 (franka.launch.py 의존성 제거 → 직접 구성)
     # ------------------------------------------------------------------
     nodes = []
 
@@ -159,6 +183,23 @@ def generate_robot_nodes(context):
                 }],
                 output='screen',
             ),
+            # joint_state_broadcaster (임시 YAML 파라미터 적용)
+            Node(
+                package='controller_manager',
+                executable='spawner',
+                namespace=namespace,
+                arguments=['joint_state_broadcaster', '-p', temp_yaml_file.name, '--controller-manager-timeout', '30'],
+                output='screen',
+            ),
+            Node(
+                package='controller_manager',
+                executable='spawner',
+                namespace=namespace,
+                arguments=['franka_robot_state_broadcaster', '--controller-manager-timeout', '30'],
+                parameters=[{'robot_type': robot_type_str}],
+                condition=UnlessCondition(use_fake_hw_str),
+                output='screen',
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([
                     PathJoinSubstitution([
@@ -174,29 +215,32 @@ def generate_robot_nodes(context):
             ),
         ]
 
-        nodes.append(
-            create_controller_spawner(
-                controller_name='franka_robot_state_broadcaster',
-                runtime_param_file=runtime_param_file,
-                active=True,
+        # ---- (D) 선택된 컨트롤러 Spawner (-p 옵션으로 임시 YAML 주입) ----
+        for name in controllers_to_load:
+            spawner_args = [name, '-p', temp_yaml_file.name]
+            if name != active_ctrl:
+                spawner_args.append('--inactive')
+
+            nodes.append(Node(
+                package='controller_manager',
+                executable='spawner',
                 namespace=namespace,
-                timeout=30,
-                condition=UnlessCondition(use_fake_hw_str),
-            )
-        )
-        nodes.extend(
-            create_controller_spawners(
-                always_active_controllers=REAL_ALWAYS_ACTIVE_CONTROLLERS,
-                switchable_controllers=switchable_controllers,
-                initial_active_controller=initial_active_controller,
-                runtime_param_file=runtime_param_file,
+                arguments=spawner_args + ['--controller-manager-timeout', '30'],
+                output='screen',
+            ))
+
+        # ---- (E) 항상 켜져야 하는 공통 컨트롤러들 (-p 옵션으로 임시 YAML 주입) ----
+        for common_ctrl in ['gripper_controller', 'ee_state_broadcaster']:
+            nodes.append(Node(
+                package='controller_manager',
+                executable='spawner',
                 namespace=namespace,
-                timeout=30,
-            )
-        )
+                arguments=[common_ctrl, '-p', temp_yaml_file.name, '--controller-manager-timeout', '30'],
+                output='screen',
+            ))
 
     # ------------------------------------------------------------------
-    # 4. RViz
+    # 5. RViz
     # ------------------------------------------------------------------
     if any(str(c.get('use_rviz', 'false')).lower() == 'true' for c in configs.values()):
         nodes.append(Node(
@@ -208,14 +252,6 @@ def generate_robot_nodes(context):
             ]), '-f', 'base'],
             output='screen',
         ))
-
-    nodes.append(
-        RegisterEventHandler(
-            event_handler=OnShutdown(
-                on_shutdown=[create_runtime_param_cleanup(runtime_param_file)],
-            )
-        )
-    )
 
     return nodes
 

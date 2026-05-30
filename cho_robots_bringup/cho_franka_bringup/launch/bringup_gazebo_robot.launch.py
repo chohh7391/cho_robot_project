@@ -1,16 +1,31 @@
+import importlib.util
 import os
-import tempfile
-import yaml
 import xacro
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription, LaunchContext
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, IncludeLaunchDescription
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+package_share = get_package_share_directory('cho_franka_bringup')
+utils_path = os.path.abspath(
+    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+)
+launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
+spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
+launch_utils = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launch_utils)
+
+ALWAYS_ACTIVE_CONTROLLERS = launch_utils.ALWAYS_ACTIVE_CONTROLLERS
+create_controller_spawners = launch_utils.create_controller_spawners
+create_runtime_param_file = launch_utils.create_runtime_param_file
+create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
+get_initial_active_controller = launch_utils.get_initial_active_controller
+get_switchable_controllers = launch_utils.get_switchable_controllers
 
 def generate_launch_description():
     pkg_description = get_package_share_directory('cho_franka_description')
@@ -85,7 +100,7 @@ def generate_launch_description():
         robot_type_str = LaunchConfiguration('robot_type').perform(context)
         load_gripper_str = LaunchConfiguration('load_gripper').perform(context)
         franka_hand_str = LaunchConfiguration('franka_hand').perform(context)
-        is_vla = LaunchConfiguration('vla').perform(context)
+        use_vla = LaunchConfiguration('vla').perform(context)
         mode = LaunchConfiguration('control_mode').perform(context)
         
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
@@ -128,101 +143,67 @@ def generate_launch_description():
             output='screen',
         )
 
-        # ---------------------------------------------------------
-        # [핵심 로직] Payload 파일 + 동적 파라미터를 하나의 YAML로 완벽하게 병합
-        # ---------------------------------------------------------
-        active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
-
-        position_controllers = ['task_space_ik_controller']
-        torque_controllers = [
-            'gravity_compensation_controller',
-            'joint_space_impedance_controller',
-            'task_space_impedance_controller',
-            'operational_space_controller',
-            'joint_space_qp_controller',
-            'task_space_qp_controller',
-            # extra controllers
-            'joint_trajectory_controller'
-        ]
-
-        controllers_to_load = position_controllers if mode == 'position' else torque_controllers
-        
-        if active_ctrl and active_ctrl not in controllers_to_load:
-            controllers_to_load.append(active_ctrl)
-
-        all_controllers_to_param = controllers_to_load + [
-            'joint_state_broadcaster',
-            'ee_state_broadcaster',
-            'simulation_gripper_controller',
-            'gripper_controller'
-        ]
-
-        internal_mode = 'effort' if mode == 'torque' else mode
-
-        # 1. payload.yaml 파일 읽어오기
+        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
+        switchable_controllers = get_switchable_controllers(
+            control_mode=mode,
+            use_vla=use_vla,
+            requested_controller=ctrl_name,
+            extra_torque_controllers=['joint_trajectory_controller'],
+        )
+        all_runtime_param_controllers = (
+            ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers
+        )
         payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
-        with open(payload_config_path, 'r') as f:
-            dynamic_params_dict = yaml.safe_load(f) or {}
-
-        # 2. 동적 파라미터(bringup_type, control_mode) 덮어쓰기
-        for ctrl in all_controllers_to_param:
-            if ctrl not in dynamic_params_dict['/**']:
-                dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
-            elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
-                dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
-                
-            dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
-            dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
-            dynamic_params_dict['/**'][ctrl]['ros__parameters']['ee_name'] = ee_name
-
-        # 3. 완성된 단일 임시 YAML 파일 생성
-        temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
-        yaml.dump(dynamic_params_dict, temp_yaml_file)
-        temp_yaml_file.close()
-
-        # ---------------------------------------------------------
-        # Spawner 노드 생성 ( '-p' 옵션을 통해 Gazebo 내부로 파라미터 강제 푸시 )
-        # ---------------------------------------------------------
-        load_target_controllers = []
-        for name in controllers_to_load:
-            # -p 옵션은 spawner가 시작되기 전 controller_manager로 파라미터를 전송합니다!
-            spawner_args = [name, '-p', temp_yaml_file.name]
-            if name != active_ctrl:
-                spawner_args.append('--inactive')
-                
-            load_target_controllers.append(
-                Node(
-                    package='controller_manager',
-                    executable='spawner',
-                    arguments=spawner_args,
-                    parameters=[use_sim_time], # 파라미터 리스트에서는 YAML 파일 제거
-                    output='screen'
-                )
-            )
-
-        # 항상 켜져야 하는 공통 컨트롤러들
-        common_controllers = [
-            Node(package='controller_manager', executable='spawner', arguments=['joint_state_broadcaster', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
-            Node(package='controller_manager', executable='spawner', arguments=['ee_state_broadcaster', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
-            Node(package='controller_manager', executable='spawner', arguments=['simulation_gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
-            Node(package='controller_manager', executable='spawner', arguments=['gripper_controller', '-p', temp_yaml_file.name], parameters=[use_sim_time], output='screen'),
-        ]
+        runtime_param_file = create_runtime_param_file(
+            payload_config_path=payload_config_path,
+            controller_names=all_runtime_param_controllers,
+            bringup_type=b_type,
+            control_mode=mode,
+            ee_name=ee_name,
+        )
+        controller_spawners = create_controller_spawners(
+            always_active_controllers=ALWAYS_ACTIVE_CONTROLLERS,
+            switchable_controllers=switchable_controllers,
+            initial_active_controller=initial_active_controller,
+            runtime_param_file=runtime_param_file,
+            use_sim_time=use_sim_time,
+        )
 
         mock_gripper = Node(
             package='cho_franka_bringup',
             executable='mock_franka_gripper.py',
-            parameters=[use_sim_time],
+            parameters=[
+                use_sim_time,
+                {
+                    'command_mode': 'effort',
+                    'max_effort': 12.0,
+                    'effort_kp': 10.0,
+                    'effort_kd': 3.0,
+                    'position_deadband': 0.001,
+                    'velocity_deadband': 0.002,
+                },
+            ],
             output='screen'
         )
 
         delayed_controller_spawner = RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=spawn_robot,
-                on_exit=common_controllers + load_target_controllers + [mock_gripper],
+                on_exit=controller_spawners + [mock_gripper],
+            )
+        )
+        cleanup_runtime_param = RegisterEventHandler(
+            event_handler=OnShutdown(
+                on_shutdown=[create_runtime_param_cleanup(runtime_param_file)],
             )
         )
 
-        return [robot_state_publisher, spawn_robot, delayed_controller_spawner]
+        return [
+            robot_state_publisher,
+            spawn_robot,
+            delayed_controller_spawner,
+            cleanup_runtime_param,
+        ]
 
     return LaunchDescription(
         declared_arguments + [

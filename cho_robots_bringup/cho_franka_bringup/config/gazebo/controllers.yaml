@@ -70,6 +70,7 @@
         - fr3_joint5
         - fr3_joint6
         - fr3_joint7
+        - fr3_finger_joint1
 
 /**:
   ee_state_broadcaster:
@@ -81,7 +82,7 @@
     ros__parameters:
       joints:
         - fr3_finger_joint1
-      interface_name: effort # position or effort
+      interface_name: effort
 
 /**:
   gripper_controller:

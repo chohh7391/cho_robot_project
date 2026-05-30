@@ -1,14 +1,30 @@
+import importlib.util
 import os
-import tempfile
-import yaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction
-from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
+
+package_share = get_package_share_directory('cho_franka_bringup')
+utils_path = os.path.abspath(
+    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+)
+launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
+spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
+launch_utils = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(launch_utils)
+
+ALWAYS_ACTIVE_CONTROLLERS = launch_utils.ALWAYS_ACTIVE_CONTROLLERS
+create_controller_spawners = launch_utils.create_controller_spawners
+create_runtime_param_file = launch_utils.create_runtime_param_file
+create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
+get_initial_active_controller = launch_utils.get_initial_active_controller
+get_switchable_controllers = launch_utils.get_switchable_controllers
+
 
 def generate_launch_description():
 
@@ -35,10 +51,17 @@ def generate_launch_description():
             'bringup_type',
             default_value='mujoco',
             description='Global bringup type injected to all controllers'
+        ),
+        DeclareLaunchArgument(
+            'ee_name',
+            default_value='fr3_hand_tcp',
+            description='Name of End-Effector',
+            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
         )
     ]
 
-    xacro_file = os.path.join(description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf')
+    # xacro_file = os.path.join(description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf')
+    xacro_file = os.path.join(description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf')
     
     robot_description = {
         'robot_description': ParameterValue(
@@ -53,7 +76,12 @@ def generate_launch_description():
     mock_gripper = Node(
         package='cho_franka_bringup',
         executable='mock_franka_gripper.py',
-        parameters=[{'use_sim_time': True}]
+        parameters=[
+            {
+                'use_sim_time': True,
+                'command_mode': 'position',
+            }
+        ]
     )
 
     node_robot_state_publisher = Node(
@@ -63,132 +91,60 @@ def generate_launch_description():
         parameters=[robot_description]
     )
 
-    load_joint_state_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['joint_state_broadcaster'],
-        output='screen'
-    )
-
-    load_ee_state_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['ee_state_broadcaster'],
-        output='screen'
-    )
-
-    load_simulation_gripper_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['simulation_gripper_controller'],
-        output='screen'
-    )
-    
-    load_gripper_controller = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['gripper_controller'],
-        output='screen'
-    )
-
     def setup_control_environment(context, *args, **kwargs):
         mode = LaunchConfiguration('control_mode').perform(context)
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
-        is_vla = LaunchConfiguration('vla').perform(context)
+        use_vla = LaunchConfiguration('vla').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
+        ee_name = LaunchConfiguration('ee_name').perform(context)
 
-        active_ctrl = 'vla_controller' if is_vla == 'true' else ctrl_name
-
-        position_controllers = ['task_space_ik_controller']
-        torque_controllers = [
-            'gravity_compensation_controller',
-            'joint_space_impedance_controller',
-            'task_space_impedance_controller',
-            'operational_space_controller',
-            'joint_space_qp_controller',
-            'task_space_qp_controller'
-        ]
-
-        controllers_to_load = position_controllers if mode == 'position' else torque_controllers
-        
-        if active_ctrl and active_ctrl not in controllers_to_load:
-            controllers_to_load.append(active_ctrl)
-
-        # ---------------------------------------------------------
-        # [핵심 수정] 동적으로 /** 와일드카드가 포함된 YAML 파일을 생성합니다.
-        # ---------------------------------------------------------
-        dynamic_params_dict = {'/**': {}}
-        internal_mode = 'effort' if mode == 'torque' else mode
-
-        def deep_merge(base: dict, override: dict) -> dict:
-            for key, val in override.items():
-                if key in base and isinstance(base[key], dict) and isinstance(val, dict):
-                    deep_merge(base[key], val)
-                else:
-                    base[key] = val
-            return base
-
-        dynamic_params_dict = {'/**': {}}
-        if os.path.exists(payload_config_file):
-            with open(payload_config_file, 'r') as f:
-                dynamic_params_dict = yaml.safe_load(f) or {}
-
-        if '/**' not in dynamic_params_dict:
-            dynamic_params_dict['/**'] = {}
-
-        for ctrl in controllers_to_load:
-            if ctrl not in dynamic_params_dict['/**']:
-                dynamic_params_dict['/**'][ctrl] = {'ros__parameters': {}}
-            elif 'ros__parameters' not in dynamic_params_dict['/**'][ctrl]:
-                dynamic_params_dict['/**'][ctrl]['ros__parameters'] = {}
-
-            dynamic_params_dict['/**'][ctrl]['ros__parameters']['bringup_type'] = b_type
-            dynamic_params_dict['/**'][ctrl]['ros__parameters']['control_mode'] = internal_mode
-
-        temp_yaml_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml')
-        yaml.dump(dynamic_params_dict, temp_yaml_file)
-        temp_yaml_file.close()
-        # ---------------------------------------------------------
-
-        # Mujoco Node에서는 payload_config_file을 별도로 넘기던 것을
-        # 이제 temp_yaml_file에 통합되었으므로 제거
-        node_mujoco_ros2_control = Node(
-            package='mujoco_ros2_control',
-            executable='mujoco_ros2_control',
-            output='screen',
-            parameters=[
-                robot_description,
-                controller_config_file,
-                temp_yaml_file.name,  # payload + offset + 동적 파라미터 통합
-                {'mujoco_model_path': os.path.join(description_path, 'xml', 'fr3', 'scene.xml')}
-            ]
+        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
+        switchable_controllers = get_switchable_controllers(
+            control_mode=mode,
+            use_vla=use_vla,
+            requested_controller=ctrl_name,
+        )
+        all_runtime_param_controllers = (
+            ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers
+        )
+        runtime_param_file = create_runtime_param_file(
+            payload_config_path=payload_config_file,
+            controller_names=all_runtime_param_controllers,
+            bringup_type=b_type,
+            control_mode=mode,
+            ee_name=ee_name,
+        )
+        controller_spawners = create_controller_spawners(
+            always_active_controllers=ALWAYS_ACTIVE_CONTROLLERS,
+            switchable_controllers=switchable_controllers,
+            initial_active_controller=initial_active_controller,
+            runtime_param_file=runtime_param_file,
+            use_sim_time={'use_sim_time': True},
         )
 
-        spawner_nodes = []
-        for name in controllers_to_load:
-            args = [name] if name == active_ctrl else [name, '--inactive']
-            spawner_nodes.append(
-                Node(
-                    package='controller_manager',
-                    executable='spawner',
-                    arguments=args,
-                    output='screen'
-                )
-            )
-
-        all_spawners = spawner_nodes + [load_simulation_gripper_controller, load_gripper_controller]
+        node_mujoco_ros2_control = Node(
+            package='mujoco_ros2_control',
+            executable='ros2_control_node',
+            output='screen',
+            parameters=[
+                {'use_sim_time': True},
+                robot_description,
+                controller_config_file,
+                runtime_param_file,
+            ],
+            remappings=[('~/robot_description', '/robot_description')],
+        )
 
         event_handlers = [
             RegisterEventHandler(
                 event_handler=OnProcessStart(
                     target_action=node_mujoco_ros2_control,
-                    on_start=[load_joint_state_controller, load_ee_state_controller],
+                    on_start=controller_spawners,
                 )
             ),
             RegisterEventHandler(
-                event_handler=OnProcessExit(
-                    target_action=load_joint_state_controller,
-                    on_exit=all_spawners,
+                event_handler=OnShutdown(
+                    on_shutdown=[create_runtime_param_cleanup(runtime_param_file)],
                 )
             )
         ]

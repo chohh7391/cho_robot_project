@@ -10,14 +10,18 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <!-- Build dependencies -->
+  <build_depend>rclcpp</build_depend>
   <build_depend>pinocchio</build_depend>
   <build_depend>eiquadprog</build_depend>
+  <build_depend>eigen</build_depend>
   <build_depend>boost</build_depend>
   <build_depend>cho_trajectory_smoother</build_depend>
 
   <!-- Execution dependencies -->
+  <exec_depend>rclcpp</exec_depend>
   <exec_depend>pinocchio</exec_depend>
   <exec_depend>eiquadprog</exec_depend>
+  <exec_depend>eigen</exec_depend>
   <exec_depend>boost</exec_depend>
   <exec_depend>cho_trajectory_smoother</exec_depend>
 

@@ -1,7 +1,10 @@
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from sensor_msgs.msg import JointState
 from cho_interfaces.action import JointSpace
-from cho_task_manager.utils.controller_names import ControllerNames
+from cho_task_manager.utils.controller_names import (
+    ControllerNames,
+    controller_action_name,
+)
 
 
 class JointSpaceActionBehavior(BaseActionBehavior):
@@ -12,7 +15,7 @@ class JointSpaceActionBehavior(BaseActionBehavior):
         duration: float=5.0,
         controller_name: str = ControllerNames.JOINT_QP,
     ):
-        super().__init__(name, JointSpace, f"/controller_action_server/{controller_name}")
+        super().__init__(name, JointSpace, controller_action_name(controller_name))
         self.target_joints = target_joints
         self.duration = duration
 
