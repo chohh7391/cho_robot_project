@@ -72,7 +72,7 @@
       <joint name="flange_to_${special_connection}" type="fixed">
         <parent link="${arm_prefix}${robot_type}_link8"/> <!-- This is the end-effector flange -->
         <child link="${special_connection}"/>
-        <origin xyz="0 0 0.0175"/> <!-- Adjust based on sensor position -->
+        <origin xyz="0 0 0.0175" rpy="${pi} 0 0"/> <!-- Adjust based on sensor position -->
       </joint>
     </xacro:unless>
 
