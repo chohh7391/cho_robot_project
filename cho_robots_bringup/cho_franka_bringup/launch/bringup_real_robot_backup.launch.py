@@ -135,7 +135,7 @@ def generate_robot_nodes(context):
                 'use_fake_hardware':    use_fake_hw_str,
                 'fake_sensor_commands': fake_sensor_cmds_str,
                 'special_connection':   'ft_sensor',
-                'xyz_ee':               '0 0 -0.0175',
+                'xyz_ee':               '0 0 0.0175',
             },
         ).toprettyxml(indent='  ')
 
