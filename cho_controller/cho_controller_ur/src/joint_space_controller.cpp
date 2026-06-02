@@ -43,10 +43,10 @@ controller_interface::return_type JointSpaceController::update(
         auto sample = action_server_->trajectory_->computeNext();
         state_.q_des = sample.pos.head(num_dof_);
     } else {
-        state_.q_des = state_.q.head(num_dof_);
+        state_.q_des = state_.q_ref;
     }
 
-    // Clip to stay within eps of current position per control cycle
+    // Rate-limit the command without letting external motion drag the setpoint.
     Eigen::VectorXd q_cmd = state_.q_des;
     clip_position(q_cmd);
 

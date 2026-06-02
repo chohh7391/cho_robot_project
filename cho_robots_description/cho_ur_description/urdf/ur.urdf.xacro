@@ -4,6 +4,8 @@
    <xacro:arg name="name" default="ur"/>
    <!-- import main macro -->
    <xacro:include filename="$(find cho_ur_description)/urdf/ur_macro.xacro"/>
+   <xacro:include filename="$(find robotiq_description)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
+   <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
 
    <!-- possible 'ur_type' values: ur3, ur5, ur10, ur3e, ur5e, ur7e, ur10e, ur12e, ur16e, ur8long, ur15, ur18, ur20, ur30 -->
    <!-- the default value should raise an error in case this was called without defining the type -->
@@ -47,6 +49,7 @@
    <xacro:arg name="sim_gazebo" default="false" />
    <xacro:arg name="sim_ignition" default="false" />
    <xacro:arg name="simulation_controllers" default="" />
+   <xacro:arg name="load_gripper" default="false" />
 
    <!-- initial position for simulations (Fake Hardware, Gazebo, Ignition) -->
    <xacro:arg name="initial_positions_file" default="$(find cho_ur_description)/config/initial_positions.yaml"/>
@@ -125,6 +128,19 @@
      >
      <origin xyz="0 0 0" rpy="0 0 0" />          <!-- position robot in the world -->
    </xacro:ur_robot>
+
+   <xacro:if value="$(arg load_gripper)">
+     <xacro:ur_to_robotiq prefix="$(arg tf_prefix)" connected_to="$(arg tf_prefix)tool0">
+     </xacro:ur_to_robotiq>
+     <xacro:robotiq_gripper
+       name="$(arg tf_prefix)robotiq_gripper"
+       prefix="$(arg tf_prefix)"
+       parent="$(arg tf_prefix)gripper_mount_link"
+       sim_ignition="$(arg sim_ignition)"
+       use_fake_hardware="$(arg use_fake_hardware)">
+       <origin xyz="0 0 0" rpy="0 0 0"/>
+     </xacro:robotiq_gripper>
+   </xacro:if>
 
    <xacro:if value="$(arg sim_gazebo)">
     <!-- Gazebo plugins -->

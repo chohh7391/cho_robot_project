@@ -39,10 +39,10 @@ void URJointSpaceActionServer::handle_accepted(
     const auto goal = goal_handle->get_goal();
     duration_ = goal->duration;
 
-    Eigen::VectorXd q_goal = Eigen::Map<const Eigen::VectorXd>(
+    q_goal_ = Eigen::Map<const Eigen::VectorXd>(
         goal->target_joints.position.data(), goal->target_joints.position.size());
     trajectory_->setDuration(duration_);
-    trajectory_->setGoalSample(q_goal);
+    trajectory_->setGoalSample(q_goal_);
     initialized_ = false;
     control_running_ = true;
 }
@@ -54,9 +54,7 @@ bool URJointSpaceActionServer::compute(const rclcpp::Time & current_time, URStat
     }
 
     if (!initialized_) {
-        const auto goal = goal_handle_->get_goal();
-        state.q_ref = Eigen::Map<const Eigen::VectorXd>(
-            goal->target_joints.position.data(), num_dof_);
+        state.q_ref = state.q.head(num_dof_);
         start_time_ = current_time;
         trajectory_->setStartTime(start_time_.seconds());
         trajectory_->setInitSample(state.q.head(num_dof_));
@@ -76,7 +74,7 @@ bool URJointSpaceActionServer::compute(const rclcpp::Time & current_time, URStat
     feedback_msg_->percent_complete = static_cast<float>(
         std::min(100.0, elapsed / std::max(duration_, 0.001) * 100.0));
 
-    double error = (state.q_ref - state.q.head(num_dof_)).norm();
+    double error = (q_goal_ - state.q.head(num_dof_)).norm();
 
     if (elapsed > duration_ && error < 5e-2) {
         RCLCPP_INFO(node_->get_logger(), "[%s] Succeeded. Error: %f", action_name_.c_str(), error);

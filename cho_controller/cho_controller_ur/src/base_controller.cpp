@@ -168,9 +168,14 @@ void URBaseController::compute_kinematics()
 
 void URBaseController::clip_position(Eigen::VectorXd & q_cmd, double eps)
 {
+    if (state_.q_ref.size() != q_cmd.size()) {
+        state_.q_ref = state_.q.head(q_cmd.size());
+    }
+
     q_cmd = q_cmd.array()
-        .max(state_.q.head(num_dof_).array() - eps)
-        .min(state_.q.head(num_dof_).array() + eps);
+        .max(state_.q_ref.array() - eps)
+        .min(state_.q_ref.array() + eps);
+    state_.q_ref = q_cmd;
 }
 
 void URBaseController::log_ee_pose()

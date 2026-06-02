@@ -27,6 +27,9 @@ public:
         const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
 
     bool compute(const rclcpp::Time & current_time, URState & state) override;
+
+private:
+    Eigen::VectorXd q_goal_;
 };
 
 } // namespace ur

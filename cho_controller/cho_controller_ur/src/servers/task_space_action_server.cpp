@@ -63,6 +63,7 @@ bool URTaskSpaceActionServer::compute(const rclcpp::Time & current_time, URState
     }
 
     if (!initialized_) {
+        state.q_ref = state.q.head(num_dof_);
         if (is_relative_) {
             state.H_ee_ref = state.H_ee * H_ee_ref_;
         } else {

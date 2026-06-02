@@ -5,35 +5,14 @@ controller_manager:
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    joint_trajectory_controller:
-      type: joint_trajectory_controller/JointTrajectoryController
-
     joint_space_controller:
       type: cho_controller_ur/JointSpaceController
 
     task_space_ik_controller:
       type: cho_controller_ur/TaskSpaceIKController
 
-joint_trajectory_controller:
-  ros__parameters:
-    joints:
-      - shoulder_pan_joint
-      - shoulder_lift_joint
-      - elbow_joint
-      - wrist_1_joint
-      - wrist_2_joint
-      - wrist_3_joint
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
-
 joint_space_controller:
   ros__parameters:
-    robot_type: ur5e
-    bringup_type: gz
-    control_mode: position
     joints:
       - shoulder_pan_joint
       - shoulder_lift_joint
@@ -45,7 +24,7 @@ joint_space_controller:
 task_space_ik_controller:
   ros__parameters:
     robot_type: ur5e
-    bringup_type: gz
+    bringup_type: mujoco
     control_mode: position
     ee_name: tool0
     joints:
@@ -57,4 +36,3 @@ task_space_ik_controller:
       - wrist_3_joint
     lambda: 0.02
     max_delta_q: 0.02
-  

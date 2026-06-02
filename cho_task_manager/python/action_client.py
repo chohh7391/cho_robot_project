@@ -19,6 +19,7 @@ from cho_interfaces.action import (
 # from perception.perception_interfaces.srv import GetObjectInfo
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Pose
+from std_msgs.msg import Float64MultiArray
 import time
 
 
@@ -80,7 +81,7 @@ class ControlSuiteShell(cmd.Cmd):
         super().__init__()
         self.robot_type = robot_type
         self.space = space
-        self.has_gripper = bool(DEFAULT_ACTION_PREFERENCES.get(robot_type, {}).get("gripper"))
+        self.has_gripper = bool(DEFAULT_ACTION_PREFERENCES.get(robot_type, {}).get("gripper")) or robot_type == "ur5e"
         rclpy.init(args=None)
         self.node = rclpy.create_node(
             f"actions_client_{robot_type}",
@@ -98,6 +99,11 @@ class ControlSuiteShell(cmd.Cmd):
         self.joint_space_action_client = None
         self.task_space_action_client = None
         self.gripper_action_client = None
+        self.robotiq_command_publisher = None
+        if robot_type == "ur5e":
+            self.robotiq_command_publisher = self.node.create_publisher(
+                Float64MultiArray, "/robotiq_controller/commands", 10
+            )
         self._spinning = False
 
         self.refresh_clients(
@@ -473,19 +479,27 @@ class ControlSuiteShell(cmd.Cmd):
 
     def do_grasp(self, arg):
         """Gripper open / close   (arg=0 => open, arg=1 => close)"""
-        if self.gripper_action_client is None:
-            print("No gripper action server is selected. Run `servers` or `use_gripper <controller>`.")
-            return
-        goal = Gripper.Goal()
-
-        # 0: Open -> False
-        # 1: Close -> True
         if arg.strip() == "0":
-            goal.grasp = False
-
+            grasp = False
         elif arg.strip() == "1":
-            goal.grasp = True
-            
+            grasp = True
+        else:
+            print("Usage: grasp 0|1")
+            return
+
+        if self.gripper_action_client is None:
+            if self.robotiq_command_publisher is None:
+                print("No gripper action server is selected. Run `servers` or `use_gripper <controller>`.")
+                return
+            msg = Float64MultiArray()
+            msg.data = [0.7929 if grasp else 0.0]
+            self.robotiq_command_publisher.publish(msg)
+            print(f"{'Close' if grasp else 'Open'} command published to /robotiq_controller/commands")
+            return
+
+        goal = Gripper.Goal()
+        goal.grasp = grasp
+
         print("Close" if goal.grasp else "Open")
 
         if self._send_goal_and_wait(self.gripper_action_client, goal):
