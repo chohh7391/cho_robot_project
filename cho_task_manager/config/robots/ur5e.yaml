@@ -1,0 +1,11 @@
+robot_type: ur5e
+controllers:
+  joint_space: joint_space_controller
+  task_space: task_space_ik_controller
+  gripper: null
+  vla: null
+actions:
+  joint_space: /controller_action_server/joint_space_controller
+  task_space: /controller_action_server/task_space_ik_controller
+  gripper: null
+  vla: null

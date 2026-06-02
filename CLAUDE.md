@@ -27,7 +27,7 @@ Python linting enforces max line length 120 (flake8), relaxed pep257. Test files
 ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
 
 # Simulation
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
 ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_qp_controller
 
 # VLA mode (requires control_mode set in controller config)

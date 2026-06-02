@@ -214,7 +214,7 @@ MuJoCo:
 ## Suggested Cho Integration Plan
 
 1. Add `cho_ur_description` with a thin wrapper around official `ur_description` first. Do not rewrite UR kinematics by hand.
-2. Add `cho_ur_bringup` with `bringup_real_robot.launch.py`, `bringup_gazebo_robot.launch.py`, and later `bringup_mujoco_robot.launch.py`.
+2. Add `cho_ur_bringup` with `bringup_real_robot.launch.py`, `bringup_gz_robot.launch.py`, and later `bringup_mujoco_robot.launch.py`.
 3. Add a robot capability config:
 
 ```yaml
@@ -243,6 +243,5 @@ state_interfaces:
 - UR calibration docs: https://docs.universal-robots.com/Universal_Robots_ROS_Documentation/doc/ur_robot_driver/ur_calibration/doc/index.html
 - UR DH parameter article: https://www.universal-robots.com/articles/ur/application-installation/dh-parameters-for-calculations-of-kinematics-and-dynamics/
 - UR5e technical specifications: https://www.universal-robots.com/manuals/EN/HTML/SW5_19/Content/prod-usr-man/complianceUR5e/H_g5_sections/appendix_g5/tech_spec_sheet.htm
-- UR Gazebo Classic simulation: https://github.com/UniversalRobots/Universal_Robots_ROS2_Gazebo_Simulation
 - UR Gazebo/GZ simulation: https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation
 - MuJoCo Menagerie UR5e: https://github.com/google-deepmind/mujoco_menagerie/tree/main/universal_robots_ur5e

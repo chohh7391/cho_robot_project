@@ -18,7 +18,7 @@ colcon test-result --verbose
 Use package-scoped builds while iterating, for example `colcon build --packages-select cho_controller_franka`. Launch real hardware only after checking config values such as `cho_robots_bringup/cho_franka_bringup/config/real/franka.config.yaml`:
 
 ```bash
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
 ros2 launch cho_task_manager run_task_manager.launch.py task:=<task_name>
 ```
 

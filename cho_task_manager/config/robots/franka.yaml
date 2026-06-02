@@ -1,0 +1,11 @@
+robot_type: franka
+controllers:
+  joint_space: joint_space_qp_controller
+  task_space: task_space_qp_controller
+  gripper: gripper_controller
+  vla: vla_controller
+actions:
+  joint_space: /controller_action_server/joint_space_qp_controller
+  task_space: /controller_action_server/task_space_qp_controller
+  gripper: /controller_action_server/gripper_controller
+  vla: /controller_action_server/vla_controller

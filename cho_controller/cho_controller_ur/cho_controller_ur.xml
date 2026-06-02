@@ -1,0 +1,12 @@
+<library path="cho_controller_ur">
+    <class name="cho_controller_ur/JointSpaceController"
+           type="cho_controller::ur::JointSpaceController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>6-DOF joint-space position controller for Universal Robots</description>
+    </class>
+    <class name="cho_controller_ur/TaskSpaceIKController"
+           type="cho_controller::ur::TaskSpaceIKController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>6-DOF task-space DLS-IK position controller for Universal Robots</description>
+    </class>
+</library>

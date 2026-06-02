@@ -61,15 +61,15 @@ ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque
 source ~/ros2_ws/install/setup.bash
 
 # position control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position controller_name:={controller_name}
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=position controller_name:={controller_name}
 
 # torque control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque controller_name:={controller_name}
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=torque controller_name:={controller_name}
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=position vla:=true
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque vla:=true
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=position vla:=true
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=torque vla:=true
 ```
 
 - mujoco
@@ -80,7 +80,7 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=position controller_name:={controller_name}
 
 # torque control mode
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:=torque controller_name:={controller_name}
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=torque controller_name:={controller_name}
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
@@ -134,7 +134,7 @@ fastdds discovery --server-id 0 -l <PC2_IP> -p 11811
 ```bash
 export ROS_DISCOVERY_SERVER="<PC2_IP>:11811"
 source ~/ros2_ws/install/setup.bash
-ros2 launch cho_franka_bringup bringup_gazebo_robot.launch.py control_mode:={control_mode} controller_name:={controller_name}
+ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:={control_mode} controller_name:={controller_name}
 ```
 
 3. call control command (PC2)

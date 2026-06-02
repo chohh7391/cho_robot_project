@@ -29,7 +29,9 @@ FORGE_FRANKA_APPROACH_JOINT_POSITION = make_joint_state(
 # ==========================================
 # 🧠 Pick and Place 트리 조립
 # ==========================================
-def create_forge_tree() -> py_trees.behaviour.Behaviour:
+def create_forge_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
+    if robot_config and robot_config.get("robot_type") != "franka":
+        raise ValueError("forge task is currently implemented only for robot_type='franka'")
     
     mission_sequence = py_trees.composites.Sequence(name="Forge_Sequence", memory=True)
 

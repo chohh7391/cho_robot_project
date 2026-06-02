@@ -6,6 +6,7 @@ from cho_task_manager.tasks import (
     create_pick_and_place_tree,
     create_forge_tree,
 )
+from cho_task_manager.utils.controller_names import load_robot_config
 
 
 def main():
@@ -14,29 +15,48 @@ def main():
     node = rclpy.create_node("task_manager_node")
 
     node.declare_parameter("task", "pick_and_place")
+    node.declare_parameter("robot_type", "franka")
     node.declare_parameter("debug_tree", True)
     node.declare_parameter("print_tree", True)
-    
+
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
+    robot_type = node.get_parameter("robot_type").get_parameter_value().string_value
     debug_tree = node.get_parameter("debug_tree").get_parameter_value().bool_value
     print_tree = node.get_parameter("print_tree").get_parameter_value().bool_value
 
     node.get_logger().info(f"--- Running in {'SIMULATION' if use_sim_time else 'REAL'} mode ---")
-    
-    if task.lower() == "pick_and_place":
-        root = create_pick_and_place_tree()
-    elif task.lower() == "forge":
-        root = create_forge_tree()
-    else:
-        raise ValueError(f"Invalid task: {task}")
-    
-    # Create BehaviourTree
+    node.get_logger().info(f"--- Robot type: {robot_type} ---")
+
+    try:
+        robot_config = load_robot_config(robot_type)
+    except ValueError as e:
+        node.get_logger().error(str(e))
+        node.destroy_node()
+        rclpy.try_shutdown()
+        return
+
+    try:
+        if task.lower() == "pick_and_place":
+            root = create_pick_and_place_tree(robot_config=robot_config)
+        elif task.lower() == "forge":
+            root = create_forge_tree(robot_config=robot_config)
+        else:
+            node.get_logger().error(f"Invalid task: {task}")
+            node.destroy_node()
+            rclpy.try_shutdown()
+            return
+    except ValueError as e:
+        node.get_logger().error(str(e))
+        node.destroy_node()
+        rclpy.try_shutdown()
+        return
+
     tree = py_trees_ros.trees.BehaviourTree(
         root=root,
         unicode_tree_debug=debug_tree
     )
-    
+
     try:
         tree.setup(node=node, timeout=15.0)
     except py_trees_ros.exceptions.TimedOutError as e:
@@ -49,7 +69,7 @@ def main():
         node.destroy_node()
         rclpy.try_shutdown()
         return
-    
+
     try:
         executor = MultiThreadedExecutor()
         executor.add_node(node)
@@ -62,10 +82,8 @@ def main():
                 py_trees.common.Status.FAILURE,
             ):
                 return
-
             if terminal_status["status"] is not None:
                 return
-
             terminal_status["status"] = root_status
             if hasattr(behaviour_tree, "timer") and behaviour_tree.timer is not None:
                 behaviour_tree.timer.cancel()
@@ -88,7 +106,7 @@ def main():
                     previously_visited=tree.snapshot_visitor.previously_visited,
                 )
                 node.get_logger().info("\n" + tree_snapshot)
-        
+
     except KeyboardInterrupt:
         pass
     finally:

@@ -1,0 +1,9 @@
+# Replace this file with calibration extracted from the real robot:
+#
+# ros2 launch ur_calibration calibration_correction.launch.py \
+#   robot_ip:=<ROBOT_IP> \
+#   target_filename:=/path/to/ur5e_calibration.yaml
+#
+# Do not commit lab-specific calibration unless repository policy allows it.
+kinematics:
+  hash: calibration_not_configured

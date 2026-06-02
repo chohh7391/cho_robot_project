@@ -5,11 +5,14 @@ from cho_task_manager.utils.msg_utils import make_joint_state, make_pose, make_d
 from cho_task_manager.utils.controller_names import ControllerNames
 
 FRNKA_HOME_POSITION = make_joint_state([0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785])
+UR5E_HOME_POSITION = make_joint_state([0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
 
 # ==========================================
 # 🧠 Pick and Place 트리 조립
 # ==========================================
-def create_pick_and_place_tree() -> py_trees.behaviour.Behaviour:
+def create_pick_and_place_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
+    if robot_config and robot_config.get("robot_type") == "ur5e":
+        return create_ur5e_pick_and_place_tree(robot_config)
     
     mission_sequence = py_trees.composites.Sequence(name="Pick_And_Place_Sequence", memory=True)
 
@@ -143,3 +146,81 @@ def create_pick_and_place_tree() -> py_trees.behaviour.Behaviour:
     )
     
     return root
+
+
+def create_ur5e_pick_and_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
+    joint_controller = robot_config["joint_space"]
+    task_controller = robot_config["task_space"]
+
+    mission_sequence = py_trees.composites.Sequence(name="UR5e_Pick_And_Place_Sequence", memory=True)
+
+    init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
+    init_seq.add_children([
+        SwitchControllerServiceBehavior(
+            name="Switch_To_UR_Joint",
+            activate=[joint_controller],
+            deactivate=[task_controller],
+            strict=False,
+        ),
+        JointSpaceActionBehavior(
+            name="UR_Go_Home",
+            target_joints=UR5E_HOME_POSITION,
+            controller_name=joint_controller,
+            duration=3.0,
+        ),
+    ])
+
+    task_seq = py_trees.composites.Sequence(name="2_Task_Motion", memory=True)
+    task_seq.add_children([
+        SwitchControllerServiceBehavior(
+            name="Switch_To_UR_Task_IK",
+            activate=[task_controller],
+            deactivate=[joint_controller],
+            strict=False,
+        ),
+        TaskSpaceActionBehavior(
+            name="UR_Approach_Object",
+            target_pose=make_pose(position=[0.4, 0.0, 0.4]),
+            relative=False,
+            controller_name=task_controller,
+            duration=3.0,
+        ),
+        TaskSpaceActionBehavior(
+            name="UR_Go_Down",
+            target_pose=make_down_pose(height=0.05),
+            relative=True,
+            controller_name=task_controller,
+            duration=2.0,
+        ),
+        TaskSpaceActionBehavior(
+            name="UR_Retreat",
+            target_pose=make_up_pose(height=0.05),
+            relative=True,
+            controller_name=task_controller,
+            duration=2.0,
+        ),
+    ])
+
+    finish_seq = py_trees.composites.Sequence(name="3_Finish", memory=True)
+    finish_seq.add_children([
+        SwitchControllerServiceBehavior(
+            name="Switch_To_UR_Joint_Final",
+            activate=[joint_controller],
+            deactivate=[task_controller],
+            strict=False,
+        ),
+        JointSpaceActionBehavior(
+            name="UR_Go_Home_Final",
+            target_joints=UR5E_HOME_POSITION,
+            controller_name=joint_controller,
+            duration=3.0,
+        ),
+    ])
+
+    mission_sequence.add_children([init_seq, task_seq, finish_seq])
+
+    return py_trees.decorators.OneShot(
+        child=mission_sequence,
+        name="UR5e_OneShot_Root",
+        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION,
+    )
