@@ -586,13 +586,13 @@
   <joint name="flange_to_ft_sensor" type="fixed">
     <parent link="fr3_link8"/>
     <child link="ft_sensor"/>
-    <origin rpy="3.141592653589793 0 0" xyz="0 0 0.0175"/>
+    <origin rpy="0 0 0" xyz="0 0 0.0175"/>
   </joint>
 
   <joint name="fr3_hand_joint" type="fixed">
     <parent link="ft_sensor"/>
     <child link="fr3_hand"/>
-    <origin rpy="3.141592653589793 0 0.7853981633974483" xyz="0 0 -0.0175"/>
+    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0.0175"/>
   </joint>
 
   <link name="fr3_hand">
