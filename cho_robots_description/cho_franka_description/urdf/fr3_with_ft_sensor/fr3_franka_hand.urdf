@@ -558,7 +558,7 @@
     <child link="fr3_link7"/>
     <axis xyz="0 0 1"/>
     <limit effort="12.0" lower="-3.0508" upper="3.0508" velocity="5.26"/>
-    </joint>
+  </joint>
 
   <link name="fr3_link8"/>
   <joint name="fr3_joint8" type="fixed">
