@@ -9,3 +9,7 @@
 [submodule "qpOASES"]
 	path = extern/qpOASES
 	url = https://github.com/coin-or/qpOASES.git
+[submodule "Universal_Robots_ROS2_Driver"]
+	path = extern/Universal_Robots_ROS2_Driver
+	url = https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
+	branch = humble
