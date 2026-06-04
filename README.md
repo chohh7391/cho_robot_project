@@ -124,24 +124,86 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<YOUR_TASK>
 - PC1: run controller with action server
 - PC2: call action server
 
+Use the same `ROS_DOMAIN_ID` on both PCs. The examples below use domain `25`.
 
-1. run server (PC2), don't quit this terminal
+1. Run FastDDS discovery server (PC2). Do not quit this terminal.
 ```bash
-fastdds discovery --server-id 0 -l <PC2_IP> -p 11811
+fastdds discovery --server-id 0 -l 0.0.0.0 -p 11811
 ```
 
-2. bringup (PC1)
+2. Bringup robot or simulation (PC1).
 ```bash
+export ROS_DOMAIN_ID=25
 export ROS_DISCOVERY_SERVER="<PC2_IP>:11811"
 source ~/ros2_ws/install/setup.bash
 ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:={control_mode} controller_name:={controller_name}
 ```
 
-3. call control command (PC2)
+3. Call control command (PC2).
 ```bash
+export ROS_DOMAIN_ID=25
 export ROS_DISCOVERY_SERVER="<PC2_IP>:11811"
 source ~/ros2_ws/install/setup.bash
 python3 cho_task_manager/python/action_client.py
+```
+
+4. Check ROS graph with `ros2` CLI (PC2).
+
+FastDDS Discovery Server clients can communicate correctly while `ros2 topic list`
+only shows `/parameter_events` and `/rosout`. For graph inspection commands such
+as `ros2 topic list` and `ros2 node info`, run the CLI as a FastDDS
+`SUPER_CLIENT`.
+
+Create a profile file on PC2. Replace `<PC2_IP>` with the same IP used above.
+
+```bash
+cat > /tmp/fastdds_super_client.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <participant profile_name="super_client_profile" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <discovery_config>
+          <discoveryProtocol>SUPER_CLIENT</discoveryProtocol>
+          <discoveryServersList>
+            <RemoteServer prefix="44.53.00.5f.45.50.52.4f.53.49.4d.41">
+              <metatrafficUnicastLocatorList>
+                <locator>
+                  <udpv4>
+                    <address><PC2_IP></address>
+                    <port>11811</port>
+                  </udpv4>
+                </locator>
+              </metatrafficUnicastLocatorList>
+            </RemoteServer>
+          </discoveryServersList>
+        </discovery_config>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>
+EOF
+```
+
+Then run ROS CLI commands with this profile.
+
+```bash
+export ROS_DOMAIN_ID=25
+unset ROS_DISCOVERY_SERVER
+unset ROS_LOCALHOST_ONLY
+export FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/fastdds_super_client.xml
+source ~/ros2_ws/install/setup.bash
+
+ros2 topic list --no-daemon
+ros2 node list --no-daemon
+```
+
+Make sure `FASTRTPS_DEFAULT_PROFILES_FILE` points to the XML file itself, not the
+directory:
+
+```bash
+echo $FASTRTPS_DEFAULT_PROFILES_FILE
+ls -l $FASTRTPS_DEFAULT_PROFILES_FILE
 ```
 
 

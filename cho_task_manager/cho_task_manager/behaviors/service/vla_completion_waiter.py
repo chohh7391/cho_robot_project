@@ -7,3 +7,18 @@ class VLACompletionWaiterBehavior(BaseServiceServerBehavior):
     def __init__(self, name="Wait_For_External_VLA_Script"):
         super().__init__(name, Trigger, vla_completion_service_name())
         self.response_message = "Task Manager acknowledged VLA completion."
+        self.trigger_success_client = None
+
+    def setup(self, **kwargs):
+        result = super().setup(**kwargs)
+        self.trigger_success_client = self.node.create_client(Trigger, "/vla/trigger_success")
+        return result
+
+    def fill_response(self, request, response):
+        if self.trigger_success_client.service_is_ready():
+            self.trigger_success_client.call_async(Trigger.Request())
+            self.node.get_logger().info(f"[{self.name}] Requested VLA controller reset via /vla/trigger_success.")
+        else:
+            self.node.get_logger().warn(f"[{self.name}] /vla/trigger_success is not available; controller may stay active.")
+
+        return super().fill_response(request, response)

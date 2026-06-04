@@ -293,6 +293,18 @@ void VLAActionServer::handle_success_trigger(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+    if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) {
+        task_success_flag_.store(false);
+        control_running_ = false;
+        goal_handle_.reset();
+
+        response->success = true;
+        response->message = "No active VLA goal. Controller is ready for a new goal.";
+
+        RCLCPP_INFO(node_->get_logger(), "VLA success trigger received without an active goal; controller is ready.");
+        return;
+    }
+
     // 성공 플래그를 true로 변경
     task_success_flag_.store(true);
     
