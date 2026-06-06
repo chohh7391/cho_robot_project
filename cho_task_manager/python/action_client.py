@@ -73,14 +73,14 @@ class ControlSuiteShell(cmd.Cmd):
     def __init__(
         self,
         robot_type: str = "franka",
-        space: str = "task",
+        control_space: str = "task",
         joint_controller: str | None = None,
         task_controller: str | None = None,
         gripper_controller: str | None = None,
     ):
         super().__init__()
         self.robot_type = robot_type
-        self.space = space
+        self.control_space = control_space
         self.has_gripper = bool(DEFAULT_ACTION_PREFERENCES.get(robot_type, {}).get("gripper")) or robot_type == "ur5e"
         rclpy.init(args=None)
         self.node = rclpy.create_node(
@@ -125,7 +125,12 @@ class ControlSuiteShell(cmd.Cmd):
     ):
         """Discover available action servers and create clients for selected controllers."""
         available_actions = self._discover_action_servers(timeout_sec=3.0)
-        active_controllers = self._active_controllers(timeout_sec=1.0)
+        active_controllers = self._active_controllers(timeout_sec=3.0)
+
+        if active_controllers is None:
+            self.node.get_logger().error("Failed to get active controllers! Action clients might be incorrectly assigned.")
+        else:
+            self.node.get_logger().info(f"Active controllers found: {active_controllers}")
 
         self.joint_action_name = self._select_action_name(
             "joint", available_actions, active_controllers, joint_controller
@@ -156,7 +161,7 @@ class ControlSuiteShell(cmd.Cmd):
             }
             if available_actions or time.monotonic() >= deadline:
                 break
-            self._spin_or_sleep(0.1)
+            self._spin_or_sleep(1.0)
         return available_actions
 
     def _active_controllers(self, timeout_sec: float) -> set[str] | None:
@@ -167,7 +172,7 @@ class ControlSuiteShell(cmd.Cmd):
         future = client.call_async(ListControllers.Request())
         deadline = time.monotonic() + timeout_sec
         while rclpy.ok() and not future.done() and time.monotonic() < deadline:
-            self._spin_or_sleep(0.05)
+            self._spin_or_sleep(1.0)
 
         if not future.done():
             self.node.get_logger().warn("Timed out while querying /controller_manager/list_controllers")
@@ -555,7 +560,7 @@ class ControlSuiteShell(cmd.Cmd):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot_type", "--robot-type", choices=["franka", "ur5e"], default="franka")
-    parser.add_argument("--space", choices=["joint", "task"], default="task")
+    parser.add_argument("--control_space", choices=["joint", "task"], default="task")
     parser.add_argument("--joint-controller")
     parser.add_argument("--task-controller")
     parser.add_argument("--gripper-controller")
@@ -563,7 +568,7 @@ if __name__ == "__main__":
     try:
         ControlSuiteShell(
             robot_type=args.robot_type,
-            space=args.space,
+            control_space=args.control_space,
             joint_controller=args.joint_controller,
             task_controller=args.task_controller,
             gripper_controller=args.gripper_controller,
