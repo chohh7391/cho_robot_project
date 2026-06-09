@@ -5,6 +5,19 @@
 namespace cho_controller {
 namespace franka {
 
+void JointSpaceActionServer::init()
+{
+    BaseActionServer<JointSpaceAction, JointTrajectory>::init();
+
+    success_threshold_ = is_position_mode()
+        ? declare_or_get_double("success_threshold.position.joint", 1.5e-2)
+        : declare_or_get_double("success_threshold.torque.joint", 5e-2);
+
+    RCLCPP_INFO(node_->get_logger(),
+        "[%s] success threshold (control_mode=%s): joint_error<%.4f",
+        action_name_.c_str(), control_mode_.c_str(), success_threshold_);
+}
+
 rclcpp_action::GoalResponse JointSpaceActionServer::handle_goal(
   const rclcpp_action::GoalUUID & /*uuid*/,
   std::shared_ptr<const JointSpaceAction::Goal> goal)
@@ -41,16 +54,16 @@ void JointSpaceActionServer::handle_accepted(
 {
   goal_handle_ = goal_handle; // Store the handle
   const auto goal = goal_handle->get_goal();
-  
-  Eigen::VectorXd q_goal = Eigen::Map<const Eigen::VectorXd>(
+
+  q_goal_ = Eigen::Map<const Eigen::VectorXd>(
     goal->target_joints.position.data(), goal->target_joints.position.size());
-  
+
   duration_ = goal->duration;
 
   trajectory_->setDuration(duration_);
-  trajectory_->setGoalSample(q_goal);
-  
-  initialized_ = false; 
+  trajectory_->setGoalSample(q_goal_);
+
+  initialized_ = false;
   control_running_ = true;
 }
 
@@ -61,9 +74,10 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, State & 
   }
 
   if (!initialized_) {
-    const auto goal = goal_handle_->get_goal();
-    const_cast<State&>(state).q_arm_ref = Eigen::Map<const Eigen::VectorXd>(
-      goal->target_joints.position.data(), num_dof_);
+    // q_arm_ref is the rate-limit reference for clip_position; start it at the
+    // current measured position so the command ramps smoothly from where we are
+    // (prevents the start-of-goal jerk). The goal is tracked in q_goal_.
+    const_cast<State&>(state).q_arm_ref = state.q_arm.head(num_dof_);
     start_time_ = current_time;
     trajectory_->setStartTime(start_time_.seconds());
     trajectory_->setInitSample(state.q_arm.head(num_dof_));
@@ -89,10 +103,10 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, State & 
   feedback_msg_->percent_complete = percent;
   // goal_handle_->publish_feedback(feedback_msg_);
 
-  double error_norm = (state.q_arm_ref - state.q_arm.head(num_dof_)).norm();
+  double error_norm = (q_goal_ - state.q_arm.head(num_dof_)).norm();
 
   // success
-  if (elapsed_time_sec > goal_handle_->get_goal()->duration && error_norm < 5e-2 /*1e-3*/) {
+  if (elapsed_time_sec > goal_handle_->get_goal()->duration && error_norm < success_threshold_) {
     RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f", action_name_.c_str(), error_norm);
     result_msg_->is_completed = true;
     goal_handle_->succeed(result_msg_);

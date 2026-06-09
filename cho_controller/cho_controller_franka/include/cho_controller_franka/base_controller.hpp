@@ -114,7 +114,7 @@ protected:
     std::string robot_description_;
 
     std::string bringup_type_;
-    
+
     std::shared_ptr<cho_controller::common::robot::RobotWrapper> robot_;
     pinocchio::Model model_;
     pinocchio::Data data_;

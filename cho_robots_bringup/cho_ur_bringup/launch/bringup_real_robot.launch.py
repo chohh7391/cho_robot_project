@@ -42,7 +42,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'controller_name',
-            default_value='joint_space_controller',
+            default_value='joint_space_position_controller',
             description='Initial Cho controller to activate.',
         ),
         DeclareLaunchArgument(

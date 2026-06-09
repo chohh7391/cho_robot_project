@@ -83,8 +83,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'controller_name',
-            default_value='joint_space_controller',
-            description='Cho controller to activate: joint_space_controller or task_space_ik_controller',
+            default_value='joint_space_position_controller',
+            description='Cho controller to activate: joint_space_position_controller or task_space_ik_controller',
         ),
         DeclareLaunchArgument(
             'ee_name',

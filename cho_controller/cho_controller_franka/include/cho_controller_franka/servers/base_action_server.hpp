@@ -43,6 +43,13 @@ public:
         result_msg_ = std::make_shared<Result>();
 
         trajectory_ = std::make_shared<TrajectoryT>(action_name_);
+
+        // control_mode is injected as a controller parameter ("position" or "effort").
+        // declare_parameter picks up the launch-time override if present, else the default.
+        if (!node_->has_parameter("control_mode")) {
+            node_->declare_parameter<std::string>("control_mode", "effort");
+        }
+        control_mode_ = node_->get_parameter("control_mode").as_string();
     }
 
     std::shared_ptr<TrajectoryT> trajectory_;
@@ -53,9 +60,21 @@ public:
     }
 
 protected:
+    // Whether the controller runs in position mode (vs. effort/torque).
+    bool is_position_mode() const { return control_mode_ == "position"; }
+
+    // Declare (picking up any launch override) and return a double parameter, or the default.
+    double declare_or_get_double(const std::string & name, double default_value) {
+        if (!node_->has_parameter(name)) {
+            node_->declare_parameter<double>(name, default_value);
+        }
+        return node_->get_parameter(name).as_double();
+    }
+
     rclcpp_lifecycle::LifecycleNode::SharedPtr node_;
     typename rclcpp_action::Server<ActionT>::SharedPtr action_server_;
     std::string action_name_;
+    std::string control_mode_;
 
     std::atomic<bool> control_running_ {false};
     bool initialized_ {false};

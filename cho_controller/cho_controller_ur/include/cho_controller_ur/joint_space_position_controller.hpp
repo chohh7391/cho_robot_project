@@ -6,7 +6,7 @@
 namespace cho_controller {
 namespace ur {
 
-class JointSpaceController : public URBaseController
+class JointSpacePositionController : public URBaseController
 {
 public:
     [[nodiscard]] controller_interface::InterfaceConfiguration command_interface_configuration() const override;

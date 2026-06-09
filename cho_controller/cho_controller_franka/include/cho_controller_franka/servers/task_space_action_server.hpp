@@ -16,6 +16,8 @@ class TaskSpaceActionServer : public BaseActionServer<TaskSpaceAction, TaskTraje
 public:
     using BaseActionServer<TaskSpaceAction, TaskTrajectory>::BaseActionServer;
 
+    void init() override;
+
     rclcpp_action::GoalResponse handle_goal(
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const TaskSpaceAction::Goal> goal) override;
@@ -31,6 +33,10 @@ public:
 protected:
     bool is_relative_;
     pinocchio::SE3 H_ee_ref_;
+
+    // Success thresholds, selected by control_mode in init().
+    double success_translation_threshold_;
+    double success_rotation_threshold_;
 };
 
 } // namespace franka

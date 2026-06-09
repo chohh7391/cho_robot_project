@@ -50,8 +50,8 @@ controller_manager:
     tool_contact_controller:
       type: ur_controllers/ToolContactController
 
-    joint_space_controller:
-      type: cho_controller_ur/JointSpaceController
+    joint_space_position_controller:
+      type: cho_controller_ur/JointSpacePositionController
 
     task_space_ik_controller:
       type: cho_controller_ur/TaskSpaceIKController
@@ -207,7 +207,7 @@ tool_contact_controller:
   ros__parameters:
     tf_prefix: "$(var tf_prefix)"
 
-joint_space_controller:
+joint_space_position_controller:
   ros__parameters:
     robot_type: ur5e
     bringup_type: real

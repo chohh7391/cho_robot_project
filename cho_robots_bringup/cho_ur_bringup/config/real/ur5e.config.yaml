@@ -2,5 +2,5 @@ ur5e:
   ur_type: ur5e
   robot_ip: 0.0.0.0
   kinematics_params_file: ""
-  controller_name: joint_space_controller
+  controller_name: joint_space_position_controller
   ee_name: tool0

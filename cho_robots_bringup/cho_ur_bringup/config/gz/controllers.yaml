@@ -8,8 +8,8 @@ controller_manager:
     joint_trajectory_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
-    joint_space_controller:
-      type: cho_controller_ur/JointSpaceController
+    joint_space_position_controller:
+      type: cho_controller_ur/JointSpacePositionController
 
     task_space_ik_controller:
       type: cho_controller_ur/TaskSpaceIKController
@@ -29,7 +29,7 @@ joint_trajectory_controller:
       - position
       - velocity
 
-joint_space_controller:
+joint_space_position_controller:
   ros__parameters:
     robot_type: ur5e
     bringup_type: gz

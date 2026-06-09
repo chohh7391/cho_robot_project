@@ -16,6 +16,8 @@ class JointSpaceActionServer : public BaseActionServer<JointSpaceAction, JointTr
 public:
     using BaseActionServer<JointSpaceAction, JointTrajectory>::BaseActionServer;
 
+    void init() override;
+
     rclcpp_action::GoalResponse handle_goal(
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const JointSpaceAction::Goal> goal) override;
@@ -27,6 +29,14 @@ public:
         const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
 
     bool compute(const rclcpp::Time& current_time, State & state) override;
+
+protected:
+    // Success threshold, selected by control_mode in init().
+    double success_threshold_;
+
+    // Goal joint configuration (kept separate from State::q_arm_ref, which is the
+    // rate-limit reference used by clip_position).
+    Eigen::VectorXd q_goal_;
 };
 
 } // namespace franka

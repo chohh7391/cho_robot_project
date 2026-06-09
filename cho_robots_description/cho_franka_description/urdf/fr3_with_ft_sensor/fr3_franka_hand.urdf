@@ -567,32 +567,79 @@
     <child link="fr3_link8"/>
   </joint>
 
-  <link name="ft_sensor">
+  <!-- Bota SensONE Force-Torque Sensor -->
+  <joint name="robot_mounting_link_to_bota_ft_sensor" type="fixed">
+    <parent link="fr3_link8"/>
+    <child link="bota_ft_sensor_mounting"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+  </joint>
+  <link name="bota_ft_sensor_mounting">
     <inertial>
-      <mass value="0.24"/>
-      <origin xyz="0 0 0"/>
-      <inertia ixx="0.000098" ixy="0.0" ixz="0.0" iyy="0.000098" iyz="0.0" izz="0.0001470"/>
+      <origin rpy="0 0 0" xyz="-0.00011559 0.00060052 0.010067"/>
+      <mass value="0.15393"/>
+      <inertia ixx="4.907E-05" ixy="3.2541E-08" ixz="-1.0415E-07" iyy="5.5735E-05" iyz="1.3709E-07" izz="9.0228E-05"/>
     </inertial>
     <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <cylinder length="0.035" radius="0.035"/>
+        <mesh filename="package://cho_franka_description/meshes/accessories/ft_sensor/mounting.stl"/>
       </geometry>
-      <material name="sensor_material">
-        <color rgba="0.1 0.1 0.1 1.0"/>
+      <material name="bota_ft_material">
+        <color rgba="0.6902 0.61176 0.52941 1"/>
       </material>
     </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0.011"/>
+      <geometry><cylinder length="0.028" radius="0.035"/></geometry>
+    </collision>
+    <collision>
+      <origin rpy="1.57 0 0" xyz="0 0.051 0.0115"/>
+      <geometry><cylinder length="0.032" radius="0.0065"/></geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0.03"/>
+      <geometry><cylinder length="0.01" radius="0.0315"/></geometry>
+    </collision>
   </link>
 
-  <joint name="flange_to_ft_sensor" type="fixed">
-    <parent link="fr3_link8"/>
-    <child link="ft_sensor"/>
-    <origin rpy="0 0 0" xyz="0 0 0.0175"/>
+  <!-- Wrench (force/torque measurement) frame, 35 mm above the mounting base -->
+  <joint name="bota_ft_sensor_mounting_to_wrench" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.035"/>
+    <parent link="bota_ft_sensor_mounting"/>
+    <child link="bota_ft_sensor_wrench"/>
   </joint>
+  <link name="bota_ft_sensor_wrench">
+    <inertial>
+      <origin rpy="0 0 0" xyz="-0.00018335 -3.3341E-07 -0.0070612"/>
+      <mass value="0.08253"/>
+      <inertia ixx="2.2674E-05" ixy="-3.9222E-12" ixz="4.8952E-08" iyy="2.2294E-05" iyz="4.0972E-11" izz="4.0919E-05"/>
+    </inertial>
+  </link>
+
+  <!-- Internal mechanical reference frames -->
+  <joint name="bota_ft_sensor_mounting_to_mech1" type="fixed">
+    <origin rpy="1.5625 0 -1.5708" xyz="-0.032879 0 0.0105"/>
+    <parent link="bota_ft_sensor_mounting"/>
+    <child link="bota_ft_sensor_mech1"/>
+  </joint>
+  <link name="bota_ft_sensor_mech1"/>
+  <joint name="bota_ft_sensor_mounting_to_mech2" type="fixed">
+    <origin rpy="1.5708 0 0" xyz="0 -0.032879 0.0105"/>
+    <parent link="bota_ft_sensor_mounting"/>
+    <child link="bota_ft_sensor_mech2"/>
+  </joint>
+  <link name="bota_ft_sensor_mech2"/>
+  <joint name="bota_ft_sensor_mounting_to_mech3" type="fixed">
+    <origin rpy="1.5708 0 1.5708" xyz="0.032879 0 0.0105"/>
+    <parent link="bota_ft_sensor_mounting"/>
+    <child link="bota_ft_sensor_mech3"/>
+  </joint>
+  <link name="bota_ft_sensor_mech3"/>
 
   <joint name="fr3_hand_joint" type="fixed">
-    <parent link="ft_sensor"/>
+    <parent link="bota_ft_sensor_wrench"/>
     <child link="fr3_hand"/>
-    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0.0175"/>
+    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0"/>
   </joint>
 
   <link name="fr3_hand">
@@ -765,7 +812,14 @@
   <ros2_control name="MujocoSystem" type="system">
     <hardware>
       <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
-      <param name="mujoco_model">$(find cho_franka_description)/xml/fr3_with_ft_sensor/scene.xml</param>
+      <!-- Select MuJoCo actuators automatically based on control_mode:
+             position -> position servos, torque -> direct motors. -->
+      <xacro:if value="${'$(arg control_mode)' == 'position'}">
+        <param name="mujoco_model">$(find cho_franka_description)/xml/fr3_with_ft_sensor/scene_position.xml</param>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+        <param name="mujoco_model">$(find cho_franka_description)/xml/fr3_with_ft_sensor/scene_torque.xml</param>
+      </xacro:unless>
     </hardware>
 
     <joint name="fr3_joint1">

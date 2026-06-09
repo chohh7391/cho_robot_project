@@ -32,6 +32,9 @@ public:
 private:
   bool assign_parameters();
 
+  double lambda_{0.01};       // DLS damping factor
+  double max_delta_q_{0.02};  // per-step joint command limit [rad]
+
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 };
 

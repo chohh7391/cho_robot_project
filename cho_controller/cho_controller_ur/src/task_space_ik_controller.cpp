@@ -78,7 +78,7 @@ controller_interface::return_type TaskSpaceIKController::update(
     Eigen::VectorXd delta_q = J.transpose() * JJt.inverse() * delta_pose;
 
     Eigen::VectorXd q_cmd = state_.q.head(num_dof_) + delta_q;
-    clip_position(q_cmd, max_delta_q_);
+    // clip_position(q_cmd, max_delta_q_);
 
     for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(q_cmd(i));

@@ -90,6 +90,7 @@
     <mesh name="link6_coll" file="link6.stl"/>
     <mesh name="link7_coll" file="link7.stl"/>
     <mesh name="hand_c" file="hand.stl"/>
+    <mesh name="ft_mounting" file="mounting.stl"/>
   </asset>
 
   <worldbody>
@@ -154,11 +155,17 @@
                       <geom mesh="link7_3" material="black" class="visual"/>
                       <geom name="fr3_link7_collision" class="collision" mesh="link7_coll"/>
                       <site name="attachment_site" pos="0 0 0.107"/>
-                      <body name="ft_sensor" pos="0 0 0.107">
-                        <inertial pos="0 0 0.019" mass="0.24" diaginertia="0.001 0.001 0.001"/>
-                        <geom type="cylinder" size="0.035 0.019" pos="0 0 0.019" rgba="0.1 0.1 0.1 1.0" group="1"/>
-                        <site name="ft_sensor_site" pos="0 0 0.019"/>
-                        <body name="fr3_hand" pos="0 0 0.038" quat="0.9238795 0 0 -0.3826834">
+                      <!-- Bota SensONE Force-Torque Sensor (mounting -> wrench), matching the URDF -->
+                      <body name="bota_ft_sensor_mounting" pos="0 0 0.107">
+                        <inertial pos="-0.00011559 0.00060052 0.010067" mass="0.15393" fullinertia="4.907e-05 5.5735e-05 9.0228e-05 3.2541e-08 -1.0415e-07 1.3709e-07"/>
+                        <geom type="mesh" mesh="ft_mounting" rgba="0.6902 0.61176 0.52941 1" class="visual"/>
+                        <geom type="cylinder" size="0.035 0.014" pos="0 0 0.011" class="collision"/>
+                        <geom type="cylinder" size="0.0065 0.016" pos="0 0.051 0.0115" quat="0.70710678 0.70710678 0 0" class="collision"/>
+                        <geom type="cylinder" size="0.0315 0.005" pos="0 0 0.03" class="collision"/>
+                        <body name="bota_ft_sensor_wrench" pos="0 0 0.035">
+                          <inertial pos="-0.00018335 -3.3341e-07 -0.0070612" mass="0.08253" fullinertia="2.2674e-05 2.2294e-05 4.0919e-05 -3.9222e-12 4.8952e-08 4.0972e-11"/>
+                          <site name="ft_sensor_site"/>
+                          <body name="fr3_hand" pos="0 0 0" quat="0.9238795 0 0 -0.3826834">
                           <inertial pos="-0.0000376 0.0119128 0.0207260" mass="0.6544" fullinertia="0.00186 0.0003 0.00174 0.0 0.0 -2e-05"/>
                           <geom mesh="hand_0" material="off_white" class="visual"/>
                           <geom mesh="hand_1" material="black" class="visual"/>
@@ -191,6 +198,7 @@
                             <geom class="fingertip_pad_collision_5"/>
                           </body>
                         </body>
+                        </body>
                       </body>
                     </body>
                   </body>
@@ -214,33 +222,15 @@
     <joint joint1="fr3_finger_joint1" joint2="fr3_finger_joint2" solimp="0.95 0.99 0.001" solref="0.005 1"/>
   </equality>
 
-  <!-- torque control mode -->
-  <actuator>
-    <motor class="fr3" name="fr3_joint1" joint="fr3_joint1" ctrlrange="-87 87"/>
-    <motor class="fr3" name="fr3_joint2" joint="fr3_joint2" ctrlrange="-87 87"/>
-    <motor class="fr3" name="fr3_joint3" joint="fr3_joint3" ctrlrange="-87 87"/>
-    <motor class="fr3" name="fr3_joint4" joint="fr3_joint4" ctrlrange="-87 87"/>
-    <motor class="fr3" name="fr3_joint5" joint="fr3_joint5" ctrlrange="-12 12"/>
-    <motor class="fr3" name="fr3_joint6" joint="fr3_joint6" ctrlrange="-12 12"/>
-    <motor class="fr3" name="fr3_joint7" joint="fr3_joint7" ctrlrange="-12 12"/>
-    <position class="fr3" name="fr3_finger_joint1" tendon="split" kp="300" kv="30" inheritrange="0" ctrlrange="0 0.04"/>
-  </actuator>
-  
-  <!-- position control mode -->
-  <!-- <actuator>
-    <position class="fr3" name="fr3_joint1" joint="fr3_joint1" kp="4500" kv="450"/>
-    <position class="fr3" name="fr3_joint2" joint="fr3_joint2" kp="4500" kv="450"/>
-    <position class="fr3" name="fr3_joint3" joint="fr3_joint3" kp="3500" kv="350"/>
-    <position class="fr3" name="fr3_joint4" joint="fr3_joint4" kp="3500" kv="350"/>
-    <position class="fr3" name="fr3_joint5" joint="fr3_joint5" kp="2000" kv="200"/>
-    <position class="fr3" name="fr3_joint6" joint="fr3_joint6" kp="2000" kv="200"/>
-    <position class="fr3" name="fr3_joint7" joint="fr3_joint7" kp="2000" kv="200"/>
-    <position class="fr3" name="fr3_finger_joint1" tendon="split" kp="300" kv="30" inheritrange="0" ctrlrange="0 0.04"/>
-  </actuator> -->
+  <!-- Actuators are defined in separate include files selected by control_mode:
+         actuators_position.xml (position control) / actuators_torque.xml (torque control).
+       The scene_{position,torque}.xml wrappers include this file plus the matching actuators. -->
+
   <contact>
     <exclude body1="fr3_link0" body2="fr3_link1"/>
     <exclude body1="fr3_hand" body2="fr3_leftfinger"/>
     <exclude body1="fr3_hand" body2="fr3_rightfinger"/>
+    <exclude body1="bota_ft_sensor_mounting" body2="fr3_hand"/>
   </contact>
 
   <keyframe>

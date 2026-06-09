@@ -39,6 +39,7 @@ add_library(${PROJECT_NAME} SHARED
     src/task_space_ik_controller.cpp
     src/gravity_compensation_controller.cpp
     src/gripper_controller.cpp
+    src/joint_space_position_controller.cpp
     src/joint_space_impedance_controller.cpp
     src/task_space_impedance_controller.cpp
     src/operational_space_controller.cpp

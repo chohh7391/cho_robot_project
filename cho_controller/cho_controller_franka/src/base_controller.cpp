@@ -155,6 +155,8 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.v_arm_init = state_.v_arm;
   if (nq_ > num_dof_) state_.q_gripper_init = state_.q_gripper;
   state_.H_ee_init = state_.H_ee;
+  // 명령 기준점을 현재 측정값으로 초기화 (clip_position의 rate-limit 기준).
+  state_.q_arm_ref = state_.q_arm;
 
   return CallbackReturn::SUCCESS;
 }
@@ -267,7 +269,13 @@ Vector7d FrankaBaseController::compute_hand_gravity()
 
 void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 {
-    position = position.array().max(state_.q_arm.array() - eps).min(state_.q_arm.array() + eps);
+    // 직전 "명령값"(q_arm_ref) 기준으로 per-step 변화량을 eps 이내로 제한하고 기준점을 갱신한다.
+    // 측정값이 아니라 명령값을 기준으로 해야 position actuator가 충분한 추종 오차(=구동력)를
+    // 확보할 수 있고(특히 mujoco), 목표 점프/특이점 튐도 함께 방지된다.
+    position = position.array()
+                   .max(state_.q_arm_ref.array() - eps)
+                   .min(state_.q_arm_ref.array() + eps);
+    state_.q_arm_ref = position;
 }
 
 void FrankaBaseController::clip_torque(Vector7d & torque)

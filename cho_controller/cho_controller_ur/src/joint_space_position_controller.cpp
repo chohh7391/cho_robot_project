@@ -1,10 +1,10 @@
-#include "cho_controller_ur/joint_space_controller.hpp"
+#include "cho_controller_ur/joint_space_position_controller.hpp"
 
 namespace cho_controller {
 namespace ur {
 
 controller_interface::InterfaceConfiguration
-JointSpaceController::command_interface_configuration() const
+JointSpacePositionController::command_interface_configuration() const
 {
     controller_interface::InterfaceConfiguration config;
     config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
@@ -14,24 +14,24 @@ JointSpaceController::command_interface_configuration() const
     return config;
 }
 
-CallbackReturn JointSpaceController::on_init()
+CallbackReturn JointSpacePositionController::on_init()
 {
     return URBaseController::on_init();
 }
 
-CallbackReturn JointSpaceController::on_configure(
+CallbackReturn JointSpacePositionController::on_configure(
     const rclcpp_lifecycle::State & previous_state)
 {
     if (URBaseController::on_configure(previous_state) != CallbackReturn::SUCCESS) {
         return CallbackReturn::FAILURE;
     }
     action_server_ = std::make_shared<URJointSpaceActionServer>(
-        get_node(), "/controller_action_server/joint_space_controller", num_dof_);
+        get_node(), "/controller_action_server/joint_space_position_controller", num_dof_);
     action_server_->init();
     return CallbackReturn::SUCCESS;
 }
 
-controller_interface::return_type JointSpaceController::update(
+controller_interface::return_type JointSpacePositionController::update(
     const rclcpp::Time & time, const rclcpp::Duration & period)
 {
     if (URBaseController::update(time, period) != controller_interface::return_type::OK) {
@@ -60,5 +60,5 @@ controller_interface::return_type JointSpaceController::update(
 } // namespace cho_controller
 
 #include "pluginlib/class_list_macros.hpp"
-PLUGINLIB_EXPORT_CLASS(cho_controller::ur::JointSpaceController,
+PLUGINLIB_EXPORT_CLASS(cho_controller::ur::JointSpacePositionController,
                        controller_interface::ControllerInterface)

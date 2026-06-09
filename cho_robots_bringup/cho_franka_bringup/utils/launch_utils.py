@@ -28,6 +28,7 @@ ALWAYS_ACTIVE_CONTROLLERS = [
 ]
 
 POSITION_CONTROLLERS = [
+    'joint_space_position_controller',
     'task_space_ik_controller',
 ]
 

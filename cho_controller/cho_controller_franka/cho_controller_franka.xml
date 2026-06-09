@@ -23,6 +23,12 @@
             The joint space impedance controller
         </description>
     </class>
+    <class name="cho_controller_franka/JointSpacePositionController"
+           type="cho_controller::franka::JointSpacePositionController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            The joint space position controller
+        </description>
+    </class>
     <class name="cho_controller_franka/TaskSpaceImpedanceController"
            type="cho_controller::franka::TaskSpaceImpedanceController" base_class_type="controller_interface::ControllerInterface">
         <description>

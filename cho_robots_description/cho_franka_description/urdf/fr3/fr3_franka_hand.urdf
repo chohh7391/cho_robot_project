@@ -744,7 +744,14 @@
   <ros2_control name="MujocoSystem" type="system">
     <hardware>
       <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
-      <param name="mujoco_model">$(find cho_franka_description)/xml/fr3/scene.xml</param>
+      <!-- Select MuJoCo actuators automatically based on control_mode:
+             position -> position servos, torque -> direct motors. -->
+      <xacro:if value="${'$(arg control_mode)' == 'position'}">
+        <param name="mujoco_model">$(find cho_franka_description)/xml/fr3/scene_position.xml</param>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+        <param name="mujoco_model">$(find cho_franka_description)/xml/fr3/scene_torque.xml</param>
+      </xacro:unless>
     </hardware>
 
     <joint name="fr3_joint1">

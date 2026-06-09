@@ -29,7 +29,10 @@
         type: joint_state_broadcaster/JointStateBroadcaster
 
       task_space_ik_controller:
-        type: cho_controller_franka/IKController
+        type: cho_controller_franka/TaskSpaceIKController
+
+      joint_space_position_controller:
+        type: cho_controller_franka/JointSpacePositionController
 
       gravity_compensation_controller:
         type: cho_controller_franka/GravityCompensationController
@@ -96,14 +99,16 @@
       robot_type: "fr3"
 
 /**:
+  joint_space_position_controller:
+    ros__parameters:
+      robot_type: "fr3"
+
+/**:
   task_space_ik_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_task: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
-      kd_task: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
-      kp_null: 10.0
-      kd_null: 1.0
-      default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
+      lambda: 0.01          # DLS damping factor
+      max_delta_q: 0.02     # per-step joint command limit [rad]
 
 /**:
   joint_space_impedance_controller:

@@ -30,11 +30,8 @@ CallbackReturn TaskSpaceIKController::on_init() {
   }
 
   try {
-    auto_declare<std::vector<double>>("kp_task", {});
-    auto_declare<std::vector<double>>("kd_task", {});
-    auto_declare<double>("kp_null", 0.0);
-    auto_declare<double>("kd_null", 0.0);
-    auto_declare<std::vector<double>>("default_dof_pos", {});
+    auto_declare<double>("lambda", 0.01);
+    auto_declare<double>("max_delta_q", 0.02);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -77,48 +74,33 @@ controller_interface::return_type TaskSpaceIKController::update(
   } else {
     state_.H_ee_ref = state_.H_ee_init;
     state_.H_ee_des = state_.H_ee_ref;
+    // 정지 상태에서는 명령 기준점(q_arm_ref)을 측정값과 동기화해 둔다.
+    state_.q_arm_ref = state_.q_arm;
   }
 
-  // [수정 2] Differential IK 핵심 로직 시작
-  const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Body Jacobian
+  // Differential IK (UR 방식의 Newton step):
+  //   delta_q = J^T (J J^T + lambda^2 I)^-1 * error
+  //   q_cmd   = q + delta_q   (dt / 게인에 비의존)
+  const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Body Jacobian (LOCAL)
   const pinocchio::SE3 & H_ee = state_.H_ee;
-  const Vector7d & q = state_.q_arm;
 
   // 1. Task Space Error 계산 (Local Frame 기준)
-  Vector6d error; 
+  Vector6d error;
   error.head<3>() = H_ee.rotation().transpose() * (state_.H_ee_des.translation() - H_ee.translation());
   pinocchio::SE3::Matrix3 R_err = H_ee.rotation().transpose() * state_.H_ee_des.rotation();
   error.tail<3>() = pinocchio::log3(R_err);
 
-  // 2. Desired Task Velocity (P Control)
-  // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
-  Vector6d v_des = kp_task_.cwiseProduct(error);
-
-  // 3. Damped Least Squares (DLS) 의사역행렬 계산
-  // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다 (Pink 컨트롤러의 하위호환 역할).
-  double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
+  // 2. Damped Least Squares (DLS) 의사역행렬으로 Newton step 계산
   Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-  JJt.diagonal().array() += lambda;
-  Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
+  JJt.diagonal().array() += lambda_ * lambda_;
+  Vector7d dq = J.transpose() * JJt.inverse() * error;
 
-  // 4. 관절 속도 계산 (Joint Velocity)
-  Vector7d dq_des = J_pinv * v_des;
+  Vector7d q_cmd = state_.q_arm + dq;
 
-  // // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
-  // Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
-  // Vector7d q_err = default_dof_pos_ - q; // 초기 자세로 돌아가려는 힘
-  // Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
-  
-  // dq_des += N * dq_null;
+  // 3. Rate limit: 직전 명령값 기준으로 per-step 변화량을 제한 (BaseController 공통 로직).
+  FrankaBaseController::clip_position(q_cmd, max_delta_q_);
 
-  // 6. 위치 적분 (Euler Integration)
-  double dt = period.seconds();
-  Vector7d q_cmd = q + dq_des * dt;
-
-  // apply joint limit
-  FrankaBaseController::clip_position(q_cmd);
-
-  // 7. 하드웨어로 Position Command 전송
+  // 4. 하드웨어로 Position Command 전송
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(q_cmd(i));
   }
@@ -127,26 +109,17 @@ controller_interface::return_type TaskSpaceIKController::update(
 }
 
 bool TaskSpaceIKController::assign_parameters() {
-  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
-  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
-  auto kp_null = get_node()->get_parameter("kp_null").as_double();
-  auto kd_null = get_node()->get_parameter("kd_null").as_double();
-  auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
+  lambda_ = get_node()->get_parameter("lambda").as_double();
+  max_delta_q_ = get_node()->get_parameter("max_delta_q").as_double();
 
-  if (kp_task.size() != 6 || kd_task.size() != 6) {
-    RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
+  if (lambda_ <= 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "lambda must be positive");
     return false;
   }
-  if (default_dof_pos.size() != num_dof_) {
-    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
+  if (max_delta_q_ <= 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "max_delta_q must be positive");
     return false;
   }
-  
-  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
-  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
-  kp_null_ = kp_null;
-  kd_null_ = kd_null;
-  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
 
   return true;
 }
