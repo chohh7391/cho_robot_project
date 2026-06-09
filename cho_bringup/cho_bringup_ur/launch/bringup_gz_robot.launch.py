@@ -8,18 +8,30 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
+SWITCHABLE_CONTROLLERS = [
+    'joint_space_position_controller',
+    'task_space_ik_controller',
+]
+
+
 def launch_setup(context, *args, **kwargs):
-    del context, args, kwargs
+    del args, kwargs
 
     ur_type = LaunchConfiguration('ur_type')
     description_file = LaunchConfiguration('description_file')
     controllers_file = LaunchConfiguration('controllers_file')
-    controller_name = LaunchConfiguration('controller_name')
+    controller_name = LaunchConfiguration('controller_name').perform(context)
     launch_rviz = LaunchConfiguration('launch_rviz')
     gazebo_gui = LaunchConfiguration('gazebo_gui')
     world_file = LaunchConfiguration('world_file')
     load_gripper = LaunchConfiguration('load_gripper')
     tf_prefix = LaunchConfiguration('tf_prefix')
+
+    if controller_name not in SWITCHABLE_CONTROLLERS:
+        raise RuntimeError(
+            f"Unknown controller_name '{controller_name}'. "
+            f"Valid options: {SWITCHABLE_CONTROLLERS}"
+        )
 
     controller_config = PathJoinSubstitution([
         FindPackageShare('cho_bringup_ur'),
@@ -117,29 +129,11 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(launch_rviz),
     )
 
-    joint_state_broadcaster_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
-        output='screen',
-    )
-
-    joint_trajectory_controller_spawner = Node(
+    active_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
-            'joint_trajectory_controller',
-            '--controller-manager',
-            '/controller_manager',
-            '--inactive',
-        ],
-        output='screen',
-    )
-
-    cho_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
+            'joint_state_broadcaster',
             controller_name,
             '--controller-manager',
             '/controller_manager',
@@ -149,11 +143,33 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
     )
 
-    robotiq_controller_spawner = Node(
+    inactive_controllers = [
+        'joint_trajectory_controller',
+        *[
+            controller for controller in SWITCHABLE_CONTROLLERS
+            if controller != controller_name
+        ],
+    ]
+
+    inactive_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
-            'robotiq_controller',
+            *inactive_controllers,
+            '--controller-manager',
+            '/controller_manager',
+            '--controller-manager-timeout',
+            '30',
+            '--inactive',
+        ],
+        output='screen',
+    )
+
+    gripper_controller_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=[
+            'gripper_controller',
             '--controller-manager',
             '/controller_manager',
             '--controller-manager-timeout',
@@ -167,12 +183,17 @@ def launch_setup(context, *args, **kwargs):
         event_handler=OnProcessExit(
             target_action=gz_spawn_entity,
             on_exit=[
-                joint_state_broadcaster_spawner,
-                joint_trajectory_controller_spawner,
-                cho_controller_spawner,
-                robotiq_controller_spawner,
+                active_controller_spawner,
+                gripper_controller_spawner,
                 rviz,
             ],
+        )
+    )
+
+    delayed_inactive_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=active_controller_spawner,
+            on_exit=[inactive_controller_spawner],
         )
     )
 
@@ -183,6 +204,7 @@ def launch_setup(context, *args, **kwargs):
         gz_launch_without_gui,
         clock_bridge,
         delayed_spawners,
+        delayed_inactive_spawner,
     ]
 
 
@@ -211,7 +233,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'load_gripper',
             default_value='true',
-            description='Attach the Robotiq 2F-85 gripper and spawn robotiq_controller.',
+            description='Attach the Robotiq 2F-85 gripper and spawn gripper_controller.',
         ),
         DeclareLaunchArgument(
             'launch_rviz',

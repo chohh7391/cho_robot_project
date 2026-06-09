@@ -1,5 +1,9 @@
 import py_trees
-from cho_task_manager.behaviors.action import JointSpaceActionBehavior, TaskSpaceActionBehavior
+from cho_task_manager.behaviors.action import (
+    JointSpaceActionBehavior,
+    TaskSpaceActionBehavior,
+    GripperActionBehavior,
+)
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose, make_down_pose, make_up_pose
 
@@ -29,6 +33,8 @@ def create_ur_pick_and_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             controller_name=joint_controller,
             duration=3.0,
         ),
+        # Robotiq 2F-85 open (cho_controller_ur/GripperController)
+        GripperActionBehavior(name="UR_Open_Gripper_Init", grasp=False),
     ])
 
     task_seq = py_trees.composites.Sequence(name="2_Task_Motion", memory=True)
@@ -53,6 +59,8 @@ def create_ur_pick_and_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             controller_name=task_controller,
             duration=2.0,
         ),
+        # Close on the object
+        GripperActionBehavior(name="UR_Close_Gripper", grasp=True),
         TaskSpaceActionBehavior(
             name="UR_Retreat",
             target_pose=make_up_pose(height=0.05),
@@ -60,6 +68,8 @@ def create_ur_pick_and_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             controller_name=task_controller,
             duration=2.0,
         ),
+        # Release
+        GripperActionBehavior(name="UR_Open_Gripper_Release", grasp=False),
     ])
 
     finish_seq = py_trees.composites.Sequence(name="3_Finish", memory=True)

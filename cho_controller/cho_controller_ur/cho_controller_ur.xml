@@ -9,4 +9,9 @@
            base_class_type="controller_interface::ControllerInterface">
         <description>6-DOF task-space DLS-IK position controller for Universal Robots</description>
     </class>
+    <class name="cho_controller_ur/GripperController"
+           type="cho_controller::ur::GripperController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>Position controller + action server for the Robotiq 2F-85 gripper on UR</description>
+    </class>
 </library>

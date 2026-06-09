@@ -28,8 +28,10 @@ add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
     src/joint_space_position_controller.cpp
     src/task_space_ik_controller.cpp
+    src/gripper_controller.cpp
     src/servers/joint_space_action_server.cpp
     src/servers/task_space_action_server.cpp
+    src/servers/gripper_action_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include

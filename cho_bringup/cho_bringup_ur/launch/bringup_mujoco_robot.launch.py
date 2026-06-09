@@ -2,15 +2,27 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction
-from launch.event_handlers import OnProcessStart
+from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
+SWITCHABLE_CONTROLLERS = [
+    'joint_space_position_controller',
+    'task_space_ik_controller',
+]
+
+
 def setup_control_environment(context):
     controller_name = LaunchConfiguration('controller_name').perform(context)
     ee_name = LaunchConfiguration('ee_name').perform(context)
+
+    if controller_name not in SWITCHABLE_CONTROLLERS:
+        raise RuntimeError(
+            f"Unknown controller_name '{controller_name}'. "
+            f"Valid options: {SWITCHABLE_CONTROLLERS}"
+        )
 
     ur_desc_path = get_package_share_directory('cho_description_ur')
     bringup_path = get_package_share_directory('cho_bringup_ur')
@@ -49,20 +61,35 @@ def setup_control_environment(context):
         remappings=[('~/robot_description', '/robot_description')],
     )
 
-    spawner_jsb = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
-        output='screen',
-    )
-
-    spawner_ctrl = Node(
+    active_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
+            'joint_state_broadcaster',
             controller_name,
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', '30',
+            '--controller-manager',
+            '/controller_manager',
+            '--controller-manager-timeout',
+            '30',
+        ],
+        output='screen',
+    )
+
+    inactive_controllers = [
+        controller for controller in SWITCHABLE_CONTROLLERS
+        if controller != controller_name
+    ]
+
+    inactive_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=[
+            *inactive_controllers,
+            '--controller-manager',
+            '/controller_manager',
+            '--controller-manager-timeout',
+            '30',
+            '--inactive',
         ],
         output='screen',
     )
@@ -71,7 +98,13 @@ def setup_control_environment(context):
         RegisterEventHandler(
             event_handler=OnProcessStart(
                 target_action=node_mujoco,
-                on_start=[spawner_jsb, spawner_ctrl],
+                on_start=[active_spawner],
+            )
+        ),
+        RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=active_spawner,
+                on_exit=[inactive_spawner],
             )
         ),
     ]
