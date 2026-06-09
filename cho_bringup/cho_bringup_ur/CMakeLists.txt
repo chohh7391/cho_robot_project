@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(cho_ur_bringup)
+project(cho_bringup_ur)
 
 find_package(ament_cmake REQUIRED)
 

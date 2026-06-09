@@ -43,7 +43,7 @@
       </visual>
       <collision name="${prefix}${name}_collision">
         <geometry>
-          <mesh filename="package://cho_franka_description/meshes/robot_ee/${ee_id}/collision/${name}.stl" />
+          <mesh filename="package://cho_description_franka/meshes/robot_ee/${ee_id}/collision/${name}.stl" />
         </geometry>
       </collision>
       <xacro:ee-inertials name="${name}" />

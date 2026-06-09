@@ -32,6 +32,6 @@
   <xacro:arg name="gazebo" default="false" />
 
   <!-- Name of the description package -->
-  <xacro:arg name="description_pkg" default="cho_franka_description" />
+  <xacro:arg name="description_pkg" default="cho_description_franka" />
 
 </robot>

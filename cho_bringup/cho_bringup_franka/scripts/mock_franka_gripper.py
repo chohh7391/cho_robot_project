@@ -190,9 +190,14 @@ def main(args=None):
     node = MockFrankaGripper()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    executor.spin()
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

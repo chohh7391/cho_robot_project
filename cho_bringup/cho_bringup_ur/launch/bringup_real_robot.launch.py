@@ -28,7 +28,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'kinematics_params_file',
             default_value=PathJoinSubstitution([
-                FindPackageShare('cho_ur_description'),
+                FindPackageShare('cho_description_ur'),
                 'config',
                 ur_type,
                 'default_kinematics.yaml',
@@ -38,7 +38,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controllers_file',
             default_value='real/controllers.yaml',
-            description='Controller YAML path relative to cho_ur_bringup/config.',
+            description='Controller YAML path relative to cho_bringup_ur/config.',
         ),
         DeclareLaunchArgument(
             'controller_name',
@@ -71,8 +71,8 @@ def generate_launch_description():
             launch_arguments={
                 'ur_type': ur_type,
                 'robot_ip': robot_ip,
-                'runtime_config_package': 'cho_ur_bringup',
-                'description_package': 'cho_ur_description',
+                'runtime_config_package': 'cho_bringup_ur',
+                'description_package': 'cho_description_ur',
                 'description_file': 'ur.urdf.xacro',
                 'controllers_file': controllers_file,
                 'initial_joint_controller': 'joint_trajectory_controller',

@@ -12,16 +12,16 @@ def setup_control_environment(context):
     controller_name = LaunchConfiguration('controller_name').perform(context)
     ee_name = LaunchConfiguration('ee_name').perform(context)
 
-    ur_desc_path = get_package_share_directory('cho_ur_description')
-    bringup_path = get_package_share_directory('cho_ur_bringup')
+    ur_desc_path = get_package_share_directory('cho_description_ur')
+    bringup_path = get_package_share_directory('cho_bringup_ur')
 
     urdf_path = os.path.join(ur_desc_path, 'urdf', 'ur5e.urdf')
     controller_config = os.path.join(bringup_path, 'config', 'mujoco', 'controllers.yaml')
 
-    # Resolve $(find cho_ur_description) substitution baked into the pre-built URDF
+    # Resolve $(find cho_description_ur) substitution baked into the pre-built URDF
     with open(urdf_path, 'r') as f:
         robot_description_content = f.read().replace(
-            '$(find cho_ur_description)', ur_desc_path
+            '$(find cho_description_ur)', ur_desc_path
         )
 
     robot_description = {'robot_description': robot_description_content}

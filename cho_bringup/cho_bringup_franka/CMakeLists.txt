@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.5)
 option(CHECK_TIDY "Enable clang-tidy checks" OFF)
 option(CMAKE_EXPORT_COMPILE_COMMANDS "Enable compile commands export" OFF)
 
-project(cho_franka_bringup)
+project(cho_bringup_franka)
 
 find_package(ament_cmake REQUIRED)
 

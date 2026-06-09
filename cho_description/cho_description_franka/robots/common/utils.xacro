@@ -44,7 +44,7 @@
       </visual>
       <collision name="${prefix}${name}_collision">
         <geometry>
-          <mesh filename="package://cho_franka_description/meshes/robots/${robot_type}/collision/${name}.stl" />
+          <mesh filename="package://cho_description_franka/meshes/robots/${robot_type}/collision/${name}.stl" />
         </geometry>
       </collision>
       <xacro:franka-inertials name="${name}" />

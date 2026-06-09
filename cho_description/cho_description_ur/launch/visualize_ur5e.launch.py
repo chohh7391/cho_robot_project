@@ -10,7 +10,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 PathJoinSubstitution([
-                    FindPackageShare('cho_ur_description'),
+                    FindPackageShare('cho_description_ur'),
                     'launch',
                     'view_ur.launch.py',
                 ])

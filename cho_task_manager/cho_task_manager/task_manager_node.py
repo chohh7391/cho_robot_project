@@ -2,10 +2,7 @@ import py_trees_ros
 import py_trees
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
-from cho_task_manager.tasks import (
-    create_pick_and_place_tree,
-    create_forge_tree,
-)
+from cho_task_manager.tasks import build_task_tree
 from cho_task_manager.utils.controller_names import load_robot_config
 
 
@@ -37,15 +34,7 @@ def main():
         return
 
     try:
-        if task.lower() == "pick_and_place":
-            root = create_pick_and_place_tree(robot_config=robot_config)
-        elif task.lower() == "forge":
-            root = create_forge_tree(robot_config=robot_config)
-        else:
-            node.get_logger().error(f"Invalid task: {task}")
-            node.destroy_node()
-            rclpy.try_shutdown()
-            return
+        root = build_task_tree(task, robot_config)
     except ValueError as e:
         node.get_logger().error(str(e))
         node.destroy_node()

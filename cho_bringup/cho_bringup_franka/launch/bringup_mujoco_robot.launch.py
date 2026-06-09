@@ -2,16 +2,16 @@ import importlib.util
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction, Shutdown
 from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
-package_share = get_package_share_directory('cho_franka_bringup')
+package_share = get_package_share_directory('cho_bringup_franka')
 utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_franka', 'utils')
 )
 launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
 spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
@@ -28,8 +28,8 @@ get_switchable_controllers = launch_utils.get_switchable_controllers
 
 def generate_launch_description():
 
-    description_path = os.path.join(get_package_share_directory('cho_franka_description'))
-    bringup_path = os.path.join(get_package_share_directory('cho_franka_bringup'))
+    description_path = os.path.join(get_package_share_directory('cho_description_franka'))
+    bringup_path = os.path.join(get_package_share_directory('cho_bringup_franka'))
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -74,7 +74,7 @@ def generate_launch_description():
     payload_config_file = os.path.join(bringup_path, 'config', 'payload.yaml')
 
     mock_gripper = Node(
-        package='cho_franka_bringup',
+        package='cho_bringup_franka',
         executable='mock_franka_gripper.py',
         parameters=[
             {
@@ -120,6 +120,7 @@ def generate_launch_description():
             initial_active_controller=initial_active_controller,
             runtime_param_file=runtime_param_file,
             use_sim_time={'use_sim_time': True},
+            timeout=60,
         )
 
         node_mujoco_ros2_control = Node(
@@ -133,6 +134,7 @@ def generate_launch_description():
                 runtime_param_file,
             ],
             remappings=[('~/robot_description', '/robot_description')],
+            on_exit=Shutdown(),
         )
 
         event_handlers = [

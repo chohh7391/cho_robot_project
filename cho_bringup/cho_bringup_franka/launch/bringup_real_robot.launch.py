@@ -11,26 +11,26 @@ from launch.actions import (
     RegisterEventHandler,
     Shutdown,
 )
-from launch.conditions import IfCondition, UnlessCondition
-from launch.event_handlers import OnShutdown
+from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessStart, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 # ---------------------------------------------------------------------------
-# cho_franka_bringup launch utility loading
+# cho_bringup_franka launch utility loading
 # ---------------------------------------------------------------------------
-package_share = get_package_share_directory('cho_franka_bringup')
+package_share = get_package_share_directory('cho_bringup_franka')
 utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_franka', 'utils')
 )
 launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
 spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
 launch_utils = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launch_utils)
 load_yaml = launch_utils.load_yaml
-create_controller_spawner = launch_utils.create_controller_spawner
+as_bool = launch_utils.as_bool
 create_controller_spawners = launch_utils.create_controller_spawners
 create_runtime_param_file = launch_utils.create_runtime_param_file
 create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
@@ -68,7 +68,7 @@ def generate_robot_nodes(context):
         extra_torque_controllers=['joint_trajectory_controller'],
     )
 
-    pkg_bringup = get_package_share_directory('cho_franka_bringup')
+    pkg_bringup = get_package_share_directory('cho_bringup_franka')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
     runtime_param_file = create_runtime_param_file(
         payload_config_path=payload_config_path,
@@ -96,7 +96,7 @@ def generate_robot_nodes(context):
 
         # ---- (A) URDF 생성 (xacro) ----
         urdf_path = PathJoinSubstitution([
-            FindPackageShare('cho_franka_description'),
+            FindPackageShare('cho_description_franka'),
             'robots', robot_type_str, f'{robot_type_str}.urdf.xacro',
         ]).perform(context)
 
@@ -117,7 +117,7 @@ def generate_robot_nodes(context):
 
         # ---- (B) controllers.yaml 경로 ----
         controllers_yaml = PathJoinSubstitution([
-            FindPackageShare('cho_franka_bringup'), 'config', 'real', 'controllers.yaml'
+            FindPackageShare('cho_bringup_franka'), 'config', 'real', 'controllers.yaml'
         ]).perform(context)
 
         joint_state_publisher_sources = [
@@ -126,6 +126,20 @@ def generate_robot_nodes(context):
         ]
 
         # ---- (C) Franka 코어 노드 ----
+        ros2_control_node = Node(
+            package='controller_manager',
+            executable='ros2_control_node',
+            namespace=namespace,
+            parameters=[
+                controllers_yaml,
+                {'robot_description': robot_description},
+                {'load_gripper': load_gripper_bool},
+            ],
+            remappings=[('joint_states', joint_state_publisher_sources[0])],
+            output='screen',
+            on_exit=Shutdown(),
+        )
+
         nodes += [
             Node(
                 package='robot_state_publisher',
@@ -134,19 +148,7 @@ def generate_robot_nodes(context):
                 parameters=[{'robot_description': robot_description}],
                 output='screen',
             ),
-            Node(
-                package='controller_manager',
-                executable='ros2_control_node',
-                namespace=namespace,
-                parameters=[
-                    controllers_yaml,
-                    {'robot_description': robot_description},
-                    {'load_gripper': load_gripper_bool},
-                ],
-                remappings=[('joint_states', joint_state_publisher_sources[0])],
-                output='screen',
-                on_exit=Shutdown(),
-            ),
+            ros2_control_node,
             Node(
                 package='joint_state_publisher',
                 executable='joint_state_publisher',
@@ -174,24 +176,28 @@ def generate_robot_nodes(context):
             ),
         ]
 
-        nodes.append(
-            create_controller_spawner(
-                controller_name='franka_robot_state_broadcaster',
-                runtime_param_file=runtime_param_file,
-                active=True,
-                namespace=namespace,
-                timeout=30,
-                condition=UnlessCondition(use_fake_hw_str),
-            )
+        # Spawner들은 ros2_control_node 가 떠야 controller_manager 서비스에 접속할 수
+        # 있다. active 묶음이 끝난 뒤 inactive 묶음이 뜨도록 launch_utils 에서
+        # 체인으로 구성해 controller_manager 요청이 겹치지 않게 한다.
+        always_active_controllers = list(REAL_ALWAYS_ACTIVE_CONTROLLERS)
+        if not as_bool(use_fake_hw_str):
+            always_active_controllers.insert(0, 'franka_robot_state_broadcaster')
+
+        controller_spawners = create_controller_spawners(
+            always_active_controllers=always_active_controllers,
+            switchable_controllers=switchable_controllers,
+            initial_active_controller=initial_active_controller,
+            runtime_param_file=runtime_param_file,
+            namespace=namespace,
+            timeout=60,
         )
-        nodes.extend(
-            create_controller_spawners(
-                always_active_controllers=REAL_ALWAYS_ACTIVE_CONTROLLERS,
-                switchable_controllers=switchable_controllers,
-                initial_active_controller=initial_active_controller,
-                runtime_param_file=runtime_param_file,
-                namespace=namespace,
-                timeout=30,
+
+        nodes.append(
+            RegisterEventHandler(
+                event_handler=OnProcessStart(
+                    target_action=ros2_control_node,
+                    on_start=controller_spawners,
+                )
             )
         )
 
@@ -204,7 +210,7 @@ def generate_robot_nodes(context):
             executable='rviz2',
             name='rviz2',
             arguments=['--display-config', PathJoinSubstitution([
-                FindPackageShare('cho_franka_description'), 'rviz', 'visualize_franka.rviz'
+                FindPackageShare('cho_description_franka'), 'rviz', 'visualize_franka.rviz'
             ]), '-f', 'base'],
             output='screen',
         ))
@@ -225,7 +231,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'robot_config_file',
             default_value=PathJoinSubstitution(
-                [FindPackageShare('cho_franka_bringup'), 'config', 'real', 'franka.config.yaml']
+                [FindPackageShare('cho_bringup_franka'), 'config', 'real', 'franka.config.yaml']
             ),
             description='Path to the robot configuration file to load',
         ),

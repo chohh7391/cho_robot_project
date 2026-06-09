@@ -11,9 +11,9 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-package_share = get_package_share_directory('cho_franka_bringup')
+package_share = get_package_share_directory('cho_bringup_franka')
 utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_franka_bringup', 'utils')
+    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_franka', 'utils')
 )
 launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
 spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
@@ -28,8 +28,8 @@ get_initial_active_controller = launch_utils.get_initial_active_controller
 get_switchable_controllers = launch_utils.get_switchable_controllers
 
 def generate_launch_description():
-    pkg_description = get_package_share_directory('cho_franka_description')
-    pkg_bringup = get_package_share_directory('cho_franka_bringup')
+    pkg_description = get_package_share_directory('cho_description_franka')
+    pkg_bringup = get_package_share_directory('cho_bringup_franka')
     
     # 1. Launch Arguments
     declared_arguments = [
@@ -71,7 +71,13 @@ def generate_launch_description():
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     # 2. Gazebo / Rviz / Bridge Nodes
-    os.environ['GZ_SIM_RESOURCE_PATH'] = os.path.dirname(pkg_description)
+    resource_path = os.path.dirname(pkg_description)
+    existing_resource_path = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+    if resource_path not in existing_resource_path.split(os.pathsep):
+        os.environ['GZ_SIM_RESOURCE_PATH'] = (
+            os.pathsep.join([existing_resource_path, resource_path])
+            if existing_resource_path else resource_path
+        )
     gazebo_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')
@@ -167,10 +173,11 @@ def generate_launch_description():
             initial_active_controller=initial_active_controller,
             runtime_param_file=runtime_param_file,
             use_sim_time=use_sim_time,
+            timeout=60,
         )
 
         mock_gripper = Node(
-            package='cho_franka_bringup',
+            package='cho_bringup_franka',
             executable='mock_franka_gripper.py',
             parameters=[
                 use_sim_time,

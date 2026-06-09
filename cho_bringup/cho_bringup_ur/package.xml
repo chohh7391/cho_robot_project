@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>cho_ur_bringup</name>
+  <name>cho_bringup_ur</name>
   <version>0.1.0</version>
   <description>Cho UR bringup wrappers for simulation and real Universal Robots hardware.</description>
   <maintainer email="todo@example.com">Cho Robot Project Maintainers</maintainer>
@@ -9,7 +9,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>cho_ur_description</exec_depend>
+  <exec_depend>cho_description_ur</exec_depend>
   <exec_depend>cho_controller_ur</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>

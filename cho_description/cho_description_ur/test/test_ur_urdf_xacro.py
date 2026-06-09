@@ -65,7 +65,7 @@ def test_ur_urdf_xacro(ur_type, description_file, prefix):
     safety_pos_margin = "0.15"
     safety_k_position = "20"
     # General Arguments
-    description_package = "cho_ur_description"
+    description_package = "cho_description_ur"
     description_file = "ur.urdf.xacro"
     prefix = '""'
 

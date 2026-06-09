@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr3">
 
-  <xacro:include filename="$(find cho_franka_description)/robots/common/franka_arm.srdf.xacro"/>
+  <xacro:include filename="$(find cho_description_franka)/robots/common/franka_arm.srdf.xacro"/>
 
   <!-- The ID of the robot model to be used -->
   <xacro:arg name="robot_type" default="fr3" />

@@ -43,7 +43,7 @@ from launch_testing.actions import ReadyToTest
 def generate_test_description():
     launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("cho_ur_description"), "launch/view_ur.launch.py")
+            os.path.join(get_package_share_directory("cho_description_ur"), "launch/view_ur.launch.py")
         ),
         launch_arguments={"ur_type": "ur3"}.items(),
     )

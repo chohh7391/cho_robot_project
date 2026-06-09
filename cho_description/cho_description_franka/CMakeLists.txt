@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 cmake_minimum_required(VERSION 3.5)
-project(cho_franka_description)
+project(cho_description_franka)
 find_package(ament_cmake REQUIRED)
 
 

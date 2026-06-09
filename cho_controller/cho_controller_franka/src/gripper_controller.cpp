@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <exception>
+#include <future>
 #include <string>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -96,11 +98,20 @@ controller_interface::CallbackReturn GripperController::on_deactivate(
     std_srvs::srv::Trigger::Request::SharedPtr request =
         std::make_shared<std_srvs::srv::Trigger::Request>();
 
+    // Do NOT block indefinitely on result.get(): during shutdown the gripper
+    // server (e.g. mock_franka_gripper) receives SIGINT at the same time and may
+    // die before answering, which would hang the controller_manager shutdown
+    // thread until launch escalates to SIGKILL. Bound the wait instead.
     auto result = gripper_stop_client_->async_send_request(request);
-    if (result.get() && result.get()->success) {
-      RCLCPP_INFO(get_node()->get_logger(), "Gripper stopped successfully.");
+    if (result.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready) {
+      if (result.get() && result.get()->success) {
+        RCLCPP_INFO(get_node()->get_logger(), "Gripper stopped successfully.");
+      } else {
+        RCLCPP_ERROR(get_node()->get_logger(), "Failed to stop gripper.");
+      }
     } else {
-      RCLCPP_ERROR(get_node()->get_logger(), "Failed to stop gripper.");
+      RCLCPP_WARN(get_node()->get_logger(),
+                  "Gripper stop service did not respond within timeout; skipping.");
     }
   } else {
     RCLCPP_ERROR(get_node()->get_logger(), "Gripper stop service is not available.");

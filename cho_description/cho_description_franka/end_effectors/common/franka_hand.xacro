@@ -11,7 +11,7 @@
                        tcp_rpy:='0 0 0'
                        safety_distance:=0
                        gazebo:=false
-                       description_pkg:=cho_franka_description
+                       description_pkg:=cho_description_franka
                        with_sc:=false
                        no_prefix:=false">
     <xacro:property name="ee_prefix" default="robot_"/>

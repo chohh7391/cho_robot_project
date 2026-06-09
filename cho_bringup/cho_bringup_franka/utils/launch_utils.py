@@ -16,7 +16,8 @@ import os
 import tempfile
 import yaml
 
-from launch.actions import OpaqueFunction
+from launch.actions import OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 
 
@@ -133,8 +134,8 @@ def create_runtime_param_cleanup(runtime_param_file):
     return OpaqueFunction(function=cleanup)
 
 
-def create_controller_spawner(
-    controller_name,
+def _make_spawner_node(
+    controller_names,
     runtime_param_file,
     active=True,
     use_sim_time=None,
@@ -142,7 +143,12 @@ def create_controller_spawner(
     timeout=None,
     condition=None,
 ):
-    spawner_args = [controller_name, '-p', runtime_param_file]
+    # The ros2_control spawner accepts multiple controller names and loads /
+    # configures / activates them in a single, deterministic sequence inside one
+    # process. Grouping controllers this way (instead of one spawner per
+    # controller running in parallel) avoids the concurrent switch_controller
+    # races that intermittently leave a controller un-activated.
+    spawner_args = list(controller_names) + ['-p', runtime_param_file]
     if not active:
         spawner_args.append('--inactive')
     if timeout:
@@ -167,6 +173,26 @@ def create_controller_spawner(
     return Node(**node_kwargs)
 
 
+def create_controller_spawner(
+    controller_name,
+    runtime_param_file,
+    active=True,
+    use_sim_time=None,
+    namespace=None,
+    timeout=None,
+    condition=None,
+):
+    return _make_spawner_node(
+        [controller_name],
+        runtime_param_file,
+        active=active,
+        use_sim_time=use_sim_time,
+        namespace=namespace,
+        timeout=timeout,
+        condition=condition,
+    )
+
+
 def create_controller_spawners(
     always_active_controllers,
     switchable_controllers,
@@ -176,28 +202,44 @@ def create_controller_spawners(
     namespace=None,
     timeout=None,
 ):
-    spawners = [
-        create_controller_spawner(
-            controller_name,
-            runtime_param_file,
-            active=True,
-            use_sim_time=use_sim_time,
-            namespace=namespace,
-            timeout=timeout,
-        )
-        for controller_name in unique_names(always_active_controllers)
-    ]
+    switchable = unique_names(switchable_controllers)
 
-    for controller_name in unique_names(switchable_controllers):
-        spawners.append(
-            create_controller_spawner(
-                controller_name,
-                runtime_param_file,
-                active=(controller_name == initial_active_controller),
-                use_sim_time=use_sim_time,
-                namespace=namespace,
-                timeout=timeout,
+    # Everything that must come up active: the always-active controllers plus the
+    # single requested/initial switchable controller (loaded last so the
+    # broadcasters are available before the main controller activates).
+    active_controllers = unique_names(
+        list(always_active_controllers)
+        + ([initial_active_controller] if initial_active_controller in switchable else [])
+    )
+    inactive_controllers = [c for c in switchable if c != initial_active_controller]
+
+    active_spawner = _make_spawner_node(
+        active_controllers,
+        runtime_param_file,
+        active=True,
+        use_sim_time=use_sim_time,
+        namespace=namespace,
+        timeout=timeout,
+    )
+
+    if not inactive_controllers:
+        return [active_spawner]
+
+    inactive_spawner = _make_spawner_node(
+        inactive_controllers,
+        runtime_param_file,
+        active=False,
+        use_sim_time=use_sim_time,
+        namespace=namespace,
+        timeout=timeout,
+    )
+
+    return [
+        RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=active_spawner,
+                on_exit=[inactive_spawner],
             )
-        )
-
-    return spawners
+        ),
+        active_spawner,
+    ]

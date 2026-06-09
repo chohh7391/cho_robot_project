@@ -44,7 +44,7 @@ def generate_launch_description():
                     [
                         PathJoinSubstitution(
                             [
-                                FindPackageShare("cho_ur_description"),
+                                FindPackageShare("cho_description_ur"),
                                 "launch",
                                 "view_ur.launch.xml",
                             ]

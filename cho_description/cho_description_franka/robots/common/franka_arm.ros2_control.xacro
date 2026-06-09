@@ -111,7 +111,7 @@
     <xacro:if value="${gazebo}">
       <gazebo>
         <plugin filename="franka_ign_ros2_control-system" name="ign_ros2_control::IgnitionROS2ControlPlugin">
-          <parameters>$(find cho_franka_bringup)/config/gazebo/controllers.yaml</parameters>
+          <parameters>$(find cho_bringup_franka)/config/gazebo/controllers.yaml</parameters>
         </plugin>
       </gazebo>
     </xacro:if>

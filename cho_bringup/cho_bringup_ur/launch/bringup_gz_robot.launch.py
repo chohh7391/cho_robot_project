@@ -22,7 +22,7 @@ def launch_setup(context, *args, **kwargs):
     tf_prefix = LaunchConfiguration('tf_prefix')
 
     controller_config = PathJoinSubstitution([
-        FindPackageShare('cho_ur_bringup'),
+        FindPackageShare('cho_bringup_ur'),
         'config',
         controllers_file,
     ])
@@ -31,7 +31,7 @@ def launch_setup(context, *args, **kwargs):
         PathJoinSubstitution([FindExecutable(name='xacro')]),
         ' ',
         PathJoinSubstitution([
-            FindPackageShare('cho_ur_description'),
+            FindPackageShare('cho_description_ur'),
             'urdf',
             description_file,
         ]),
@@ -109,7 +109,7 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             '-d',
             PathJoinSubstitution([
-                FindPackageShare('cho_ur_description'),
+                FindPackageShare('cho_description_ur'),
                 'rviz',
                 'view_robot.rviz',
             ]),
@@ -196,12 +196,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'description_file',
             default_value='ur.urdf.xacro',
-            description='Cho UR xacro filename under cho_ur_description/urdf.',
+            description='Cho UR xacro filename under cho_description_ur/urdf.',
         ),
         DeclareLaunchArgument(
             'controllers_file',
             default_value='gz/controllers.yaml',
-            description='Controller YAML path relative to cho_ur_bringup/config.',
+            description='Controller YAML path relative to cho_bringup_ur/config.',
         ),
         DeclareLaunchArgument(
             'controller_name',

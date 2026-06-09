@@ -14,7 +14,7 @@ source install/setup.bash
 colcon build --packages-select cho_controller_franka
 
 # Tests
-colcon test --packages-select cho_task_manager cho_franka_description
+colcon test --packages-select cho_task_manager cho_description_franka
 colcon test-result --verbose
 ```
 
@@ -23,15 +23,15 @@ Python linting enforces max line length 120 (flake8), relaxed pep257. Test files
 ## Launch
 
 ```bash
-# Real robot (set IP in cho_franka_bringup/config/real/franka.config.yaml first)
-ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
+# Real robot (set IP in cho_bringup_franka/config/real/franka.config.yaml first)
+ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
 
 # Simulation
-ros2 launch cho_franka_bringup bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
-ros2 launch cho_franka_bringup bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_qp_controller
+ros2 launch cho_bringup_franka bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
+ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_qp_controller
 
 # VLA mode (requires control_mode set in controller config)
-ros2 launch cho_franka_bringup bringup_real_robot.launch.py control_mode:=torque vla:=true
+ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
 
 # Behavior tree task
 ros2 launch cho_task_manager run_task_manager.launch.py task:=<task_name>
@@ -52,13 +52,13 @@ cho_controller/
 
 cho_interfaces/              # ROS2 msgs (ActionChunk, PoseLog, JointLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
 
-cho_robots_description/cho_franka_description/
+cho_description/cho_description_franka/
   robots/                    # Xacro entry points per robot variant
   urdf/                      # Generated URDFs (fr3, fr3_with_ft_sensor, etc.)
   xml/                       # MuJoCo scene XMLs
   config/                    # Payload YAML
 
-cho_robots_bringup/cho_franka_bringup/
+cho_bringup/cho_bringup_franka/
   launch/                    # bringup_real/gazebo/mujoco_robot.launch.py
   config/{real,gazebo,mujoco}/controllers.yaml  # Per-environment controller gains
   config/real/franka.config.yaml               # Robot IP, gripper, FT sensor flags
@@ -66,8 +66,10 @@ cho_robots_bringup/cho_franka_bringup/
 cho_task_manager/
   cho_task_manager/
     behaviors/               # py_trees leaf nodes: action/, service/
-    tasks/                   # Assembled behavior trees (forge.py, pick_and_place.py)
+    tasks/                   # Behavior trees, split per robot: franka/ (pick_and_place, forge), ur/ (pick_and_place, multi_move); __init__.py dispatches by robot_type via build_task_tree()
     task_manager_node.py     # ROS2 node that runs the selected tree
+    utils/controller_names.py  # Loads config/robots/<robot>.yaml (single source of truth for controller roles)
+  config/robots/             # Per-robot controller role config (franka.yaml, ur5e.yaml)
   python/                    # Standalone scripts: action_client, vla_action_client, plot_*
 
 extern/

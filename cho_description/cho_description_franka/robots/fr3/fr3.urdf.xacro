@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr3">
 
-  <xacro:include filename="$(find cho_franka_description)/robots/common/franka_robot.xacro"/>
+  <xacro:include filename="$(find cho_description_franka)/robots/common/franka_robot.xacro"/>
 
   <!-- Define arguments -->
   <!-- The ID of the robot model to be used -->
@@ -59,18 +59,18 @@
   <xacro:arg name="gazebo_effort" default="false" />
 
   <!-- Name of the description package -->
-  <xacro:arg name="description_pkg" default="cho_franka_description" />
+  <xacro:arg name="description_pkg" default="cho_description_franka" />
   
   <!-- Append an underscore to the user-provided prefix, if non-empty. -->
   <xacro:property name="prefix" value="$(arg arm_prefix)"/>
   <xacro:property name="modified_prefix" value="${prefix + '_' if prefix else ''}"/>
 
   <xacro:franka_robot robot_type="fr3"
-                      joint_limits="${xacro.load_yaml('$(find cho_franka_description)/robots/fr3/joint_limits.yaml')}"
-                      inertials="${xacro.load_yaml('$(find cho_franka_description)/robots/fr3/inertials.yaml')}"
-                      kinematics="${xacro.load_yaml('$(find cho_franka_description)/robots/fr3/kinematics.yaml')}"
-                      accelerometer_config="${xacro.load_yaml('$(find cho_franka_description)/robots/fr3/accelerometers.yaml')}"
-                      dynamics="${xacro.load_yaml('$(find cho_franka_description)/robots/fr3/dynamics.yaml')}"
+                      joint_limits="${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/joint_limits.yaml')}"
+                      inertials="${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/inertials.yaml')}"
+                      kinematics="${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/kinematics.yaml')}"
+                      accelerometer_config="${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/accelerometers.yaml')}"
+                      dynamics="${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/dynamics.yaml')}"
                       gazebo="$(arg gazebo)"
                       hand="$(arg hand)"
                       ee_id="$(arg ee_id)"
