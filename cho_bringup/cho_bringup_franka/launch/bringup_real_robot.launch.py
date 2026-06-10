@@ -132,6 +132,7 @@ def generate_robot_nodes(context):
             namespace=namespace,
             parameters=[
                 controllers_yaml,
+                runtime_param_file,
                 {'robot_description': robot_description},
                 {'load_gripper': load_gripper_bool},
             ],
@@ -187,7 +188,8 @@ def generate_robot_nodes(context):
             always_active_controllers=always_active_controllers,
             switchable_controllers=switchable_controllers,
             initial_active_controller=initial_active_controller,
-            runtime_param_file=runtime_param_file,
+            # runtime params are loaded directly on ros2_control_node above, so
+            # no spawner -p file handoff is needed here.
             namespace=namespace,
             timeout=60,
         )

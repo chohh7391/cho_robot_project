@@ -118,7 +118,8 @@ def generate_launch_description():
             always_active_controllers=ALWAYS_ACTIVE_CONTROLLERS,
             switchable_controllers=switchable_controllers,
             initial_active_controller=initial_active_controller,
-            runtime_param_file=runtime_param_file,
+            # runtime params are loaded directly on node_mujoco_ros2_control
+            # below, so no spawner -p file handoff is needed here.
             use_sim_time={'use_sim_time': True},
             timeout=60,
         )

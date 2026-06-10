@@ -9,7 +9,8 @@
                  gazebo:=false
                  hand:=false
                  gazebo_effort:=false
-                 arm_prefix:=''">
+                 arm_prefix:=''
+                 runtime_param_file:=''">
 
     <xacro:property name="arm_prefix_modified" value="${'' if arm_prefix == '' else arm_prefix + '_'}" />
     <ros2_control name="${arm_prefix_modified}FrankaHardwareInterface" type="system">
@@ -112,6 +113,15 @@
       <gazebo>
         <plugin filename="franka_ign_ros2_control-system" name="ign_ros2_control::IgnitionROS2ControlPlugin">
           <parameters>$(find cho_bringup_franka)/config/gazebo/controllers.yaml</parameters>
+          <!-- Runtime params (bringup_type/control_mode/ee_name + payload) are
+               loaded straight onto the in-Gazebo controller_manager node, the
+               same way real/mujoco feed ros2_control_node, so no spawner -p
+               file handoff is needed. The plugin reads every <parameters> tag
+               (ign_ros2_control_plugin.cpp). Guarded so non-Gazebo / fileless
+               builds don't emit an empty <parameters> that aborts plugin init. -->
+          <xacro:if value="${runtime_param_file != ''}">
+            <parameters>${runtime_param_file}</parameters>
+          </xacro:if>
         </plugin>
       </gazebo>
     </xacro:if>

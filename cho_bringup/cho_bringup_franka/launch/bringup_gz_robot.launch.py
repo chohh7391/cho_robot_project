@@ -113,6 +113,30 @@ def generate_launch_description():
         b_type = LaunchConfiguration('bringup_type').perform(context)
         ee_name = LaunchConfiguration('ee_name').perform(context)
 
+        # --- 컨트롤러 목록 및 runtime 파라미터 파일 준비 ---
+        # gz 는 controller_manager 가 Gazebo 플러그인 안에서 뜨므로 이 파일을
+        # URDF 의 <parameters> 로 주입한다. 따라서 xacro 처리 전에 생성해 경로를
+        # mapping 으로 넘겨야 하고, real/mujoco 와 동일하게 노드 파라미터로 로드돼
+        # spawner -p 핸드오프가 사라진다.
+        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
+        switchable_controllers = get_switchable_controllers(
+            control_mode=mode,
+            use_vla=use_vla,
+            requested_controller=ctrl_name,
+            extra_torque_controllers=['joint_trajectory_controller'],
+        )
+        all_runtime_param_controllers = (
+            ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers
+        )
+        payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
+        runtime_param_file = create_runtime_param_file(
+            payload_config_path=payload_config_path,
+            controller_names=all_runtime_param_controllers,
+            bringup_type=b_type,
+            control_mode=mode,
+            ee_name=ee_name,
+        )
+
         # --- Xacro 파싱 ---
         gazebo_effort_str = 'false' if mode == 'position' else 'true'
 
@@ -132,6 +156,7 @@ def generate_launch_description():
                 'gazebo_effort': gazebo_effort_str,
                 'special_connection': 'ft_sensor',
                 'xyz_ee': '0 0 0',
+                'runtime_param_file': runtime_param_file,
             }
         )
         
@@ -149,29 +174,12 @@ def generate_launch_description():
             output='screen',
         )
 
-        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
-        switchable_controllers = get_switchable_controllers(
-            control_mode=mode,
-            use_vla=use_vla,
-            requested_controller=ctrl_name,
-            extra_torque_controllers=['joint_trajectory_controller'],
-        )
-        all_runtime_param_controllers = (
-            ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers
-        )
-        payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
-        runtime_param_file = create_runtime_param_file(
-            payload_config_path=payload_config_path,
-            controller_names=all_runtime_param_controllers,
-            bringup_type=b_type,
-            control_mode=mode,
-            ee_name=ee_name,
-        )
         controller_spawners = create_controller_spawners(
             always_active_controllers=ALWAYS_ACTIVE_CONTROLLERS,
             switchable_controllers=switchable_controllers,
             initial_active_controller=initial_active_controller,
-            runtime_param_file=runtime_param_file,
+            # runtime params are injected into the Gazebo controller_manager via
+            # the URDF <parameters> tag above, so no spawner -p handoff is needed.
             use_sim_time=use_sim_time,
             timeout=60,
         )

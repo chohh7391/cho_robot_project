@@ -28,7 +28,8 @@
                       no_prefix:='false'
                       arm_prefix:=''
                       description_pkg:='cho_description_franka'
-                      connected_to:='base'">
+                      connected_to:='base'
+                      runtime_param_file:=''">
                       
     <xacro:include filename="$(find cho_description_franka)/robots/common/utils.xacro" />
 
@@ -236,6 +237,7 @@
           hand="${hand}"
           gazebo_effort="${gazebo_effort}"
           arm_prefix="${arm_prefix}"
+          runtime_param_file="${runtime_param_file}"
       />
     </xacro:if>
 

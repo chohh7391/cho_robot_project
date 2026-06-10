@@ -115,14 +115,24 @@ def create_runtime_param_file(
         ros_params['control_mode'] = internal_control_mode
         ros_params['ee_name'] = ee_name
 
-    temp_yaml_file = tempfile.NamedTemporaryFile(
-        mode='w',
-        delete=False,
-        suffix='.yaml',
+    # Write under ROS_HOME (defaults to ~/.ros) instead of the system /tmp.
+    # The file is read by the local controller_manager (ros2_control_node /
+    # gazebo / mujoco plugin) started by this same launch, so a per-user,
+    # non-/tmp location avoids the cross-process /tmp visibility problems
+    # (containers, PrivateTmp systemd units, multi-PC setups) that the old
+    # tempfile approach was vulnerable to.
+    runtime_dir = os.environ.get('ROS_HOME') or os.path.join(
+        os.path.expanduser('~'), '.ros'
     )
-    yaml.dump(dynamic_params, temp_yaml_file)
-    temp_yaml_file.close()
-    return temp_yaml_file.name
+    os.makedirs(runtime_dir, exist_ok=True)
+    fd, runtime_path = tempfile.mkstemp(
+        suffix='.yaml',
+        prefix='cho_runtime_params_',
+        dir=runtime_dir,
+    )
+    with os.fdopen(fd, 'w') as runtime_file:
+        yaml.dump(dynamic_params, runtime_file)
+    return runtime_path
 
 
 def create_runtime_param_cleanup(runtime_param_file):
@@ -136,7 +146,7 @@ def create_runtime_param_cleanup(runtime_param_file):
 
 def _make_spawner_node(
     controller_names,
-    runtime_param_file,
+    runtime_param_file=None,
     active=True,
     use_sim_time=None,
     namespace=None,
@@ -148,7 +158,15 @@ def _make_spawner_node(
     # process. Grouping controllers this way (instead of one spawner per
     # controller running in parallel) avoids the concurrent switch_controller
     # races that intermittently leave a controller un-activated.
-    spawner_args = list(controller_names) + ['-p', runtime_param_file]
+    #
+    # runtime_param_file is only forwarded via '-p' when the controller_manager
+    # cannot receive the runtime parameters directly as node parameters (e.g.
+    # the Gazebo-embedded controller_manager). When None, the parameters are
+    # expected to already be loaded on the controller_manager node, which is the
+    # robust path that avoids the spawner -> controller_manager file handoff.
+    spawner_args = list(controller_names)
+    if runtime_param_file is not None:
+        spawner_args += ['-p', runtime_param_file]
     if not active:
         spawner_args.append('--inactive')
     if timeout:
@@ -175,7 +193,7 @@ def _make_spawner_node(
 
 def create_controller_spawner(
     controller_name,
-    runtime_param_file,
+    runtime_param_file=None,
     active=True,
     use_sim_time=None,
     namespace=None,
@@ -197,7 +215,7 @@ def create_controller_spawners(
     always_active_controllers,
     switchable_controllers,
     initial_active_controller,
-    runtime_param_file,
+    runtime_param_file=None,
     use_sim_time=None,
     namespace=None,
     timeout=None,

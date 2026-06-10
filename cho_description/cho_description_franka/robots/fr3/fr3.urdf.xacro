@@ -60,7 +60,10 @@
 
   <!-- Name of the description package -->
   <xacro:arg name="description_pkg" default="cho_description_franka" />
-  
+
+  <!-- Runtime controller params YAML, injected into the Gazebo controller_manager. -->
+  <xacro:arg name="runtime_param_file" default="" />
+
   <!-- Append an underscore to the user-provided prefix, if non-empty. -->
   <xacro:property name="prefix" value="$(arg arm_prefix)"/>
   <xacro:property name="modified_prefix" value="${prefix + '_' if prefix else ''}"/>
@@ -89,6 +92,7 @@
                       no_prefix="$(arg no_prefix)"
                       arm_prefix="${modified_prefix}"
                       description_pkg="$(arg description_pkg)"
+                      runtime_param_file="$(arg runtime_param_file)"
                       connected_to= "base">
   </xacro:franka_robot>
 
