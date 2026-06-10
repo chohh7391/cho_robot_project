@@ -220,12 +220,18 @@ void FrankaBaseController::compute_all_terms()
     robot_->computeAllTerms(data_, state_.q, state_.v);
     state_.M = robot_->mass(data_);
 
+    // coriolis()/nonLinearEffects() are sized to the model's nv, which is > 7
+    // when the URDF carries movable gripper-finger joints. state_.nle is the
+    // arm-only Vector7d, so always take the leading num_dof_ entries (matches
+    // the M_arm/J_arm truncation) to stay robust regardless of model DOF.
     if (bringup_type_ == "real") {
         // libfranka compensates arm + hand gravity which is set at Desk.
-        state_.nle = robot_->coriolis(data_);
+        // coriolis() is declared MatrixXd (nv x 1), so use topRows (not the
+        // vector-only head) to take the leading num_dof_ arm rows.
+        state_.nle = robot_->coriolis(data_).topRows(num_dof_);
     } else if (bringup_type_ == "gazebo") {
         // franka_ros2 compensates arm gravity.
-        state_.nle = robot_->coriolis(data_) + compute_hand_gravity();
+        state_.nle = robot_->coriolis(data_).topRows(num_dof_) + compute_hand_gravity();
     }
     else {
         // mujoco_ros2 does not compensates.
