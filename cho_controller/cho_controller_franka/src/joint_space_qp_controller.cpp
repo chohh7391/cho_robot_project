@@ -50,9 +50,18 @@ CallbackReturn JointSpaceQPController::on_configure(
   }
 
   // 1. Posture Task 초기화
+  // Posture gains must match the model's actuated-joint count (na), which is > 7
+  // when the URDF carries movable gripper joints. Size the gain vectors to na and
+  // fill only the leading num_dof_ arm entries (gripper rows stay 0 = uncontrolled),
+  // so this works whether or not the model includes the gripper (na == num_dof_).
   task_joint_posture_ = std::make_shared<TaskJointPosture>("task-posture", *robot_);
-  task_joint_posture_->Kp(kp_joint_);
-  task_joint_posture_->Kd(kd_joint_);
+  const int total_na = robot_->na();
+  Eigen::VectorXd kp_joint_full = Eigen::VectorXd::Zero(total_na);
+  Eigen::VectorXd kd_joint_full = Eigen::VectorXd::Zero(total_na);
+  kp_joint_full.head(num_dof_) = kp_joint_;
+  kd_joint_full.head(num_dof_) = kd_joint_;
+  task_joint_posture_->Kp(kp_joint_full);
+  task_joint_posture_->Kd(kd_joint_full);
 
   // 2. TSID Formulation 초기화
   double time_ = 0.0;

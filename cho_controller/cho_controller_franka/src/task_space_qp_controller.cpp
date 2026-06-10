@@ -58,11 +58,18 @@ CallbackReturn TaskSpaceQPController::on_configure(
   task_se3_equality_->Kd(kd_task_);
 
   // 2. Posture Task 초기화 (Default Control용)
-  // [수정] Gain 벡터 크기를 로봇 전체 관절 수(9개)로 설정
+  // Posture gains must match the model's actuated-joint count (na), which is > 7
+  // when the URDF carries movable gripper joints. Size the gain vectors to na and
+  // fill only the leading num_dof_ arm entries (gripper rows stay 0 = uncontrolled),
+  // so this works whether or not the model includes the gripper (na == num_dof_).
   task_joint_posture_ = std::make_shared<TaskJointPosture>("task-posture", *robot_);
-  
-  task_joint_posture_->Kp(kp_joint_);
-  task_joint_posture_->Kd(kd_joint_);
+  const int total_na = robot_->na();
+  Eigen::VectorXd kp_joint_full = Eigen::VectorXd::Zero(total_na);
+  Eigen::VectorXd kd_joint_full = Eigen::VectorXd::Zero(total_na);
+  kp_joint_full.head(num_dof_) = kp_joint_;
+  kd_joint_full.head(num_dof_) = kd_joint_;
+  task_joint_posture_->Kp(kp_joint_full);
+  task_joint_posture_->Kd(kd_joint_full);
 
   traj_posture_cubic_ = std::make_shared<TrajectoryEuclidianCubic>("traj_posture");
   control_mode_ = QPControlMode::DEFAULT;
