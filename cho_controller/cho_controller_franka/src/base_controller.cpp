@@ -226,12 +226,10 @@ void FrankaBaseController::compute_all_terms()
     // the M_arm/J_arm truncation) to stay robust regardless of model DOF.
     if (bringup_type_ == "real") {
         // libfranka compensates arm + hand gravity which is set at Desk.
-        // coriolis() is declared MatrixXd (nv x 1), so use topRows (not the
-        // vector-only head) to take the leading num_dof_ arm rows.
-        state_.nle = robot_->coriolis(data_).topRows(num_dof_);
+        state_.nle = robot_->coriolis(data_).block(0, 0, num_dof_, 1);
     } else if (bringup_type_ == "gazebo") {
         // franka_ros2 compensates arm gravity.
-        state_.nle = robot_->coriolis(data_).topRows(num_dof_) + compute_hand_gravity();
+        state_.nle = robot_->coriolis(data_).block(0, 0, num_dof_, 1) + compute_hand_gravity();
     }
     else {
         // mujoco_ros2 does not compensates.
