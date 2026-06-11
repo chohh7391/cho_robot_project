@@ -53,6 +53,7 @@ def generate_robot_nodes(context):
 
     mode = LaunchConfiguration('control_mode').perform(context)
     ctrl_name = LaunchConfiguration('controller_name').perform(context)
+    load_gripper_arg = LaunchConfiguration('load_gripper').perform(context)
     use_vla = LaunchConfiguration('vla').perform(context)
     b_type = LaunchConfiguration('bringup_type').perform(context)
     ee_name = LaunchConfiguration('ee_name').perform(context)
@@ -88,7 +89,7 @@ def generate_robot_nodes(context):
         robot_type_str        = str(config['robot_type'])
         arm_prefix_str        = str(config.get('arm_prefix', ''))
         robot_ip_str          = str(config['robot_ip'])
-        load_gripper_str      = str(config['load_gripper'])
+        load_gripper_str      = str(config['load_gripper']) if load_gripper_arg == 'config' else load_gripper_arg
         use_fake_hw_str       = str(config['use_fake_hardware'])
         fake_sensor_cmds_str  = str(config['fake_sensor_commands'])
         joint_state_rate_int  = int(config.get('joint_state_rate', 30))
@@ -122,8 +123,9 @@ def generate_robot_nodes(context):
 
         joint_state_publisher_sources = [
             'franka/joint_states',
-            'franka_gripper/joint_states',
         ]
+        if load_gripper_bool:
+            joint_state_publisher_sources.append('franka_gripper/joint_states')
 
         # ---- (C) Franka 코어 노드 ----
         ros2_control_node = Node(
@@ -180,7 +182,10 @@ def generate_robot_nodes(context):
         # Spawner들은 ros2_control_node 가 떠야 controller_manager 서비스에 접속할 수
         # 있다. active 묶음이 끝난 뒤 inactive 묶음이 뜨도록 launch_utils 에서
         # 체인으로 구성해 controller_manager 요청이 겹치지 않게 한다.
-        always_active_controllers = list(REAL_ALWAYS_ACTIVE_CONTROLLERS)
+        always_active_controllers = [
+            controller for controller in REAL_ALWAYS_ACTIVE_CONTROLLERS
+            if load_gripper_bool or controller != 'gripper_controller'
+        ]
         if not as_bool(use_fake_hw_str):
             always_active_controllers.insert(0, 'franka_robot_state_broadcaster')
 
@@ -249,6 +254,12 @@ def generate_launch_description():
             description='Which controller to activate initially',
         ),
         DeclareLaunchArgument(
+            'load_gripper',
+            default_value='config',
+            description='Enable Franka Gripper: true, false, or config to use robot_config_file',
+            choices=['true', 'false', 'config'],
+        ),
+        DeclareLaunchArgument(
             'vla',
             default_value='false',
             description='If true, forces vla_controller to be the active controller',
@@ -262,7 +273,7 @@ def generate_launch_description():
             'ee_name',
             default_value='fr3_hand_tcp',
             description='Name of End-Effector',
-            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+            choices=['fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
         ),
         OpaqueFunction(function=generate_robot_nodes),
     ])

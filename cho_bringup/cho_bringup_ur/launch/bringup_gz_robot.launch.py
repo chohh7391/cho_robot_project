@@ -1,7 +1,11 @@
+import os
+import tempfile
+import yaml
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
 from launch.conditions import IfCondition, UnlessCondition
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -12,6 +16,45 @@ SWITCHABLE_CONTROLLERS = [
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
+
+
+def create_runtime_controller_params(ee_name, bringup_type):
+    runtime_dir = os.environ.get('ROS_HOME') or os.path.join(os.path.expanduser('~'), '.ros')
+    os.makedirs(runtime_dir, exist_ok=True)
+    fd, runtime_path = tempfile.mkstemp(
+        suffix='.yaml',
+        prefix='cho_ur_gz_runtime_params_',
+        dir=runtime_dir,
+    )
+    params = {
+        '/**': {
+            'joint_space_position_controller': {
+                'ros__parameters': {
+                    'bringup_type': bringup_type,
+                    'control_mode': 'position',
+                },
+            },
+            'task_space_ik_controller': {
+                'ros__parameters': {
+                    'bringup_type': bringup_type,
+                    'control_mode': 'position',
+                    'ee_name': ee_name,
+                },
+            },
+        },
+    }
+    with os.fdopen(fd, 'w') as runtime_file:
+        yaml.safe_dump(params, runtime_file)
+    return runtime_path
+
+
+def cleanup_runtime_controller_params(runtime_path):
+    def cleanup(context, *args, **kwargs):
+        if os.path.exists(runtime_path):
+            os.unlink(runtime_path)
+        return []
+
+    return OpaqueFunction(function=cleanup)
 
 
 def launch_setup(context, *args, **kwargs):
@@ -26,6 +69,15 @@ def launch_setup(context, *args, **kwargs):
     world_file = LaunchConfiguration('world_file')
     load_gripper = LaunchConfiguration('load_gripper')
     tf_prefix = LaunchConfiguration('tf_prefix')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    robot_name = LaunchConfiguration('robot_name')
+    allow_renaming = LaunchConfiguration('allow_renaming')
+    safety_pos_margin = LaunchConfiguration('safety_pos_margin')
+    safety_k_position = LaunchConfiguration('safety_k_position')
+    ee_name = LaunchConfiguration('ee_name').perform(context)
+    bringup_type = LaunchConfiguration('bringup_type').perform(context)
+    controller_manager_timeout = LaunchConfiguration('controller_manager_timeout')
+    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
         raise RuntimeError(
@@ -50,11 +102,14 @@ def launch_setup(context, *args, **kwargs):
         ' ',
         'safety_limits:=true',
         ' ',
-        'safety_pos_margin:=0.15',
+        'safety_pos_margin:=',
+        safety_pos_margin,
         ' ',
-        'safety_k_position:=20',
+        'safety_k_position:=',
+        safety_k_position,
         ' ',
-        'name:=ur',
+        'name:=',
+        robot_name,
         ' ',
         'ur_type:=',
         ur_type,
@@ -76,7 +131,7 @@ def launch_setup(context, *args, **kwargs):
         executable='robot_state_publisher',
         output='both',
         parameters=[
-            {'use_sim_time': True},
+            {'use_sim_time': use_sim_time},
             {'robot_description': robot_description_content},
         ],
     )
@@ -89,9 +144,9 @@ def launch_setup(context, *args, **kwargs):
             '-string',
             robot_description_content,
             '-name',
-            'ur',
+            robot_name,
             '-allow_renaming',
-            'true',
+            allow_renaming,
         ],
     )
 
@@ -135,10 +190,12 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             'joint_state_broadcaster',
             controller_name,
+            '-p',
+            runtime_param_file,
             '--controller-manager',
             '/controller_manager',
             '--controller-manager-timeout',
-            '30',
+            controller_manager_timeout,
         ],
         output='screen',
     )
@@ -156,10 +213,12 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=[
             *inactive_controllers,
+            '-p',
+            runtime_param_file,
             '--controller-manager',
             '/controller_manager',
             '--controller-manager-timeout',
-            '30',
+            controller_manager_timeout,
             '--inactive',
         ],
         output='screen',
@@ -173,7 +232,7 @@ def launch_setup(context, *args, **kwargs):
             '--controller-manager',
             '/controller_manager',
             '--controller-manager-timeout',
-            '30',
+            controller_manager_timeout,
         ],
         output='screen',
         condition=IfCondition(load_gripper),
@@ -205,6 +264,11 @@ def launch_setup(context, *args, **kwargs):
         clock_bridge,
         delayed_spawners,
         delayed_inactive_spawner,
+        RegisterEventHandler(
+            event_handler=OnShutdown(
+                on_shutdown=[cleanup_runtime_controller_params(runtime_param_file)],
+            )
+        ),
     ]
 
 
@@ -236,6 +300,11 @@ def generate_launch_description():
             description='Attach the Robotiq 2F-85 gripper and spawn gripper_controller.',
         ),
         DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='true',
+            description='Use simulation time.',
+        ),
+        DeclareLaunchArgument(
             'launch_rviz',
             default_value='true',
             description='Launch RViz.',
@@ -251,6 +320,31 @@ def generate_launch_description():
             description='Gazebo world file.',
         ),
         DeclareLaunchArgument(
+            'robot_name',
+            default_value='ur',
+            description='Robot name passed to xacro and Gazebo.',
+        ),
+        DeclareLaunchArgument(
+            'allow_renaming',
+            default_value='true',
+            description='Allow Gazebo to rename the spawned entity.',
+        ),
+        DeclareLaunchArgument(
+            'safety_pos_margin',
+            default_value='0.15',
+            description='UR safety position margin forwarded to xacro.',
+        ),
+        DeclareLaunchArgument(
+            'safety_k_position',
+            default_value='20',
+            description='UR safety k_position forwarded to xacro.',
+        ),
+        DeclareLaunchArgument(
+            'bringup_type',
+            default_value='gz',
+            description='Cho controller bringup type.',
+        ),
+        DeclareLaunchArgument(
             'tf_prefix',
             default_value='',
             description='Optional tf/joint prefix.',
@@ -258,7 +352,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'ee_name',
             default_value='tool0',
-            description='Cho controller end-effector frame. Kept as a wrapper-level contract.',
+            description='Cho controller end-effector frame.',
+        ),
+        DeclareLaunchArgument(
+            'controller_manager_timeout',
+            default_value='30',
+            description='Controller manager service timeout for spawners.',
         ),
     ]
 

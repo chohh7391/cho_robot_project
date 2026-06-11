@@ -39,6 +39,7 @@ def generate_launch_description():
         DeclareLaunchArgument('namespace', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('vla', default_value='false'),
+        DeclareLaunchArgument('robot_name', default_value='franka_robot'),
         DeclareLaunchArgument(
             'control_mode',
             default_value='torque',
@@ -106,6 +107,11 @@ def generate_launch_description():
         robot_type_str = LaunchConfiguration('robot_type').perform(context)
         load_gripper_str = LaunchConfiguration('load_gripper').perform(context)
         franka_hand_str = LaunchConfiguration('franka_hand').perform(context)
+        namespace_str = LaunchConfiguration('namespace').perform(context)
+        robot_name_str = LaunchConfiguration('robot_name').perform(context)
+        robot_description_topic = (
+            'robot_description' if not namespace_str else f'/{namespace_str}/robot_description'
+        )
         use_vla = LaunchConfiguration('vla').perform(context)
         mode = LaunchConfiguration('control_mode').perform(context)
         
@@ -125,9 +131,15 @@ def generate_launch_description():
             requested_controller=ctrl_name,
             extra_torque_controllers=['joint_trajectory_controller'],
         )
-        all_runtime_param_controllers = (
-            ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers
-        )
+        load_gripper_bool = load_gripper_str.lower() == 'true'
+        always_active_controllers = [
+            controller for controller in ALWAYS_ACTIVE_CONTROLLERS
+            if load_gripper_bool or controller not in (
+                'simulation_gripper_controller',
+                'gripper_controller',
+            )
+        ]
+        all_runtime_param_controllers = always_active_controllers + switchable_controllers
         payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
         runtime_param_file = create_runtime_param_file(
             payload_config_path=payload_config_path,
@@ -163,19 +175,21 @@ def generate_launch_description():
         robot_state_publisher = Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
-            parameters=[{'robot_description': ParameterValue(doc.toxml(), value_type=str), 'use_sim_time': True}]
+            namespace=namespace_str,
+            parameters=[{'robot_description': ParameterValue(doc.toxml(), value_type=str)}, use_sim_time]
         )
 
         # --- Gazebo Spawner ---
         spawn_robot = Node(
             package='ros_gz_sim',
             executable='create',
-            arguments=['-topic', 'robot_description', '-name', 'franka_robot'],
+            namespace=namespace_str,
+            arguments=['-topic', robot_description_topic, '-name', robot_name_str],
             output='screen',
         )
 
         controller_spawners = create_controller_spawners(
-            always_active_controllers=ALWAYS_ACTIVE_CONTROLLERS,
+            always_active_controllers=always_active_controllers,
             switchable_controllers=switchable_controllers,
             initial_active_controller=initial_active_controller,
             # runtime params are injected into the Gazebo controller_manager via
@@ -198,7 +212,8 @@ def generate_launch_description():
                     'velocity_deadband': 0.002,
                 },
             ],
-            output='screen'
+            output='screen',
+            condition=IfCondition(load_gripper_str),
         )
 
         delayed_controller_spawner = RegisterEventHandler(
