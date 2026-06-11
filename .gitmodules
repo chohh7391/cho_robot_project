@@ -13,3 +13,6 @@
 	path = extern/Universal_Robots_ROS2_Driver
 	url = https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
 	branch = humble
+[submodule "extern/bota_driver_ros2"]
+	path = extern/bota_driver_ros2
+	url = https://gitlab.com/botasys/drivers/bota_driver_ros2.git
