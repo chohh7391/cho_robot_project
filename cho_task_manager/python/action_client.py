@@ -467,7 +467,7 @@ class ControlSuiteShell(cmd.Cmd):
             goal.relative = False
             goal.target_pose.position.x = 0.6
             goal.target_pose.position.y = 0.0
-            goal.target_pose.position.z = 0.05 + 0.047
+            goal.target_pose.position.z = 0.05 + 0.025 + 0.047
             goal.target_pose.orientation.x = 1.0
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
