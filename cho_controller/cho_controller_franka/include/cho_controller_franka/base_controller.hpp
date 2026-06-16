@@ -103,6 +103,13 @@ public:
     void compute_all_terms();
     Vector7d compute_hand_gravity();
 
+    // EE-frame pose + arm Jacobian (LOCAL) at an arbitrary full configuration q_full,
+    // using the shared robot model. Uses a private scratch Data so it does NOT touch
+    // state_ or data_. For controllers that need open-loop kinematics at a reference
+    // configuration instead of the measured one (same wrapper calls as compute_all_terms).
+    void compute_arm_kinematics(const Eigen::VectorXd & q_full, pinocchio::SE3 & H_ee,
+                                Eigen::Matrix<double, 6, 7> & J_arm);
+
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
@@ -119,6 +126,11 @@ protected:
     pinocchio::Model model_;
     pinocchio::Data data_;
     State state_;
+
+    // scratch for compute_arm_kinematics (kinematics at an arbitrary config)
+    pinocchio::Data kin_data_;
+    Eigen::VectorXd kin_v_zero_;
+    pinocchio::Data::Matrix6x kin_J_;
 
     std::string ee_name_;
     pinocchio::FrameIndex ee_id_;

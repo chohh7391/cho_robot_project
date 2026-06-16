@@ -17,6 +17,18 @@ public:
 
 private:
   std::shared_ptr<JointSpaceActionServer> action_server_;
+
+  // Monotonic, jitter-free clock (advanced by the fixed nominal control period)
+  // used to sample the trajectory. Sampling on the measured wall-clock ROS time
+  // would swing the per-FCI-tick command velocity and trip the libfranka
+  // acceleration_discontinuity reflex. Reset to 0 on each activation.
+  double traj_clock_{0.0};
+
+  // Last position command actually written, and the action-server running state
+  // from the previous cycle. On a goal start we re-seed the trajectory from
+  // last_cmd_ (not the measured position) to avoid a one-cycle command step.
+  Vector7d last_cmd_{Vector7d::Zero()};
+  bool prev_running_{false};
 };
 
 } // namespace franka

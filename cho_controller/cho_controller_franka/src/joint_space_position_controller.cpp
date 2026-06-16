@@ -44,6 +44,10 @@ CallbackReturn JointSpacePositionController::on_activate(
   state_.q_arm_des = state_.q_arm_init;
   state_.q_arm_ref = state_.q_arm_init;
 
+  traj_clock_ = 0.0;
+  last_cmd_ = state_.q_arm_init;
+  prev_running_ = false;
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -55,11 +59,37 @@ controller_interface::return_type JointSpacePositionController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  if (action_server_ && action_server_->is_running()) {
-    action_server_->compute(time, state_);
+  // Advance a monotonic, jitter-free clock by the fixed nominal control period and
+  // sample the trajectory against it (instead of the measured ROS `time`). The FCI
+  // applies our position command at an exact 1 kHz; the measured wall-clock period
+  // swings ~0.9-2.2 ms, so parameterizing the trajectory by jittery time would make
+  // the per-tick command velocity swing in proportion and trip the libfranka
+  // joint_motion_generator_acceleration_discontinuity reflex.
+  const unsigned int update_rate = get_update_rate();
+  const double dt = update_rate > 0 ? 1.0 / update_rate : 0.001;
+  traj_clock_ += dt;
+  const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
+
+  const bool running = action_server_ && action_server_->is_running();
+  if (running) {
+    action_server_->compute(traj_time, state_);
+
+    if (!prev_running_) {
+      // Goal just started. The action server seeds the trajectory (and the clip
+      // reference) from the *measured* position, but on a position interface the
+      // FCI continues from the *last command*. The steady-state tracking error
+      // between them would otherwise be injected as a one-cycle command step
+      // (~1e-4 rad => ~100 rad/s^2), tripping the libfranka velocity/acceleration
+      // discontinuity reflex. Re-seed from the last command so the trajectory
+      // starts exactly where the command already is.
+      action_server_->trajectory_->setInitSample(last_cmd_);
+      state_.q_arm_ref = last_cmd_;
+    }
+
     const auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos.head(num_dof_);
   }
+  prev_running_ = running;
 
   Vector7d q_cmd = state_.q_arm_des;
   FrankaBaseController::clip_position(q_cmd);
@@ -67,6 +97,7 @@ controller_interface::return_type JointSpacePositionController::update(
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(q_cmd(i));
   }
+  last_cmd_ = q_cmd;
 
   return controller_interface::return_type::OK;
 }

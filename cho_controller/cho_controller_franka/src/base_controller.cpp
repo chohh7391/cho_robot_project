@@ -110,6 +110,9 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     robot_ = std::make_shared<RobotWrapper>(robot_description_, true, false);
     model_ = robot_->model();
     data_ = pinocchio::Data(model_);
+    kin_data_ = pinocchio::Data(model_);
+    kin_v_zero_ = Eigen::VectorXd::Zero(model_.nv);
+    kin_J_.setZero(6, model_.nv);
 
     nq_ = robot_->nq();
     nv_ = robot_->nv();
@@ -243,6 +246,20 @@ void FrankaBaseController::compute_all_terms()
     state_.M_arm = state_.M.topLeftCorner(num_dof_, num_dof_);
     state_.J_arm = state_.J.leftCols(num_dof_);
     state_.J_arm_world = state_.J_world.leftCols(num_dof_);
+}
+
+void FrankaBaseController::compute_arm_kinematics(
+    const Eigen::VectorXd & q_full, pinocchio::SE3 & H_ee,
+    Eigen::Matrix<double, 6, 7> & J_arm)
+{
+    // Same wrapper calls as compute_all_terms, but evaluated at q_full on a private
+    // scratch Data (v = 0: kinematics only). Leaves state_ and data_ untouched.
+    if (kin_v_zero_.size() != nv_) kin_v_zero_ = Eigen::VectorXd::Zero(nv_);
+    if (kin_J_.cols() != nv_) kin_J_.setZero(6, nv_);
+    robot_->computeAllTerms(kin_data_, q_full, kin_v_zero_);
+    H_ee = robot_->framePosition(kin_data_, ee_id_);
+    robot_->frameJacobianLocal(kin_data_, ee_id_, kin_J_);
+    J_arm = kin_J_.leftCols(num_dof_);
 }
 
 Vector7d FrankaBaseController::compute_hand_gravity()

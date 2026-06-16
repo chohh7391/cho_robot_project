@@ -37,3 +37,9 @@ Recent history does not enforce a strict commit format. Prefer concise imperativ
 ## Safety & Configuration Tips
 
 Do not commit machine-specific robot IPs, secrets, or local network settings. Treat real robot launch changes as safety-critical: verify simulation paths first, document controller defaults, and preserve existing frame semantics unless the PR explicitly changes them.
+
+## Build Alias
+we set alias related to build below.
+you can use this alias when you need to build some packages or entire packages.
+alias cbr='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install'
+alias cbp='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select'
