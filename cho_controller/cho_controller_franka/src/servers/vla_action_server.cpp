@@ -284,9 +284,9 @@ void VLAActionServer::process_vla_action(const cho_interfaces::msg::ActionChunk:
 void VLAActionServer::call_gripper(const bool grasp) {
     // gripper_action is not accurate, becuase my task is conducted gripper closed.
     // so, when you want to use grasping, uncomment lower lines.
-    // auto msg = GripperAction::Goal();
-    // msg.grasp = grasp;
-    // gripper_client_->async_send_goal(msg);
+    auto msg = GripperAction::Goal();
+    msg.grasp = grasp;
+    gripper_client_->async_send_goal(msg);
 }
 
 void VLAActionServer::handle_success_trigger(
