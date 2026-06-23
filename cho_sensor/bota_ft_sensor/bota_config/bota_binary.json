@@ -8,7 +8,7 @@
             "baudrate": 460800
         },
         "sensor_operation_params": {
-            "app_mode": 2,
+            "app_mode": 1,
             "app_submode": 11,
             "wrench_offset": {
                 "fx": 0.0,
@@ -31,4 +31,4 @@
             "runtime_verbosity": true
         }
     }
- }
+}

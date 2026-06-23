@@ -7,9 +7,11 @@ from cho_task_manager.behaviors.action import (
 from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
     VLACompletionWaiterBehavior,
+    TareFTSensorServiceBehavior,
 )
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
 from cho_task_manager.utils.controller_names import ControllerNames
+import numpy as np
 
 FRANKA_HOME_POSITION = make_joint_state(
     [0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785]
@@ -18,13 +20,12 @@ FRANKA_HOME_POSITION = make_joint_state(
 FORGE_FRANKA_DEFAULT_POSITION = make_joint_state(
     [0.00871, -0.10368, -0.00794, -1.49139, -0.00083, 1.38774, 0.0]
 )
+range = [-0.01, 0.01]
+x_offset = np.random.uniform(range[0], range[1])
+y_offset = np.random.uniform(range[0], range[1])
 FORGE_FRANKA_APPROACH_POSE = make_pose(
-    position=[0.6, 0.0, 0.05 + 0.025 + 0.047],
+    position=[0.6 + x_offset, 0.0 + y_offset, 0.05 + 0.025 + 0.047],
     orientation=[1.0, 0.0, 0.0, 0.0]
-)
-FORGE_FRANKA_APPROACH_JOINT_POSITION = make_joint_state(
-    [-0.28776633739471436, 0.5265796184539795, 0.34377163648605347, -2.040536880493164,
-     -0.29417240619659424, 2.521876573562622, 1.321135401725769]
 )
 
 
@@ -37,6 +38,8 @@ def create_franka_forge_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
     # 1. initialize
     init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
     init_seq.add_children([
+        TareFTSensorServiceBehavior(name="Tare_FT_Sensor"),
+        py_trees.timers.Timer(name="Wait_After_Tare", duration=3.0),
         SwitchControllerServiceBehavior(
             name="Switch_To_Joint_Impedance",
             activate=[ControllerNames.JOINT_IMPEDANCE],
