@@ -38,7 +38,7 @@ def create_franka_forge_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
     # 1. initialize
     init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
     init_seq.add_children([
-        TareFTSensorServiceBehavior(name="Tare_FT_Sensor"),
+        # TareFTSensorServiceBehavior(name="Tare_FT_Sensor"),
         py_trees.timers.Timer(name="Wait_After_Tare", duration=3.0),
         SwitchControllerServiceBehavior(
             name="Switch_To_Joint_Impedance",

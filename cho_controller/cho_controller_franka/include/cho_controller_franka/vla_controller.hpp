@@ -31,6 +31,9 @@ private:
 
     double ema_factor_;
 
+    // joint-space position 명령의 slew-rate 제한 (rad/s). 0 이하이면 비활성.
+    double max_joint_vel_ {0.0};
+
     Vector6d default_kp_task_;
     Vector6d default_kd_task_;
     Vector6d current_kp_task_;
