@@ -11,7 +11,7 @@ def main():
 
     node = rclpy.create_node("task_manager_node")
 
-    node.declare_parameter("task", "pick_and_place")
+    node.declare_parameter("task", "peg_insert")
     node.declare_parameter("robot_type", "franka")
     node.declare_parameter("debug_tree", True)
     node.declare_parameter("print_tree", True)
