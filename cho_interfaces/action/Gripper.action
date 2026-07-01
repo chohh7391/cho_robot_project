@@ -1,4 +1,11 @@
 bool grasp
+# Optional grasp parameters. Leave at 0 (the default) to use the controller's
+# built-in defaults; set a positive value to override that field for this grasp.
+float64 width          # target width [m]
+float64 speed          # closing speed [m/s]
+float64 force          # grasping force [N]
+float64 epsilon_inner  # inner width tolerance [m]
+float64 epsilon_outer  # outer width tolerance [m]
 ---
 bool is_completed
 ---

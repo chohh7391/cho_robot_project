@@ -10,6 +10,7 @@
 
 #include "franka_msgs/action/grasp.hpp"
 #include "franka_msgs/action/move.hpp"
+#include "franka_msgs/action/homing.hpp"
 #include "cho_controller_franka/servers/gripper_action_server.hpp"
 
 namespace cho_controller {
@@ -71,14 +72,23 @@ class GripperController : public FrankaBaseController {
   bool openGripper();
   // Issues the Grasp Goal to close the Gripper around an object.
   void graspGripper();
+  // Issues the Homing Goal to calibrate the gripper (recovers the width reference).
+  void homeGripper();
   // Populates the callbacks for the Move Goal
   void assignMoveGoalOptionsCallbacks();
   // Populates the callbacks for the Grasp Goal
   void assignGraspGoalOptionsCallbacks();
+  // Populates the callbacks for the Homing Goal
+  void assignHomingGoalOptionsCallbacks();
 
   std::shared_ptr<rclcpp_action::Client<franka_msgs::action::Grasp>> gripper_grasp_action_client_;
   std::shared_ptr<rclcpp_action::Client<franka_msgs::action::Move>> gripper_move_action_client_;
+  std::shared_ptr<rclcpp_action::Client<franka_msgs::action::Homing>> gripper_homing_action_client_;
   std::shared_ptr<rclcpp::Client<std_srvs::srv::Trigger>> gripper_stop_client_;
+
+  // When true, the gripper is homed (calibrated) on activation so that width
+  // commands take effect without a manual "initialize end effector" in Desk.
+  bool auto_home_{true};
 
   /**
    * The struct SendGoalOptions is used solely for setting goal callbacks.
@@ -88,6 +98,7 @@ class GripperController : public FrankaBaseController {
    */
   rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions move_goal_options_;
   rclcpp_action::Client<franka_msgs::action::Grasp>::SendGoalOptions grasp_goal_options_;
+  rclcpp_action::Client<franka_msgs::action::Homing>::SendGoalOptions homing_goal_options_;
 
   std::shared_ptr<GripperActionServer> action_server_;
 };

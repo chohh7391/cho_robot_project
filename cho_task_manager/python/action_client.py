@@ -467,7 +467,9 @@ class ControlSuiteShell(cmd.Cmd):
             goal.relative = False
             goal.target_pose.position.x = 0.6
             goal.target_pose.position.y = 0.0
-            goal.target_pose.position.z = 0.05 + 0.035 + 0.015
+            goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
+            # goal.target_pose.position.z = 0.05 + 0.025 + 0.035  # gear mesh
+            # goal.target_pose.position.z = 0.05 + 0.035 + 0.015  # nut thread
             goal.target_pose.orientation.x = 1.0
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
@@ -483,13 +485,28 @@ class ControlSuiteShell(cmd.Cmd):
             print("action failed")
 
     def do_grasp(self, arg):
-        """Gripper open / close   (arg=0 => open, arg=1 => close)"""
-        if arg.strip() == "0":
-            grasp = False
-        elif arg.strip() == "1":
-            grasp = True
-        else:
-            print("Usage: grasp 0|1")
+        """Gripper open / close.
+
+        Usage: grasp 0                                  (open)
+               grasp 1                                  (close with default params)
+               grasp 1 [width] [speed] [force] [eps_in] [eps_out]
+        Any omitted (or 0) parameter falls back to the controller's default.
+        """
+        tokens = arg.split()
+        if not tokens or tokens[0] not in ("0", "1"):
+            print("Usage: grasp 0|1 [width speed force eps_in eps_out]")
+            return
+        grasp = tokens[0] == "1"
+
+        # params = [0.0, 0.0, 0.0, 0.0, 0.0]  # width, speed, force, eps_in, eps_out
+        params = [0.015, 0.05, 100.0, 0.05, 0.05]  # peg insert
+        # params = []  # gear mesh
+        # params = [0.05, 0.03, 100.0, 0.05, 0.05]  # nut thread
+        try:
+            for i, value in enumerate(tokens[1:6]):
+                params[i] = float(value)
+        except ValueError:
+            print("Grasp parameters must be numbers.")
             return
 
         if self.gripper_action_client is None:
@@ -504,6 +521,7 @@ class ControlSuiteShell(cmd.Cmd):
 
         goal = Gripper.Goal()
         goal.grasp = grasp
+        goal.width, goal.speed, goal.force, goal.epsilon_inner, goal.epsilon_outer = params
 
         print("Close" if goal.grasp else "Open")
 

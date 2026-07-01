@@ -82,6 +82,12 @@ struct State {
     bool gripper_has_goal = false;
     bool gripper_has_result = false;
     float gripper_current_width;
+    // Optional grasp parameters from the goal (<= 0 means "use controller default").
+    double grasp_width = 0.0;
+    double grasp_speed = 0.0;
+    double grasp_force = 0.0;
+    double grasp_epsilon_inner = 0.0;
+    double grasp_epsilon_outer = 0.0;
 };
 
 

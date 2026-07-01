@@ -52,6 +52,13 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
   if (!initialized_) {
     const auto goal = goal_handle_->get_goal();
     state.is_grasp = goal->grasp;
+    // Forward optional grasp parameters; graspGripper() falls back to defaults
+    // for any field left at 0 (the action's default value).
+    state.grasp_width = goal->width;
+    state.grasp_speed = goal->speed;
+    state.grasp_force = goal->force;
+    state.grasp_epsilon_inner = goal->epsilon_inner;
+    state.grasp_epsilon_outer = goal->epsilon_outer;
     state.gripper_has_goal = true; // 컨트롤러에게 새로운 명령 실행을 알림
     state.gripper_has_result = false; // 결과 플래그 초기화
     initialized_ = true;

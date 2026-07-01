@@ -95,7 +95,15 @@ def create_franka_gear_mesh_tree(robot_config=None) -> py_trees.behaviour.Behavi
             controller_name=ControllerNames.TASK_QP,
             duration=5.0
         ),
-        GripperActionBehavior(name="Close_Gripper", grasp=True),
+        GripperActionBehavior(
+            name="Close_Gripper",
+            grasp=True,
+            width=0.03,          # gear grip width [m]
+            speed=0.05,          # closing speed [m/s]
+            force=60.0,          # firm hold for a heavier gear [N]
+            epsilon_inner=0.005,  # grasp-success tolerance [m]
+            epsilon_outer=0.005,
+        ),
     ])
 
     # 3. Start VLA Controller (test)

@@ -92,6 +92,9 @@
   gripper_controller:
     ros__parameters:
       robot_type: "fr3"
+      # Home (calibrate) the gripper on activation so grasp width takes effect
+      # without a manual "initialize end effector" in Desk. Set false to skip.
+      auto_home: true
 
 /**:
   gravity_compensation_controller:

@@ -69,7 +69,15 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
             controller_name=ControllerNames.TASK_QP,
             duration=5.0
         ),
-        GripperActionBehavior(name="Close_Gripper", grasp=True),
+        GripperActionBehavior(
+            name="Close_Gripper",
+            grasp=True,
+            width=0.01,          # peg diameter [m]
+            speed=0.05,          # closing speed [m/s]
+            force=50.0,          # firm hold for a small, light peg [N]
+            epsilon_inner=0.005,  # grasp-success tolerance [m]
+            epsilon_outer=0.005,
+        ),
     ])
 
     # 3. Start VLA Controller (test)
