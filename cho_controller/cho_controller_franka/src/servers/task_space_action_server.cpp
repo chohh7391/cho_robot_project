@@ -12,7 +12,7 @@ void TaskSpaceActionServer::init()
         success_rotation_threshold_    = declare_or_get_double("success_threshold.position.rotation", 3e-2);
     } else {
         success_translation_threshold_ = declare_or_get_double("success_threshold.torque.translation", 2e-2);
-        success_rotation_threshold_    = declare_or_get_double("success_threshold.torque.rotation", 5e-2);
+        success_rotation_threshold_    = declare_or_get_double("success_threshold.torque.rotation", 1e-1);
     }
 
     RCLCPP_INFO(node_->get_logger(),
