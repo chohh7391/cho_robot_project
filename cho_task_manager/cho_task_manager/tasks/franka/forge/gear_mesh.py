@@ -75,7 +75,7 @@ def create_franka_gear_mesh_tree(robot_config=None) -> py_trees.behaviour.Behavi
             name="Go_Home_Init",
             target_joints=GEAR_MESH_FRANKA_DEFAULT_POSITION,
             controller_name=ControllerNames.JOINT_IMPEDANCE,
-            duration=5.0
+            duration=3.0
         ),
         GripperActionBehavior(name="Open_Gripper_Init", grasp=False)
     ])
@@ -93,14 +93,14 @@ def create_franka_gear_mesh_tree(robot_config=None) -> py_trees.behaviour.Behavi
             target_pose=GEAR_MESH_FRANKA_APPROACH_POSE,
             relative=False,
             controller_name=ControllerNames.TASK_QP,
-            duration=5.0
+            duration=3.0
         ),
         GripperActionBehavior(
             name="Close_Gripper",
             grasp=True,
-            width=0.03,          # gear grip width [m]
+            width=0.028,          # gear grip width [m]
             speed=0.05,          # closing speed [m/s]
-            force=60.0,          # firm hold for a heavier gear [N]
+            force=100.0,          # firm hold for a heavier gear [N]
             epsilon_inner=0.005,  # grasp-success tolerance [m]
             epsilon_outer=0.005,
         ),
@@ -117,7 +117,7 @@ def create_franka_gear_mesh_tree(robot_config=None) -> py_trees.behaviour.Behavi
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
         ),
-        py_trees.timers.Timer(name="Wait_2_Seconds", duration=1.0),
+        py_trees.timers.Timer(name="Wait_1_Seconds", duration=1.0),
         GripperActionBehavior(name="Open_Gripper", grasp=False),
     ])
 

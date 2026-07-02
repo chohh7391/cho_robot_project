@@ -76,7 +76,7 @@ def create_franka_nut_thread_tree(robot_config=None) -> py_trees.behaviour.Behav
             name="Go_Home_Init",
             target_joints=NUT_THREAD_FRANKA_DEFAULT_POSITION,
             controller_name=ControllerNames.JOINT_IMPEDANCE,
-            duration=5.0
+            duration=3.0
         ),
         GripperActionBehavior(name="Open_Gripper_Init", grasp=False)
     ])
@@ -94,14 +94,14 @@ def create_franka_nut_thread_tree(robot_config=None) -> py_trees.behaviour.Behav
             target_pose=NUT_THREAD_FRANKA_APPROACH_POSE,
             relative=False,
             controller_name=ControllerNames.TASK_QP,
-            duration=5.0
+            duration=3.0
         ),
         GripperActionBehavior(
             name="Close_Gripper",
             grasp=True,
             width=0.025,         # nut across-flats width [m]
-            speed=0.05,          # closing speed [m/s]
-            force=60.0,          # firm hold to resist threading torque [N]
+            speed=0.03,          # closing speed [m/s]
+            force=100.0,          # firm hold to resist threading torque [N]
             epsilon_inner=0.005,  # grasp-success tolerance [m]
             epsilon_outer=0.005,
         ),
@@ -118,7 +118,7 @@ def create_franka_nut_thread_tree(robot_config=None) -> py_trees.behaviour.Behav
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
         ),
-        py_trees.timers.Timer(name="Wait_2_Seconds", duration=1.0),
+        py_trees.timers.Timer(name="Wait_1_Seconds", duration=1.0),
         GripperActionBehavior(name="Open_Gripper", grasp=False),
     ])
 
