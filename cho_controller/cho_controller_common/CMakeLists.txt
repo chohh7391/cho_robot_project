@@ -40,10 +40,16 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME}
   Eigen3::Eigen
   eiquadprog::eiquadprog
-  # pinocchio 3+/4.0: carries BOOST_MPL_LIMIT_LIST_SIZE=30 etc. as interface
-  # compile definitions (needed since JointCollectionDefault has >20 variant
-  # types). ament_target_dependencies(pinocchio) does not propagate these.
-  pinocchio::pinocchio_headers
+  # pinocchio 3+/4.0: link the modern imported target explicitly.
+  # ament_target_dependencies(pinocchio) does not propagate the target's
+  # interface properties, so we would otherwise miss:
+  #  - BOOST_MPL_LIMIT_LIST_SIZE=30 compile defs (JointCollectionDefault now
+  #    has >20 boost::variant types), and
+  #  - the split-out pinocchio_parsers lib holding the URDF parser symbols
+  #    (pinocchio::urdf::buildModel), which caused an undefined-symbol crash
+  #    at runtime.
+  # pinocchio::pinocchio bundles default + parsers + collision (and headers).
+  pinocchio::pinocchio
 )
 
 # Install
