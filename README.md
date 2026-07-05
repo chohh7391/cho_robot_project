@@ -93,7 +93,7 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=position controller_name:={controller_name}
 
 # torque control mode
-ros2 launch cho_bringup_franka bringup_gz_robot.launch.py control_mode:=torque controller_name:={controller_name}
+ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque controller_name:={controller_name}
 
 # vla control mode (you can use both of position and torque) - (position: ik), (torque: task space impedance)
 # before execution, change control_mode in controller config
