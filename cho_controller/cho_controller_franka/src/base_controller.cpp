@@ -135,6 +135,15 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
 
     pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
     joint_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::JointLog>("/log/joint_pos", 10);
+    pose_log_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(pose_log_pub_);
+    joint_log_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>>(joint_log_pub_);
+    // Preallocate the joint-log vectors once so the per-cycle resize() is a no-op
+    // (no realtime heap traffic).
+    joint_log_rt_pub_->msg_.desired_state.position.resize(num_dof_);
+    joint_log_rt_pub_->msg_.current_state.position.resize(num_dof_);
+    joint_log_rt_pub_->msg_.current_state.velocity.resize(num_dof_);
 
     // gravity compensation parameter
     mass_ = get_node()->get_parameter("mass").as_double();
@@ -331,32 +340,37 @@ void FrankaBaseController::log_ee_pose()
         msg.orientation.w = q.w();
     };
 
-    auto pose_log_msg = cho_interfaces::msg::PoseLog();
-    fill_pose(pose_log_msg.pose_ref, state_.H_ee_ref);
-    fill_pose(pose_log_msg.pose_des, state_.H_ee_des);
-    fill_pose(pose_log_msg.pose_curr, state_.H_ee);
-
-    pose_log_pub_->publish(pose_log_msg);
+    if (!pose_log_rt_pub_ || !pose_log_rt_pub_->trylock()) {
+        return;  // publisher busy: drop this sample rather than block the RT loop
+    }
+    auto & m = pose_log_rt_pub_->msg_;
+    fill_pose(m.pose_ref, state_.H_ee_ref);
+    fill_pose(m.pose_des, state_.H_ee_des);
+    fill_pose(m.pose_curr, state_.H_ee);
+    pose_log_rt_pub_->unlockAndPublish();
 }
 
 void FrankaBaseController::log_joint_pos()
 {
-    auto joint_pos_log_msg = cho_interfaces::msg::JointLog();
+    if (!joint_log_rt_pub_ || !joint_log_rt_pub_->trylock()) {
+        return;  // publisher busy: drop this sample rather than block the RT loop
+    }
+    auto & m = joint_log_rt_pub_->msg_;
 
-    // 1. Desired joint positions 메모리 할당 및 값 복사
-    joint_pos_log_msg.desired_state.position.resize(state_.q_arm_des.size());
-    Eigen::VectorXd::Map(&joint_pos_log_msg.desired_state.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
+    // resize() is a no-op after the on_configure preallocation (no RT heap traffic).
+    // 1. Desired joint positions
+    m.desired_state.position.resize(state_.q_arm_des.size());
+    Eigen::VectorXd::Map(&m.desired_state.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
 
-    // 2. Current joint positions 메모리 할당 및 값 복사
-    joint_pos_log_msg.current_state.position.resize(state_.q_arm.size());
-    Eigen::VectorXd::Map(&joint_pos_log_msg.current_state.position[0], state_.q_arm.size()) = state_.q_arm;
+    // 2. Current joint positions
+    m.current_state.position.resize(state_.q_arm.size());
+    Eigen::VectorXd::Map(&m.current_state.position[0], state_.q_arm.size()) = state_.q_arm;
 
-    // 3. Current joint velocities 메모리 할당 및 값 복사
-    joint_pos_log_msg.current_state.velocity.resize(state_.v_arm.size());
-    Eigen::VectorXd::Map(&joint_pos_log_msg.current_state.velocity[0], state_.v_arm.size()) = state_.v_arm;
+    // 3. Current joint velocities
+    m.current_state.velocity.resize(state_.v_arm.size());
+    Eigen::VectorXd::Map(&m.current_state.velocity[0], state_.v_arm.size()) = state_.v_arm;
 
-    // 3. 퍼블리시
-    joint_log_pub_->publish(joint_pos_log_msg);
+    joint_log_rt_pub_->unlockAndPublish();
 }
 
 } // namespace franka

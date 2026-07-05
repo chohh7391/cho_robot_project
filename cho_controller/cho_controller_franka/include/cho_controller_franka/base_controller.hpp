@@ -28,6 +28,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <cho_interfaces/msg/pose_log.hpp>
 #include <cho_interfaces/msg/joint_log.hpp>
+#include <realtime_tools/realtime_publisher.hpp>
 
 using namespace std;
 using namespace Eigen;
@@ -155,6 +156,11 @@ protected:
 
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
     rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
+    // Realtime-safe wrappers: the 1 kHz update() publishes through these (lock-free
+    // try-lock + a separate publisher thread) instead of calling ->publish() directly,
+    // which can allocate/lock in the DDS path inside the control loop.
+    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> pose_log_rt_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>> joint_log_rt_pub_;
 
     // gains
     // joint space

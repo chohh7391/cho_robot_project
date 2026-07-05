@@ -136,31 +136,28 @@ controller_interface::return_type TaskSpaceQPController::update(
   // ----------------------------------------------------
   // 제어 모드 선택 (Action vs Default)
   // ----------------------------------------------------
-  if (action_server_ && action_server_->is_running()) {
+  // Decide the effective mode from whether the action goal yields a reference THIS
+  // cycle, then switch the TSID task set only on an actual transition. Switching to
+  // ACTION *before* compute() (as before) meant a transient compute()==false flipped
+  // ACTION->DEFAULT->ACTION every tick, churning addTask/removeTask at 1 kHz.
+  const bool action_ok =
+      action_server_ && action_server_->is_running() && action_server_->compute(time, state_);
 
+  if (action_ok) {
     if (control_mode_ != QPControlMode::ACTION) {
       switch_to_action_control();
     }
+    auto trajectory_sample = action_server_->trajectory_->computeNext();
 
-    if (!action_server_->compute(time, state_)) {
-      switch_to_default_control(time);
-      update_default_control_reference(time);
-    } else {
-      auto trajectory_sample = action_server_->trajectory_->computeNext();
-
-      state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
-      state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(
-        trajectory_sample.pos.segment<9>(3).data());
-      task_se3_equality_->setReference(trajectory_sample);
-    }
-
+    state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
+    state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(
+      trajectory_sample.pos.segment<9>(3).data());
+    task_se3_equality_->setReference(trajectory_sample);
   } else {
-    
-    // [2. Default Control (Hold Posture)]
+    // [2. Default Control (Hold Posture)] no active goal, or no valid action reference yet.
     if (control_mode_ != QPControlMode::DEFAULT) {
       switch_to_default_control(time);
     }
-
     update_default_control_reference(time);
   }
 
