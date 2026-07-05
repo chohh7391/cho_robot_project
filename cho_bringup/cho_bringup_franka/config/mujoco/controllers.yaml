@@ -131,6 +131,8 @@
   gripper_controller:
     ros__parameters:
       robot_type: "fr3"
+      # Sim has no /franka_gripper/homing action server; only home on real.
+      auto_home: false
 
 /**:
   joint_space_qp_controller:

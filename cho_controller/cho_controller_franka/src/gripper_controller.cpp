@@ -47,7 +47,10 @@ GripperController::state_interface_configuration() const {
 CallbackReturn GripperController::on_init() {
   try {
     auto_declare<std::string>("robot_type", "fr3");
-    auto_declare<bool>("auto_home", true);
+    // Default false: homing talks to the real /franka_gripper/homing action
+    // server, which sim (mock_franka_gripper) does not provide. Only the real
+    // bringup config opts in with auto_home: true.
+    auto_declare<bool>("auto_home", false);
   } catch (const std::exception& e) {
     fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
     return CallbackReturn::ERROR;
