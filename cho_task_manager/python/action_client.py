@@ -466,11 +466,11 @@ class ControlSuiteShell(cmd.Cmd):
         elif arg.strip() == "3":
             goal.relative = False
             # goal.target_pose.position.x = 0.6  # peg_insert / nut_thread
-            goal.target_pose.position.x = 0.6 + 0.02025  # gear_mesh
+            # goal.target_pose.position.x = 0.6 + 0.02025  # gear_mesh
             goal.target_pose.position.y = 0.0
-            goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
+            # goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
             # goal.target_pose.position.z = 0.05 + 0.025 + 0.035  # gear mesh
-            # goal.target_pose.position.z = 0.05 + 0.035 + 0.015  # nut thread
+            goal.target_pose.position.z = 0.05 + 0.035 + 0.015  # nut thread
             goal.target_pose.orientation.x = 1.0
             goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
@@ -500,9 +500,9 @@ class ControlSuiteShell(cmd.Cmd):
         grasp = tokens[0] == "1"
 
         # params = [0.0, 0.0, 0.0, 0.0, 0.0]  # width, speed, force, eps_in, eps_out
-        params = [0.015, 0.05, 100.0, 0.05, 0.05]  # peg insert
-        # params = []  # gear mesh
-        # params = [0.05, 0.03, 100.0, 0.05, 0.05]  # nut thread
+        # params = [0.015, 0.05, 100.0, 0.05, 0.05]  # peg insert
+        # params = [0.028, 0.05, 100.0, 0.005, 0.005]  # gear mesh
+        params = [0.023, 0.03, 100.0, 0.05, 0.05]  # nut thread
         try:
             for i, value in enumerate(tokens[1:6]):
                 params[i] = float(value)
