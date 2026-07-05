@@ -54,7 +54,8 @@ namespace cho_controller {
                 // Check this line, calling with zero acceleration at the last phase compute the CoM acceleration.
                 //      pinocchio::centerOfMass(m_model, data, q,v,false);
                 pinocchio::updateFramePlacements(m_model, data);
-                pinocchio::centerOfMass(m_model, data, q, v, Eigen::VectorXd::Zero(nv()));
+                if (m_a_zero.size() != nv()) m_a_zero = Eigen::VectorXd::Zero(nv());
+                pinocchio::centerOfMass(m_model, data, q, v, m_a_zero);
                 pinocchio::ccrba(m_model, data, q, v);
             }
 
@@ -106,9 +107,8 @@ namespace cho_controller {
                 return m_C;
             }
 
-            void RobotWrapper::jacobianWorld(const Data & data, const Model::JointIndex index, Data::Matrix6x & J) 
-            {   
-                Data::Matrix6x J_tmp(6, this->nv());
+            void RobotWrapper::jacobianWorld(const Data & data, const Model::JointIndex index, Data::Matrix6x & J)
+            {
                 return pinocchio::getJointJacobian(m_model, data, index, pinocchio::WORLD, J) ;
             }
 
@@ -173,9 +173,8 @@ namespace cho_controller {
                 frameAcceleration.linear() += v.angular().cross(v.linear());
             }
 
-            void RobotWrapper::frameJacobianLocal(Data & data, const Model::FrameIndex index, Data::Matrix6x & J) 
+            void RobotWrapper::frameJacobianLocal(Data & data, const Model::FrameIndex index, Data::Matrix6x & J)
             {
-                Data::Matrix6x J_tmp(6, this->nv());
                 assert(index<m_model.frames.size());
 
                 return pinocchio::getFrameJacobian(m_model, data, index, pinocchio::LOCAL, J) ;

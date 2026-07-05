@@ -94,8 +94,9 @@ protected:
     Eigen::MatrixXd m_M, m_Minv, m_C;
     Eigen::MatrixXd m_S, m_S_dot;
     Matrix6d m_Rot;
-    double r_, b_, d_, c_; 
+    double r_, b_, d_, c_;
     Eigen::VectorXd m_q;
+    Eigen::VectorXd m_a_zero;  // cached zero acceleration for centerOfMass (avoids per-cycle alloc)
 };
 
 } // namespace robot
