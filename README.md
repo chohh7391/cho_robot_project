@@ -183,11 +183,11 @@ Available tasks per robot:
 
 | robot_type | tasks | required bringup |
 | --- | --- | --- |
-| `franka` | `pick_and_place`, `forge` | `control_mode:=torque` (uses `*_qp` / impedance / vla controllers) |
+| `franka` | `pick_and_place`, `peg_insert` | `control_mode:=torque` (uses `*_qp` / impedance / vla controllers) |
 | `ur5e` | `pick_and_place`, `multi_move` | UR bringup; **`pick_and_place` needs `load_gripper:=true`** (it opens/closes the Robotiq 2F-85). `multi_move` needs no gripper. |
 
 > Bring the robot up first (see Bringup above), then run the matching task.
-> `forge`/`pick_and_place` on Franka need a `control_mode:=torque` bringup;
+> `peg_insert`/`pick_and_place` on Franka need a `control_mode:=torque` bringup;
 > launching the task against a `position`-mode bringup fails with
 > `no controller with this name exists`.
 > UR `pick_and_place` includes gripper steps, so bring UR up with `load_gripper:=true`.
@@ -198,8 +198,8 @@ source ~/ros2_ws/install/setup.bash
 # Franka pick & place (requires a control_mode:=torque bringup)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_and_place robot_type:=franka use_sim_time:=true
 
-# Franka forge (VLA flow; requires control_mode:=torque vla:=true bringup)
-ros2 launch cho_task_manager run_task_manager.launch.py task:=forge robot_type:=franka use_sim_time:=true
+# Franka peg_insert (VLA flow; requires control_mode:=torque vla:=true bringup)
+ros2 launch cho_task_manager run_task_manager.launch.py task:=peg_insert robot_type:=franka use_sim_time:=true
 
 # UR5e pick & place
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_and_place robot_type:=ur5e use_sim_time:=true
