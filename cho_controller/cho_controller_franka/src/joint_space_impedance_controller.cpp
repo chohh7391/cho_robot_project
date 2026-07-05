@@ -101,6 +101,11 @@ controller_interface::return_type JointSpaceImpedanceController::update(
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos;
     state_.v_arm_des = trajectory_sample.vel;
+  } else {
+    // Not tracking a goal: hold q_arm_des and command zero desired velocity. A
+    // stale nonzero v_arm_des (e.g. after a mid-motion preemption) would keep
+    // commanding kd*(v_des - dq) and drive a slow drift.
+    state_.v_arm_des.setZero();
   }
 
   // calculate torque

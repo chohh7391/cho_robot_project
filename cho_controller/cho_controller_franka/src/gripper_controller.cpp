@@ -51,6 +51,9 @@ CallbackReturn GripperController::on_init() {
     // server, which sim (mock_franka_gripper) does not provide. Only the real
     // bringup config opts in with auto_home: true.
     auto_declare<bool>("auto_home", false);
+    // Default false (sim): report grasp failures as success since the mock gripper
+    // cannot determine real success. Real bringup sets report_failure: true.
+    auto_declare<bool>("report_failure", false);
   } catch (const std::exception& e) {
     fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
     return CallbackReturn::ERROR;
@@ -78,6 +81,7 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State&) {
   assignHomingGoalOptionsCallbacks();
 
   action_server_ = std::make_shared<GripperActionServer>(get_node(), "/controller_action_server/gripper_controller");
+  action_server_->set_report_failure(get_node()->get_parameter("report_failure").as_bool());
   action_server_->init();
 
   return nullptr != gripper_grasp_action_client_ && nullptr != gripper_move_action_client_ &&

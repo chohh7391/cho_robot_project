@@ -37,6 +37,22 @@ rclcpp_action::GoalResponse TaskSpaceActionServer::handle_goal(
         RCLCPP_ERROR(node_->get_logger(), "[%s] Goal rejected: duration must be positive.", action_name_.c_str());
         return rclcpp_action::GoalResponse::REJECT;
     }
+    // Reject non-finite positions and zero/invalid quaternions before they reach
+    // the RT loop. The message default orientation is all-zero, which would yield a
+    // degenerate rotation matrix commanded as the EE pose.
+    {
+        const auto & p = goal->target_pose.position;
+        const auto & o = goal->target_pose.orientation;
+        const double quat_norm = std::sqrt(o.w * o.w + o.x * o.x + o.y * o.y + o.z * o.z);
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+            !std::isfinite(o.w) || !std::isfinite(o.x) || !std::isfinite(o.y) ||
+            !std::isfinite(o.z) || quat_norm < 1e-6) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "[%s] Goal rejected: non-finite position or zero/invalid quaternion.",
+                action_name_.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+    }
     // If another goal is active and this server only handles one at a time
     if (control_running_ || (goal_handle_ && goal_handle_->is_active())) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());
@@ -63,6 +79,7 @@ void TaskSpaceActionServer::handle_accepted(
 
     Eigen::Vector3d pos(goal->target_pose.position.x, goal->target_pose.position.y, goal->target_pose.position.z);
     Eigen::Quaterniond quat(goal->target_pose.orientation.w, goal->target_pose.orientation.x, goal->target_pose.orientation.y, goal->target_pose.orientation.z);
+    quat.normalize();  // guard against a non-unit quaternion scaling the rotation
 
     H_ee_ref_ = pinocchio::SE3(quat.toRotationMatrix(), pos);
 

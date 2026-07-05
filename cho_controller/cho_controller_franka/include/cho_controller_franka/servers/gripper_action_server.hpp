@@ -26,9 +26,15 @@ public:
 
     bool compute(const rclcpp::Time& current_time, State & state) override;
 
+    // When false (simulation), a failed grasp is still reported as success because
+    // the mock gripper cannot determine real grasp success; only the real bringup
+    // sets this true so genuine failures surface to the behavior tree.
+    void set_report_failure(bool v) { report_failure_ = v; }
+
 private:
     bool is_waiting_{false};
     bool saved_success_status_{false};
+    bool report_failure_{false};
     rclcpp::Time wait_start_time_;
 };
 

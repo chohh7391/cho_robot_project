@@ -95,6 +95,8 @@
       # Home (calibrate) the gripper on activation so grasp width takes effect
       # without a manual "initialize end effector" in Desk. Set false to skip.
       auto_home: true
+      # Real robot can sense grasp success/failure, so surface failures to the BT.
+      report_failure: true
 
 /**:
   gravity_compensation_controller:
@@ -111,7 +113,7 @@
     ros__parameters:
       robot_type: "fr3"
       lambda: 0.01          # DLS damping factor
-      max_delta_q: 0.02     # per-step joint command limit [rad]
+      max_delta_q: 0.0025   # per-step joint command limit [rad] (~2.5 rad/s @1kHz, under FR3 joint vel limits)
 
 /**:
   joint_space_impedance_controller:

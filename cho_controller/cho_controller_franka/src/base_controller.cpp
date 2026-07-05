@@ -227,15 +227,20 @@ void FrankaBaseController::compute_all_terms()
     // when the URDF carries movable gripper-finger joints. state_.nle is the
     // arm-only Vector7d, so always take the leading num_dof_ entries (matches
     // the M_arm/J_arm truncation) to stay robust regardless of model DOF.
+    // Coriolis/centrifugal joint torque is (nle - g) = C(q,v)*v, NOT a column of
+    // the C matrix. coriolis() returns the full nv x nv C matrix, so extracting a
+    // block gave a wrong feedforward as soon as the arm moved. Compute it from the
+    // non-linear effects minus gravity, which is also robust to Pinocchio API changes.
     if (bringup_type_ == "real") {
-        // libfranka compensates arm + hand gravity which is set at Desk.
-        state_.nle = robot_->coriolis(data_).block(0, 0, num_dof_, 1);
+        // libfranka compensates arm + hand gravity (set at Desk); add Coriolis only.
+        state_.nle = (robot_->nonLinearEffects(data_) - robot_->GeneralizedGravity(data_)).head(num_dof_);
     } else if (bringup_type_ == "gazebo") {
-        // franka_ros2 compensates arm gravity.
-        state_.nle = robot_->coriolis(data_).block(0, 0, num_dof_, 1) + compute_hand_gravity();
+        // franka_ros2 compensates arm gravity; add Coriolis + hand-payload gravity.
+        state_.nle = (robot_->nonLinearEffects(data_) - robot_->GeneralizedGravity(data_)).head(num_dof_)
+                     + compute_hand_gravity();
     }
     else {
-        // mujoco_ros2 does not compensates.
+        // mujoco_ros2 does not compensate; add full non-linear effects (Coriolis + gravity).
         state_.nle = robot_->nonLinearEffects(data_).head(num_dof_);
     }
 
@@ -301,6 +306,15 @@ void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 
 void FrankaBaseController::clip_torque(Vector7d & torque)
 {
+    // Never let a non-finite value reach the actuators: Eigen's array max/min
+    // propagate NaN unchanged, so saturation alone does not sanitize it. A NaN
+    // torque in torque mode trips a Franka reflex/fault. Fall back to zero
+    // (gravity-comp hold on real/gazebo, where the robot compensates gravity).
+    if (!torque.allFinite()) {
+        RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+            "Non-finite torque command detected; commanding zero torque.");
+        torque.setZero();
+    }
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
 }
 

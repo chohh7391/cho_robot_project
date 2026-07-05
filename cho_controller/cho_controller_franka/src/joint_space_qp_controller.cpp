@@ -164,10 +164,12 @@ controller_interface::return_type JointSpaceQPController::update(
     
     if (hqp_data.size() > 0) {
       const auto& qp_sol = solver_->solve(hqp_data);
-      if (qp_sol.status == HQP_STATUS_OPTIMAL || qp_sol.status == HQP_STATUS_MAX_ITER_REACHED) {
+      if (qp_sol.status == HQP_STATUS_OPTIMAL) {
           VectorXd ddq = tsid_->getAccelerations(qp_sol);
           acc_arm = ddq.head(num_dof_);
       } else {
+          // A non-converged (MAX_ITER) solution may violate constraints / be
+          // unbounded near singularities; hold instead of commanding it.
           RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "QP Solver Failed! Holding position.");
           acc_arm.setZero();
       }
