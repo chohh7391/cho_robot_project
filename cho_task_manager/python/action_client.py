@@ -465,7 +465,7 @@ class ControlSuiteShell(cmd.Cmd):
 
         elif arg.strip() == "3":
             goal.relative = False
-            # goal.target_pose.position.x = 0.6  # peg_insert / nut_thread
+            goal.target_pose.position.x = 0.6  # peg_insert / nut_thread
             # goal.target_pose.position.x = 0.6 + 0.02025  # gear_mesh
             goal.target_pose.position.y = 0.0
             # goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
