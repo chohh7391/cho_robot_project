@@ -1,6 +1,6 @@
 #include "cho_controller_common/robot/robot_wrapper.hpp"
 
-#include <pinocchio/multibody/model.hpp>
+#include <pinocchio/multibody.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/center-of-mass.hpp>
 #include <pinocchio/algorithm/compute-all-terms.hpp>
@@ -116,50 +116,50 @@ namespace cho_controller {
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                return data.oMi[f.parent].act(f.placement);
+                return data.oMi[f.parentJoint].act(f.placement);
             }
 
             void RobotWrapper::framePosition(const Data & data, const Model::FrameIndex index, SE3 & framePosition) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                framePosition = data.oMi[f.parent].act(f.placement);
+                framePosition = data.oMi[f.parentJoint].act(f.placement);
             }
 
             Motion RobotWrapper::frameVelocity(const Data & data, const Model::FrameIndex index) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                return f.placement.actInv(data.v[f.parent]);
+                return f.placement.actInv(data.v[f.parentJoint]);
             }
         
             void RobotWrapper::frameVelocity(const Data & data, const Model::FrameIndex index, Motion & frameVelocity) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                frameVelocity = f.placement.actInv(data.v[f.parent]);
+                frameVelocity = f.placement.actInv(data.v[f.parentJoint]);
             }
         
             Motion RobotWrapper::frameAcceleration(const Data & data, const Model::FrameIndex index) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                return f.placement.actInv(data.a[f.parent]);
+                return f.placement.actInv(data.a[f.parentJoint]);
             }
 
             void RobotWrapper::frameAcceleration(const Data & data, const Model::FrameIndex index, Motion & frameAcceleration) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                frameAcceleration = f.placement.actInv(data.a[f.parent]);
+                frameAcceleration = f.placement.actInv(data.a[f.parentJoint]);
             }
 
             Motion RobotWrapper::frameClassicAcceleration(const Data & data, const Model::FrameIndex index) const
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                Motion a = f.placement.actInv(data.a[f.parent]);
-                Motion v = f.placement.actInv(data.v[f.parent]);
+                Motion a = f.placement.actInv(data.a[f.parentJoint]);
+                Motion v = f.placement.actInv(data.v[f.parentJoint]);
                 a.linear() += v.angular().cross(v.linear());
                 return a;
             }
@@ -168,8 +168,8 @@ namespace cho_controller {
             {
                 assert(index<m_model.frames.size());
                 const Frame & f = m_model.frames[index];
-                frameAcceleration = f.placement.actInv(data.a[f.parent]);
-                Motion v = f.placement.actInv(data.v[f.parent]);
+                frameAcceleration = f.placement.actInv(data.a[f.parentJoint]);
+                Motion v = f.placement.actInv(data.v[f.parentJoint]);
                 frameAcceleration.linear() += v.angular().cross(v.linear());
             }
 

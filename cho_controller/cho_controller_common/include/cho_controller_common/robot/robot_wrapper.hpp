@@ -3,8 +3,7 @@
 #include "cho_controller_common/math/fwd.hpp"
 #include "cho_controller_common/robot/fwd.hpp"
 
-#include <pinocchio/multibody/data.hpp>
-#include <pinocchio/multibody/model.hpp>
+#include <pinocchio/multibody.hpp>
 #include <pinocchio/spatial/fwd.hpp>
 
 #include <string>

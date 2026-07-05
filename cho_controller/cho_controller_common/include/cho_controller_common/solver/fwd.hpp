@@ -4,7 +4,7 @@
 
 #include "cho_controller_common/config.hpp"
 #include "cho_controller_common/math/fwd.hpp"
-#include <pinocchio/container/aligned-vector.hpp>
+#include <pinocchio/macros.hpp>
 
 #define DEFAULT_HESSIAN_REGULARIZATION 1e-8
 

@@ -5,7 +5,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include "cho_interfaces/msg/action_chunk.hpp"
-#include <pinocchio/spatial/se3.hpp>
+#include <pinocchio/spatial.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 #include <Eigen/Geometry>
 #include "cho_interfaces/action/gripper.hpp"

@@ -40,6 +40,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME}
   Eigen3::Eigen
   eiquadprog::eiquadprog
+  # pinocchio 3+/4.0: carries BOOST_MPL_LIMIT_LIST_SIZE=30 etc. as interface
+  # compile definitions (needed since JointCollectionDefault has >20 variant
+  # types). ament_target_dependencies(pinocchio) does not propagate these.
+  pinocchio::pinocchio_headers
 )
 
 # Install

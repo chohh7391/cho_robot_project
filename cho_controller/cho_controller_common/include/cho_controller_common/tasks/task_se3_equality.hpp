@@ -4,8 +4,7 @@
 #include "cho_controller_common/math/constraint_equality.hpp"
 #include "cho_controller_common/trajectory/trajectory_base.hpp"
 
-#include <pinocchio/multibody/model.hpp>
-#include <pinocchio/multibody/data.hpp>
+#include <pinocchio/multibody.hpp>
 
 
 namespace cho_controller {

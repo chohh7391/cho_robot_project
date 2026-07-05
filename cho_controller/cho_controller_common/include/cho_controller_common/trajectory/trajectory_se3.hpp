@@ -2,7 +2,7 @@
 
 #include "cho_controller_common/trajectory/trajectory_base.hpp"
 
-#include <pinocchio/spatial/se3.hpp>
+#include <pinocchio/spatial.hpp>
 #include <cho_trajectory_smoother/Path.h>
 #include <cho_trajectory_smoother/Trajectory.h>
 

@@ -4,7 +4,7 @@
 #include "cho_controller_common/robot/robot_wrapper.hpp"
 #include "cho_controller_common/math/constraint_base.hpp"
 
-#include <pinocchio/multibody/fwd.hpp>
+#include <pinocchio/multibody.hpp>
 
 
 namespace cho_controller {
