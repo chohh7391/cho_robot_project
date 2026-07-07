@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS SUPER_CLIENT profile for the Discovery Server setup.
+
+  Use this on any machine that INTROSPECTS the ROS 2 graph over the discovery
+  server: action_client.py, ros2 CLI (node/topic/action list), rqt, rviz, etc.
+
+  Why: a plain discovery-server CLIENT (ROS_DISCOVERY_SERVER=ip:port) is only told
+  about endpoints that match readers/writers it has already created, so graph
+  queries like get_action_names_and_types() come back empty. A SUPER_CLIENT
+  receives the whole graph, so auto-discovery of action servers works.
+
+  Server is the discovery server on PC1 (Tailscale IP 100.88.157.53, port 11811,
+  --server-id 0). The prefix below encodes server-id 0: the 3rd byte (00) is the id.
+  For --server-id 1 it would be 44.53.01.5f...  (DS + id + _EPROSIMA).
+
+  Activate with:
+    export FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/dds/super_client.xml
+  (see dds_mode.sh -> dds_client)
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <participant profile_name="super_client_profile" is_default_profile="true">
+      <rtps>
+        <builtin>
+          <discovery_config>
+            <discoveryProtocol>SUPER_CLIENT</discoveryProtocol>
+            <discoveryServersList>
+              <RemoteServer prefix="44.53.00.5f.45.50.52.4f.53.49.4d.41">
+                <metatrafficUnicastLocatorList>
+                  <locator>
+                    <udpv4>
+                      <address>100.88.157.53</address>
+                      <port>11811</port>
+                    </udpv4>
+                  </locator>
+                </metatrafficUnicastLocatorList>
+              </RemoteServer>
+            </discoveryServersList>
+          </discovery_config>
+        </builtin>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
