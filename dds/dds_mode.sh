@@ -62,3 +62,17 @@ dds_status() {
   else                                                echo "  -> mode: LOCAL"
   fi
 }
+
+# Convenience: `source dds_mode.sh <mode>` applies that mode immediately, so you
+# don't have to source and then call the function on a second line. Both work:
+#   source dds/dds_mode.sh server
+#   source dds/dds_mode.sh          # then: dds_server
+if [ -n "$1" ]; then
+  case "$1" in
+    local|dds_local)   dds_local ;;
+    server|dds_server) dds_server ;;
+    client|dds_client) dds_client ;;
+    status|dds_status) dds_status ;;
+    *) echo "[dds] unknown mode: '$1' (use: local | server | client | status)" ;;
+  esac
+fi
