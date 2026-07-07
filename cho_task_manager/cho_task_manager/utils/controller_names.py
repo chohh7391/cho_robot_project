@@ -37,6 +37,24 @@ class ControllerNames(str, Enum):
         return self.value
 
 
+# Arm controllers that all claim the same effort (torque) command interfaces:
+# at most one may be active at a time. A switch that activates one of these must
+# deactivate every other one, regardless of which was running before, so that
+# re-runs after a failure (memory Sequence + OneShot re-tick) don't leave a
+# conflicting controller active and fail the STRICT switch.
+# GRIPPER uses a separate interface, so it is intentionally excluded.
+EXCLUSIVE_ARM_CONTROLLERS = [
+    ControllerNames.JOINT_IMPEDANCE,
+    ControllerNames.JOINT_QP,
+    ControllerNames.IK,
+    ControllerNames.OPERATIONAL_SPACE,
+    ControllerNames.TASK_IMPEDANCE,
+    ControllerNames.TASK_QP,
+    ControllerNames.VLA,
+    ControllerNames.GRAVITY_COMPENSATION,
+]
+
+
 # ---------------------------------------------------------------------------
 # Config-backed controller registry (single source of truth: config/robots/*.yaml)
 # ---------------------------------------------------------------------------

@@ -42,8 +42,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
         py_trees.timers.Timer(name="Wait_After_Tare", duration=3.0),
         SwitchControllerServiceBehavior(
             name="Switch_To_Joint_Impedance",
-            activate=[ControllerNames.JOINT_IMPEDANCE],
-            deactivate=[ControllerNames.VLA]
+            activate=[ControllerNames.JOINT_IMPEDANCE]
         ),
         JointSpaceActionBehavior(
             name="Go_Home_Init",
@@ -59,8 +58,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
     approach_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_Task_QP",
-            activate=[ControllerNames.TASK_QP],
-            deactivate=[ControllerNames.JOINT_IMPEDANCE]
+            activate=[ControllerNames.TASK_QP]
         ),
         TaskSpaceActionBehavior(
             name="Approach_Object",
@@ -85,8 +83,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
-            activate=[ControllerNames.VLA],
-            deactivate=[ControllerNames.TASK_QP]
+            activate=[ControllerNames.VLA]
         ),
         VLACompletionWaiterBehavior(
             name="Wait_For_VLA_Completion"
@@ -100,8 +97,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
     finish_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_Joint_Impedance_Final",
-            activate=[ControllerNames.JOINT_IMPEDANCE],
-            deactivate=[ControllerNames.VLA]
+            activate=[ControllerNames.JOINT_IMPEDANCE]
         ),
         JointSpaceActionBehavior(
             name="Go_Home_Final",

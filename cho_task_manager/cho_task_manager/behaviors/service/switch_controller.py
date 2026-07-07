@@ -4,6 +4,7 @@ from controller_manager_msgs.srv import SwitchController
 from builtin_interfaces.msg import Duration 
 from cho_task_manager.utils.controller_names import (
     SWITCH_CONTROLLER_SERVICE,
+    EXCLUSIVE_ARM_CONTROLLERS,
     controller_name_value,
 )
 
@@ -13,15 +14,33 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         self,
         name: str,
         activate: list,
-        deactivate: list,
-        strict: bool = True,
+        deactivate: list = None,
+        exclusive: bool = True,
+        strict: bool = None,
         activate_asap: bool = True,
         timeout_sec: int = 2,
     ):
         super().__init__(name, SwitchController, SWITCH_CONTROLLER_SERVICE)
         self.activate = activate
-        self.deactivate = deactivate
-        self.strict = strict
+
+        if exclusive:
+            # Deactivate every mutually-exclusive arm controller except the one(s)
+            # being activated. This makes the switch idempotent: it succeeds no
+            # matter which controller was active before (e.g. when the mission
+            # sequence re-runs from the top after a mid-sequence failure), instead
+            # of assuming a fixed predecessor via a hard-coded deactivate list.
+            keep = {controller_name_value(c) for c in activate}
+            self.deactivate = [
+                c for c in EXCLUSIVE_ARM_CONTROLLERS
+                if controller_name_value(c) not in keep
+            ]
+            # BEST_EFFORT so deactivating a controller that is not currently
+            # running is tolerated (STRICT would fail the whole switch).
+            self.strict = False if strict is None else strict
+        else:
+            self.deactivate = deactivate or []
+            self.strict = True if strict is None else strict
+
         self.activate_asap = activate_asap
         self.timeout_sec = timeout_sec
 
