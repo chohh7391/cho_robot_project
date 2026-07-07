@@ -40,7 +40,7 @@ def quat_mul(q1, q2):
 # yaw random noise: rotate about the end-effector's local Z axis (the down-pointing
 # axis when the EE faces down), so the noise is applied in the EE frame.
 # nut_thread uses a narrower range than gear_mesh: hand_init_orn_noise yaw = 0.26 rad.
-yaw_range = [-0.26, 0.26]
+yaw_range = [-0.13, 0.13]
 yaw_noise = np.random.uniform(yaw_range[0], yaw_range[1])
 # base orientation [0.6099, 0.7927, 0, 0] (qx, qy, qz, qw) = hand_init_orn [pi, 0, 1.83]
 base_orientation = [0.6099, 0.7927, 0.0, 0.0]
@@ -51,7 +51,7 @@ approach_orientation = quat_mul(base_orientation, q_yaw)
 # nut_thread: x = 0.6 (center axis, no offset)
 #             z = fixed_root(0.05) + tip_offset(height 0.025 + base 0.01 = 0.035) + hand_z(0.015)
 NUT_THREAD_FRANKA_APPROACH_POSE = make_pose(
-    position=[0.6 + x_offset, 0.0 + y_offset, 0.05 + 0.035 + 0.015],
+    position=[0.6 + x_offset, 0.0 + y_offset, 0.05 + 0.035 + 0.015 + 0.01],
     orientation=approach_orientation
 )
 
