@@ -471,8 +471,12 @@ class ControlSuiteShell(cmd.Cmd):
             # goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
             # goal.target_pose.position.z = 0.05 + 0.025 + 0.035  # gear mesh
             goal.target_pose.position.z = 0.05 + 0.035 + 0.015  # nut thread
-            goal.target_pose.orientation.x = 1.0
-            goal.target_pose.orientation.y = 0.0
+            # goal.target_pose.orientation.x = 1.0
+            # goal.target_pose.orientation.y = 0.0
+            # goal.target_pose.orientation.z = 0.0
+            # goal.target_pose.orientation.w =  0.0
+            goal.target_pose.orientation.x = 0.6099
+            goal.target_pose.orientation.y = 0.7927
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w =  0.0
         else:
