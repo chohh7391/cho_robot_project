@@ -120,6 +120,13 @@ public:
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
+    // Position a fresh open-loop reference should seed from on controller activation.
+    // Prefers whatever the PREVIOUS controller left on the shared position command
+    // interface (this call assumes num_dof_ position-type command interfaces, indexed
+    // 0..num_dof_-1 in joint order); falls back to the measured position only when no
+    // controller has ever written to it yet (cold start). See base_controller.cpp for why.
+    Vector7d held_command_position() const;
+
     void log_ee_pose();
     void log_joint_pos();
 

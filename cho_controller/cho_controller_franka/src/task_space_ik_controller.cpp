@@ -66,8 +66,10 @@ CallbackReturn TaskSpaceIKController::on_activate(
     return CallbackReturn::FAILURE;
   }
 
-  // Seed the open-loop IK reference at the activation pose.
-  q_ref_ = state_.q_arm_init;
+  // Seed the open-loop IK reference from whatever the previous controller was actually
+  // holding on the shared position command interface, not the measured position
+  // (see held_command_position()) -- avoids a one-cycle step at the controller switch.
+  q_ref_ = FrankaBaseController::held_command_position();
   ik_init_ = true;
   prev_running_ = false;
   traj_clock_ = 0.0;

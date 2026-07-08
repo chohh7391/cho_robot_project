@@ -76,10 +76,20 @@ CallbackReturn VLAController::on_activate(
 
   dq_filtered_.setZero();
 
-  // Seed the open-loop position reference at the activation configuration so the
-  // very first update() commands exactly where the arm already is (no startup jump/creep).
-  q_ref_ = state_.q_arm_init;
+  // Seed the open-loop position reference so the very first update() commands exactly
+  // where the arm is already being held (no startup jump/creep). In "position" mode the
+  // command interfaces are position-typed, so prefer whatever the PREVIOUS controller was
+  // actually holding on the shared interface over the measured position -- otherwise the
+  // commanded-vs-measured tracking error is injected as a one-cycle discontinuity at the
+  // controller switch (see held_command_position()). Other control modes claim
+  // differently-typed interfaces, so measured position is the only valid seed there.
+  q_ref_ = (control_mode_ == "position")
+               ? FrankaBaseController::held_command_position()
+               : state_.q_arm_init;
   q_ref_init_ = true;
+  // Anchor clip_position's rate-limit reference at the same seed, so the first cycle's
+  // command is not clamped against the measured position instead of the held one.
+  state_.q_arm_ref = q_ref_;
 
   return CallbackReturn::SUCCESS;
 }
@@ -245,11 +255,37 @@ controller_interface::return_type VLAController::update(
         // 4. 관절 속도 계산 (Joint Velocity)
         Vector7d dq_des = J_pinv * v_des;
 
+        // Slew-rate limit, same as the joint-space branch above. Without this, a large
+        // one-cycle task-space error (e.g. the VLA server's chunk-start interpolation
+        // jumping to a new target pose) maps through the IK straight into an unbounded
+        // per-cycle q_ref_ step -> velocity/acceleration discontinuity reflex.
+        if (max_joint_vel_ > 0.0) {
+          for (int i = 0; i < num_dof_; ++i) {
+            dq_des(i) = std::clamp(dq_des(i), -max_joint_vel_, max_joint_vel_);
+          }
+        }
+
         // 5. 위치 적분 (Euler Integration) — 레퍼런스에 누적
         q_ref_ += dq_des * period.seconds();
       }
+    } else {
+      // Idle: freeze q_ref_ (hold the activation/last-goal pose exactly). Also keep
+      // q_arm_init/H_ee_init tracking the CURRENTLY HELD reference (not the value
+      // frozen at controller activation) so that whenever the next VLA goal starts,
+      // VLAActionServer::compute() -- which seeds its first interpolation sample from
+      // these _init fields -- continues from where the arm is actually being held
+      // instead of a stale snapshot, possibly from a much earlier pose. This is the
+      // same "seed from the held reference, not measured/stale state" principle as
+      // held_command_position(), applied across successive goals on an already-active
+      // vla_controller instead of across a controller switch.
+      state_.q_arm_init = q_ref_;
+      Eigen::VectorXd q_full = state_.q;
+      q_full.head(num_dof_) = q_ref_;
+      pinocchio::SE3 H_ref;
+      Eigen::Matrix<double, 6, 7> J;
+      FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
+      state_.H_ee_init = H_ref;
     }
-    // else: idle -> q_ref_ 를 그대로 유지(freeze)하여 활성화 자세를 정확히 홀드한다.
 
     // apply joint limit
     Vector7d q_cmd = q_ref_;

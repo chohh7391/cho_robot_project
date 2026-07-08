@@ -302,6 +302,45 @@ Vector7d FrankaBaseController::compute_hand_gravity()
     return tau_hand;
 }
 
+Vector7d FrankaBaseController::held_command_position() const
+{
+    // Command interfaces retain whatever the PREVIOUS controller last wrote, even across
+    // a controller switch. Seeding a fresh reference from the *measured* state instead
+    // would inject the steady-state tracking error (commanded vs. measured) as a single
+    // 1kHz-cycle position step -- a huge instantaneous velocity/acceleration spike that
+    // trips the libfranka joint_motion_generator discontinuity reflex. So prefer the
+    // held command -- but ONLY when it is consistent with the measured position.
+    //
+    // When the position interface starts a FRESH libfranka session (first-ever
+    // activation, or a mode switch from effort/velocity), franka_hardware initializes
+    // hw_position_commands_ to ZEROS (finite!) and only re-seeds it to the measured
+    // position in the read() of the cycle AFTER this on_activate runs
+    // (first_position_update_). A stale value from an older position session survives
+    // the same way. In both cases the FCI motion generator restarts from the measured
+    // position, so measured is the correct seed there.
+    //
+    // A genuinely-held live command differs from measured only by the holding tracking
+    // error (< ~0.02 rad); zeros / stale values sit far outside that. 0.05 rad rejects
+    // the all-zeros vector unconditionally (fr3 joint4's range [-3.07, -0.07] never
+    // comes within 0.05 of 0).
+    constexpr double kHeldCmdConsistencyBand = 0.05;  // rad, per joint
+    if (command_interfaces_.size() >= static_cast<size_t>(num_dof_)) {
+        Vector7d q_cmd;
+        bool usable = true;
+        for (int i = 0; i < num_dof_; ++i) {
+            const double v = command_interfaces_[i].get_value();
+            if (!std::isfinite(v) ||
+                std::abs(v - state_.q_arm_init(i)) > kHeldCmdConsistencyBand) {
+                usable = false;
+                break;
+            }
+            q_cmd(i) = v;
+        }
+        if (usable) return q_cmd;
+    }
+    return state_.q_arm_init;
+}
+
 void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 {
     // 직전 "명령값"(q_arm_ref) 기준으로 per-step 변화량을 eps 이내로 제한하고 기준점을 갱신한다.

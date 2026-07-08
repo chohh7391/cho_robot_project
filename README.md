@@ -218,7 +218,7 @@ Use the same `ROS_DOMAIN_ID` on both PCs. The examples below use domain `25`.
 ```bash
 fastdds discovery --server-id 0 -l 0.0.0.0 -p 11811
 ```
-
+ㅇv
 2. Bringup robot or simulation (PC1).
 ```bash
 export ROS_DOMAIN_ID=25

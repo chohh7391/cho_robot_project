@@ -41,11 +41,14 @@ CallbackReturn JointSpacePositionController::on_activate(
     return CallbackReturn::FAILURE;
   }
 
-  state_.q_arm_des = state_.q_arm_init;
-  state_.q_arm_ref = state_.q_arm_init;
+  // Seed from whatever the previous controller was actually holding on the shared
+  // position command interface, not the measured position (see held_command_position()).
+  const Vector7d q_held = FrankaBaseController::held_command_position();
+  state_.q_arm_des = q_held;
+  state_.q_arm_ref = q_held;
 
   traj_clock_ = 0.0;
-  last_cmd_ = state_.q_arm_init;
+  last_cmd_ = q_held;
   prev_running_ = false;
 
   return CallbackReturn::SUCCESS;
