@@ -38,7 +38,6 @@ CallbackReturn VLAController::on_init() {
     auto_declare<std::vector<double>>("kp_joint", {600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0});
     auto_declare<std::vector<double>>("kd_joint", {30.0, 30.0, 30.0, 30.0, 10.0, 10.0, 5.0});
     auto_declare<double>("max_joint_vel", 1.5);
-    auto_declare<double>("max_joint_acc", 3.0);
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
     auto_declare<std::vector<double>>("default_dof_pos", {});
@@ -89,7 +88,7 @@ CallbackReturn VLAController::on_activate(
                ? FrankaBaseController::held_command_position()
                : state_.q_arm_init;
   q_ref_init_ = true;
-  dq_ref_.setZero();
+  prev_vla_running_ = false;
   // Anchor clip_position's rate-limit reference at the same seed, so the first cycle's
   // command is not clamped against the measured position instead of the held one.
   state_.q_arm_ref = q_ref_;
@@ -205,8 +204,7 @@ controller_interface::return_type VLAController::update(
 
   } else {
     // ----- Position control: command an OPEN-LOOP joint reference -----
-    // q_ref_ is advanced by an acceleration-limited velocity reference (dq_ref_) ONLY
-    // while a VLA goal is active; when idle it brakes to zero velocity and holds.
+    // q_ref_ is integrated ONLY while a VLA goal is active; when idle it is FROZEN.
     // Rebuilding the command from the *measured* joint position every cycle
     // (q_measured + dq) integrates the servo tracking lag and makes the arm creep to
     // a nearby pose even with no command. Holding an open-loop reference removes that
@@ -216,33 +214,45 @@ controller_interface::return_type VLAController::update(
       q_ref_init_ = true;
     }
 
-    // Fixed nominal step: the FCI consumes commands at exactly 1 kHz, while the
-    // measured period jitters ~0.9-2.2 ms; integrating with the jittery period would
-    // modulate the commanded velocity cycle-to-cycle (cf. joint_space_position_controller).
-    const unsigned int update_rate = get_update_rate();
-    const double dt = update_rate > 0 ? 1.0 / update_rate : 0.001;
-
-    // Desired joint velocity for this cycle. Stays zero when idle (or right after a
-    // goal ends), so the acceleration-limited integration below brakes dq_ref_ to zero
-    // smoothly instead of freezing q_ref_ mid-motion (which would itself be a
-    // discontinuity if the goal ends while moving).
-    Vector7d dq_des = Vector7d::Zero();
+    // ---- Goal-start diagnostic (idle -> running edge) --------------------------
+    // Prints the initial-value state at the instant a VLA goal starts commanding, so
+    // we can see whether the acceleration_discontinuity reflex is caused by a mismatch
+    // between the open-loop reference (q_ref_), the measured arm, and the first desired
+    // setpoint the action server produces -- rather than guessing. RT-unsafe logging,
+    // but fires only once per goal so it will not disturb the 1 kHz loop meaningfully.
+    if (vla_running && !prev_vla_running_) {
+      Eigen::VectorXd q_full_dbg = state_.q;
+      q_full_dbg.head(num_dof_) = q_ref_;
+      pinocchio::SE3 H_ref_dbg;
+      Eigen::Matrix<double, 6, 7> J_dbg;
+      FrankaBaseController::compute_arm_kinematics(q_full_dbg, H_ref_dbg, J_dbg);
+      const Vector7d q_ref_meas_err = q_ref_ - state_.q_arm;
+      const Vector7d q_des_ref_err  = state_.q_arm_des - q_ref_;
+      const Vector3d p_des_ref_err  = state_.H_ee_des.translation() - H_ref_dbg.translation();
+      RCLCPP_WARN(get_node()->get_logger(),
+        "[VLA goal-start] space=%s |q_ref-q_meas|inf=%.5f |q_des-q_ref|inf=%.5f "
+        "|p_des-p_ref|=%.5f  q_ref=[%.4f %.4f %.4f %.4f %.4f %.4f %.4f]",
+        action_space.c_str(),
+        q_ref_meas_err.cwiseAbs().maxCoeff(),
+        q_des_ref_err.cwiseAbs().maxCoeff(),
+        p_des_ref_err.norm(),
+        q_ref_(0), q_ref_(1), q_ref_(2), q_ref_(3), q_ref_(4), q_ref_(5), q_ref_(6));
+    }
+    prev_vla_running_ = vla_running;
 
     if (vla_running) {
       if (action_space == "joint") {
-        // ----- Joint space: 목표 관절각으로 향하는 속도 명령 생성 -----
-        for (int i = 0; i < num_dof_; ++i) {
-          const double err = state_.q_arm_des(i) - q_ref_(i);
-          double v_lim = (max_joint_vel_ > 0.0) ? max_joint_vel_
-                                                : std::numeric_limits<double>::infinity();
-          if (max_joint_acc_ > 0.0) {
-            // Braking-aware cap: never approach the target faster than max_joint_acc_
-            // can decelerate from, so the accel-limited tracker below cannot overshoot
-            // and ring when q_arm_des jumps (e.g. at chunk boundaries).
-            v_lim = std::min(v_lim, std::sqrt(2.0 * max_joint_acc_ * std::abs(err)));
+        // ----- Joint space: 목표 관절각으로 가되, 속도(slew-rate)를 제한 -----
+        // q_arm_des 가 chunk 경계 등에서 튀어도 가속도 스파이크(=떨림)가 나지 않도록
+        // 레퍼런스 기준으로 한 사이클당 최대 이동량을 클램프한다.
+        Vector7d step = state_.q_arm_des - q_ref_;
+        if (max_joint_vel_ > 0.0) {
+          const double max_step = max_joint_vel_ * period.seconds();
+          for (int i = 0; i < num_dof_; ++i) {
+            step(i) = std::clamp(step(i), -max_step, max_step);
           }
-          dq_des(i) = std::clamp(err / dt, -v_lim, v_lim);
         }
+        q_ref_ += step;
       } else {
         // ----- Task space: Differential IK (evaluated at the REFERENCE config) -----
         // FK/Jacobian at q_ref_ (not measured) so the open-loop reference stays free
@@ -259,66 +269,25 @@ controller_interface::return_type VLAController::update(
         pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * state_.H_ee_des.rotation();
         error.tail<3>() = pinocchio::log3(R_err);
 
-        // 2. Damped Least Squares (DLS) 의사역행렬 계산
+        // 2. Desired Task Velocity (P Control)
+        // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
+        Vector6d v_des = current_kp_task_.cwiseProduct(error);
+
+        // 3. Damped Least Squares (DLS) 의사역행렬 계산
         // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다.
         double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
         Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
         JJt.diagonal().array() += lambda;
         Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
 
-        // 3. Newton step: joint displacement closing the FULL pose error (rad).
-        // NOTE: deliberately NOT scaled by kp_task_. Those are effort-mode impedance
-        // gains (e.g. 565); used as a velocity P-gain here they saturate the request
-        // at +/-max_joint_vel_ for any error > a few mm -- effectively bang-bang.
-        // The acceleration-limited tracker below cannot follow a sign-flipping
-        // saturated request and hunts around the target in a visible limit cycle.
-        // The braking-aware velocity cap below provides the smooth approach instead
-        // (identical structure to the joint-space branch above).
-        Vector7d dq_step = J_pinv * error;
+        // 4. 관절 속도 계산 (Joint Velocity)
+        Vector7d dq_des = J_pinv * v_des;
 
-        for (int i = 0; i < num_dof_; ++i) {
-          double v_lim = (max_joint_vel_ > 0.0) ? max_joint_vel_
-                                                : std::numeric_limits<double>::infinity();
-          if (max_joint_acc_ > 0.0) {
-            v_lim = std::min(v_lim, std::sqrt(2.0 * max_joint_acc_ * std::abs(dq_step(i))));
-          }
-          dq_des(i) = std::clamp(dq_step(i) / dt, -v_lim, v_lim);
-        }
+        // 5. 위치 적분 (Euler Integration) — 레퍼런스에 누적
+        q_ref_ += dq_des * period.seconds();
       }
-    } else {
-      // Idle: freeze q_ref_ (hold the activation/last-goal pose exactly). Also keep
-      // q_arm_init/H_ee_init tracking the CURRENTLY HELD reference (not the value
-      // frozen at controller activation) so that whenever the next VLA goal starts,
-      // VLAActionServer::compute() -- which seeds its first interpolation sample from
-      // these _init fields -- continues from where the arm is actually being held
-      // instead of a stale snapshot, possibly from a much earlier pose. This is the
-      // same "seed from the held reference, not measured/stale state" principle as
-      // held_command_position(), applied across successive goals on an already-active
-      // vla_controller instead of across a controller switch.
-      state_.q_arm_init = q_ref_;
-      Eigen::VectorXd q_full = state_.q;
-      q_full.head(num_dof_) = q_ref_;
-      pinocchio::SE3 H_ref;
-      Eigen::Matrix<double, 6, 7> J;
-      FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
-      state_.H_ee_init = H_ref;
     }
-
-    // Acceleration-limited velocity reference, then integrate the position reference.
-    // Clamping velocity alone is NOT enough for the FCI: stepping the commanded
-    // velocity 0 -> max_joint_vel_ between two 1 ms cycles is a commanded acceleration
-    // of ~1500 rad/s^2, which trips the joint_motion_generator discontinuity reflex the
-    // instant a VLA goal starts streaming targets. Slewing dq_ref_ at max_joint_acc_
-    // keeps the commanded velocity continuous through goal start/end and chunk jumps.
-    if (max_joint_acc_ > 0.0) {
-      const double dv_max = max_joint_acc_ * dt;
-      for (int i = 0; i < num_dof_; ++i) {
-        dq_ref_(i) += std::clamp(dq_des(i) - dq_ref_(i), -dv_max, dv_max);
-      }
-    } else {
-      dq_ref_ = dq_des;
-    }
-    q_ref_ += dq_ref_ * dt;
+    // else: idle -> q_ref_ 를 그대로 유지(freeze)하여 활성화 자세를 정확히 홀드한다.
 
     // apply joint limit
     Vector7d q_cmd = q_ref_;
@@ -342,7 +311,6 @@ bool VLAController::assign_parameters() {
   auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
   auto max_joint_vel = get_node()->get_parameter("max_joint_vel").as_double();
-  auto max_joint_acc = get_node()->get_parameter("max_joint_acc").as_double();
   auto kd_null = get_node()->get_parameter("kd_null").as_double();
   auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
   auto default_kp_task = get_node()->get_parameter("default_kp_task").as_double_array();
@@ -383,7 +351,6 @@ bool VLAController::assign_parameters() {
   kp_null_ = kp_null;
   kd_null_ = kd_null;
   max_joint_vel_ = max_joint_vel;
-  max_joint_acc_ = max_joint_acc;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
   default_kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(default_kp_task.data());
   default_kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(default_kd_task.data());

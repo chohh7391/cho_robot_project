@@ -31,14 +31,11 @@ private:
 
     double ema_factor_;
 
-    // position 명령의 slew-rate 제한 (rad/s). 0 이하이면 비활성.
+    // joint-space position 명령의 slew-rate 제한 (rad/s). 0 이하이면 비활성.
     double max_joint_vel_ {0.0};
-    // 명령 "속도"의 slew-rate 제한 (rad/s^2). 0 이하이면 비활성. FCI는 명령 속도의
-    // 사이클 간 점프(=가속도)에 reflex를 걸므로 속도 클램프만으로는 부족하다.
-    double max_joint_acc_ {0.0};
 
-    // Acceleration-limited velocity reference driving q_ref_ (position control_mode).
-    Vector7d dq_ref_ {Vector7d::Zero()};
+    // Tracks the idle->running edge to fire the one-shot goal-start diagnostic log.
+    bool prev_vla_running_ {false};
 
     // Open-loop joint reference for position control_mode. Seeded at the activation
     // pose and integrated ONLY while a VLA goal is active; frozen when idle so the
