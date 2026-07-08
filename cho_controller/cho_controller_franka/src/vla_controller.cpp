@@ -259,28 +259,30 @@ controller_interface::return_type VLAController::update(
         pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * state_.H_ee_des.rotation();
         error.tail<3>() = pinocchio::log3(R_err);
 
-        // 2. Desired Task Velocity (P Control)
-        // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
-        Vector6d v_des = current_kp_task_.cwiseProduct(error);
-
-        // 3. Damped Least Squares (DLS) 의사역행렬 계산
+        // 2. Damped Least Squares (DLS) 의사역행렬 계산
         // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다.
         double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
         Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
         JJt.diagonal().array() += lambda;
         Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
 
-        // 4. 관절 속도 계산 (Joint Velocity)
-        dq_des = J_pinv * v_des;
+        // 3. Newton step: joint displacement closing the FULL pose error (rad).
+        // NOTE: deliberately NOT scaled by kp_task_. Those are effort-mode impedance
+        // gains (e.g. 565); used as a velocity P-gain here they saturate the request
+        // at +/-max_joint_vel_ for any error > a few mm -- effectively bang-bang.
+        // The acceleration-limited tracker below cannot follow a sign-flipping
+        // saturated request and hunts around the target in a visible limit cycle.
+        // The braking-aware velocity cap below provides the smooth approach instead
+        // (identical structure to the joint-space branch above).
+        Vector7d dq_step = J_pinv * error;
 
-        // Velocity clamp. Without this, a large task-space error (e.g. an aggressive
-        // VLA target) maps through the IK into an unbounded joint velocity request.
-        // (No braking cap needed here: the task-space P gain already drives v_des,
-        // and thus dq_des, to zero as the error vanishes.)
-        if (max_joint_vel_ > 0.0) {
-          for (int i = 0; i < num_dof_; ++i) {
-            dq_des(i) = std::clamp(dq_des(i), -max_joint_vel_, max_joint_vel_);
+        for (int i = 0; i < num_dof_; ++i) {
+          double v_lim = (max_joint_vel_ > 0.0) ? max_joint_vel_
+                                                : std::numeric_limits<double>::infinity();
+          if (max_joint_acc_ > 0.0) {
+            v_lim = std::min(v_lim, std::sqrt(2.0 * max_joint_acc_ * std::abs(dq_step(i))));
           }
+          dq_des(i) = std::clamp(dq_step(i) / dt, -v_lim, v_lim);
         }
       }
     } else {
