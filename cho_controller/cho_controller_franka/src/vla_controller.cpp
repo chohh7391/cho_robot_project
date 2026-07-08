@@ -2,7 +2,6 @@
 #include <cassert>
 #include <cmath>
 #include <exception>
-#include <limits>
 #include <string>
 
 #include <Eigen/Eigen>
@@ -77,21 +76,10 @@ CallbackReturn VLAController::on_activate(
 
   dq_filtered_.setZero();
 
-  // Seed the open-loop position reference so the very first update() commands exactly
-  // where the arm is already being held (no startup jump/creep). In "position" mode the
-  // command interfaces are position-typed, so prefer whatever the PREVIOUS controller was
-  // actually holding on the shared interface over the measured position -- otherwise the
-  // commanded-vs-measured tracking error is injected as a one-cycle discontinuity at the
-  // controller switch (see held_command_position()). Other control modes claim
-  // differently-typed interfaces, so measured position is the only valid seed there.
-  q_ref_ = (control_mode_ == "position")
-               ? FrankaBaseController::held_command_position()
-               : state_.q_arm_init;
+  // Seed the open-loop position reference at the activation configuration so the
+  // very first update() commands exactly where the arm already is (no startup jump/creep).
+  q_ref_ = state_.q_arm_init;
   q_ref_init_ = true;
-  prev_vla_running_ = false;
-  // Anchor clip_position's rate-limit reference at the same seed, so the first cycle's
-  // command is not clamped against the measured position instead of the held one.
-  state_.q_arm_ref = q_ref_;
 
   return CallbackReturn::SUCCESS;
 }
@@ -213,32 +201,6 @@ controller_interface::return_type VLAController::update(
       q_ref_ = state_.q_arm;
       q_ref_init_ = true;
     }
-
-    // ---- Goal-start diagnostic (idle -> running edge) --------------------------
-    // Prints the initial-value state at the instant a VLA goal starts commanding, so
-    // we can see whether the acceleration_discontinuity reflex is caused by a mismatch
-    // between the open-loop reference (q_ref_), the measured arm, and the first desired
-    // setpoint the action server produces -- rather than guessing. RT-unsafe logging,
-    // but fires only once per goal so it will not disturb the 1 kHz loop meaningfully.
-    if (vla_running && !prev_vla_running_) {
-      Eigen::VectorXd q_full_dbg = state_.q;
-      q_full_dbg.head(num_dof_) = q_ref_;
-      pinocchio::SE3 H_ref_dbg;
-      Eigen::Matrix<double, 6, 7> J_dbg;
-      FrankaBaseController::compute_arm_kinematics(q_full_dbg, H_ref_dbg, J_dbg);
-      const Vector7d q_ref_meas_err = q_ref_ - state_.q_arm;
-      const Vector7d q_des_ref_err  = state_.q_arm_des - q_ref_;
-      const Vector3d p_des_ref_err  = state_.H_ee_des.translation() - H_ref_dbg.translation();
-      RCLCPP_WARN(get_node()->get_logger(),
-        "[VLA goal-start] space=%s |q_ref-q_meas|inf=%.5f |q_des-q_ref|inf=%.5f "
-        "|p_des-p_ref|=%.5f  q_ref=[%.4f %.4f %.4f %.4f %.4f %.4f %.4f]",
-        action_space.c_str(),
-        q_ref_meas_err.cwiseAbs().maxCoeff(),
-        q_des_ref_err.cwiseAbs().maxCoeff(),
-        p_des_ref_err.norm(),
-        q_ref_(0), q_ref_(1), q_ref_(2), q_ref_(3), q_ref_(4), q_ref_(5), q_ref_(6));
-    }
-    prev_vla_running_ = vla_running;
 
     if (vla_running) {
       if (action_space == "joint") {
