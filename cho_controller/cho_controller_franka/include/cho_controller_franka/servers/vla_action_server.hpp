@@ -67,8 +67,16 @@ protected:
     pinocchio::SE3 H_ee_ref_;
 
     rclcpp_action::Client<cho_interfaces::action::Gripper>::SharedPtr gripper_client_;
-    bool last_gripper_grasp_ = false; 
+    rclcpp_action::Client<cho_interfaces::action::Gripper>::SendGoalOptions gripper_goal_options_;
+    bool last_gripper_grasp_ = false;
     bool gripper_initialized_ = false;
+    // Set by gripper_goal_options_.goal_response_callback when a grasp/open
+    // request is rejected (GripperActionServer is still settling ~1s after its
+    // previous result — see gripper_action_server.cpp). Consumed once per
+    // incoming chunk in apply_gripper_action() to undo the optimistic
+    // last_gripper_grasp_ flip so the next matching command retries instead of
+    // being silently dropped forever.
+    std::atomic<bool> gripper_goal_rejected_{false};
 
     rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Float64MultiArray>::SharedPtr ee_pose_pub_;
     rclcpp::Subscription<cho_interfaces::msg::ActionChunk>::SharedPtr vla_action_sub_;

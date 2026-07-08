@@ -22,6 +22,15 @@ void VLAActionServer::init() {
     gripper_client_ = rclcpp_action::create_client<GripperAction>(
         node_, "/controller_action_server/gripper_controller"
     );
+    gripper_goal_options_.goal_response_callback =
+        [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<GripperAction>> & goal_handle) {
+            if (!goal_handle) {
+                RCLCPP_WARN(node_->get_logger(),
+                    "[%s] Gripper goal rejected (server still settling from previous "
+                    "result); will retry on the next chunk.", action_name_.c_str());
+                gripper_goal_rejected_.store(true);
+            }
+        };
 
     if (!gripper_client_->wait_for_action_server(std::chrono::seconds(1))) {
         RCLCPP_ERROR(node_->get_logger(), "Gripper action server not available at init!");
@@ -320,6 +329,17 @@ void VLAActionServer::apply_gripper_action(
         return;
     }
 
+    // A rejected request (gripper server still settling ~1s after its previous
+    // result — see GripperActionServer::compute()'s is_waiting_ delay) leaves
+    // last_gripper_grasp_ desynced from the real gripper state, since it was
+    // optimistically flipped before we knew whether the goal would be
+    // accepted. Undo that flip once per incoming chunk so the edge-trigger
+    // below fires again on the very next cycle instead of the retry being
+    // dropped silently until the button is released and re-pressed.
+    if (i == 0 && gripper_goal_rejected_.exchange(false)) {
+        last_gripper_grasp_ = !last_gripper_grasp_;
+    }
+
     double raw_gripper = msg->gripper_actions[i];
     double filtered_gripper;
     if (has_previous && (i == 0)) {
@@ -352,7 +372,7 @@ void VLAActionServer::call_gripper(const bool grasp) {
     // so, when you want to use grasping, uncomment lower lines.
     auto msg = GripperAction::Goal();
     msg.grasp = grasp;
-    gripper_client_->async_send_goal(msg);
+    gripper_client_->async_send_goal(msg, gripper_goal_options_);
 }
 
 void VLAActionServer::handle_success_trigger(
