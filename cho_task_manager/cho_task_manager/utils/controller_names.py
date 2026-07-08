@@ -19,6 +19,7 @@ class ControllerNames(str, Enum):
     # Joint Space Controllers
     JOINT_IMPEDANCE = 'joint_space_impedance_controller'
     JOINT_QP = 'joint_space_qp_controller'
+    JOINT_POSITION = 'joint_space_position_controller'
 
     # Task Space Controllers
     IK = 'task_space_ik_controller'
@@ -46,6 +47,7 @@ class ControllerNames(str, Enum):
 EXCLUSIVE_ARM_CONTROLLERS = [
     ControllerNames.JOINT_IMPEDANCE,
     ControllerNames.JOINT_QP,
+    ControllerNames.JOINT_POSITION,
     ControllerNames.IK,
     ControllerNames.OPERATIONAL_SPACE,
     ControllerNames.TASK_IMPEDANCE,

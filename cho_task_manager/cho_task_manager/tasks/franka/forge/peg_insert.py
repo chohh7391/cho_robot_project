@@ -48,7 +48,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
             name="Go_Home_Init",
             target_joints=PEG_INSERT_FRANKA_DEFAULT_POSITION,
             controller_name=ControllerNames.JOINT_IMPEDANCE,
-            duration=4.0
+            duration=3.0
         ),
         GripperActionBehavior(name="Open_Gripper_Init", grasp=False)
     ])
@@ -65,7 +65,7 @@ def create_franka_peg_insert_tree(robot_config=None) -> py_trees.behaviour.Behav
             target_pose=PEG_INSERT_FRANKA_APPROACH_POSE,
             relative=False,
             controller_name=ControllerNames.TASK_QP,
-            duration=4.0
+            duration=3.0
         ),
         GripperActionBehavior(
             name="Close_Gripper",

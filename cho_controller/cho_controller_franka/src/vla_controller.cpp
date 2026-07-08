@@ -226,12 +226,12 @@ controller_interface::return_type VLAController::update(
       // 4. 관절 속도 계산 (Joint Velocity)
       Vector7d dq_des = J_pinv * v_des;
 
-      // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
-      Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
-      Vector7d q_err = default_dof_pos_ - q; // 초기 자세로 돌아가려는 힘
-      Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
+      // // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
+      // Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
+      // Vector7d q_err = default_dof_pos_ - q; // 초기 자세로 돌아가려는 힘
+      // Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
 
-      dq_des += N * dq_null;
+      // dq_des += N * dq_null;
 
       // 6. 위치 적분 (Euler Integration)
       double dt = period.seconds();

@@ -1,11 +1,13 @@
 from cho_task_manager.tasks.franka import (
-    create_franka_gear_mesh_tree,
-    create_franka_pick_and_place_tree,
+    # forge
     create_franka_peg_insert_tree,
+    create_franka_gear_mesh_tree,
     create_franka_nut_thread_tree,
+    # pick place
+    create_franka_pick_place_tree,
 )
 from cho_task_manager.tasks.ur import (
-    create_ur_pick_and_place_tree,
+    create_ur_pick_place_tree,
     create_ur_multi_move_tree,
 )
 
@@ -13,13 +15,15 @@ from cho_task_manager.tasks.ur import (
 # robot_type -> {task_name -> tree builder}
 _TASK_REGISTRY = {
     'franka': {
-        'pick_and_place': create_franka_pick_and_place_tree,
+        # forge
         'peg_insert': create_franka_peg_insert_tree,
         'gear_mesh': create_franka_gear_mesh_tree,
         'nut_thread': create_franka_nut_thread_tree,
+        # pick place
+        'pick_place': create_franka_pick_place_tree,
     },
     'ur5e': {
-        'pick_and_place': create_ur_pick_and_place_tree,
+        'pick_place': create_ur_pick_place_tree,
         'multi_move': create_ur_multi_move_tree,
     },
 }

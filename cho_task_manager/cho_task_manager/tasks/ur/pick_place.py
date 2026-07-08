@@ -13,7 +13,7 @@ UR5E_HOME_POSITION = make_joint_state([0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0
 # ==========================================
 # 🦾 UR5e Pick and Place 트리 조립
 # ==========================================
-def create_ur_pick_and_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
+def create_ur_pick_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
     joint_controller = robot_config["joint_space"]
     task_controller = robot_config["task_space"]
 
