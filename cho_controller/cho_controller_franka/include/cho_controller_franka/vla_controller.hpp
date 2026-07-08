@@ -34,6 +34,13 @@ private:
     // joint-space position 명령의 slew-rate 제한 (rad/s). 0 이하이면 비활성.
     double max_joint_vel_ {0.0};
 
+    // Open-loop joint reference for position control_mode. Seeded at the activation
+    // pose and integrated ONLY while a VLA goal is active; frozen when idle so the
+    // arm holds exactly instead of creeping on measured-position feedback.
+    // (mirrors task_space_ik_controller's q_ref_ pattern)
+    Vector7d q_ref_;
+    bool q_ref_init_ {false};
+
     Vector6d default_kp_task_;
     Vector6d default_kd_task_;
     Vector6d current_kp_task_;

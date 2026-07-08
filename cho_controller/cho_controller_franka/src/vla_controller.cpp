@@ -76,6 +76,11 @@ CallbackReturn VLAController::on_activate(
 
   dq_filtered_.setZero();
 
+  // Seed the open-loop position reference at the activation configuration so the
+  // very first update() commands exactly where the arm already is (no startup jump/creep).
+  q_ref_ = state_.q_arm_init;
+  q_ref_init_ = true;
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -91,8 +96,10 @@ controller_interface::return_type VLAController::update(
   // 제어 모드 선택 (Action vs Default)
   // action_space ("task" | "joint") 는 현재 실행 중인 VLA 명령이 결정한다.
   // ----------------------------------------------------
+  const bool vla_running = action_server_ && action_server_->is_running();
+
   std::string action_space = "task";
-  if (action_server_ && action_server_->is_running()) {
+  if (vla_running) {
     action_server_->compute(time, state_);
     action_space = action_server_->action_space();
     current_kp_task_ = kp_task_;
@@ -184,61 +191,68 @@ controller_interface::return_type VLAController::update(
     
 
   } else {
-    Vector7d q_cmd;
-
-    if (action_space == "joint") {
-      // ----- Joint space: 목표 관절각으로 가되, 속도(slew-rate)를 제한 -----
-      // q_arm_des 가 chunk 경계 등에서 튀어도 가속도 스파이크(=떨림)가 나지 않도록
-      // 측정 관절각 기준으로 한 사이클당 최대 이동량을 클램프한다. (Diff-IK 의 q+dq*dt 와 동일 효과)
-      if (max_joint_vel_ > 0.0) {
-        const double max_step = max_joint_vel_ * period.seconds();
-        Vector7d step = state_.q_arm_des - state_.q_arm;
-        for (int i = 0; i < num_dof_; ++i) {
-          step(i) = std::clamp(step(i), -max_step, max_step);
-        }
-        q_cmd = state_.q_arm + step;
-      } else {
-        q_cmd = state_.q_arm_des;
-      }
-    } else {
-      // ----- Task space: Differential IK -----
-      const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Body Jacobian
-      const pinocchio::SE3 & H_ee = state_.H_ee;
-      const Vector7d & q = state_.q_arm;
-
-      // 1. Task Space Error 계산 (Local Frame 기준)
-      Vector6d error;
-      error.head<3>() = H_ee.rotation().transpose() * (state_.H_ee_des.translation() - H_ee.translation());
-      pinocchio::SE3::Matrix3 R_err = H_ee.rotation().transpose() * state_.H_ee_des.rotation();
-      error.tail<3>() = pinocchio::log3(R_err);
-
-      // 2. Desired Task Velocity (P Control)
-      // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
-      Vector6d v_des = current_kp_task_.cwiseProduct(error);
-
-      // 3. Damped Least Squares (DLS) 의사역행렬 계산
-      // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다 (Pink 컨트롤러의 하위호환 역할).
-      double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
-      Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-      JJt.diagonal().array() += lambda;
-      Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
-
-      // 4. 관절 속도 계산 (Joint Velocity)
-      Vector7d dq_des = J_pinv * v_des;
-
-      // // 5. Null-space Projection (남는 자유도로 로봇의 기본 자세 유지)
-      // Eigen::Matrix<double, 7, 7> N = Eigen::Matrix<double, 7, 7>::Identity() - J_pinv * J;
-      // Vector7d q_err = default_dof_pos_ - q; // 초기 자세로 돌아가려는 힘
-      // Vector7d dq_null = kp_null_ * q_err; // kp_null_를 P-gain처럼 사용
-
-      // dq_des += N * dq_null;
-
-      // 6. 위치 적분 (Euler Integration)
-      double dt = period.seconds();
-      q_cmd = q + dq_des * dt;
+    // ----- Position control: command an OPEN-LOOP joint reference -----
+    // q_ref_ is integrated ONLY while a VLA goal is active; when idle it is FROZEN.
+    // Rebuilding the command from the *measured* joint position every cycle
+    // (q_measured + dq) integrates the servo tracking lag and makes the arm creep to
+    // a nearby pose even with no command. Holding an open-loop reference removes that
+    // measured coupling entirely. (cf. task_space_ik_controller)
+    if (!q_ref_init_) {
+      q_ref_ = state_.q_arm;
+      q_ref_init_ = true;
     }
 
+    if (vla_running) {
+      if (action_space == "joint") {
+        // ----- Joint space: 목표 관절각으로 가되, 속도(slew-rate)를 제한 -----
+        // q_arm_des 가 chunk 경계 등에서 튀어도 가속도 스파이크(=떨림)가 나지 않도록
+        // 레퍼런스 기준으로 한 사이클당 최대 이동량을 클램프한다.
+        Vector7d step = state_.q_arm_des - q_ref_;
+        if (max_joint_vel_ > 0.0) {
+          const double max_step = max_joint_vel_ * period.seconds();
+          for (int i = 0; i < num_dof_; ++i) {
+            step(i) = std::clamp(step(i), -max_step, max_step);
+          }
+        }
+        q_ref_ += step;
+      } else {
+        // ----- Task space: Differential IK (evaluated at the REFERENCE config) -----
+        // FK/Jacobian at q_ref_ (not measured) so the open-loop reference stays free
+        // of encoder noise, exactly like task_space_ik_controller.
+        Eigen::VectorXd q_full = state_.q;
+        q_full.head(num_dof_) = q_ref_;
+        pinocchio::SE3 H_ref;
+        Eigen::Matrix<double, 6, 7> J;  // 6x7 Body Jacobian (LOCAL)
+        FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
+
+        // 1. Task Space Error 계산 (Local Frame 기준)
+        Vector6d error;
+        error.head<3>() = H_ref.rotation().transpose() * (state_.H_ee_des.translation() - H_ref.translation());
+        pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * state_.H_ee_des.rotation();
+        error.tail<3>() = pinocchio::log3(R_err);
+
+        // 2. Desired Task Velocity (P Control)
+        // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
+        Vector6d v_des = current_kp_task_.cwiseProduct(error);
+
+        // 3. Damped Least Squares (DLS) 의사역행렬 계산
+        // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다.
+        double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
+        Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+        JJt.diagonal().array() += lambda;
+        Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
+
+        // 4. 관절 속도 계산 (Joint Velocity)
+        Vector7d dq_des = J_pinv * v_des;
+
+        // 5. 위치 적분 (Euler Integration) — 레퍼런스에 누적
+        q_ref_ += dq_des * period.seconds();
+      }
+    }
+    // else: idle -> q_ref_ 를 그대로 유지(freeze)하여 활성화 자세를 정확히 홀드한다.
+
     // apply joint limit
+    Vector7d q_cmd = q_ref_;
     FrankaBaseController::clip_position(q_cmd);
 
     // apply position command to robot
