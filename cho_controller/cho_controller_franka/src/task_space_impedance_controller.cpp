@@ -36,6 +36,7 @@ CallbackReturn TaskSpaceImpedanceController::on_init() {
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
     auto_declare<std::vector<double>>("default_dof_pos", {});
+    auto_declare<bool>("use_nullspace_posture", false);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -57,6 +58,7 @@ CallbackReturn TaskSpaceImpedanceController::on_configure(
 
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_impedance_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -69,7 +71,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  // 1. 목표 포즈 업데이트
+  // 1. Update the target pose from the action server
   if (action_server_ && action_server_->is_running()) {
     action_server_->compute(time, state_);
     auto trajectory_sample = action_server_->trajectory_->computeNext();
@@ -80,7 +82,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
     state_.H_ee_des = state_.H_ee_ref;
   }
 
-  // --- 역학 계산 시작 ---
+  // --- Dynamics quantities ---
   const Matrix7d & M = state_.M_arm;
   Matrix7d M_inv = M.inverse();
   
@@ -94,13 +96,13 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   Eigen::Matrix<double, 7, 6> J_T = J.transpose();
 
 
-  // 2. Pose Error 계산 (World frame 기준)
+  // 2. Pose error (world frame)
   Vector3d pos_error = state_.H_ee_des.translation() - state_.H_ee.translation();
   
   Eigen::Matrix3d R_err = state_.H_ee_des.rotation() * R_curr.transpose();
   Eigen::AngleAxisd axis_angle_err(R_err);
   
-  // 회전 특이점 방어 로직 추가
+  // Guard against the axis-angle singularity at zero rotation
   Vector3d rot_error = Vector3d::Zero();
   if (std::abs(axis_angle_err.angle()) > 1e-5) {
       rot_error = axis_angle_err.axis() * axis_angle_err.angle();
@@ -110,7 +112,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   delta_pose.head<3>() = pos_error;
   delta_pose.tail<3>() = rot_error;
 
-  // 3. Task Wrench 계산 (World frame 기준)
+  // 3. Task wrench (world frame)
   Vector6d ee_vel = J * state_.v_arm;
   Vector6d task_wrench;
   task_wrench = kp_task_.cwiseProduct(delta_pose) - kd_task_.cwiseProduct(ee_vel);
@@ -118,27 +120,29 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // 4. Motion Torque
   Vector7d torque_motion = J_T * task_wrench;
 
-  // Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J_T).inverse();
-  // Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
+  // 5. Optional null-space posture torque (use_nullspace_posture parameter):
+  // dynamically-consistent projection of a PD pull toward default_dof_pos_.
+  Vector7d torque_null = Vector7d::Zero();
+  if (use_nullspace_posture_) {
+    Eigen::Matrix<double, 6, 6> Lambda_inv = J * M_inv * J_T;
+    Lambda_inv.diagonal().array() += 1e-4;  // regularize near singularities
+    Eigen::Matrix<double, 6, 6> Lambda =
+        Lambda_inv.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
+    Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
 
-  // // Null-space 가속도 지령
-  // Vector7d q_error = default_dof_pos_ - state_.q_arm;
-  // for(int i = 0; i < 7; ++i) {
-  //     q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
-  // }
-  // Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+    Vector7d q_error = default_dof_pos_ - state_.q_arm;
+    for (int i = 0; i < 7; ++i) {
+      q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+    }
+    Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+    Vector7d u_null_torque = M * u_null_accel;
+    torque_null = (Matrix7d::Identity() - J_T * j_eef_inv) * u_null_torque;
+  }
 
-  // // Null-space 토크 변환
-  // Vector7d u_null_torque = M * u_null_accel;
+  // 6. Total torque
+  Vector7d torque_desired = torque_motion + torque_null + state_.nle;
 
-  // // Null-space Projection
-  // Matrix7d I = Matrix7d::Identity();
-  // Vector7d torque_null = (I - J_T * j_eef_inv) * u_null_torque;
-
-  // 6. 최종 토크 합산
-  Vector7d torque_desired = torque_motion /*+ torque_null*/ + state_.nle;
-
-  // 7. 안전 클리핑 및 전송
+  // 7. Safety clipping and command write
   FrankaBaseController::clip_torque(torque_desired);
   for (int i = 0; i < 7; ++i) {
     command_interfaces_[i].set_value(torque_desired(i));
@@ -168,6 +172,7 @@ bool TaskSpaceImpedanceController::assign_parameters() {
   kp_null_ = kp_null;
   kd_null_ = kd_null;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
+  use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
 
   return true;
 }

@@ -49,7 +49,7 @@ CallbackReturn JointSpaceQPController::on_configure(
     return CallbackReturn::FAILURE;
   }
 
-  // 1. Posture Task 초기화
+  // 1. Posture task setup
   // Posture gains must match the model's actuated-joint count (na), which is > 7
   // when the URDF carries movable gripper joints. Size the gain vectors to na and
   // fill only the leading num_dof_ arm entries (gripper rows stay 0 = uncontrolled),
@@ -63,19 +63,20 @@ CallbackReturn JointSpaceQPController::on_configure(
   task_joint_posture_->Kp(kp_joint_full);
   task_joint_posture_->Kd(kd_joint_full);
 
-  // 2. TSID Formulation 초기화
+  // 2. TSID formulation setup
   double time_ = 0.0;
   tsid_ = std::make_shared<InverseDynamicsFormulationAccForce>("tsid", *robot_);
   tsid_->computeProblemData(time_, state_.q, state_.v);
   data_ = tsid_->data(); // overwrite
 
-  // 3. QP Solver 초기화
+  // 3. QP solver setup
   solver_ = SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog");
 
   dq_filtered_.setZero();
 
   action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "/controller_action_server/joint_space_qp_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -90,9 +91,9 @@ CallbackReturn JointSpaceQPController::on_activate(
   state_.v_arm_des = state_.v_arm_init;
   dq_filtered_.setZero();
 
-  // 활성화 시 Task 등록
+  // Register the task on activation
   tsid_->removeTask("task-posture");
-  tsid_->addMotionTask(*task_joint_posture_, 1.0, 0); // 우선순위 0
+  tsid_->addMotionTask(*task_joint_posture_, 1.0, 0); // priority level 0
 
   return CallbackReturn::SUCCESS;
 }
@@ -106,7 +107,7 @@ controller_interface::return_type JointSpaceQPController::update(
   }
 
   // ----------------------------------------------------
-  // 속도 필터링 및 실무적 보정 항
+  // Velocity filtering and practical correction terms
   // ----------------------------------------------------
   const double kAlpha = 0.99;
   dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
@@ -122,41 +123,41 @@ controller_interface::return_type JointSpaceQPController::update(
   kd_joint_modified(6) = 0.2;
 
   // ----------------------------------------------------
-  // Action Server 궤적 추종
+  // Track the action-server trajectory
   // ----------------------------------------------------
   action_server_->compute(time, state_);
   
-  // [수정 1] 샘플 크기를 로봇 전체 관절 수(9개)로 생성
+  // Build the sample at the model's full actuated size (arm + gripper)
   int model_na = robot_->na();
   cho_controller::common::trajectory::TrajectorySample sample_posture(model_na);
 
   if (action_server_->is_running()) {
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     
-    // [수정 2] 팔 부분(Head)만 궤적 값으로 채움
+    // Fill only the arm entries (head) from the trajectory
     sample_posture.pos.head(num_dof_) = trajectory_sample.pos;
     sample_posture.vel.head(num_dof_) = trajectory_sample.vel;
     
-    // [수정 3] 나머지 그리퍼 부분(Tail)은 0으로 채움
+    // Zero the remaining gripper entries (tail)
     sample_posture.pos.tail(model_na - num_dof_).setZero();
     sample_posture.vel.tail(model_na - num_dof_).setZero();
 
     state_.q_arm_des = trajectory_sample.pos; 
   } else {
-    // Action이 없을 때는 제자리 유지
+    // No active goal: hold the current posture
     sample_posture.pos.head(num_dof_) = state_.q_arm_des;
-    sample_posture.vel.head(num_dof_).setZero(); // 팔 속도 0
+    sample_posture.vel.head(num_dof_).setZero(); // zero arm velocity
     
-    // 그리퍼 부분 0으로 채움
+    // zero the gripper entries
     sample_posture.pos.tail(model_na - num_dof_).setZero();
     sample_posture.vel.tail(model_na - num_dof_).setZero();
   }
   
-  // 이제 크기가 9개이므로 Assertion 통과
+  // Full-size sample now matches the task dimension (assertion passes)
   task_joint_posture_->setReference(sample_posture);
 
   // ----------------------------------------------------
-  // TSID Solver 실행
+  // TSID solve
   // ----------------------------------------------------
   Vector7d acc_arm = Vector7d::Zero();
   try {
@@ -180,7 +181,7 @@ controller_interface::return_type JointSpaceQPController::update(
   }
 
   // ----------------------------------------------------
-  // 최종 토크 계산
+  // Final torque computation
   // ----------------------------------------------------
   Vector7d torque_desired;
   torque_desired = M_modified * acc_arm;

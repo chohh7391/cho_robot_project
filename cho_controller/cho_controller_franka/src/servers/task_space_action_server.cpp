@@ -54,6 +54,12 @@ rclcpp_action::GoalResponse TaskSpaceActionServer::handle_goal(
         }
     }
     // Single-goal server: busy unless fully idle.
+    if (!controller_ready()) {
+        RCLCPP_WARN(node_->get_logger(),
+            "[%s] Goal rejected: controller is not active (activate it first).", action_name_.c_str());
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+
     if (goal_busy()) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());
         return rclcpp_action::GoalResponse::REJECT;

@@ -86,7 +86,18 @@ public:
         return phase_.load() == static_cast<uint8_t>(GoalPhase::kActive);
     }
 
+    // Attach the owning controller's activity flag (FrankaBaseController::
+    // controller_active_). While the controller is INACTIVE its update()/compute()
+    // never run, so an accepted goal would hang forever -- handle_goal implementations
+    // gate on controller_ready() to REJECT instead.
+    void attach_activity_flag(const std::atomic<bool>* flag) { controller_active_flag_ = flag; }
+
 protected:
+    bool controller_ready() const {
+        return controller_active_flag_ == nullptr ||
+               controller_active_flag_->load(std::memory_order_acquire);
+    }
+
     // Whether the controller runs in position mode (vs. effort/torque).
     bool is_position_mode() const { return control_mode_ == "position"; }
 
@@ -129,6 +140,7 @@ protected:
     uint64_t rt_seen_epoch_ {0};                       // RT-thread-only
     std::shared_ptr<GoalHandle> pending_goal_handle_;  // executor/finisher-owned
     rclcpp::TimerBase::SharedPtr finisher_timer_;
+    const std::atomic<bool>* controller_active_flag_{nullptr};  // see attach_activity_flag()
 
     // Executor side.
     bool goal_busy() const {

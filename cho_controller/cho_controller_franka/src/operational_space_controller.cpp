@@ -36,6 +36,7 @@ CallbackReturn OperationalSpaceController::on_init() {
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
     auto_declare<std::vector<double>>("default_dof_pos", {});
+    auto_declare<bool>("use_nullspace_posture", false);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -57,6 +58,7 @@ CallbackReturn OperationalSpaceController::on_configure(
 
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/operational_space_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   dq_filtered_.setZero();
 
@@ -131,15 +133,20 @@ controller_interface::return_type OperationalSpaceController::update(
   Vector6d desired_acc = kp_task_.cwiseProduct(error) + kd_task_.cwiseProduct(error_dot);
   Vector6d F_task = lambda * desired_acc;
 
-  // Eigen::Matrix<double, 7, 6> J_trans_lambda = J.transpose() * lambda;
-  // Eigen::Matrix<double, 6, 7> J_M_inv = J * M_inv;
+  // Optional null-space posture torque (use_nullspace_posture parameter):
+  // dynamically-consistent projection of a PD pull toward default_dof_pos_.
+  Vector7d tau_null = Vector7d::Zero();
+  if (use_nullspace_posture_) {
+    Matrix7d N_T = Matrix7d::Identity() - J.transpose() * lambda * J * M_inv;
+    Vector7d q_error = default_dof_pos_ - q;
+    for (int i = 0; i < num_dof_; ++i) {
+      q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+    }
+    Vector7d tau_0 = kp_null_ * q_error - kd_null_ * v;
+    tau_null = N_T * tau_0;
+  }
 
-  // Matrix7d N_T = Matrix7d::Identity() - J_trans_lambda * J_M_inv;
-  // Vector7d q_nom = default_dof_pos_;
-  // Vector7d tau_0 = kp_null_ * (q_nom - q) - kd_null_ * v;
-  // Vector7d tau_null = N_T * tau_0;
-
-  torque_desired = J.transpose() * F_task /*+ tau_null*/ + state_.nle;
+  torque_desired = J.transpose() * F_task + tau_null + state_.nle;
   torque_desired -= kd_joint_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
   // clip torque
@@ -174,6 +181,7 @@ bool OperationalSpaceController::assign_parameters() {
   kp_null_ = kp_null;
   kd_null_ = kd_null;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
+  use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
 
   return true;
 }

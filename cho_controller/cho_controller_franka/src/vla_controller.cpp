@@ -40,6 +40,7 @@ CallbackReturn VLAController::on_init() {
     auto_declare<double>("max_joint_vel", 1.5);
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
+    auto_declare<bool>("use_nullspace_posture", false);
     auto_declare<std::vector<double>>("default_dof_pos", {});
     auto_declare<std::vector<double>>("default_kp_task", {});
     auto_declare<std::vector<double>>("default_kd_task", {});
@@ -64,6 +65,7 @@ CallbackReturn VLAController::on_configure(
   // action server
   action_server_ = std::make_shared<VLAActionServer>(get_node(), "/controller_action_server/vla_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -175,21 +177,28 @@ controller_interface::return_type VLAController::update(
 
       Vector7d torque_motion = J.transpose() * task_wrench;
 
-      // Null-space posture term, disabled by owner decision (see
-      // CONTROLLER_STABILITY_TODO.md). If re-enabled it needs:
-      //   const Matrix7d & M = state_.M_arm;  Matrix7d M_inv = M.inverse();
-      // Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J.transpose()).inverse();
-      // Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
-      // Vector7d q_error = default_dof_pos_ - state_.q_arm;
-      // for(int i = 0; i < 7; ++i) {
-      //   q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
-      // }
-      // Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
-      // Vector7d u_null_torque = M * u_null_accel;
-      // Matrix7d I = Matrix7d::Identity();
-      // Vector7d torque_null = (I - J.transpose() * j_eef_inv) * u_null_torque;
+      // Optional null-space posture torque (use_nullspace_posture parameter,
+      // default false = the long-standing owner decision to run without it).
+      Vector7d torque_null = Vector7d::Zero();
+      if (use_nullspace_posture_) {
+        const Matrix7d & M = state_.M_arm;
+        Matrix7d M_inv = M.llt().solve(Matrix7d::Identity());
+        Eigen::Matrix<double, 6, 6> Lambda_inv = J * M_inv * J.transpose();
+        Lambda_inv.diagonal().array() += 1e-4;  // regularize near singularities
+        Eigen::Matrix<double, 6, 6> Lambda =
+            Lambda_inv.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
+        Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
 
-      torque_desired = torque_motion /*+ torque_null*/ + state_.nle;
+        Vector7d q_error = default_dof_pos_ - state_.q_arm;
+        for (int i = 0; i < 7; ++i) {
+          q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+        }
+        Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+        Vector7d u_null_torque = M * u_null_accel;
+        torque_null = (Matrix7d::Identity() - J.transpose() * j_eef_inv) * u_null_torque;
+      }
+
+      torque_desired = torque_motion + torque_null + state_.nle;
     }
 
     FrankaBaseController::clip_torque(torque_desired);
@@ -379,6 +388,7 @@ bool VLAController::assign_parameters() {
   kp_joint_vel_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(kp_joint_vel.data());
   kp_null_ = kp_null;
   kd_null_ = kd_null;
+  use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
   max_joint_vel_ = max_joint_vel;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
   default_kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(default_kp_task.data());

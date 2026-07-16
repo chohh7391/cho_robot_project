@@ -83,6 +83,7 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State&) {
   action_server_ = std::make_shared<GripperActionServer>(get_node(), "/controller_action_server/gripper_controller");
   action_server_->set_report_failure(get_node()->get_parameter("report_failure").as_bool());
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return nullptr != gripper_grasp_action_client_ && nullptr != gripper_move_action_client_ &&
                  nullptr != gripper_homing_action_client_ && nullptr != gripper_stop_client_
@@ -115,11 +116,15 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State&) {
   }
   state_.is_grasp = false;
   state_.gripper_success = false;
+  // GripperController skips the FrankaBaseController lifecycle (no arm
+  // interfaces), so maintain the activity flag directly.
+  controller_active_.store(true, std::memory_order_release);
   return CallbackReturn::SUCCESS;
 }
 
 controller_interface::CallbackReturn GripperController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
+  controller_active_.store(false, std::memory_order_release);
   if (gripper_stop_client_->service_is_ready()) {
     std_srvs::srv::Trigger::Request::SharedPtr request =
         std::make_shared<std_srvs::srv::Trigger::Request>();

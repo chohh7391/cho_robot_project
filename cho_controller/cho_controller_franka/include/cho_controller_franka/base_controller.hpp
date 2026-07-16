@@ -120,6 +120,12 @@ public:
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
+    // Clamp an arm configuration to the model's absolute joint position limits
+    // (with a small safety margin). Open-loop reference integrators (diff-IK)
+    // must call this after every integration step: without it, chasing an
+    // unreachable Cartesian target walks the reference through a joint limit.
+    void clamp_to_joint_limits(Vector7d & q) const;
+
     // Position a fresh open-loop reference should seed from on controller activation.
     // Prefers whatever the PREVIOUS controller left on the shared position command
     // interface (this call assumes num_dof_ position-type command interfaces, indexed
@@ -166,6 +172,17 @@ protected:
 
     const Eigen::Matrix<double, 7, 1> torque_limits_ {87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0};
 
+    // Absolute joint position limits from the model (arm joints, margin applied),
+    // cached in on_configure for clamp_to_joint_limits().
+    Vector7d q_lower_limits_{Vector7d::Zero()};
+    Vector7d q_upper_limits_{Vector7d::Zero()};
+
+    // True exactly while this controller is ACTIVE (set/cleared in the base
+    // on_activate/on_deactivate). Action servers read it via an attached pointer
+    // to REJECT goals while the controller is inactive (compute() would never
+    // run, so the goal would hang forever).
+    std::atomic<bool> controller_active_{false};
+
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
     rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
     // Realtime-safe wrappers: the 1 kHz update() publishes through these (lock-free
@@ -184,6 +201,11 @@ protected:
     // null space
     double kp_null_;
     double kd_null_;
+    // Toggle for the null-space posture term in the redundant-DoF controllers
+    // (task_space_qp / task_space_impedance / operational_space / vla effort).
+    // Each controller declares and reads its own "use_nullspace_posture"
+    // parameter; default false preserves the pre-toggle behavior.
+    bool use_nullspace_posture_{false};
 
     // varibles for controllers
     Vector7d dq_filtered_;

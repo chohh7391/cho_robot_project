@@ -113,7 +113,7 @@ void JointTrajectoryController::start_srv_cb(
         return;
     }
 
-    start_time_ = get_node()->now(); // 서비스가 호출된 시점을 시작 시간으로 설정
+    start_time_ = get_node()->now(); // trajectory start time = service call time
     is_started_ = true;
     
     response->success = true;
@@ -165,18 +165,18 @@ void JointTrajectoryController::setup_trajectory_params()
 {
     active_params_.clear();
 
-    // 논문 Table II 정밀 반영 
-    active_params_[2] = { {2, M_PI/12.0, 0.0, 0.0} }; // k를 2로 수정
+    // Matches Table II of the paper exactly 
+    active_params_[2] = { {2, M_PI/12.0, 0.0, 0.0} }; // k corrected to 2
     active_params_[3] = { {2, M_PI/8.0,  0.0, 0.0} };
     active_params_[4] = { {2, M_PI/16.0, 0.0, 0.0} };
     
-    // Joint 5: k=1(sin) 성분 pi/3, k=6(cos) 성분 pi/32 
+    // Joint 5: k=1 (sin) amplitude pi/3, k=6 (cos) amplitude pi/32 
     active_params_[5] = { {1, M_PI/3.0, 0.0, 0.0}, {6, 0.0, M_PI/32.0, 0.0} };
     
-    // Joint 6: k=1(sin) 성분 pi/4, k=8(cos) 성분 pi/6 
+    // Joint 6: k=1 (sin) amplitude pi/4, k=8 (cos) amplitude pi/6 
     active_params_[6] = { {1, M_PI/4.0, 0.0, 0.0}, {8, 0.0, M_PI/64.0, 0.0} };
     
-    // Joint 7: k=1(sin) 성분 pi/2, k=4(cos) 성분 pi/16 
+    // Joint 7: k=1 (sin) amplitude pi/2, k=4 (cos) amplitude pi/16 
     active_params_[7] = { {1, M_PI/2.5, 0.0, 0.0}, {4, 0.0, M_PI/16.0, 0.0} };
 
     f_hz_.setConstant(0.33); 
@@ -195,39 +195,39 @@ void JointTrajectoryController::compute_desired_q(double & tau)
         tau = duration_;
     }
 
-    // 논문 기본 주파수 f = 0.33 Hz (T=6s 기준 동작 2회 반복) [cite: 300]
+    // Paper's base frequency f = 0.33 Hz (two repetitions over T=6s) [cite: 300]
     const double wf_base = 2.0 * M_PI * f_hz_(0);
 
-    // --- [수정] 논문 규격을 반영한 C4-Smooth 사다리꼴 Fade 프로파일 모사 ---
+    // --- C4-smooth trapezoidal fade profile per the paper's specification ---
     double fade = 1.0;
-    const double ramp_time = 1.0; // 시작과 종료 시 부드럽게 가감속할 시간 (1초)
+    const double ramp_time = 1.0; // smooth accel/decel window at start and end [s]
 
     if (tau < ramp_time) {
-        // 1. 시작 구간: 0초부터 ramp_time까지 매끄럽게 가속 (0.0 -> 1.0)
+        // 1. Start segment: smooth ramp-up from 0 to ramp_time (0.0 -> 1.0)
         fade = 0.5 * (1.0 - std::cos(M_PI * tau / ramp_time));
     } else if (tau > duration_ - ramp_time) {
-        // 2. 종료 구간: 마칠 때 매끄럽게 감속 (1.0 -> 0.0) 
+        // 2. End segment: smooth ramp-down at the finish (1.0 -> 0.0) 
         double t_end = duration_ - tau;
         fade = 0.5 * (1.0 - std::cos(M_PI * t_end / ramp_time));
     } else {
-        // 3. 중간 구간: Table II에 지정된 진폭을 100% 온전하게 유지하며 진동
+        // 3. Middle segment: oscillate at the full Table II amplitude
         fade = 1.0;
     }
 
     Eigen::VectorXd q = state_.q_arm_init; 
 
-    // 각 조인트 i에 대해 논문 식 (25) 계산 
+    // Evaluate the paper's Eq. (25) for each joint i 
     for (auto const& [joint_num, harmonics] : active_params_) {
         int idx = joint_num - 1; // 1-based to 0-based
         if (idx >= num_dof_) continue;
 
         double sum_disp = 0.0;
         for (const auto& h : harmonics) {
-            // 헤더의 변수명 h.phi_val, h.rho_val, h.sigma_val 사용 
+            // Uses the header's h.phi_val, h.rho_val, h.sigma_val 
             double angle = h.k * wf_base * tau + h.phi_val;
             sum_disp += h.rho_val * std::sin(angle) + h.sigma_val * std::cos(angle);
         }
-        // 시작 시 충격을 방지하기 위해 fade 가중치를 곱함 
+        // Multiply by the fade weight to avoid a jerk at start 
         q(idx) += sum_disp * fade;
     }
 
@@ -243,7 +243,7 @@ void JointTrajectoryController::log_all_terms(const double world_time_s, const d
 
     if (tau >= duration_ && !is_saved_) {
         save_log_to_file();
-        is_saved_ = true; // 중복 저장 방지
+        is_saved_ = true; // prevent duplicate saves
     }
 }
 

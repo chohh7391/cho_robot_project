@@ -154,6 +154,8 @@
       kd_task: [34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719]
       kp_null: 10.0
       kd_null: 6.3246
+      # enable after validating on the real robot (changes torque behavior)
+      use_nullspace_posture: false
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
 
 /**:
@@ -164,6 +166,8 @@
       kd_task: [20.0, 20.0, 20.0, 56.57, 56.57, 56.57]
       kp_null: 10.0
       kd_null: 1.0
+      # enable after validating on the real robot (changes torque behavior)
+      use_nullspace_posture: false
       default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
 
 /**:
@@ -181,6 +185,10 @@
       kd_task: [20.0, 20.0, 20.0, 56.57, 56.57, 56.57]
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
       kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      # ACTION-mode null-space posture task. Verified in MuJoCo; flip to true
+      # after validating on the real robot (changes torque behavior).
+      use_nullspace_posture: false
+      nullspace_posture_weight: 1.0e-3
 
 /**:
   vla_controller:
@@ -190,6 +198,8 @@
       kd_task: [47.54, 47.54, 47.54, 10.58, 10.58, 10.58]  # [20.0, 20.0, 40.0, 10.95, 10.95, 10.95]
       kp_null: 10.0
       kd_null: 6.3246
+      # null-space posture kept OFF (owner decision; toggle available)
+      use_nullspace_posture: false
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
       default_kd_task: [34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719]

@@ -17,6 +17,12 @@ rclcpp_action::GoalResponse GripperActionServer::handle_goal(
       action_name_.c_str());
   }
 
+  if (!controller_ready()) {
+    RCLCPP_WARN(node_->get_logger(),
+      "[%s] Goal rejected: controller is not active (activate it first).", action_name_.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   // Single-goal server: busy unless fully idle.
   if (goal_busy()) {
     RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());

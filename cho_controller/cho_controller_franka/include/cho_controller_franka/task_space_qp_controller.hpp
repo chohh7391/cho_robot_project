@@ -42,9 +42,14 @@ private:
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 
   bool assign_parameters();
-  void switch_to_action_control();
+  void switch_to_action_control(const rclcpp::Time & time);
   void switch_to_default_control(const rclcpp::Time & time);
   void update_default_control_reference(const rclcpp::Time & time);
+
+  // ACTION-mode null-space posture task (level-1 cost under the SE3 constraint):
+  // keeps the elbow near the switch-time configuration on long motions.
+  // The on/off flag itself (use_nullspace_posture_) lives in FrankaBaseController.
+  double nullspace_posture_weight_{1e-3};
 
   std::shared_ptr<TaskSE3Equality> task_se3_equality_;
   std::shared_ptr<TaskJointPosture> task_joint_posture_; // for default control

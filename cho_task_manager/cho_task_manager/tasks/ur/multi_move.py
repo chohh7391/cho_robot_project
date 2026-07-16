@@ -5,8 +5,8 @@ from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
 
 UR5E_HOME_POSITION = make_joint_state([0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
 
-# 순회할 절대 좌표 waypoint 들 (base 기준, [x, y, z]).
-# UR5e 작업 반경(~0.85 m) 안에서 사각형 경로 + 중앙 복귀.
+# Absolute waypoints to visit (base frame, [x, y, z]).
+# Rectangular path within the UR5e reach (~0.85 m), then back to center.
 UR5E_WAYPOINTS = [
     ("Move_To_P1_Front",       [0.45, 0.0, 0.40]),
     ("Move_To_P2_Front_Left",  [0.45, 0.25, 0.40]),
@@ -18,10 +18,10 @@ UR5E_WAYPOINTS = [
 
 
 # ==========================================
-# 🦾 UR5e Multi-location Move 예제 트리
+# UR5e multi-location move example tree
 # ==========================================
 def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
-    """여러 absolute waypoint 를 순서대로 방문하는 UR5e 예제 task."""
+    """UR5e example task that visits several absolute waypoints in order."""
     joint_controller = robot_config["joint_space"]
     task_controller = robot_config["task_space"]
 
@@ -44,7 +44,7 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
         ),
     ])
 
-    # 2. Waypoint 순회 (task space, absolute)
+    # 2. Waypoint tour (task space, absolute)
     tour_seq = py_trees.composites.Sequence(name="2_Visit_Waypoints", memory=True)
     tour_seq.add_child(
         SwitchControllerServiceBehavior(
@@ -65,7 +65,7 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
             )
         )
 
-    # 3. Home 복귀 (joint space)
+    # 3. Return home (joint space)
     finish_seq = py_trees.composites.Sequence(name="3_Finish", memory=True)
     finish_seq.add_children([
         SwitchControllerServiceBehavior(

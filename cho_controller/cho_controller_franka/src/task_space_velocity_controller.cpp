@@ -56,6 +56,7 @@ CallbackReturn TaskSpaceVelocityController::on_configure(
   action_server_ = std::make_shared<TaskSpaceActionServer>(
       get_node(), "/controller_action_server/task_space_velocity_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -132,6 +133,9 @@ controller_interface::return_type TaskSpaceVelocityController::update(
       dq(i) = std::clamp(dq(i), -max_delta_q_, max_delta_q_);
     }
     q_ref_ += dq;
+    // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
+    // stop at the model's position limits instead of integrating through them.
+    FrankaBaseController::clamp_to_joint_limits(q_ref_);
   }
   prev_running_ = running;
 

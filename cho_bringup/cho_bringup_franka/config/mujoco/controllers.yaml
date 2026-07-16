@@ -137,6 +137,8 @@
       kd_task: [60.0, 60.0, 60.0, 5.0, 5.0, 5.0]
       kp_null: 10.0
       kd_null: 6.3246
+      # null-space posture toward default_dof_pos (verified in MuJoCo)
+      use_nullspace_posture: true
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
 
 /**:
@@ -147,6 +149,8 @@
       kd_task: [60.0, 60.0, 60.0, 33.9, 33.9, 33.9]
       kp_null: 10.0
       kd_null: 2.0
+      # null-space posture toward default_dof_pos (verified in MuJoCo)
+      use_nullspace_posture: true
       default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
 
 /**:
@@ -171,6 +175,10 @@
       kd_task: [20.0, 20.0, 20.0, 56.57, 56.57, 56.57]
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
       kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      # ACTION mode: low-weight null-space posture task (keeps the elbow from
+      # drifting toward joint limits on long motions).
+      use_nullspace_posture: true
+      nullspace_posture_weight: 1.0e-3
 
 /**:
   vla_controller:
@@ -182,6 +190,8 @@
       kp_joint_vel: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
       kp_null: 10.0
       kd_null: 6.3246
+      # null-space posture kept OFF (owner decision; toggle available)
+      use_nullspace_posture: false
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
       default_kd_task: [3.46410162, 3.46410162, 3.46410162, 0.89442719, 0.89442719, 0.89442719]

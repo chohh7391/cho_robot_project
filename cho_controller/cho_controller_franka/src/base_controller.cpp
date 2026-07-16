@@ -87,7 +87,7 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
         }
 
         auto future = parameters_client->get_parameters({"robot_description"});
-        auto result = future.get(); // Gazebo 환경에서는 데드락이 걸리지 않음
+        auto result = future.get(); // does not deadlock in the Gazebo environment
         
         if (result.empty() || result[0].value_to_string().empty()) {
             RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description from robot_state_publisher");
@@ -118,6 +118,13 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     nq_ = robot_->nq();
     nv_ = robot_->nv();
     na_ = robot_->na();
+
+    // Arm joints occupy the first num_dof_ configuration entries (URDF chain order).
+    // Margin covers the physical tracking overshoot when a fast reference ramp is
+    // clamped dead at the boundary (measured ~0.035 rad at 2.5 rad/s in MuJoCo).
+    constexpr double kJointLimitMargin = 0.05;  // [rad]
+    q_lower_limits_ = model_.lowerPositionLimit.head(num_dof_).array() + kJointLimitMargin;
+    q_upper_limits_ = model_.upperPositionLimit.head(num_dof_).array() - kJointLimitMargin;
 
     // find End-Effector Frame ID
     ee_name_ = get_node()->get_parameter("ee_name").as_string();
@@ -168,14 +175,17 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.v_arm_init = state_.v_arm;
   if (nq_ > num_dof_) state_.q_gripper_init = state_.q_gripper;
   state_.H_ee_init = state_.H_ee;
-  // 명령 기준점을 현재 측정값으로 초기화 (clip_position의 rate-limit 기준).
+  // Seed the command reference from the current measurement (rate-limit baseline for clip_position).
   state_.q_arm_ref = state_.q_arm;
+
+  controller_active_.store(true, std::memory_order_release);
 
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn FrankaBaseController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
+  controller_active_.store(false, std::memory_order_release);
   return CallbackReturn::SUCCESS;
 }
 
@@ -344,13 +354,19 @@ Vector7d FrankaBaseController::held_command_position() const
 
 void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 {
-    // 직전 "명령값"(q_arm_ref) 기준으로 per-step 변화량을 eps 이내로 제한하고 기준점을 갱신한다.
-    // 측정값이 아니라 명령값을 기준으로 해야 position actuator가 충분한 추종 오차(=구동력)를
-    // 확보할 수 있고(특히 mujoco), 목표 점프/특이점 튐도 함께 방지된다.
+    // Limit the per-step change to eps around the PREVIOUS COMMAND (q_arm_ref) and
+    // advance that baseline. Rate-limiting against the command (not the measurement)
+    // lets the position actuator keep enough tracking error (= drive force, esp. in
+    // mujoco) while also suppressing target jumps and singularity spikes.
     position = position.array()
                    .max(state_.q_arm_ref.array() - eps)
                    .min(state_.q_arm_ref.array() + eps);
     state_.q_arm_ref = position;
+}
+
+void FrankaBaseController::clamp_to_joint_limits(Vector7d & q) const
+{
+    q = q.array().max(q_lower_limits_.array()).min(q_upper_limits_.array());
 }
 
 void FrankaBaseController::clip_torque(Vector7d & torque)

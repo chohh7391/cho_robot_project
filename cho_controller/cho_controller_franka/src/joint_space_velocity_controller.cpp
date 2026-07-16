@@ -50,6 +50,7 @@ CallbackReturn JointSpaceVelocityController::on_configure(
   action_server_ = std::make_shared<JointSpaceActionServer>(
       get_node(), "/controller_action_server/joint_space_velocity_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }

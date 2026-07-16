@@ -104,6 +104,12 @@ rclcpp_action::GoalResponse VLAActionServer::handle_goal(
 
     // Single-goal server: busy unless fully idle (a goal in a kFinish* phase is
     // still being closed out by the finisher timer, typically for < 5 ms).
+    if (!controller_ready()) {
+        RCLCPP_WARN(node_->get_logger(),
+            "[%s] Goal rejected: controller is not active (activate it first).", action_name_.c_str());
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+
     if (goal_busy()) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());
         return rclcpp_action::GoalResponse::REJECT;

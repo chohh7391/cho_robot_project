@@ -1,7 +1,7 @@
 import py_trees
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
 from controller_manager_msgs.srv import SwitchController
-from builtin_interfaces.msg import Duration 
+from builtin_interfaces.msg import Duration
 from cho_task_manager.utils.controller_names import (
     SWITCH_CONTROLLER_SERVICE,
     EXCLUSIVE_ARM_CONTROLLERS,
@@ -62,7 +62,7 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         return req
 
     def handle_response(self, result):
-        """SwitchController의 결과(result.ok) 판별"""
+        """Judge the SwitchController result (result.ok)."""
         if result.ok:
             self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
             return py_trees.common.Status.SUCCESS

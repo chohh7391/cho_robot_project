@@ -52,9 +52,10 @@ CallbackReturn TaskSpaceIKController::on_configure(
     return CallbackReturn::FAILURE;
   }
 
-  // 액션 서버 이름도 목적에 맞게 변경하시면 좋습니다.
+  // Action server named after this controller.
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_ik_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -140,6 +141,9 @@ controller_interface::return_type TaskSpaceIKController::update(
       dq(i) = std::clamp(dq(i), -max_delta_q_, max_delta_q_);
     }
     q_ref_ += dq;
+    // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
+    // stop at the model's position limits instead of integrating through them.
+    FrankaBaseController::clamp_to_joint_limits(q_ref_);
   }
   // else: q_ref_ frozen -> the robot holds smoothly, no measured coupling.
   prev_running_ = running;

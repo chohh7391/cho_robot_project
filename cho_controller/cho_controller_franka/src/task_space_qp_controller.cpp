@@ -34,6 +34,11 @@ CallbackReturn TaskSpaceQPController::on_init() {
     auto_declare<std::vector<double>>("kd_task", {});
     auto_declare<std::vector<double>>("kp_joint", {});
     auto_declare<std::vector<double>>("kd_joint", {});
+    // ACTION mode: add the posture task as a low-weight level-1 cost in the
+    // null space of the SE3 task, so the redundant DoF (elbow) does not drift
+    // toward a joint limit during long motions. Default off (previous behavior).
+    auto_declare<bool>("use_nullspace_posture", false);
+    auto_declare<double>("nullspace_posture_weight", 1e-3);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -52,12 +57,12 @@ CallbackReturn TaskSpaceQPController::on_configure(
     return CallbackReturn::FAILURE;
   }
   
-  // 1. SE3 Task 초기화
+  // 1. SE3 task setup
   task_se3_equality_ = std::make_shared<TaskSE3Equality>("task-se3", *robot_, ee_name_, ee_offset_);
   task_se3_equality_->Kp(kp_task_);
   task_se3_equality_->Kd(kd_task_);
 
-  // 2. Posture Task 초기화 (Default Control용)
+  // 2. Posture task setup (used by DEFAULT control and the null-space option)
   // Posture gains must match the model's actuated-joint count (na), which is > 7
   // when the URDF carries movable gripper joints. Size the gain vectors to na and
   // fill only the leading num_dof_ arm entries (gripper rows stay 0 = uncontrolled),
@@ -86,6 +91,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   // action server
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_qp_controller");
   action_server_->init();
+  action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -118,7 +124,7 @@ controller_interface::return_type TaskSpaceQPController::update(
   Vector7d acc_arm = Vector7d::Zero();
 
   // ----------------------------------------------------
-  // 실무적 보정 항 (발작 방지용 Practical Terms)
+  // Practical correction terms (anti-oscillation)
   // ----------------------------------------------------
   const double kAlpha = 0.99;
   dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
@@ -134,7 +140,7 @@ controller_interface::return_type TaskSpaceQPController::update(
   kd_joint_modified(6) = 0.2;
 
   // ----------------------------------------------------
-  // 제어 모드 선택 (Action vs Default)
+  // Control mode selection (ACTION vs DEFAULT)
   // ----------------------------------------------------
   // Decide the effective mode from whether the action goal yields a reference THIS
   // cycle, then switch the TSID task set only on an actual transition. Switching to
@@ -145,7 +151,11 @@ controller_interface::return_type TaskSpaceQPController::update(
 
   if (action_ok) {
     if (control_mode_ != QPControlMode::ACTION) {
-      switch_to_action_control();
+      switch_to_action_control(time);
+    }
+    if (use_nullspace_posture_) {
+      // Keep feeding the (constant) posture reference latched at the ACTION switch.
+      update_default_control_reference(time);
     }
     auto trajectory_sample = action_server_->trajectory_->computeNext();
 
@@ -162,7 +172,7 @@ controller_interface::return_type TaskSpaceQPController::update(
   }
 
   // ----------------------------------------------------
-  // TSID Solver 실행 및 토크 계산
+  // TSID solve and torque computation
   // ----------------------------------------------------
   try {
     const HQPData & hqp_data = tsid_->computeProblemData(time.seconds(), state_.q, state_.v);
@@ -171,7 +181,7 @@ controller_interface::return_type TaskSpaceQPController::update(
       const auto& qp_sol = solver_->solve(hqp_data);
       if (qp_sol.status == HQP_STATUS_OPTIMAL) {
           VectorXd ddq = tsid_->getAccelerations(qp_sol);
-          // ddq는 전체 크기(9)이므로, 앞 7개만 가져옴
+          // ddq is full-size (nv); take only the leading 7 arm entries
           acc_arm = ddq.head(num_dof_);
       } else {
           RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "QP Solver Failed! Holding position.");
@@ -183,7 +193,7 @@ controller_interface::return_type TaskSpaceQPController::update(
       acc_arm.setZero();
   }
 
-  // 최종 토크 = M*ddq + C + G - Damping
+  // Final torque = M*ddq + nle - damping
   torque_desired = M_modified * acc_arm;
   torque_desired += state_.nle; 
   torque_desired -= kd_joint_modified.cwiseProduct(dq_filtered_);
@@ -199,12 +209,23 @@ controller_interface::return_type TaskSpaceQPController::update(
   return controller_interface::return_type::OK;
 }
 
-void TaskSpaceQPController::switch_to_action_control()
+void TaskSpaceQPController::switch_to_action_control(const rclcpp::Time & time)
 {
   tsid_->removeTask("task-posture");
   tsid_->addMotionTask(*task_se3_equality_, 1.0, 0);
+  if (use_nullspace_posture_) {
+    // Level-1 cost (level 0 = hard constraints, weights ignored there): the SE3
+    // task stays exact while the posture task resolves the redundant DoF toward
+    // the configuration held when this motion started.
+    tsid_->addMotionTask(*task_joint_posture_, nullspace_posture_weight_, 1);
+    traj_posture_cubic_->setInitSample(state_.q_arm);
+    traj_posture_cubic_->setDuration(0.1);
+    traj_posture_cubic_->setStartTime(time.seconds());
+    traj_posture_cubic_->setGoalSample(state_.q_arm);
+  }
   control_mode_ = QPControlMode::ACTION;
-  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control.");
+  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control%s.",
+              use_nullspace_posture_ ? " (with null-space posture)" : "");
 }
 
 void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
@@ -264,6 +285,13 @@ bool TaskSpaceQPController::assign_parameters() {
   for (int i = 0; i < num_dof_; ++i) {
     kp_joint_(i) = kp_joint.at(i);
     kd_joint_(i) = kd_joint.at(i);
+  }
+
+  use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
+  nullspace_posture_weight_ = get_node()->get_parameter("nullspace_posture_weight").as_double();
+  if (nullspace_posture_weight_ <= 0.0 || !std::isfinite(nullspace_posture_weight_)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "nullspace_posture_weight must be positive and finite");
+    return false;
   }
 
   return true;
