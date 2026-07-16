@@ -29,6 +29,12 @@
       task_space_ik_controller:
         type: cho_controller_franka/TaskSpaceIKController
 
+      task_space_velocity_controller:
+        type: cho_controller_franka/TaskSpaceVelocityController
+
+      joint_space_velocity_controller:
+        type: cho_controller_franka/JointSpaceVelocityController
+
       joint_space_position_controller:
         type: cho_controller_franka/JointSpacePositionController
 
@@ -96,6 +102,22 @@
       max_delta_q: 0.0025   # per-step joint command limit [rad] (~2.5 rad/s @1kHz, under FR3 joint vel limits)
 
 /**:
+  task_space_velocity_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      lambda: 0.01          # DLS damping factor
+      max_delta_q: 0.0025   # per-step reference slew [rad/cycle]
+      kp_joint: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]  # hold/track P gain [1/s]
+      max_joint_vel: 1.0    # output velocity clamp [rad/s]
+
+/**:
+  joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      kp_joint: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]  # hold/track P gain [1/s]
+      max_joint_vel: 1.0    # output velocity clamp [rad/s]
+
+/**:
   gravity_compensation_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -156,6 +178,8 @@
       robot_type: "fr3"
       kp_task: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
       kd_task: [47.539, 47.539, 47.539, 10.583, 10.583, 10.583]
+      # velocity control_mode reference-tracking P gain ((rad/s)/rad)
+      kp_joint_vel: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
       kp_null: 10.0
       kd_null: 6.3246
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]

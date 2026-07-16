@@ -33,6 +33,11 @@ POSITION_CONTROLLERS = [
     'task_space_ik_controller',
 ]
 
+VELOCITY_CONTROLLERS = [
+    'joint_space_velocity_controller',
+    'task_space_velocity_controller',
+]
+
 TORQUE_CONTROLLERS = [
     'gravity_compensation_controller',
     'joint_space_impedance_controller',
@@ -80,10 +85,14 @@ def get_switchable_controllers(
 ):
     if control_mode == 'position':
         controllers = list(POSITION_CONTROLLERS)
+    elif control_mode == 'velocity':
+        # Position/torque controllers claim interfaces a velocity-mode URDF
+        # doesn't export, so only the velocity-interface controllers are spawned.
+        controllers = list(VELOCITY_CONTROLLERS)
     else:
         controllers = list(TORQUE_CONTROLLERS)
 
-    if extra_torque_controllers and control_mode != 'position':
+    if extra_torque_controllers and control_mode not in ('position', 'velocity'):
         controllers.extend(extra_torque_controllers)
 
     if as_bool(use_vla):

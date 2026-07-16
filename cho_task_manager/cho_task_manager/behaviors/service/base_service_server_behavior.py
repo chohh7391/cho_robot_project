@@ -1,18 +1,21 @@
 # cho_task_manager/behaviors/service/base_service_server_behavior.py
 import py_trees
+from rclpy.duration import Duration
 from rclpy.node import Node
 
 class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
-    """외부에서 서비스 호출(Signal)이 들어올 때까지 대기(RUNNING)하는 기본 서버 클래스"""
-    def __init__(self, name: str, service_type, service_name: str):
+    """Base server behavior: RUNNING until an external service call (signal) arrives."""
+    def __init__(self, name: str, service_type, service_name: str, timeout_sec: float = None):
         super().__init__(name)
         self.service_type = service_type
         self.service_name = service_name
+        self.timeout_sec = timeout_sec
 
         self.server = None
         self.node: Node = None
         self.signal_received = False
         self.response_message = "Signal received successfully."
+        self._deadline = None
 
     def setup(self, **kwargs):
         self.node = kwargs['node']
@@ -25,14 +28,12 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
         return True
 
     def _service_callback(self, request, response):
-        """클라이언트가 호출했을 때 실행되는 콜백"""
         self.signal_received = True
         self.node.get_logger().info(f"[{self.name}] Signal received.")
         return self.fill_response(request, response)
 
     def fill_response(self, request, response):
-        """자식 클래스에서 오버라이딩하여 Response 값을 채워넣는 함수"""
-        # std_srvs/Trigger의 기본형태 (다른 타입이면 자식에서 덮어쓰기)
+        """Override in a subclass to fill in the response. Default matches std_srvs/Trigger."""
         if hasattr(response, 'success'):
             response.success = True
         if hasattr(response, 'message'):
@@ -40,15 +41,24 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
         return response
 
     def initialise(self):
-        """노드 진입 시 매번 플래그 초기화"""
         self.signal_received = False
+        if self.timeout_sec is not None:
+            self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        else:
+            self._deadline = None
         self.node.get_logger().info(f"[{self.name}] Waiting for signal on {self.service_name}...")
 
     def update(self):
-        """신호가 오면 SUCCESS, 안 오면 RUNNING"""
         if self.signal_received:
             return py_trees.common.Status.SUCCESS
+        if self._deadline is not None and self.node.get_clock().now() > self._deadline:
+            self.node.get_logger().error(
+                f"[{self.name}] Timed out after {self.timeout_sec}s waiting for signal on "
+                f"{self.service_name}"
+            )
+            return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
 
     def terminate(self, new_status):
         self.signal_received = False
+        self._deadline = None

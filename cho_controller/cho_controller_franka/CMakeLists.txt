@@ -37,6 +37,8 @@ add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
     src/ee_state_broadcaster.cpp
     src/task_space_ik_controller.cpp
+    src/task_space_velocity_controller.cpp
+    src/joint_space_velocity_controller.cpp
     src/gravity_compensation_controller.cpp
     src/gripper_controller.cpp
     src/joint_space_position_controller.cpp

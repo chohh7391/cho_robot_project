@@ -11,9 +11,31 @@ namespace franka {
 
 struct NoTrajectory {
     NoTrajectory() = default;
-    
+
     template<typename... Args>
-    NoTrajectory(Args&&...) {} 
+    NoTrajectory(Args&&...) {}
+};
+
+// Goal-lifecycle phases of the RT-safe action-server state machine:
+//   kIdle -> kActive          (executor: handle_accepted, via activate_goal())
+//   kActive -> kFinish*       (RT: compute() detects cancel/success/timeout and
+//                              calls finish_from_rt() -- an atomic store only)
+//   kFinish* -> kIdle         (non-RT finisher timer: performs the actual
+//                              succeed()/abort()/canceled() calls and releases the
+//                              goal handle)
+// The RT compute() must never touch the goal handle or any rclcpp_action API
+// (internal mutexes, allocation, message serialization -> priority inversion /
+// cycle overrun on the 1 kHz thread). Per-goal RT state is reset by the RT thread
+// itself when it observes a goal_epoch_ change (rt_new_goal_epoch()), so every
+// non-atomic playback member stays RT-thread-only; executor-side goal payload is
+// staged in plain members BEFORE activate_goal()'s phase store (release) and only
+// read by RT after observing kActive (acquire), which establishes happens-before.
+enum class GoalPhase : uint8_t {
+    kIdle = 0,
+    kActive,
+    kFinishSucceeded,
+    kFinishAborted,
+    kFinishCanceled,
 };
 
 template <typename ActionT, typename TrajectoryT = NoTrajectory>
@@ -44,6 +66,11 @@ public:
 
         trajectory_ = std::make_shared<TrajectoryT>(action_name_);
 
+        // Non-RT finisher for the goal state machine (see GoalPhase doc above).
+        finisher_timer_ = node_->create_wall_timer(
+            std::chrono::milliseconds(5),
+            std::bind(&BaseActionServer::finisher_tick, this));
+
         // control_mode is injected as a controller parameter ("position" or "effort").
         // declare_parameter picks up the launch-time override if present, else the default.
         if (!node_->has_parameter("control_mode")) {
@@ -56,7 +83,7 @@ public:
 
     virtual bool compute(const rclcpp::Time & current_time, State & state) = 0;
     bool is_running() {
-        return control_running_;
+        return phase_.load() == static_cast<uint8_t>(GoalPhase::kActive);
     }
 
 protected:
@@ -76,12 +103,12 @@ protected:
     std::string action_name_;
     std::string control_mode_;
 
-    std::atomic<bool> control_running_ {false};
-    bool initialized_ {false};
+    std::atomic<bool> control_running_ {false};  // mirrors phase_ == kActive
+    bool initialized_ {false};                   // RT-thread-only
     const int num_dof_ {7};
-    rclcpp::Time start_time_;
+    rclcpp::Time start_time_;                    // RT-thread-only
     double duration_;
-    
+
     virtual rclcpp_action::GoalResponse handle_goal(
         const rclcpp_action::GoalUUID & uuid,
         std::shared_ptr<const typename ActionT::Goal> goal) = 0;
@@ -92,9 +119,83 @@ protected:
     virtual void handle_accepted(
         const std::shared_ptr<GoalHandle> goal_handle) = 0;
 
-    std::shared_ptr<GoalHandle> goal_handle_; 
     std::shared_ptr<Feedback> feedback_msg_;
     std::shared_ptr<Result> result_msg_;
+
+    // --- RT-safe goal state machine (see the GoalPhase doc above) ---------------
+    std::atomic<uint8_t> phase_ {static_cast<uint8_t>(GoalPhase::kIdle)};
+    std::atomic<uint64_t> goal_epoch_ {0};
+    std::atomic<bool> cancel_requested_ {false};
+    uint64_t rt_seen_epoch_ {0};                       // RT-thread-only
+    std::shared_ptr<GoalHandle> pending_goal_handle_;  // executor/finisher-owned
+    rclcpp::TimerBase::SharedPtr finisher_timer_;
+
+    // Executor side.
+    bool goal_busy() const {
+        return phase_.load() != static_cast<uint8_t>(GoalPhase::kIdle);
+    }
+
+    // Publish a staged goal to the RT thread. Call at the END of handle_accepted,
+    // after every goal-payload member has been written (the phase store provides
+    // the release fence RT acquires through rt_active()).
+    void activate_goal(const std::shared_ptr<GoalHandle> & goal_handle) {
+        pending_goal_handle_ = goal_handle;
+        cancel_requested_.store(false);
+        control_running_ = true;
+        goal_epoch_.fetch_add(1);
+        phase_.store(static_cast<uint8_t>(GoalPhase::kActive));
+    }
+
+    // RT side.
+    bool rt_active() const {
+        return phase_.load() == static_cast<uint8_t>(GoalPhase::kActive);
+    }
+
+    // True exactly once per accepted goal; the caller resets its per-goal RT state.
+    bool rt_new_goal_epoch() {
+        const uint64_t e = goal_epoch_.load();
+        if (e == rt_seen_epoch_) {
+            return false;
+        }
+        rt_seen_epoch_ = e;
+        return true;
+    }
+
+    void finish_from_rt(GoalPhase terminal) {
+        control_running_ = false;
+        phase_.store(static_cast<uint8_t>(terminal));
+    }
+
+    // Executor-side hook invoked by the finisher after the terminal call
+    // (e.g. VLA notifies the behavior tree here).
+    virtual void on_goal_finished(GoalPhase /*terminal*/) {}
+
+    void finisher_tick() {
+        const auto ph = static_cast<GoalPhase>(phase_.load());
+        if (ph == GoalPhase::kIdle || ph == GoalPhase::kActive) {
+            return;
+        }
+        if (pending_goal_handle_) {
+            result_msg_->is_completed = (ph == GoalPhase::kFinishSucceeded);
+            switch (ph) {
+                case GoalPhase::kFinishSucceeded:
+                    RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded.", action_name_.c_str());
+                    pending_goal_handle_->succeed(result_msg_);
+                    break;
+                case GoalPhase::kFinishAborted:
+                    RCLCPP_WARN(node_->get_logger(), "[%s] Goal Aborted.", action_name_.c_str());
+                    pending_goal_handle_->abort(result_msg_);
+                    break;
+                default:  // kFinishCanceled
+                    RCLCPP_INFO(node_->get_logger(), "[%s] Goal Canceled.", action_name_.c_str());
+                    pending_goal_handle_->canceled(result_msg_);
+                    break;
+            }
+            pending_goal_handle_.reset();
+        }
+        phase_.store(static_cast<uint8_t>(GoalPhase::kIdle));
+        on_goal_finished(ph);
+    }
 };
 
 } // namespace franka

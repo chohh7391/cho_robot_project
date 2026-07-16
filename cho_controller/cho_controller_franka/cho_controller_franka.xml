@@ -11,6 +11,18 @@
             The inverse kinematics controller
         </description>
     </class>
+    <class name="cho_controller_franka/TaskSpaceVelocityController"
+           type="cho_controller::franka::TaskSpaceVelocityController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            Resolved-rate task-space controller on the joint velocity interface
+        </description>
+    </class>
+    <class name="cho_controller_franka/JointSpaceVelocityController"
+           type="cho_controller::franka::JointSpaceVelocityController" base_class_type="controller_interface::ControllerInterface">
+        <description>
+            Joint-space trajectory controller on the joint velocity interface
+        </description>
+    </class>
     <class name="cho_controller_franka/GravityCompensationController"
            type="cho_controller::franka::GravityCompensationController" base_class_type="controller_interface::ControllerInterface">
         <description>

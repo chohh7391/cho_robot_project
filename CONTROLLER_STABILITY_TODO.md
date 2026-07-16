@@ -18,7 +18,7 @@ Root cause: `goal_handle_` is a plain (non-atomic) `std::shared_ptr` shared betw
 
 - `servers/base_action_server.hpp:95` — `goal_handle_` shared between threads.
 - RT `compute()` calls `goal_handle_.reset()` / `is_active()` / `succeed()` / `abort()`
-  every cycle (task/joint/gripper/vla action servers). These take internal mutexes,
+  every cycle (task/joint/gripper action servers). These take internal mutexes,
   allocate, and serialize messages → priority inversion / cycle overrun; concurrent
   copy+reset of the same shared_ptr from two threads is a data race (refcount
   corruption / use-after-free); `reset()` can run the goal-handle destructor in the RT
@@ -29,19 +29,37 @@ Root cause: `goal_handle_` is a plain (non-atomic) `std::shared_ptr` shared betw
 A non-RT context (a timer or the executor) owns the `goal_handle_` lifecycle and calls
 `succeed()/abort()/reset()`. No `rclcpp_action` calls from the RT thread.
 
-## HIGH/MED — VLA action-chunk buffering (concurrency)
+**RESOLVED for ALL four action servers (2026-07-17):**
+The atomic goal-phase state machine now lives in `BaseActionServer` (kIdle → kActive →
+kFinish\* → kIdle): the executor stages the goal payload and calls `activate_goal()`,
+the RT `compute()` resets per-goal state on epoch change (`rt_new_goal_epoch()`) and
+only flips the phase atomically on cancel/success/timeout (`finish_from_rt()`), and a
+5 ms non-RT finisher timer performs the actual `succeed()/abort()/canceled()` calls
+and handle release (`on_goal_finished()` hook for per-server follow-ups, e.g. VLA's
+BT notification). `goal_handle_` was removed from the base class entirely; no server's
+RT path touches rclcpp_action or logs per-cycle. Verified in MuJoCo: VLA (four command
+representations, cancel, success trigger, re-acceptance), joint+gripper (full
+pick_place_position behavior-tree run), task-space (succeed status=4, mid-motion
+cancel status=5, immediate re-accept).
+**Known trait (pre-existing, unchanged):** an action server accepts goals even while
+its controller is INACTIVE; compute() never runs, so the goal hangs until cancelled.
+The behavior trees always switch the controller active before sending goals, which
+avoids this — but direct CLI/action clients should do the same.
 
-- `servers/vla_action_server.cpp:232` — `process_vla_action` (non-RT subscription cb)
-  calls `vla_cmd_buffer_.readFromRT()`, violating `RealtimeBuffer`'s single-RT-reader
-  contract vs RT `compute()` `readFromRT()` (:81) → torn/garbage pose to the RT loop.
-- `vla_action_server.hpp:77` — `chunk_size_` uninitialized `int`, written non-RT (:233)
-  / read RT (:119), used as a divisor → possible divide-by-zero and unsynchronized read.
-- `vla_action_server.cpp:42` — `inference_dt_ = 1 / goal->inference_frequency` with no
-  validation (zero/negative/NaN → inf).
-- `vla_action_server.cpp:87-91` — "waiting for first chunk" branch returns early and
-  skips cancel/success/timeout handling → goal can wedge if no chunk arrives.
-- Two non-RT writers to `vla_cmd_buffer_` (`:69` and `:309`) — unsafe on a
-  multi-threaded executor.
+## HIGH/MED — VLA action-chunk buffering (concurrency) — RESOLVED (2026-07-17)
+
+- ~~`process_vla_action` calling `vla_cmd_buffer_.readFromRT()` from non-RT~~ →
+  replaced with an executor-owned shadow copy of the last written command.
+- ~~`chunk_size_` written non-RT / read RT as a divisor~~ → the RT side now reads a
+  precomputed `waypoint_dt` carried inside the buffered `VLACommand`; `chunk_size_` is
+  executor-only and `chunk_size <= 0` messages are rejected.
+- ~~`inference_dt_` unvalidated~~ → `handle_goal` rejects non-finite / non-positive
+  `inference_frequency`.
+- ~~"waiting for first chunk" branch skips cancel/success/timeout → wedge~~ → terminal
+  checks moved before target processing; goal timeout anchored to goal start.
+- Two non-RT writers to `vla_cmd_buffer_` — benign: `writeFromNonRT` serializes
+  writers on its internal mutex, and both callbacks live in the node's mutually
+  exclusive callback group.
 
 ---
 

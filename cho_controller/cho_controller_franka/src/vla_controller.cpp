@@ -36,6 +36,7 @@ CallbackReturn VLAController::on_init() {
     auto_declare<std::vector<double>>("kd_task", {});
     auto_declare<std::vector<double>>("kp_joint", {600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0});
     auto_declare<std::vector<double>>("kd_joint", {30.0, 30.0, 30.0, 30.0, 10.0, 10.0, 5.0});
+    auto_declare<std::vector<double>>("kp_joint_vel", {10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0});
     auto_declare<double>("max_joint_vel", 1.5);
     auto_declare<double>("kp_null", 10.0);
     auto_declare<double>("kd_null", 1.0);
@@ -76,10 +77,16 @@ CallbackReturn VLAController::on_activate(
 
   dq_filtered_.setZero();
 
-  // Seed the open-loop position reference at the activation configuration so the
-  // very first update() commands exactly where the arm already is (no startup jump/creep).
-  q_ref_ = state_.q_arm_init;
+  // Seed the open-loop reference. Position mode: prefer what the position command
+  // interface is still holding (if consistent with measured) -- same helper/rationale
+  // as task_space_ik_controller.cpp, avoids a one-cycle step at the controller switch.
+  // Velocity mode: the command interfaces hold velocities, so use measured.
+  q_ref_ = (control_mode_ == "position")
+      ? FrankaBaseController::held_command_position()
+      : state_.q_arm;
   q_ref_init_ = true;
+  ref_fk_dirty_ = true;
+  activation_state_latched_ = false;
 
   return CallbackReturn::SUCCESS;
 }
@@ -92,10 +99,31 @@ controller_interface::return_type VLAController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  // ----------------------------------------------------
-  // 제어 모드 선택 (Action vs Default)
-  // action_space ("task" | "joint") 는 현재 실행 중인 VLA 명령이 결정한다.
-  // ----------------------------------------------------
+  // See activation_state_latched_ doc comment (vla_controller.hpp): re-latch the
+  // activation anchor here, once, now that state_ is guaranteed fresh -- overrides
+  // whatever on_activate() captured if that read happened before hardware state was valid.
+  if (!activation_state_latched_) {
+    state_.q_arm_init = state_.q_arm;
+    state_.H_ee_init = state_.H_ee;
+    // Also seed the shared reference/desired fields: VLAActionServer::compute() reads
+    // them (hold target while waiting for the first chunk, and first-chunk seeding),
+    // and they must never be consumed uninitialized -- each control-mode branch below
+    // keeps them fresh afterwards.
+    state_.q_arm_ref = state_.q_arm;
+    state_.H_ee_ref = state_.H_ee;
+    state_.q_arm_des = state_.q_arm;
+    state_.H_ee_des = state_.H_ee;
+    // held_command_position() reads the position command interface -- only meaningful
+    // in position mode. In velocity mode the interfaces hold velocities, so seed the
+    // open-loop reference from the measured configuration instead.
+    q_ref_ = (control_mode_ == "position")
+        ? FrankaBaseController::held_command_position()
+        : state_.q_arm;
+    ref_fk_dirty_ = true;
+    activation_state_latched_ = true;
+  }
+
+  // action_space ("task" | "joint") is determined by the currently running VLA goal.
   const bool vla_running = action_server_ && action_server_->is_running();
 
   std::string action_space = "task";
@@ -117,31 +145,21 @@ controller_interface::return_type VLAController::update(
 
     if (action_space == "joint") {
       // ----- Joint space impedance (PD + gravity compensation) -----
-      Vector7d q_err = state_.q_arm_des - state_.q_arm;
-      torque_desired = kp_joint_.cwiseProduct(q_err)
+      torque_desired = kp_joint_.cwiseProduct(state_.q_arm_des - state_.q_arm)
                      - kd_joint_.cwiseProduct(state_.v_arm)
                      + state_.nle;
     } else {
       // ----- Task space impedance controller (World frame) -----
-      const Matrix7d & M = state_.M_arm;
-      Matrix7d M_inv = M.inverse();
+      // Reuse the base controller's per-cycle state directly: J_arm_world is already
+      // computed this cycle by FrankaBaseController::update().
+      const Eigen::Matrix<double, 6, 7> & J = state_.J_arm_world;
 
-      Eigen::Matrix3d R_curr = state_.H_ee.rotation();
-
-      Eigen::Matrix<double, 6, 6> R_spatial = Eigen::Matrix<double, 6, 6>::Zero();
-      R_spatial.topLeftCorner(3, 3) = R_curr;
-      R_spatial.bottomRightCorner(3, 3) = R_curr;
-
-      Eigen::Matrix<double, 6, 7> J = state_.J_arm_world;
-      Eigen::Matrix<double, 7, 6> J_T = J.transpose();
-
-      // 2. Pose Error 계산 (World frame 기준)
       Vector3d pos_error = state_.H_ee_des.translation() - state_.H_ee.translation();
 
-      Eigen::Matrix3d R_err = state_.H_ee_des.rotation() * R_curr.transpose();
+      Eigen::Matrix3d R_err = state_.H_ee_des.rotation() * state_.H_ee.rotation().transpose();
       Eigen::AngleAxisd axis_angle_err(R_err);
 
-      // 회전 특이점 방어 로직 추가
+      // Guard against the singularity at angle ~0 (axis is undefined there).
       Vector3d rot_error = Vector3d::Zero();
       if (std::abs(axis_angle_err.angle()) > 1e-5) {
         rot_error = axis_angle_err.axis() * axis_angle_err.angle();
@@ -151,62 +169,68 @@ controller_interface::return_type VLAController::update(
       delta_pose.head<3>() = pos_error;
       delta_pose.tail<3>() = rot_error;
 
-      // 3. Task Wrench 계산 (World frame 기준)
       Vector6d ee_vel = J * state_.v_arm;
-      Vector6d task_wrench;
-      task_wrench = current_kp_task_.cwiseProduct(delta_pose) - current_kd_task_.cwiseProduct(ee_vel);
+      Vector6d task_wrench =
+          current_kp_task_.cwiseProduct(delta_pose) - current_kd_task_.cwiseProduct(ee_vel);
 
-      // 4. Motion Torque
-      Vector7d torque_motion = J_T * task_wrench;
+      Vector7d torque_motion = J.transpose() * task_wrench;
 
-      // Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J_T).inverse();
+      // Null-space posture term, disabled by owner decision (see
+      // CONTROLLER_STABILITY_TODO.md). If re-enabled it needs:
+      //   const Matrix7d & M = state_.M_arm;  Matrix7d M_inv = M.inverse();
+      // Eigen::Matrix<double, 6, 6> Lambda = (J * M_inv * J.transpose()).inverse();
       // Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
-
-      // // Null-space 가속도 지령
       // Vector7d q_error = default_dof_pos_ - state_.q_arm;
-      // // Vector7d q_error = state_.q_arm_init - state_.q_arm;
       // for(int i = 0; i < 7; ++i) {
       //   q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
       // }
       // Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
-
-      // // Null-space 토크 변환
       // Vector7d u_null_torque = M * u_null_accel;
-
-      // // Null-space Projection
       // Matrix7d I = Matrix7d::Identity();
-      // Vector7d torque_null = (I - J_T * j_eef_inv) * u_null_torque;
+      // Vector7d torque_null = (I - J.transpose() * j_eef_inv) * u_null_torque;
 
-      // 6. 최종 토크 합산
       torque_desired = torque_motion /*+ torque_null*/ + state_.nle;
     }
 
-    // 7. 안전 클리핑 및 전송
     FrankaBaseController::clip_torque(torque_desired);
     for (int i = 0; i < 7; ++i) {
       command_interfaces_[i].set_value(torque_desired(i));
     }
 
-  } else if (control_mode_ == "velocity") {
-    
+    // Keep the shared reference fields fresh (same contract as the velocity/position
+    // branches -- VLAActionServer::compute() seeds new goals from them). Effort mode
+    // closes the loop through the robot, so the measured state is the anchor.
+    state_.q_arm_ref = state_.q_arm;
+    state_.H_ee_ref = state_.H_ee;
 
   } else {
-    // ----- Position control: command an OPEN-LOOP joint reference -----
-    // q_ref_ is integrated ONLY while a VLA goal is active; when idle it is FROZEN.
-    // Rebuilding the command from the *measured* joint position every cycle
-    // (q_measured + dq) integrates the servo tracking lag and makes the arm creep to
-    // a nearby pose even with no command. Holding an open-loop reference removes that
-    // measured coupling entirely. (cf. task_space_ik_controller)
+    // ----- Position & velocity control: shared OPEN-LOOP reference generation -----
+    // Both modes integrate the same joint reference q_ref_ (active only while a VLA
+    // goal runs; FROZEN at idle) and differ only in the output stage below. The
+    // reference generator is deliberately free of measured-state feedback: its
+    // differential-IK error is evaluated at FK(q_ref_), not at the measured pose.
+    // That matters twice over:
+    //  - rebuilding from measured every cycle integrates servo tracking lag (creep,
+    //    cf. task_space_ik_controller), and on velocity actuators (pure dampers in
+    //    sim) it lets gravity sag leak into the per-chunk relative anchors, which
+    //    read state_.*_ref = FK(q_ref_);
+    //  - closing the anchor loop through measured state is structurally unstable:
+    //    low gain loses to gravity (arm drifts away), high gain oscillates (both
+    //    reproduced in sim with 15 Hz chunk_size=1 streaming).
     if (!q_ref_init_) {
       q_ref_ = state_.q_arm;
       q_ref_init_ = true;
+      ref_fk_dirty_ = true;
     }
+
+    // Previous reference, for the velocity-mode feedforward term.
+    const Vector7d q_ref_prev = q_ref_;
 
     if (vla_running) {
       if (action_space == "joint") {
-        // ----- Joint space: 목표 관절각으로 가되, 속도(slew-rate)를 제한 -----
-        // q_arm_des 가 chunk 경계 등에서 튀어도 가속도 스파이크(=떨림)가 나지 않도록
-        // 레퍼런스 기준으로 한 사이클당 최대 이동량을 클램프한다.
+        // Move toward the target, rate-limited: clamp the per-cycle step against the
+        // reference so a jump in q_arm_des (e.g. at a chunk boundary) doesn't produce
+        // an acceleration spike/jitter.
         Vector7d step = state_.q_arm_des - q_ref_;
         if (max_joint_vel_ > 0.0) {
           const double max_step = max_joint_vel_ * period.seconds();
@@ -219,45 +243,82 @@ controller_interface::return_type VLAController::update(
         // ----- Task space: Differential IK (evaluated at the REFERENCE config) -----
         // FK/Jacobian at q_ref_ (not measured) so the open-loop reference stays free
         // of encoder noise, exactly like task_space_ik_controller.
-        Eigen::VectorXd q_full = state_.q;
-        q_full.head(num_dof_) = q_ref_;
+        q_scratch_ = state_.q;  // preallocated base scratch: no per-cycle heap alloc
+        q_scratch_.head(num_dof_) = q_ref_;
         pinocchio::SE3 H_ref;
         Eigen::Matrix<double, 6, 7> J;  // 6x7 Body Jacobian (LOCAL)
-        FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
+        FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ref, J);
 
-        // 1. Task Space Error 계산 (Local Frame 기준)
         Vector6d error;
         error.head<3>() = H_ref.rotation().transpose() * (state_.H_ee_des.translation() - H_ref.translation());
         pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * state_.H_ee_des.rotation();
         error.tail<3>() = pinocchio::log3(R_err);
 
-        // 2. Desired Task Velocity (P Control)
-        // VLA에서 목표를 주면 부드럽게 따라가기 위해 kp_task_를 곱합니다.
         Vector6d v_des = current_kp_task_.cwiseProduct(error);
 
-        // 3. Damped Least Squares (DLS) 의사역행렬 계산
-        // VLA가 무리한 명령을 줬을 때 Singularity 부근에서 로봇이 폭주하는 것을 막아줍니다.
-        double lambda = 0.01; // Damping factor (필요시 파라미터로 분리)
+        // Damped least-squares pseudo-inverse: bounds joint velocities near
+        // singularities even if VLA commands an aggressive target.
+        double lambda = 0.01; // Damping factor (extract to a parameter if needed)
         Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
         JJt.diagonal().array() += lambda;
         Eigen::Matrix<double, 7, 6> J_pinv = J.transpose() * JJt.inverse();
 
-        // 4. 관절 속도 계산 (Joint Velocity)
         Vector7d dq_des = J_pinv * v_des;
 
-        // 5. 위치 적분 (Euler Integration) — 레퍼런스에 누적
-        q_ref_ += dq_des * period.seconds();
+        // Euler-integrate into the reference, clamped like the joint branch above --
+        // bounds the per-cycle step even if the seed is briefly off (e.g. right after
+        // a new goal starts). See CONTROLLER_STABILITY_TODO.md.
+        Vector7d step = dq_des * period.seconds();
+        if (max_joint_vel_ > 0.0) {
+          const double max_step = max_joint_vel_ * period.seconds();
+          for (int i = 0; i < num_dof_; ++i) {
+            step(i) = std::clamp(step(i), -max_step, max_step);
+          }
+        }
+        q_ref_ += step;
       }
+      ref_fk_dirty_ = true;  // q_ref_ may have moved this cycle
     }
-    // else: idle -> q_ref_ 를 그대로 유지(freeze)하여 활성화 자세를 정확히 홀드한다.
+    // else: idle -> q_ref_ stays frozen, holding the activation pose exactly.
 
-    // apply joint limit
-    Vector7d q_cmd = q_ref_;
-    FrankaBaseController::clip_position(q_cmd);
+    // Keep the shared reference fields synced with q_ref_. VLAActionServer::compute()
+    // seeds a new goal from state_.q_arm_ref/H_ee_ref; without this, a second goal
+    // would seed from the stale activation-time snapshot and jump (same pattern as
+    // task_space_action_server.cpp / joint_space_position_controller.cpp). Recomputed
+    // only when q_ref_ changed -- at idle it's frozen, so rerunning the FK at 1 kHz
+    // would produce the identical result.
+    if (ref_fk_dirty_) {
+      q_scratch_ = state_.q;
+      q_scratch_.head(num_dof_) = q_ref_;
+      pinocchio::SE3 H_ee_ref;
+      Eigen::Matrix<double, 6, 7> J_ref;
+      FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ee_ref, J_ref);
+      state_.q_arm_ref = q_ref_;
+      state_.H_ee_ref = H_ee_ref;
+      ref_fk_dirty_ = false;
+    }
 
-    // apply position command to robot
-    for (int i = 0; i < num_dof_; ++i) {
-      command_interfaces_[i].set_value(q_cmd(i));
+    if (control_mode_ == "position") {
+      Vector7d q_cmd = q_ref_;
+      FrankaBaseController::clip_position(q_cmd);
+      for (int i = 0; i < num_dof_; ++i) {
+        command_interfaces_[i].set_value(q_cmd(i));
+      }
+    } else {
+      // Velocity output stage: track the shared reference with feedforward
+      // (reference rate) plus a joint-space P correction. At idle the feedforward
+      // is zero and the P term actively holds q_ref_ against gravity (velocity
+      // actuators have no gravity compensation of their own in sim).
+      Vector7d dq_cmd = (q_ref_ - q_ref_prev) / period.seconds()
+                      + kp_joint_vel_.cwiseProduct(q_ref_ - state_.q_arm);
+      if (max_joint_vel_ > 0.0) {
+        for (int i = 0; i < num_dof_; ++i) {
+          dq_cmd(i) = std::clamp(dq_cmd(i), -max_joint_vel_, max_joint_vel_);
+        }
+      }
+      for (int i = 0; i < num_dof_; ++i) {
+        command_interfaces_[i].set_value(dq_cmd(i));
+      }
     }
   }
 
@@ -271,6 +332,7 @@ bool VLAController::assign_parameters() {
   auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
   auto kp_joint = get_node()->get_parameter("kp_joint").as_double_array();
   auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
+  auto kp_joint_vel = get_node()->get_parameter("kp_joint_vel").as_double_array();
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
   auto max_joint_vel = get_node()->get_parameter("max_joint_vel").as_double();
   auto kd_null = get_node()->get_parameter("kd_null").as_double();
@@ -295,7 +357,11 @@ bool VLAController::assign_parameters() {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_joint and kd_joint must be size %d", num_dof_);
     return false;
   }
-  if (default_dof_pos.size() != num_dof_) {
+  if (kp_joint_vel.size() != static_cast<size_t>(num_dof_)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "kp_joint_vel must be size %d", num_dof_);
+    return false;
+  }
+  if (default_dof_pos.size() != static_cast<size_t>(num_dof_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }
@@ -310,6 +376,7 @@ bool VLAController::assign_parameters() {
   kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
   kp_joint_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(kp_joint.data());
   kd_joint_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(kd_joint.data());
+  kp_joint_vel_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(kp_joint_vel.data());
   kp_null_ = kp_null;
   kd_null_ = kd_null;
   max_joint_vel_ = max_joint_vel;

@@ -813,11 +813,14 @@
     <hardware>
       <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
       <!-- Select MuJoCo actuators automatically based on control_mode:
-             position -> position servos, torque -> direct motors. -->
+             position -> position servos, velocity -> velocity servos, torque -> direct motors. -->
       <xacro:if value="${'$(arg control_mode)' == 'position'}">
         <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_position.xml</param>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_velocity.xml</param>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_torque.xml</param>
       </xacro:unless>
     </hardware>
@@ -827,7 +830,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -842,7 +848,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -857,7 +866,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -872,7 +884,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -887,7 +902,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -902,7 +920,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">
@@ -917,7 +938,10 @@
         <command_interface name="position"/>
         <command_interface name="velocity"/>
       </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position'}">
+      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
       </xacro:unless>
       <state_interface name="position">

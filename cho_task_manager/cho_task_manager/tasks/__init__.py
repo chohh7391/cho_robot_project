@@ -5,6 +5,11 @@ from cho_task_manager.tasks.franka import (
     create_franka_nut_thread_tree,
     # pick place
     create_franka_pick_place_tree,
+    create_franka_pick_place_position_tree,
+    # controller smoke checks
+    create_franka_controller_check_position_tree,
+    create_franka_controller_check_torque_tree,
+    create_franka_controller_check_velocity_tree,
 )
 from cho_task_manager.tasks.ur import (
     create_ur_pick_place_tree,
@@ -21,6 +26,11 @@ _TASK_REGISTRY = {
         'nut_thread': create_franka_nut_thread_tree,
         # pick place
         'pick_place': create_franka_pick_place_tree,
+        'pick_place_position': create_franka_pick_place_position_tree,
+        # controller smoke checks (one per bringup control_mode)
+        'controller_check_position': create_franka_controller_check_position_tree,
+        'controller_check_torque': create_franka_controller_check_torque_tree,
+        'controller_check_velocity': create_franka_controller_check_velocity_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,

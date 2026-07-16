@@ -34,25 +34,27 @@ rclcpp_action::GoalResponse JointSpaceActionServer::handle_goal(
     RCLCPP_ERROR(node_->get_logger(), "[%s] Goal rejected: duration must be positive.", action_name_.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
-  // If another goal is active and this server only handles one at a time
-  if (control_running_ || (goal_handle_ && goal_handle_->is_active())) {
+  // Single-goal server: busy unless fully idle.
+  if (goal_busy()) {
     RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());
-    return rclcpp_action::GoalResponse::REJECT; // Or ACCEPT_AND_DEFER if you implement queuing
+    return rclcpp_action::GoalResponse::REJECT;
   }
 
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse JointSpaceActionServer::handle_cancel(
-  const std::shared_ptr<JointSpaceGoalHandle> goal_handle)
+  const std::shared_ptr<JointSpaceGoalHandle> /*goal_handle*/)
 {
+  cancel_requested_.store(true);
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void JointSpaceActionServer::handle_accepted(
   const std::shared_ptr<JointSpaceGoalHandle> goal_handle)
 {
-  goal_handle_ = goal_handle; // Store the handle
+  // Stage the goal payload BEFORE activate_goal() (see the GoalPhase doc in
+  // base_action_server.hpp for the ordering contract).
   const auto goal = goal_handle->get_goal();
 
   q_goal_ = Eigen::Map<const Eigen::VectorXd>(
@@ -63,21 +65,26 @@ void JointSpaceActionServer::handle_accepted(
   trajectory_->setDuration(duration_);
   trajectory_->setGoalSample(q_goal_);
 
-  initialized_ = false;
-  control_running_ = true;
+  activate_goal(goal_handle);
 }
 
 bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
-  if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) {
+  // RT-side: atomics only; the finisher timer performs the terminal
+  // rclcpp_action calls (see base_action_server.hpp).
+  if (!rt_active()) {
     return false;
+  }
+
+  if (rt_new_goal_epoch()) {
+    initialized_ = false;
   }
 
   if (!initialized_) {
     // q_arm_ref is the rate-limit reference for clip_position; start it at the
     // current measured position so the command ramps smoothly from where we are
     // (prevents the start-of-goal jerk). The goal is tracked in q_goal_.
-    const_cast<State&>(state).q_arm_ref = state.q_arm.head(num_dof_);
+    state.q_arm_ref = state.q_arm.head(num_dof_);
     start_time_ = current_time;
     trajectory_->setStartTime(start_time_.seconds());
     trajectory_->setInitSample(state.q_arm.head(num_dof_));
@@ -85,43 +92,27 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, State & 
   }
   trajectory_->setCurrentTime(current_time.seconds());
 
-  // Check for cancellation first
-  if (goal_handle_->is_canceling()) {
-    RCLCPP_INFO(node_->get_logger(), "[%s] Goal Canceled", action_name_.c_str());
-    result_msg_->is_completed = false; // Populate result
-    goal_handle_->canceled(result_msg_);
-    control_running_ = false;
-    goal_handle_.reset(); // Release the handle
-    return false; // Indicate computation related to this goal has stopped
+  if (cancel_requested_.load()) {
+    finish_from_rt(GoalPhase::kFinishCanceled);
+    return false;
   }
 
   double elapsed_time_sec = (current_time - start_time_).seconds();
-  
-  float percent = static_cast<float>(
-    std::min(100.0, (elapsed_time_sec / std::max(duration_, 0.001)) * 100.0)
-  );
-  feedback_msg_->percent_complete = percent;
-  // goal_handle_->publish_feedback(feedback_msg_);
+
+  feedback_msg_->percent_complete = static_cast<float>(
+    std::min(100.0, (elapsed_time_sec / std::max(duration_, 0.001)) * 100.0));
 
   double error_norm = (q_goal_ - state.q_arm.head(num_dof_)).norm();
 
   // success
-  if (elapsed_time_sec > goal_handle_->get_goal()->duration && error_norm < success_threshold_) {
-    RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f", action_name_.c_str(), error_norm);
-    result_msg_->is_completed = true;
-    goal_handle_->succeed(result_msg_);
-    control_running_ = false;
-    goal_handle_.reset();
+  if (elapsed_time_sec > duration_ && error_norm < success_threshold_) {
+    finish_from_rt(GoalPhase::kFinishSucceeded);
     return true;
   }
 
   // timeout
-  if (elapsed_time_sec > goal_handle_->get_goal()->duration + 2.0) {
-    RCLCPP_WARN(node_->get_logger(), "[%s] Goal Failed. Error norm: %f", action_name_.c_str(), error_norm);
-    result_msg_->is_completed = false;
-    goal_handle_->abort(result_msg_);
-    control_running_ = false;
-    goal_handle_.reset();
+  if (elapsed_time_sec > duration_ + 2.0) {
+    finish_from_rt(GoalPhase::kFinishAborted);
     return false;
   }
 

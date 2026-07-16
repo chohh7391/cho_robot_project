@@ -46,7 +46,7 @@ REAL_ALWAYS_ACTIVE_CONTROLLERS = [
 
 def generate_robot_nodes(context):
     # ------------------------------------------------------------------
-    # 1. Launch Arguments 읽기
+    # 1. Read launch arguments
     # ------------------------------------------------------------------
     config_file = LaunchConfiguration('robot_config_file').perform(context)
     configs = load_yaml(config_file)
@@ -80,7 +80,7 @@ def generate_robot_nodes(context):
     )
 
     # ------------------------------------------------------------------
-    # 3. 로봇별 노드 생성 (franka.launch.py 의존성 제거 → 직접 구성)
+    # 3. Build per-robot nodes (no franka.launch.py dependency -- assembled directly)
     # ------------------------------------------------------------------
     nodes = []
 
@@ -95,7 +95,7 @@ def generate_robot_nodes(context):
         joint_state_rate_int  = int(config.get('joint_state_rate', 30))
         load_gripper_bool     = load_gripper_str.lower() == 'true'
 
-        # ---- (A) URDF 생성 (xacro) ----
+        # ---- (A) Build URDF (xacro) ----
         urdf_path = PathJoinSubstitution([
             FindPackageShare('cho_description_franka'),
             'robots', robot_type_str, f'{robot_type_str}.urdf.xacro',
@@ -116,7 +116,7 @@ def generate_robot_nodes(context):
             },
         ).toprettyxml(indent='  ')
 
-        # ---- (B) controllers.yaml 경로 ----
+        # ---- (B) controllers.yaml path ----
         controllers_yaml = PathJoinSubstitution([
             FindPackageShare('cho_bringup_franka'), 'config', 'real', 'controllers.yaml'
         ]).perform(context)
@@ -127,7 +127,7 @@ def generate_robot_nodes(context):
         if load_gripper_bool:
             joint_state_publisher_sources.append('franka_gripper/joint_states')
 
-        # ---- (C) Franka 코어 노드 ----
+        # ---- (C) Franka core node ----
         ros2_control_node = Node(
             package='controller_manager',
             executable='ros2_control_node',
@@ -179,9 +179,9 @@ def generate_robot_nodes(context):
             ),
         ]
 
-        # Spawner들은 ros2_control_node 가 떠야 controller_manager 서비스에 접속할 수
-        # 있다. active 묶음이 끝난 뒤 inactive 묶음이 뜨도록 launch_utils 에서
-        # 체인으로 구성해 controller_manager 요청이 겹치지 않게 한다.
+        # Spawners can only reach the controller_manager service once ros2_control_node
+        # is up. launch_utils chains them so the active group finishes before the
+        # inactive group starts, avoiding overlapping controller_manager requests.
         always_active_controllers = [
             controller for controller in REAL_ALWAYS_ACTIVE_CONTROLLERS
             if load_gripper_bool or controller != 'gripper_controller'
@@ -245,8 +245,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'control_mode',
             default_value='torque',
-            description='Choose control mode: position, torque',
-            choices=['position', 'torque'],
+            # 'velocity' is accepted: franka_hardware already declares the velocity
+            # command_interface unconditionally (franka_arm.ros2_control.xacro) and libfranka's
+            # startJointVelocityControl() runs through the onboard joint-impedance controller
+            # (auto gravity compensation), so vla_controller's velocity control_mode should work
+            # here in principle -- verified in MuJoCo, but NOT yet exercised on real hardware.
+            # Start slow/low-gain and be ready on the e-stop the first time.
+            description='Choose control mode: position, velocity, torque (velocity untested on real hardware)',
+            choices=['position', 'velocity', 'torque'],
         ),
         DeclareLaunchArgument(
             'controller_name',

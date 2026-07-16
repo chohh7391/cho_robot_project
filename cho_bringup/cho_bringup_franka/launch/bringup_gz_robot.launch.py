@@ -44,8 +44,18 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'control_mode',
             default_value='torque',
-            description='Choose control mode: position, torque',
-            choices=['position', 'torque']
+            # NOTE: 'velocity' is accepted (vla_controller supports it and the URDF already
+            # declares the command_interface -- verified working via MuJoCo and, at the code
+            # level, on real hardware) but does NOT currently work in Gazebo: velocity
+            # commands are computed correctly (confirmed via debug logging) but are not
+            # applied by the physics engine -- the arm free-drifts under gravity for ~2s
+            # after activation and then stops responding to any further velocity command.
+            # Root cause traced to extern/franka_ros2/franka_gazebo/franka_ign_ros2_control
+            # (vendored, not to be edited here) rather than to this project's own code.
+            # Do not use control_mode:=velocity with Gazebo until that plugin is fixed/
+            # replaced; use MuJoCo or real hardware instead.
+            description='Choose control mode: position, torque (velocity is NOT functional in Gazebo -- see NOTE above)',
+            choices=['position', 'velocity', 'torque']
         ),
         DeclareLaunchArgument(
             'controller_name',
@@ -84,7 +94,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')
         ),
-        # 하드코딩된 문자열 대신 LaunchConfiguration 리스트로 연결
+        # build gz_args from a LaunchConfiguration list instead of a hardcoded string
         launch_arguments={'gz_args': ['-r ', LaunchConfiguration('world')]}.items(),
     )
 
@@ -103,7 +113,7 @@ def generate_launch_description():
         parameters=[use_sim_time]
     )
 
-    # 3. OpaqueFunction: 모드에 따른 동적 설정
+    # 3. OpaqueFunction: mode-dependent dynamic setup
     def launch_setup(context: LaunchContext, *args, **kwargs):
         robot_type_str = LaunchConfiguration('robot_type').perform(context)
         load_gripper_str = LaunchConfiguration('load_gripper').perform(context)
@@ -120,11 +130,11 @@ def generate_launch_description():
         b_type = LaunchConfiguration('bringup_type').perform(context)
         ee_name = LaunchConfiguration('ee_name').perform(context)
 
-        # --- 컨트롤러 목록 및 runtime 파라미터 파일 준비 ---
-        # gz 는 controller_manager 가 Gazebo 플러그인 안에서 뜨므로 이 파일을
-        # URDF 의 <parameters> 로 주입한다. 따라서 xacro 처리 전에 생성해 경로를
-        # mapping 으로 넘겨야 하고, real/mujoco 와 동일하게 노드 파라미터로 로드돼
-        # spawner -p 핸드오프가 사라진다.
+        # Controller list + runtime param file: in Gazebo, controller_manager runs
+        # inside the Gazebo plugin, so this file has to be injected via the URDF's
+        # <parameters> tag -- built before xacro processing and passed in as a mapping.
+        # Loaded as a node parameter the same way as real/mujoco, so no spawner -p
+        # handoff is needed.
         initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
         switchable_controllers = get_switchable_controllers(
             control_mode=mode,
@@ -150,7 +160,7 @@ def generate_launch_description():
             ee_name=ee_name,
         )
 
-        # --- Xacro 파싱 ---
+        # --- Xacro processing ---
         gazebo_effort_str = 'false' if mode == 'position' else 'true'
 
         xacro_path = os.path.join(

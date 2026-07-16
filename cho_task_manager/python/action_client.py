@@ -10,7 +10,7 @@ from rclpy.action import get_action_names_and_types
 from action_msgs.msg import GoalStatus
 from controller_manager_msgs.srv import ListControllers
 
-# 메시지 / 액션 타입 ---------------------------
+# message / action types
 from cho_interfaces.action import (
     JointSpace,
     TaskSpace,
@@ -112,7 +112,7 @@ class ControlSuiteShell(cmd.Cmd):
             gripper_controller=gripper_controller,
         )
 
-        # 노드를 백그라운드 스레드에서 스핀하도록 설정
+        # spin the node on a background thread
         self.spinner = threading.Thread(target=rclpy.spin, args=(self.node,), daemon=True)
         self.spinner.start()
         self._spinning = True
@@ -424,16 +424,22 @@ class ControlSuiteShell(cmd.Cmd):
             print("action failed")
 
     def do_reach(self, arg):
+        """Move task-space end-effector to a generic test pose.
+
+        Usage: reach 0|1|2|3
+        """
         if self.task_space_action_client is None:
             print("No task-space action server is selected. Run `servers` or `use_task <controller>`.")
             return
+
+        selector = arg.strip()
 
         goal = TaskSpace.Goal()
         goal.duration = 5.0
         goal.target_pose = Pose()
         goal.relative = False
 
-        if arg.strip() == "0":
+        if selector == "0":
             goal.relative = False
             goal.target_pose.position.x = 0.2
             goal.target_pose.position.y = -0.2
@@ -443,7 +449,7 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w = 0.0
             
-        elif arg.strip() == "1":
+        elif selector == "1":
             goal.relative = False
             goal.target_pose.position.x = 0.2
             goal.target_pose.position.y = 0.2
@@ -453,7 +459,7 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w = 0.0
 
-        elif arg.strip() == "2":
+        elif selector == "2":
             goal.relative = True
             goal.target_pose.position.x = 0.0
             goal.target_pose.position.y = 0.0
@@ -463,28 +469,18 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_pose.orientation.z = 0.0
             goal.target_pose.orientation.w = 1.0
 
-        elif arg.strip() == "3":
+        elif selector == "3":
             goal.relative = False
-            goal.target_pose.position.x = 0.6  # peg_insert / nut_thread
-            # goal.target_pose.position.x = 0.6 + 0.02025  # gear_mesh
+            goal.target_pose.position.x = 0.6
             goal.target_pose.position.y = 0.0
-            # goal.target_pose.position.z = 0.05 + 0.025 + 0.047  # peg_insert
-            # goal.target_pose.position.z = 0.05 + 0.025 + 0.035  # gear mesh
-            goal.target_pose.position.z = 0.05 + 0.035 + 0.015  # nut thread
-            # # peg_inset / gear_mesh
-            # goal.target_pose.orientation.x = 1.0
-            # goal.target_pose.orientation.y = 0.0
-            # goal.target_pose.orientation.z = 0.0
-            # goal.target_pose.orientation.w =  0.0
-            # nut_thread
-            goal.target_pose.orientation.x = 0.6099
-            goal.target_pose.orientation.y = 0.7927
+            goal.target_pose.position.z = 0.1
+            goal.target_pose.orientation.x = 1.0
+            goal.target_pose.orientation.y = 0.0
             goal.target_pose.orientation.z = 0.0
-            goal.target_pose.orientation.w =  0.0
+            goal.target_pose.orientation.w = 0.0
         else:
             print("Usage: reach 0|1|2|3")
             return
-            
 
         if self._send_goal_and_wait(self.task_space_action_client, goal):
             print("action succeed")
@@ -494,9 +490,9 @@ class ControlSuiteShell(cmd.Cmd):
     def do_grasp(self, arg):
         """Gripper open / close.
 
-        Usage: grasp 0                                  (open)
-               grasp 1                                  (close with default params)
-               grasp 1 [width] [speed] [force] [eps_in] [eps_out]
+        Usage: grasp 0                                          (open)
+               grasp 1                                          (close with default params)
+               grasp 1 [width] [speed] [force] [eps_in] [eps_out] (close with explicit params)
         Any omitted (or 0) parameter falls back to the controller's default.
         """
         tokens = arg.split()
@@ -505,10 +501,7 @@ class ControlSuiteShell(cmd.Cmd):
             return
         grasp = tokens[0] == "1"
 
-        # params = [0.0, 0.0, 0.0, 0.0, 0.0]  # width, speed, force, eps_in, eps_out
-        # params = [0.015, 0.05, 100.0, 0.05, 0.05]  # peg insert
-        # params = [0.028, 0.05, 100.0, 0.005, 0.005]  # gear mesh
-        params = [0.023, 0.03, 100.0, 0.05, 0.05]  # nut thread
+        params = [0.0, 0.0, 0.0, 0.0, 0.0]  # width, speed, force, eps_in, eps_out
         try:
             for i, value in enumerate(tokens[1:6]):
                 params[i] = float(value)
@@ -549,21 +542,15 @@ class ControlSuiteShell(cmd.Cmd):
         self.node.destroy_node()
         return True
 
-    # 편의상 EOF (^D) 도 quit 으로 연결
     def do_EOF(self, arg):
         return self.do_quit(arg)
-    
-    ##################################
-    
 
     # Helper Functions
     def _send_goal_and_wait(self, client: ActionClient, goal_msg) -> bool:
         send_goal_future = client.send_goal_async(goal_msg)
-        
-        # 콜백이 백그라운드 스레드에서 처리되므로,
-        # future가 완료될 때까지 기다리기만 하면 됩니다.
+
+        # Callbacks run on the background spinner thread, so just wait for the future.
         while rclpy.ok() and not send_goal_future.done():
-            # 짧은 시간 동안 슬립하여 CPU 사용을 줄입니다.
             time.sleep(0.1)
 
         goal_handle = send_goal_future.result()
@@ -572,8 +559,7 @@ class ControlSuiteShell(cmd.Cmd):
             return False
 
         get_result_future = goal_handle.get_result_async()
-        
-        # 마찬가지로 future가 완료될 때까지 기다립니다.
+
         while rclpy.ok() and not get_result_future.done():
             time.sleep(0.1)
 

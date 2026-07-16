@@ -36,6 +36,15 @@ private:
     bool saved_success_status_{false};
     bool report_failure_{false};
     rclcpp::Time wait_start_time_;
+
+    // Goal payload, staged in handle_accepted() before activate_goal() and read by
+    // the RT compute() (see the GoalPhase ordering contract in base_action_server.hpp).
+    bool goal_grasp_{false};
+    double goal_width_{0.0};
+    double goal_speed_{0.0};
+    double goal_force_{0.0};
+    double goal_epsilon_inner_{0.0};
+    double goal_epsilon_outer_{0.0};
 };
 
 } // namespace franka

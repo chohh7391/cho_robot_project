@@ -113,6 +113,7 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     kin_data_ = pinocchio::Data(model_);
     kin_v_zero_ = Eigen::VectorXd::Zero(model_.nv);
     kin_J_.setZero(6, model_.nv);
+    q_scratch_ = Eigen::VectorXd::Zero(model_.nq);
 
     nq_ = robot_->nq();
     nv_ = robot_->nv();

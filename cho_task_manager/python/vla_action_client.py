@@ -55,22 +55,32 @@ class VLAActionTester(Node):
         msg.rotation_type = self.test_rotation_type
         msg.relative = self.is_relative
         msg.chunk_size = self.chunk_size
+        msg.control_dt = self.dt  # explicit waypoint spacing (0.0 would fall back to inference_dt/chunk_size)
         
         arm_actions = []
         gripper_actions = []
 
-        # 원형 궤적 파라미터
+        # circle trajectory parameters
         radius = 0.05
-        # Relative 모드일 때 (0,0,0)에서 출발하도록 설계
         c_x, c_y, c_z = (0.0, 0.0, 0.0) if self.is_relative else (0.5, 0.0, 0.4)
 
+        # Relative chunks follow the usual VLA convention: each chunk's offsets are
+        # relative to the robot state at that chunk's observation (the controller
+        # re-anchors per chunk), NOT cumulative from goal start. So emit each
+        # waypoint as (trajectory at t_i) - (trajectory at this chunk's start).
+        t_chunk_start = self.count * self.chunk_size * self.dt
+
         for i in range(self.chunk_size):
-            t = (self.count * self.chunk_size + i) * self.dt
-            
-            # Position (Relative면 1-cos로 0에서 시작 유도)
-            x = c_x + radius * (1 - math.cos(t)) if self.is_relative else c_x + radius * math.cos(t)
-            y = c_y + radius * math.sin(t)
-            z = c_z
+            t = t_chunk_start + i * self.dt
+
+            if self.is_relative:
+                x = radius * (math.cos(t_chunk_start) - math.cos(t))
+                y = radius * (math.sin(t) - math.sin(t_chunk_start))
+                z = 0.0
+            else:
+                x = c_x + radius * math.cos(t)
+                y = c_y + radius * math.sin(t)
+                z = c_z
             arm_actions.extend([x, y, z])
 
             # --- Rotation Type별 처리 ---

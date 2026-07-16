@@ -145,6 +145,11 @@ protected:
     pinocchio::Data kin_data_;
     Eigen::VectorXd kin_v_zero_;
     pinocchio::Data::Matrix6x kin_J_;
+    // Preallocated full-configuration scratch for controllers that evaluate kinematics
+    // at a reference config (q_scratch_ = state_.q; q_scratch_.head(num_dof_) = q_ref).
+    // Same-size assignment never reallocates, so reusing this avoids a per-cycle heap
+    // allocation in the 1 kHz update loop (see CONTROLLER_STABILITY_TODO.md).
+    Eigen::VectorXd q_scratch_;
 
     std::string ee_name_;
     pinocchio::FrameIndex ee_id_;

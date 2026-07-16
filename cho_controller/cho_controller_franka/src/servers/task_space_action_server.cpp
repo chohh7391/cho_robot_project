@@ -53,25 +53,27 @@ rclcpp_action::GoalResponse TaskSpaceActionServer::handle_goal(
             return rclcpp_action::GoalResponse::REJECT;
         }
     }
-    // If another goal is active and this server only handles one at a time
-    if (control_running_ || (goal_handle_ && goal_handle_->is_active())) {
+    // Single-goal server: busy unless fully idle.
+    if (goal_busy()) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another goal is currently active.", action_name_.c_str());
-        return rclcpp_action::GoalResponse::REJECT; // Or ACCEPT_AND_DEFER if you implement queuing
+        return rclcpp_action::GoalResponse::REJECT;
     }
 
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse TaskSpaceActionServer::handle_cancel(
-    const std::shared_ptr<TaskSpaceGoalHandle> goal_handle)
+    const std::shared_ptr<TaskSpaceGoalHandle> /*goal_handle*/)
 {
+    cancel_requested_.store(true);
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void TaskSpaceActionServer::handle_accepted(
   const std::shared_ptr<TaskSpaceGoalHandle> goal_handle)
 {
-    goal_handle_ = goal_handle;
+    // Stage the goal payload BEFORE activate_goal() (see the GoalPhase doc in
+    // base_action_server.hpp for the ordering contract).
     const auto goal = goal_handle->get_goal();
 
     is_relative_ = goal->relative;
@@ -85,19 +87,22 @@ void TaskSpaceActionServer::handle_accepted(
 
     trajectory_->setDuration(duration_);
 
-    initialized_ = false;
-    control_running_ = true;
+    activate_goal(goal_handle);
 }
 
 bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
-    if (!control_running_ || !goal_handle_ || !goal_handle_->is_active()) {
-        return false; // Not running or no active goal
+    // RT-side: atomics only; the finisher timer performs the terminal
+    // rclcpp_action calls (see base_action_server.hpp).
+    if (!rt_active()) {
+        return false;
+    }
+
+    if (rt_new_goal_epoch()) {
+        initialized_ = false;
     }
 
     if (!initialized_) {
-        const auto goal = goal_handle_->get_goal();
-        pinocchio::SE3 final_ref;
         if (is_relative_) {
             state.H_ee_ref = state.H_ee * H_ee_ref_;
         } else {
@@ -113,49 +118,32 @@ bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & s
     }
     trajectory_->setCurrentTime(current_time.seconds());
 
-    // Check for cancellation first
-    if (goal_handle_->is_canceling()) {
-        RCLCPP_INFO(node_->get_logger(), "[%s] Goal Canceled", action_name_.c_str());
-        result_msg_->is_completed = false; // Populate result
-        goal_handle_->canceled(result_msg_);
-        control_running_ = false;
-        goal_handle_.reset(); // Release the handle
-        return false; // Indicate computation related to this goal has stopped
+    if (cancel_requested_.load()) {
+        finish_from_rt(GoalPhase::kFinishCanceled);
+        return false;
     }
 
-    // Publish feedback (percent_complete)
     double elapsed_time_sec = (current_time - start_time_).seconds();
-    float percent = static_cast<float>(
-        std::min(100.0, (elapsed_time_sec / duration_) * 100.0)
-    );
-    feedback_msg_->percent_complete = percent;
-    // goal_handle_->publish_feedback(feedback_msg_);
+    feedback_msg_->percent_complete = static_cast<float>(
+        std::min(100.0, (elapsed_time_sec / duration_) * 100.0));
 
     // success condition
     double translation_error_norm = (state.H_ee_ref.translation() - state.H_ee.translation()).norm();
     Eigen::Matrix3d R_diff = state.H_ee.rotation().transpose() * state.H_ee_ref.rotation();
     Eigen::Vector3d rot_error_vec = pinocchio::log3(R_diff);
     double rotation_error_norm = rot_error_vec.norm();
-    
+
     if (elapsed_time_sec > duration_ + 1.0 && translation_error_norm < success_translation_threshold_ && rotation_error_norm < success_rotation_threshold_) {
-        RCLCPP_INFO(node_->get_logger(), "[%s] Goal Succeeded. Error norm: %f(pos), %f(ori)", action_name_.c_str(), translation_error_norm, rotation_error_norm);
-        result_msg_->is_completed = true;
-        goal_handle_->succeed(result_msg_);
         state.H_ee_init = state.H_ee;
-        control_running_ = false;
-        goal_handle_.reset();
-        return true; // Indicate goal completion
+        finish_from_rt(GoalPhase::kFinishSucceeded);
+        return true;
     }
 
     // time-out condition
     if (elapsed_time_sec > duration_ + 2.0) {
-        RCLCPP_WARN(node_->get_logger(), "[%s] Goal Aborted (timeout). Error norm: %f(pos), %f(ori)", action_name_.c_str(), translation_error_norm, rotation_error_norm);
-        result_msg_->is_completed = false;
-        goal_handle_->abort(result_msg_);
         state.H_ee_init = state.H_ee;
-        control_running_ = false;
-        goal_handle_.reset();
-        return false; // Indicate goal failure
+        finish_from_rt(GoalPhase::kFinishAborted);
+        return false;
     }
 
     return true;

@@ -4,12 +4,13 @@ from cho_task_manager.behaviors.service.base_service_behavior import BaseService
 
 
 class TareFTSensorServiceBehavior(BaseServiceBehavior):
-    """Bota FT sensor의 tare(영점 조정) 서비스를 호출하는 behavior.
+    """
+    Calls the Bota FT sensor's tare (zeroing) service.
 
-    bota tare는 서버가 ~3초간 샘플을 모아 영점을 계산한 뒤에야 응답을 보낸다.
-    discovery server 환경에서는 그 응답이 유실되어 future가 끝나지 않는 경우가
-    있으므로, wait_for_response=False면 요청만 보내고 바로 SUCCESS를 반환한다.
-    (영점이 안정화될 시간은 뒤에 Timer 등으로 따로 확보한다.)
+    The bota tare server only responds after collecting samples for ~3s to compute the
+    zero offset. In a discovery-server setup that response can get lost, leaving the
+    future never done -- so wait_for_response=False just sends the request and returns
+    SUCCESS immediately (give the zero time to settle separately, e.g. with a Timer).
     """
 
     def __init__(
@@ -26,7 +27,8 @@ class TareFTSensorServiceBehavior(BaseServiceBehavior):
         if self.wait_for_response:
             return super().update()
 
-        # fire-and-forget: 요청을 보냈으면(future 생성됨) 응답을 기다리지 않고 통과
+        # fire-and-forget: pass as soon as the request was sent (future exists),
+        # without waiting for a response
         if self.future is None:
             self.node.get_logger().error(
                 f"[{self.name}] Tare request was not sent (service unavailable)."
@@ -39,7 +41,7 @@ class TareFTSensorServiceBehavior(BaseServiceBehavior):
         return py_trees.common.Status.SUCCESS
 
     def handle_response(self, result):
-        """Trigger의 결과(result.success) 판별 (wait_for_response=True일 때만 사용)"""
+        """Interprets the Trigger result (only used when wait_for_response=True)."""
         if result.success:
             self.node.get_logger().info(
                 f"[{self.name}] FT sensor tared successfully! message='{result.message}'"
