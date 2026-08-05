@@ -5,8 +5,8 @@
   <version>1.0.0</version>
   <description>Example package that shows how to use the bota_driver_node from bota_driver package to build a robotic application using Bota Systems FT sensors</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
-  <author email="support@botasys.com">Bota Systems AG</author>
   <license>BSL</license>
+  <author email="support@botasys.com">Bota Systems AG</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

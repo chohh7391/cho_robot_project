@@ -7,6 +7,19 @@
     URDF description for Universal Robots
   </description>
 
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+
+  <license file="LICENSE">BSD-3-Clause</license>
+  <!-- The UR8LONG, UR15, UR18, UR20 and UR30 meshes constitutes “Graphical Documentation” the use of which is subject to and governed by our “Terms and Conditions for use of Graphical Documentation”, which can be found here: https://www.universal-robots.com/legal/terms-and-conditions/terms_and_conditions_for_use_of_graphical_documentation.txt -->
+  <license file="meshes/ur20/LICENSE.txt">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>
+  <!--<license file="meshes/ur8long/LICENSE.txt" source-files="meshes/ur8long/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
+  <!--<license file="meshes/ur15/LICENSE.txt" source-files="meshes/ur15/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
+  <!--<license file="meshes/ur18/LICENSE.txt" source-files="meshes/ur18/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
+  <!--<license file="meshes/ur20/LICENSE.txt" source-files="meshes/ur20/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
+  <!--<license file="meshes/ur30/LICENSE.txt" source-files="meshes/ur30/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
+
+  <url type="bugtracker">https://github.com/UniversalRobots/Universal_Robots_ROS2_Description/issues</url>
+  <url type="repository">https://github.com/UniversalRobots/Universal_Robots_ROS2_Description</url>
   <author>Nadia Hammoudeh Garcia</author>
   <author>Kelsey Hawkins</author>
   <author>G.A. vd. Hoorn</author>
@@ -22,23 +35,9 @@
   <author email="lovro.ivanov@gmail.com">Lovro Ivanov</author>
   <author email="denis@stoglrobotics.de">Denis Stogl</author>
   <author email="dipentima@fzi.de">Vincenzo Di Pentima</author>
-
-  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <author email="feex@universal-robots.com">Felix Exner</author>
   <author email="rsk@universal-robots.com">Rune Søe-Knudsen</author>
   <author email="ros@universal-robots.com">Universal Robots A/S</author>
-
-  <license file="LICENSE">BSD-3-Clause</license>
-  <!-- The UR8LONG, UR15, UR18, UR20 and UR30 meshes constitutes “Graphical Documentation” the use of which is subject to and governed by our “Terms and Conditions for use of Graphical Documentation”, which can be found here: https://www.universal-robots.com/legal/terms-and-conditions/terms_and_conditions_for_use_of_graphical_documentation.txt -->
-  <license file="meshes/ur20/LICENSE.txt">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>
-  <!--<license file="meshes/ur8long/LICENSE.txt" source-files="meshes/ur8long/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
-  <!--<license file="meshes/ur15/LICENSE.txt" source-files="meshes/ur15/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
-  <!--<license file="meshes/ur18/LICENSE.txt" source-files="meshes/ur18/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
-  <!--<license file="meshes/ur20/LICENSE.txt" source-files="meshes/ur20/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
-  <!--<license file="meshes/ur30/LICENSE.txt" source-files="meshes/ur30/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->
-
-  <url type="bugtracker">https://github.com/UniversalRobots/Universal_Robots_ROS2_Description/issues</url>
-  <url type="repository">https://github.com/UniversalRobots/Universal_Robots_ROS2_Description</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
