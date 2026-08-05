@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Only the packages that build from binary (apt) dependencies alone are covered.
+# cho_controller_franka, cho_bringup_franka, cho_bringup_ur and bota_ft_sensor
+# need the extern/ submodules (franka_ros2 + libfranka, mujoco_ros2_control,
+# Universal_Robots_ROS2_Driver, bota_driver_ros2) built from source; there are no
+# Humble debs for franka_msgs / franka_gripper / franka_hardware. Adding them
+# means a source build of libfranka in CI - deferred, tracked separately.
+env:
+  BUILD_PACKAGES: >-
+    cho_interfaces
+    cho_trajectory_smoother
+    cho_controller_common
+    cho_controller_ur
+    cho_description_franka
+    cho_description_ur
+    cho_task_manager
+  # cho_description_franka / cho_description_ur are forks of franka_description
+  # and ur_description and carry their upstream lint debt, so they are built
+  # (the xacro/URDF must still parse) but not linted.
+  TEST_PACKAGES: >-
+    cho_interfaces
+    cho_trajectory_smoother
+    cho_controller_common
+    cho_controller_ur
+    cho_task_manager
+
+jobs:
+  build-and-test:
+    name: Humble build + test
+    runs-on: ubuntu-22.04
+    container:
+      image: ros:humble-ros-base
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/cho_robot_project
+
+      - name: Install ROS dependencies
+        shell: bash
+        run: |
+          set -eo pipefail
+          apt-get update
+          rosdep update --rosdistro humble
+          source /opt/ros/humble/setup.bash
+          rosdep install -y --rosdistro humble --ignore-src --from-paths \
+            src/cho_robot_project/cho_interfaces \
+            src/cho_robot_project/cho_controller/utils/cho_trajectory_smoother \
+            src/cho_robot_project/cho_controller/cho_controller_common \
+            src/cho_robot_project/cho_controller/cho_controller_ur \
+            src/cho_robot_project/cho_description/cho_description_franka \
+            src/cho_robot_project/cho_description/cho_description_ur \
+            src/cho_robot_project/cho_task_manager
+
+      - name: Build
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            --packages-select ${{ env.BUILD_PACKAGES }}
+
+      - name: Test
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          colcon test \
+            --packages-select ${{ env.TEST_PACKAGES }} \
+            --return-code-on-test-failure
+
+      - name: Test results
+        if: always()
+        shell: bash
+        run: colcon test-result --verbose
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build/*/test_results/**/*.xml
+          if-no-files-found: ignore

@@ -1,0 +1,48 @@
+name: Lint
+
+# Fast feedback that needs no colcon build. The heavier build + test matrix
+# lives in ci.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ament_lint:
+    name: ament linters
+    runs-on: ubuntu-22.04
+    container:
+      image: ros:humble-ros-base
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install linters
+        run: |
+          set -eo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-pytest \
+            ros-humble-ament-flake8 \
+            ros-humble-ament-pep257 \
+            ros-humble-ament-xmllint
+
+      # Covers every package, including the ones ci.yml cannot build yet.
+      - name: package.xml is well-formed
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          ament_xmllint $(find . -name package.xml -not -path './extern/*')
+
+      # Runs the package's own test_flake8.py / test_pep257.py so CI and
+      # `colcon test` stay in agreement about the configured style.
+      - name: flake8 + pep257 (cho_task_manager)
+        shell: bash
+        working-directory: cho_task_manager
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          python3 -m pytest test/test_flake8.py test/test_pep257.py -v

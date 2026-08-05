@@ -20,7 +20,9 @@ import pytest
 @pytest.mark.pep257
 def test_pep257():
     rc = main(argv=[
-        '--ignore=D100,D101,D102,D103,D104,D105,D107,D203,D204,D205,D212,D400,D401,D415',
+        # D212/D213 are mutually exclusive conventions; this codebase puts the
+        # summary on the first line, so both are ignored.
+        '--ignore=D100,D101,D102,D103,D104,D105,D107,D203,D204,D205,D212,D213,D400,D401,D415',
         'cho_task_manager',
         'launch',
         'setup.py',

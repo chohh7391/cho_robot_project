@@ -12,7 +12,6 @@
   <depend>py_trees_ros</depend>
   <depend>cho_interfaces</depend>
   <depend>controller_manager_msgs</depend>
-  <depend>franka_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>

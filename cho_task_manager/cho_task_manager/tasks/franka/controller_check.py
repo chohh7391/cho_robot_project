@@ -111,7 +111,8 @@ def _gripper_check():
 def _hold_check(controller, hold_sec=3.0):
     """For controllers without an action server (gravity compensation, VLA
     without chunks): switch to it, hold, then verify it is still active --
-    catches activation failures and mid-hold controller crashes."""
+    catches activation failures and mid-hold controller crashes.
+    """
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
     seq.add_children([
         _switch(controller),
