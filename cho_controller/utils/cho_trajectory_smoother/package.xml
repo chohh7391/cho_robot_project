@@ -5,7 +5,8 @@
   <description>Time-optimized trajectory generation/description</description>
 
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
-  <license>BSD</license>
+  <author email="tobias@gatech.edu">Tobias Kunz (Georgia Tech Research Corporation)</author>
+  <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

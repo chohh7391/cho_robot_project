@@ -4,8 +4,9 @@
   <name>cho_bringup_franka</name>
   <version>2.2.0</version>
   <description>Package with launch files and run-time configurations for using Franka Robotics research robots with ros2_control</description>
-  <maintainer email="support@franka.de">Franka Robotics GmbH</maintainer>
-  <license>Apache 2.0</license>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <author email="support@franka.de">Franka Robotics GmbH</author>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

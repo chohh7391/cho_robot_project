@@ -1,3 +1,11 @@
+//
+// Copyright (c) 2017 CNRS
+//
+// SPDX-License-Identifier: BSD-2-Clause
+//
+// Derived from TSID (https://github.com/stack-of-tasks/tsid) and modified for
+// cho_robot_project. Full license text: LICENSES/BSD-2-Clause-TSID.txt
+//
 #include "cho_controller_common/solver/solver_HQP_eiquadprog_fast.hpp"
 #include "cho_controller_common/math/util.hpp"
 #include "eiquadprog/eiquadprog-fast.hpp"

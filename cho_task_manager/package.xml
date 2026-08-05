@@ -4,7 +4,7 @@
   <name>cho_task_manager</name>
   <version>0.0.0</version>
   <description>Behavior-tree task manager for Cho robot controllers</description>
-  <maintainer email="chohh7391@gmail.com">home</maintainer>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>

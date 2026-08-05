@@ -4,8 +4,8 @@
   <name>cho_bringup_ur</name>
   <version>0.1.0</version>
   <description>Cho UR bringup wrappers for simulation and real Universal Robots hardware.</description>
-  <maintainer email="todo@example.com">Cho Robot Project Maintainers</maintainer>
-  <license>Apache 2.0</license>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

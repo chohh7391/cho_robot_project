@@ -1,0 +1,92 @@
+Cho Robot Project
+Copyright (c) 2026 Hyunho Cho
+
+This product includes software developed as part of the Cho Robot Project,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Not all packages in this repository are original work. The sections below
+record the upstream origin and license of each third-party component.
+Full license texts for vendored sources are in LICENSES/.
+
+
+================================================================================
+Vendored third-party sources (copied into this repository and modified)
+================================================================================
+
+cho_controller/cho_controller_common/
+    Derived from TSID — Task Space Inverse Dynamics
+    https://github.com/stack-of-tasks/tsid
+    Copyright (c) 2017 CNRS
+    Copyright (c) 2019-2022 CNRS, Univ. of Trento, INRIA, Max Planck Institute
+    License: BSD-2-Clause  ->  LICENSES/BSD-2-Clause-TSID.txt
+
+    Note: this code was originally copied from a pre-2020 revision of TSID,
+    which carried an LGPL-3.0 notice. TSID was relicensed to BSD-2-Clause by
+    its copyright holders (LICENSE file added upstream 2020-05-10), and the
+    BSD-2-Clause grant is the one relied on here. File headers were restored
+    to match upstream after the original copy dropped them.
+
+cho_controller/cho_controller_common/src/util/stop_watch.cpp
+cho_controller/cho_controller_common/include/cho_controller_common/util/stop_watch.hpp
+    Copyright (c) 2010-2013 Tommaso Urli <tommaso.urli@uniud.it>
+    University of Udine
+    License: MIT  ->  LICENSES/MIT-stop-watch.txt
+
+cho_controller/utils/cho_trajectory_smoother/
+    Derived from the reference implementation of
+    "Time-Optimal Trajectory Generation for Path Following with Bounded
+     Acceleration and Velocity" (Kunz & Stilman, RSS 2012)
+    https://github.com/tobiaskunz/trajectories
+    Copyright (c) 2012 Georgia Tech Research Corporation
+    Author: Tobias Kunz <tobias@gatech.edu>
+    License: BSD-style  ->  LICENSES/BSD-Kunz-trajectories.txt
+
+    Modified for cho_robot_project (namespace and packaging changes).
+
+
+================================================================================
+Forked upstream packages (retain their original license and authorship)
+================================================================================
+
+cho_controller/cho_controller_franka/
+cho_bringup/cho_bringup_franka/
+cho_description/cho_description_franka/
+    Derived from franka_ros2 / franka_description
+    https://github.com/frankaemika/franka_ros2
+    Copyright (c) 2023-2025 Franka Robotics GmbH
+    License: Apache-2.0
+
+cho_description/cho_description_ur/
+    Derived from ur_description (Universal_Robots_ROS2_Description)
+    https://github.com/UniversalRobots/Universal_Robots_ROS2_Description
+    Copyright (c) 2021 PickNik, Inc.
+    Copyright (c) 2022 FZI Forschungszentrum Informatik
+    Copyright Universal Robots A/S
+    License: BSD-3-Clause (see cho_description/cho_description_ur/LICENSE)
+
+    The mesh files under meshes/ are NOT BSD-licensed. They are covered by
+    "Universal Robots A/S' Terms and Conditions for Use of Graphical
+    Documentation" — see the per-model LICENSE.txt files in each mesh
+    directory. Redistribution of those meshes is subject to those terms.
+
+cho_sensor/bota_ft_sensor/
+    Configuration, launch and URDF files for Bota Systems force/torque sensors.
+    Copyright Bota Systems AG
+    License: see package.xml
+
+
+================================================================================
+Git submodules under extern/
+================================================================================
+
+These are not vendored — they are referenced as submodules and retain their
+own licenses in their own repositories:
+
+    extern/franka_ros2                    Franka Robotics GmbH, Apache-2.0
+    extern/Universal_Robots_ROS2_Driver   Universal Robots A/S, BSD-3-Clause
+    extern/mujoco_ros2_control            ros-controls, Apache-2.0
+    extern/qpOASES                        COIN-OR, LGPL-2.1
+    extern/bota_driver_ros2               Bota Systems AG
+
+    Note: qpOASES is LGPL-2.1. It is consumed as a separate library; if you
+    distribute binaries that link it, review the LGPL linking requirements.
