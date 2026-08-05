@@ -8,6 +8,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Container jobs default to `sh`, where `set -o pipefail` is not a valid option
+# and aborts the step with exit 2. Pin bash for every run step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ament_lint:
     name: ament linters

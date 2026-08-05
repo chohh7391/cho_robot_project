@@ -7,6 +7,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Container jobs default to `sh`, where `set -o pipefail` is not a valid option
+# and aborts the step with exit 2. Pin bash for every run step.
+defaults:
+  run:
+    shell: bash
+
 # Only the packages that build from binary (apt) dependencies alone are covered.
 # cho_controller_franka, cho_bringup_franka, cho_bringup_ur and bota_ft_sensor
 # need the extern/ submodules (franka_ros2 + libfranka, mujoco_ros2_control,
@@ -44,6 +50,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: src/cho_robot_project
+
+      # cho_controller_common compiles src/solver/solver_HQP_qpoases.cpp, which
+      # does `#include <qpOASES.hpp>`. qpOASES is not a rosdep key and is not
+      # declared in that package's CMakeLists or package.xml - it is the
+      # extern/qpOASES submodule, installed to /usr/local on developer
+      # machines. Reproduce that here, or the build fails on a missing header.
+      - name: Build and install qpOASES
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd src/cho_robot_project
+          git config --global --add safe.directory "$(pwd)"
+          git submodule update --init --depth 1 extern/qpOASES
+          cmake -S extern/qpOASES -B /tmp/qpoases-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/qpoases-build -j"$(nproc)"
+          cmake --install /tmp/qpoases-build
 
       - name: Install ROS dependencies
         shell: bash
