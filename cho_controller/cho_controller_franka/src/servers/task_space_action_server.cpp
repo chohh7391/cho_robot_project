@@ -10,6 +10,12 @@ void TaskSpaceActionServer::init()
     if (is_position_mode()) {
         success_translation_threshold_ = declare_or_get_double("success_threshold.position.translation", 1e-2);
         success_rotation_threshold_    = declare_or_get_double("success_threshold.position.rotation", 3e-2);
+    } else if (is_velocity_mode()) {
+        // Kinematic interface like position, but the command chain runs open-loop
+        // against the observer during the motion (see TaskSpaceVelocityController),
+        // so allow a little more than position and re-tune once measured on hardware.
+        success_translation_threshold_ = declare_or_get_double("success_threshold.velocity.translation", 1.5e-2);
+        success_rotation_threshold_    = declare_or_get_double("success_threshold.velocity.rotation", 4e-2);
     } else {
         success_translation_threshold_ = declare_or_get_double("success_threshold.torque.translation", 2e-2);
         success_rotation_threshold_    = declare_or_get_double("success_threshold.torque.rotation", 1e-1);

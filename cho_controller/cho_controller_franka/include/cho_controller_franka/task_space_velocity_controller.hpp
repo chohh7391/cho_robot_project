@@ -21,10 +21,12 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 // an open-loop joint reference q_ref_ integrated by a damped-least-squares
 // Newton step against FK(q_ref_), so encoder noise never enters the command.
 // The output stage converts the reference to a velocity command,
-//   dq_cmd = (q_ref_ - q_ref_prev)/dt  +  kp_joint * (q_ref_ - q_meas),
-// where the feedforward term tracks motion and the joint-space P term holds
-// q_ref_ against gravity at standstill (velocity actuators are pure dampers
-// in MuJoCo, so without the P term the arm would sag while idle).
+//   dq_cmd = (q_ref_ - q_ref_prev)/dt_nominal + kp_joint * (q_ref_ - q_cmd_int),
+// where q_cmd_int is the integral of the velocity commands actually issued, so
+// that on real hardware the command path never reads the measured joint
+// position and the differentiation uses the nominal control period rather than
+// the jittery measured one (see update()). In simulation the P term falls back
+// to the measured position, which is needed there to hold against gravity.
 class TaskSpaceVelocityController : public FrankaBaseController
 {
 public:
@@ -48,7 +50,16 @@ private:
   bool ref_init_{false};
   bool prev_running_{false};
 
-  // Jitter-free trajectory clock (fixed 1 ms cadence).
+  // Integral of the velocity commands actually issued -- the command chain's own
+  // notion of where the joints are. The P term servos q_ref_ against THIS, not
+  // against the measured state (see update()).
+  Vector7d q_cmd_int_{Vector7d::Zero()};
+
+  // Max-abs joint speed commanded last cycle; gates the at-rest goal-start
+  // re-anchor in update().
+  double prev_cmd_speed_{0.0};
+
+  // Jitter-free trajectory clock (fixed nominal cadence, 1/update_rate).
   double traj_clock_{0.0};
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;

@@ -98,8 +98,14 @@ protected:
                controller_active_flag_->load(std::memory_order_acquire);
     }
 
-    // Whether the controller runs in position mode (vs. effort/torque).
+    // Which control interface the controller commands. Success thresholds are
+    // keyed off this: position and velocity are both KINEMATIC interfaces whose
+    // inner loop lives in the robot, so they hold a tight tolerance; torque runs
+    // the loop here and settles with a real steady-state error, so it needs a
+    // looser one. Velocity must not silently fall into the torque branch -- that
+    // reports success up to 5.7 deg off (see the rotation threshold).
     bool is_position_mode() const { return control_mode_ == "position"; }
+    bool is_velocity_mode() const { return control_mode_ == "velocity"; }
 
     // Declare (picking up any launch override) and return a double parameter, or the default.
     double declare_or_get_double(const std::string & name, double default_value) {

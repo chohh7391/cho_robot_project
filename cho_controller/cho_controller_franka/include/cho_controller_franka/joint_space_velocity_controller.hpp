@@ -11,10 +11,12 @@ namespace franka {
 // velocity mode). The trajectory reference q_ref is generated exactly like
 // JointSpacePositionController (jitter-free clock, smoother trajectory); the
 // output stage converts it to a velocity command,
-//   dq_cmd = (q_ref - q_ref_prev)/dt  +  kp_joint * (q_ref - q_meas),
-// where the feedforward term tracks motion and the joint-space P term holds
-// q_ref against gravity at standstill (velocity actuators are pure dampers in
-// MuJoCo, so without it the arm would sag while idle).
+//   dq_cmd = (q_ref - q_ref_prev)/dt_nominal + kp_joint * (q_ref - q_cmd_int),
+// where q_cmd_int is the integral of the velocity commands actually issued, so
+// that on real hardware the command path never reads the measured joint
+// position and the differentiation uses the nominal control period rather than
+// the jittery measured one (see update()). In simulation the P term falls back
+// to the measured position, which is needed there to hold against gravity.
 class JointSpaceVelocityController : public FrankaBaseController
 {
 public:
@@ -40,6 +42,15 @@ private:
   Vector7d q_ref_{Vector7d::Zero()};
   bool ref_init_{false};
   bool prev_running_{false};
+
+  // Integral of the velocity commands actually issued -- the command chain's own
+  // notion of where the joints are. The P term servos q_ref_ against THIS, not
+  // against the measured state (see update()).
+  Vector7d q_cmd_int_{Vector7d::Zero()};
+
+  // Max-abs joint speed commanded last cycle; gates the at-rest goal-start
+  // re-anchor in update().
+  double prev_cmd_speed_{0.0};
 };
 
 } // namespace franka

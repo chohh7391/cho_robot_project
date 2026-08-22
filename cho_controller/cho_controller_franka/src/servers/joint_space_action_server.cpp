@@ -9,9 +9,16 @@ void JointSpaceActionServer::init()
 {
     BaseActionServer<JointSpaceAction, JointTrajectory>::init();
 
-    success_threshold_ = is_position_mode()
-        ? declare_or_get_double("success_threshold.position.joint", 1.5e-2)
-        : declare_or_get_double("success_threshold.torque.joint", 5e-2);
+    if (is_position_mode()) {
+        success_threshold_ = declare_or_get_double("success_threshold.position.joint", 1.5e-2);
+    } else if (is_velocity_mode()) {
+        // Kinematic interface like position, but the command chain runs open-loop
+        // against the observer during the motion (see JointSpaceVelocityController),
+        // so allow a little more than position and re-tune once measured on hardware.
+        success_threshold_ = declare_or_get_double("success_threshold.velocity.joint", 2e-2);
+    } else {
+        success_threshold_ = declare_or_get_double("success_threshold.torque.joint", 5e-2);
+    }
 
     RCLCPP_INFO(node_->get_logger(),
         "[%s] success threshold (control_mode=%s): joint_error<%.4f",
