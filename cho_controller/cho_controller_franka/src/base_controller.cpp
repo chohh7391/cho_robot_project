@@ -352,6 +352,38 @@ Vector7d FrankaBaseController::held_command_position() const
     return state_.q_arm_init;
 }
 
+double FrankaBaseController::nominal_period(const rclcpp::Duration & period)
+{
+  // get_update_rate() reports the controller's OWN rate, which is 0 whenever it
+  // inherits the controller_manager's - and no config in this repository sets a
+  // per-controller update_rate, so it is 0 in every bringup. Falling back to a
+  // hardcoded 1 kHz was therefore only correct where the controller_manager also
+  // runs at 1000 Hz: the MuJoCo, Gazebo and real bringups. The Isaac bringup runs
+  // it at 250 Hz to match the physics rate, so a 1 ms nominal advanced the
+  // trajectory clock at a quarter of sim time and every goal took four times its
+  // requested duration - measured 17.0 s for a 4 s joint-space goal. It does not
+  // look like a clock bug from the outside: the arm just creeps toward the target
+  // and aborts, exactly as if the drive were too soft to hold against gravity.
+  //
+  // The measured period is used to ESTIMATE the rate, not to advance the clock
+  // directly: it jitters by up to 2x, and parameterising a position trajectory by
+  // it makes each cycle's command step - and so the velocity the actuator infers
+  // from it - jitter in proportion. Seeded from the first sane cycle so the
+  // estimate is right from the first goal, then smoothed.
+  const unsigned int rate = get_update_rate();
+  if (rate > 0) {
+    return 1.0 / rate;
+  }
+  const double measured = period.seconds();
+  // A cycle that saw no new state reports 0; a resume after a clock jump reports
+  // something huge. Neither says anything about the nominal rate.
+  if (measured > 1e-6 && measured < 0.1) {
+    nominal_dt_ = (nominal_dt_ > 0.0) ? (0.95 * nominal_dt_ + 0.05 * measured) : measured;
+  }
+  return (nominal_dt_ > 0.0) ? nominal_dt_ : 0.001;
+}
+
+
 void FrankaBaseController::clip_position(Vector7d & position, const double eps)
 {
     // Limit the per-step change to eps around the PREVIOUS COMMAND (q_arm_ref) and

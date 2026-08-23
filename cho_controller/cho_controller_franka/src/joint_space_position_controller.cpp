@@ -69,8 +69,7 @@ controller_interface::return_type JointSpacePositionController::update(
   // swings ~0.9-2.2 ms, so parameterizing the trajectory by jittery time would make
   // the per-tick command velocity swing in proportion and trip the libfranka
   // joint_motion_generator_acceleration_discontinuity reflex.
-  const unsigned int update_rate = get_update_rate();
-  const double dt = update_rate > 0 ? 1.0 / update_rate : 0.001;
+  const double dt = nominal_period(period);
   traj_clock_ += dt;
   const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
 

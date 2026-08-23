@@ -120,6 +120,11 @@ public:
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
 
+    // Nominal seconds per update() call, for the controllers that advance a
+    // trajectory clock themselves. See the definition for why this is not
+    // simply 1 / get_update_rate().
+    double nominal_period(const rclcpp::Duration & period);
+
     // Clamp an arm configuration to the model's absolute joint position limits
     // (with a small safety margin). Open-loop reference integrators (diff-IK)
     // must call this after every integration step: without it, chasing an
@@ -206,6 +211,9 @@ protected:
     // Each controller declares and reads its own "use_nullspace_posture"
     // parameter; default false preserves the pre-toggle behavior.
     bool use_nullspace_posture_{false};
+
+    // Smoothed estimate of the update period; see nominal_period().
+    double nominal_dt_{0.0};
 
     // varibles for controllers
     Vector7d dq_filtered_;

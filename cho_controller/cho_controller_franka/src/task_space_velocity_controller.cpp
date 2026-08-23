@@ -107,8 +107,7 @@ controller_interface::return_type TaskSpaceVelocityController::update(
   // Nominal control period. Both the trajectory clock and the output-stage
   // differentiation are parameterized by it rather than by the measured period
   // (see the output stage below for why).
-  const unsigned int update_rate = get_update_rate();
-  const double dt = update_rate > 0 ? 1.0 / update_rate : 0.001;
+  const double dt = nominal_period(period);
 
   // Goal start from rest: re-anchor the ENTIRE command chain to the measured
   // configuration, exactly once, before anything else this cycle.
