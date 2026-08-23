@@ -29,6 +29,15 @@ ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque
 # Simulation
 ros2 launch cho_bringup_franka bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
 ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_qp_controller
+# Isaac Sim (build the USD once first: cho_description_franka/usd/README.md)
+ros2 launch cho_bringup_franka bringup_isaac_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
+ros2 launch cho_bringup_ur bringup_isaac_robot.launch.py controller_name:=task_space_ik_controller
+# OpenArm: simulation only. bimanual:=true for the two-arm torso; physics_engine
+# is physx (default) or newton - both verified for torque/position/velocity.
+ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller
+ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller physics_engine:=newton bimanual:=true
+# Isaac: give it its own ROS_DOMAIN_ID if anything else on the machine simulates -
+# two /clock publishers make sim time jump backwards and every controller misbehaves.
 
 # VLA mode (requires control_mode set in controller config)
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
@@ -56,12 +65,34 @@ cho_description/cho_description_franka/
   robots/                    # Xacro entry points per robot variant
   urdf/                      # Generated URDFs (fr3, fr3_with_ft_sensor, etc.)
   xml/                       # MuJoCo scene XMLs
+  usd/                       # Isaac Sim USD assets (generated, gitignored; see usd/README.md)
   config/                    # Payload YAML
 
 cho_bringup/cho_bringup_franka/
-  launch/                    # bringup_real/gazebo/mujoco_robot.launch.py
-  config/{real,gazebo,mujoco}/controllers.yaml  # Per-environment controller gains
+  launch/                    # bringup_real/gazebo/mujoco/isaac_robot.launch.py
+  config/{real,gazebo,mujoco,isaac}/controllers.yaml  # Per-environment controller gains
   config/real/franka.config.yaml               # Robot IP, gripper, FT sensor flags
+
+cho_description/cho_description_openarm/   # enactic OpenArm v1.0, vendored fork
+  robots/openarm_v10/        # ONE xacro entry point for real/gazebo/mujoco/isaac/mock
+  xml/openarm_v10{,_bimanual}/   # MuJoCo scenes, one per control_mode
+  usd/                       # Isaac USD (generated, gitignored; see usd/README.md)
+  scripts/sync_mjcf_inertials.py  # keeps the MJCF's inertials/axes equal to the URDF
+
+cho_controller/cho_controller_openarm/    # namespace cho_controller::openarm
+  # 4 controllers: ee_state_broadcaster + joint_space impedance/position/velocity.
+  # Dynamic-size Eigen and name-based Pinocchio indexing, so one class serves both
+  # the single arm and either arm of the bimanual torso.
+
+cho_bringup/cho_bringup_openarm/          # mujoco + isaac only (no real hardware yet)
+  config/{mujoco,isaac}/controllers{,_bimanual}.yaml
+  utils/launch_utils.py      # per_arm() prefixes controller names on a bimanual build
+
+cho_bringup/cho_bringup_isaac/   # Shared by every robot's Isaac bringup
+  isaac/run_isaac_sim.py     # Isaac standalone runner (runs under isaacsim/python.sh, NOT ROS)
+  isaac/convert_urdf_to_usd.py  # URDF -> USD, also under isaacsim/python.sh
+  isaac/robots/*.json        # Per-robot physics profile: joints, home, armature, drive gains
+  scripts/                   # ROS-side helpers: isaac_command_gate.py, isaac_ft_sensor.py
 
 cho_task_manager/
   cho_task_manager/
@@ -92,6 +123,15 @@ Key controllers:
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 
+**Controllers that advance their own trajectory clock** (`joint_space_position`,
+`joint_space_velocity`, `task_space_velocity`) must take the per-cycle period from
+`nominal_period(period)`, never from `1 / get_update_rate()`. `get_update_rate()`
+returns 0 whenever a controller inherits the controller_manager's rate, which is
+every controller here — no config sets a per-controller `update_rate`. The old
+`: 0.001` fallback was silently correct only at a 1 kHz controller_manager (MuJoCo);
+at Isaac's 250 Hz it stretched every goal 4x, which looks like a weak drive rather
+than a clock bug. Fixed in both `FrankaBaseController` and `OpenArmBaseController`.
+
 ### Task Manager / Behavior Tree Flow
 
 `task_manager_node.py` instantiates a py_trees tree from `tasks/<task>.py`. Leaf behaviors in `behaviors/action/` (JointSpace, TaskSpace, Gripper) send goals to the controller action servers. `behaviors/service/` handles controller switching via `controller_manager`. The VLA flow adds `vla_controller` activation and a `VLACompletionWaiterBehavior`.
@@ -118,3 +158,7 @@ we set alias related to build below.
 you can use this alias when you need to build some packages or entire packages.
 alias cbr='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install'
 alias cbp='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select'
+---
+
+@./.conventions/project.md
+@./.conventions/session-log.md

@@ -19,7 +19,7 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 | arg | default | description |
 | --- | --- | --- |
 | `task` | `pick_place` | task name (must exist for the given `robot_type`) |
-| `robot_type` | `franka` | `franka` or `ur5e` |
+| `robot_type` | `franka` | `franka`, `ur5e` or `openarm` |
 | `use_sim_time` | `false` | set `true` when running against a simulator |
 | `debug_tree` | `true` | print the unicode tree on every tick |
 | `print_tree` | `true` | print the final tree snapshot when the task finishes |
@@ -55,6 +55,18 @@ a rebuild or before real experiments.
 | `pick_place` | pick & place with the Robotiq 2F-85 | **`load_gripper:=true`** (it opens/closes the gripper) |
 | `multi_move` | visits several absolute task-space waypoints | any UR bringup, no gripper needed |
 
+## OpenArm tasks
+
+| task | what it does | required bringup |
+| --- | --- | --- |
+| `controller_check_torque` | smoke check: switches to the joint impedance controller and drives a small motion through its action server | `control_mode:=torque` |
+
+Only the torque smoke check is wired so far, and only for the **single-arm** build.
+There is no `openarm_bimanual` robot config, so a bimanual torso is driven by sending
+action goals directly (see the OpenArm bringup section in the top-level README).
+Position/velocity task trees and the gripper/task-space roles are still open — see
+`todo/OPENARM_TODO.md`.
+
 ## Examples
 
 ```bash
@@ -63,6 +75,9 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_t
 
 # Franka controller smoke check (position-mode bringup)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=controller_check_position use_sim_time:=true
+
+# OpenArm controller smoke check (torque bringup, MuJoCo or Isaac)
+ros2 launch cho_task_manager run_task_manager.launch.py task:=controller_check_torque robot_type:=openarm use_sim_time:=true
 
 # UR5e pick & place (bringup with load_gripper:=true)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_type:=ur5e use_sim_time:=true

@@ -54,6 +54,21 @@ cmake ..
 sudo make install
 ```
 
+## OpenArm
+
+Nothing extra to install. `cho_description_openarm` is a vendored fork (URDF/xacro,
+meshes and MJCF all live in this repository), and the bringup is simulation-only, so
+it builds from the workspace with no submodule and no vendor SDK.
+
+Isaac Sim additionally needs the USD asset built once per variant — see
+`cho_description_openarm/usd/README.md`. The assets are generated and gitignored.
+
+> Real OpenArm hardware is **not** supported yet. The description carries a
+> `hardware:='real'` branch pointing at `openarm_hardware/OpenArmHW`, but the
+> `openarm_ros2` / `openarm_can` submodules are not vendored and there is no
+> `config/real/` or real launch file, so `hardware:=real` does not build. Use
+> `hardware:=mock` for a driver-free smoke test. Tracked in `todo/OPENARM_TODO.md`.
+
 ## Build
 
 ```bash
