@@ -87,10 +87,10 @@ jobs:
             src/cho_robot_project/cho_controller/utils/cho_trajectory_smoother \
             src/cho_robot_project/cho_controller/cho_controller_common \
             src/cho_robot_project/cho_controller/cho_controller_ur \
-  src/cho_robot_project/cho_controller/cho_controller_openarm \
+            src/cho_robot_project/cho_controller/cho_controller_openarm \
             src/cho_robot_project/cho_description/cho_description_franka \
             src/cho_robot_project/cho_description/cho_description_ur \
-  src/cho_robot_project/cho_description/cho_description_openarm \
+            src/cho_robot_project/cho_description/cho_description_openarm \
             src/cho_robot_project/cho_task_manager
 
       - name: Build
