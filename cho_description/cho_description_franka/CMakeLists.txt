@@ -32,4 +32,14 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}/
 )
 
+# USD assets for Isaac Sim. Generated (and large), so they are not tracked in
+# git -- see usd/README.md for the one-shot conversion command. Guarded so a
+# fresh clone that has not run the converter yet still builds.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/usd")
+  install(DIRECTORY
+    usd
+    DESTINATION share/${PROJECT_NAME}/
+  )
+endif()
+
 ament_package()

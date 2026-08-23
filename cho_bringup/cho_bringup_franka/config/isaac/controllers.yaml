@@ -1,0 +1,229 @@
+# Namespace agnostic controller configuration for the Franka FR3 under Isaac Sim.
+#
+# Derived from config/mujoco/controllers.yaml -- the gains start from the MuJoCo
+# values because both simulators apply raw joint torques with no gravity
+# compensation of their own (bringup_type "isaac" takes the same
+# base_controller.cpp branch as "mujoco": full non-linear effects fed forward).
+#
+# What differs from MuJoCo, and why:
+#
+#   update_rate      MuJoCo embeds the controller_manager in the simulator, so it
+#                    runs a true 1 kHz loop. Isaac is reached over DDS
+#                    (topic_based_ros2_control), so the loop rate is bounded by the
+#                    round trip. It MUST equal the Isaac physics rate, because the
+#                    controller_manager is paced by /clock: if /clock ticks at
+#                    250 Hz while update_rate is 1000, four cycles fire per clock
+#                    message and three of them see measured_period == 0.
+#                    Keep this in sync with the launch argument physics_rate.
+#
+#   max_delta_q      Expressed per cycle, so it scales with update_rate. The MuJoCo
+#                    value gives 2.5 rad/s at 1 kHz; the value here gives the same
+#                    2.5 rad/s at 250 Hz.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 250   # MUST equal the Isaac physics rate (launch arg physics_rate)
+      thread_priority: 98
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      ee_state_broadcaster:
+        type: cho_controller_franka/EEStateBroadcaster
+
+      simulation_gripper_controller:
+        type: forward_command_controller/ForwardCommandController
+
+      task_space_ik_controller:
+        type: cho_controller_franka/TaskSpaceIKController
+
+      task_space_velocity_controller:
+        type: cho_controller_franka/TaskSpaceVelocityController
+
+      joint_space_velocity_controller:
+        type: cho_controller_franka/JointSpaceVelocityController
+
+      joint_space_position_controller:
+        type: cho_controller_franka/JointSpacePositionController
+
+      gravity_compensation_controller:
+        type: cho_controller_franka/GravityCompensationController
+
+      joint_space_impedance_controller:
+        type: cho_controller_franka/JointSpaceImpedanceController
+
+      task_space_impedance_controller:
+        type: cho_controller_franka/TaskSpaceImpedanceController
+
+      operational_space_controller:
+        type: cho_controller_franka/OperationalSpaceController
+
+      gripper_controller:
+        type: cho_controller_franka/GripperController
+
+      joint_space_qp_controller:
+        type: cho_controller_franka/JointSpaceQPController
+
+      task_space_qp_controller:
+        type: cho_controller_franka/TaskSpaceQPController
+
+      vla_controller:
+        type: cho_controller_franka/VLAController
+
+
+/**:
+  joint_state_broadcaster:
+    ros__parameters:
+      robot_type: "fr3"
+      joints:
+        - fr3_joint1
+        - fr3_joint2
+        - fr3_joint3
+        - fr3_joint4
+        - fr3_joint5
+        - fr3_joint6
+        - fr3_joint7
+        - fr3_finger_joint1
+
+/**:
+  ee_state_broadcaster:
+    ros__parameters:
+      robot_type: "fr3"
+
+/**:
+  simulation_gripper_controller:
+    ros__parameters:
+      joints:
+        - fr3_finger_joint1
+      interface_name: position
+
+/**:
+  joint_space_position_controller:
+    ros__parameters:
+      robot_type: "fr3"
+
+/**:
+  task_space_ik_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      lambda: 0.01          # DLS damping factor
+      max_delta_q: 0.01     # per-step joint command limit [rad] (~2.5 rad/s @250Hz, under FR3 joint vel limits)
+
+/**:
+  task_space_velocity_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      lambda: 0.01          # DLS damping factor
+      # Reference slew MUST match the output clamp: max_joint_vel / update_rate.
+      max_delta_q: 4.0e-3   # per-step reference slew [rad/cycle] (= 1.0 rad/s @250Hz)
+      kp_joint: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]  # hold/track P gain [1/s]
+      max_joint_vel: 1.0    # output velocity clamp [rad/s]
+
+/**:
+  joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      kp_joint: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]  # hold/track P gain [1/s]
+      max_joint_vel: 1.0    # output velocity clamp [rad/s]
+
+/**:
+  gravity_compensation_controller:
+    ros__parameters:
+      robot_type: "fr3"
+
+/**:
+  joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      # kd raised ~4x over the MuJoCo values, towards critical damping
+      # (2*sqrt(kp*I) is ~40 for the shoulder joints at kp 400). MuJoCo can run
+      # underdamped because its model supplies joint damping 0.21 and frictionloss
+      # ~1.1 Nm; the Isaac asset has neither (NVIDIA's own Franka authors no joint
+      # friction), so the controller has to provide the dissipation itself or the
+      # joint-space move never settles inside its 0.05 rad threshold.
+      kp_joint: [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
+      kd_joint: [40.0, 40.0, 40.0, 40.0, 8.0, 8.0, 8.0]
+
+/**:
+  task_space_impedance_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      kp_task: [1500.0, 1500.0, 1500.0, 40.0, 40.0, 40.0]
+      kd_task: [60.0, 60.0, 60.0, 5.0, 5.0, 5.0]
+      kp_null: 10.0
+      kd_null: 6.3246
+      # null-space posture toward default_dof_pos (verified in MuJoCo)
+      use_nullspace_posture: true
+      default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
+
+/**:
+  operational_space_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      # Rotation cut from the MuJoCo 7200 to 1600 by the same sqrt(kp) < 40 rule
+      # used for joint_space_qp_controller (sqrt(7200) = 85 is well past what the
+      # ~10 ms Isaac round trip tolerates); translation's 900 -> 30 already fits.
+      kp_task: [900.0, 900.0, 900.0, 1600.0, 1600.0, 1600.0]
+      kd_task: [60.0, 60.0, 60.0, 80.0, 80.0, 80.0]
+      kp_null: 10.0
+      kd_null: 2.0
+      # null-space posture toward default_dof_pos (verified in MuJoCo)
+      use_nullspace_posture: true
+      default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
+
+/**:
+  gripper_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      # Sim has no /franka_gripper/homing action server; only home on real.
+      auto_home: false
+
+/**:
+  joint_space_qp_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      # kp cut from the MuJoCo 4000 to 1600, kd set to 2*sqrt(kp).
+      # These are acceleration-level gains, so the closed-loop frequency is
+      # sqrt(kp) regardless of inertia. The Isaac loop closes over DDS with about
+      # a 10 ms round trip at 250 Hz, and stability needs roughly
+      # sqrt(kp) * tau < 0.4, i.e. sqrt(kp) < 40. MuJoCo's 4000 gives sqrt(kp)=63
+      # (0.63 with this delay, measured unstable here); 1600 gives 40.
+      # The same rule explains why joint_space_impedance (kp 400 -> 20) and
+      # task_space_qp (kp 800 -> 28) are fine at their MuJoCo values.
+      kp_joint: [1600.0, 1600.0, 1600.0, 1600.0, 1600.0, 1600.0, 1600.0]
+      kd_joint: [80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0]
+
+/**:
+  task_space_qp_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      # Left at the MuJoCo values. Both lowering the rotation gain alone and
+      # lowering translation with it were measured: neither removes the wrist
+      # limit cycle (fr3_joint5/6 bang-bang at their 12 Nm limit regardless), and
+      # the softer task only adds steady-state offset. The residual is a transport
+      # delay problem, not a stiffness one - see SESSION_LOG.
+      kp_task: [800.0, 800.0, 800.0, 400.0, 400.0, 400.0]
+      kd_task: [56.57, 56.57, 56.57, 40.0, 40.0, 40.0]
+      kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
+      kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      # ACTION mode: low-weight null-space posture task (keeps the elbow from
+      # drifting toward joint limits on long motions).
+      use_nullspace_posture: true
+      nullspace_posture_weight: 1.0e-3
+
+/**:
+  vla_controller:
+    ros__parameters:
+      robot_type: "fr3"
+      kp_task: [565.0, 565.0, 565.0, 28.0, 28.0, 28.0]
+      kd_task: [47.539, 47.539, 47.539, 10.583, 10.583, 10.583]
+      # velocity control_mode reference-tracking P gain ((rad/s)/rad)
+      kp_joint_vel: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+      kp_null: 10.0
+      kd_null: 6.3246
+      # null-space posture kept OFF (owner decision; toggle available)
+      use_nullspace_posture: false
+      default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
+      default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
+      default_kd_task: [3.46410162, 3.46410162, 3.46410162, 0.89442719, 0.89442719, 0.89442719]

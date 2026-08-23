@@ -1,5 +1,7 @@
 import os
 import tempfile
+
+import xacro
 import yaml
 
 from launch import LaunchDescription
@@ -68,18 +70,18 @@ def setup_control_environment(context):
             f"Valid options: {SWITCHABLE_CONTROLLERS}"
         )
 
-    ur_desc_path = get_package_share_directory('cho_description_ur')
     bringup_path = get_package_share_directory('cho_bringup_ur')
 
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
     runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
 
-    # Resolve $(find cho_description_ur) substitution baked into the pre-built URDF
-    with open(urdf_path, 'r') as f:
-        robot_description_content = f.read().replace(
-            '$(find cho_description_ur)', ur_desc_path
-        )
+    # ur5e.urdf carries a `hardware` xacro arg so the same file can emit either the
+    # MuJoCo or the Isaac ros2_control block, so it has to be expanded rather than
+    # read verbatim. xacro also resolves the $(find cho_description_ur) inside it.
+    robot_description_content = xacro.process_file(
+        urdf_path, mappings={'hardware': 'mujoco'}
+    ).toxml()
 
     robot_description = {'robot_description': robot_description_content}
 

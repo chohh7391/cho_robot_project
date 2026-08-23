@@ -12,6 +12,7 @@
   <!-- dynamics: description of the dynamics that comes from a YAML file. Example definition: ${xacro.load_yaml('$(find cho_description_franka)/robots/fr3/dynamics.yaml')} -->
 
   <xacro:arg name="control_mode" default="torque" />
+  <xacro:arg name="hardware" default="mujoco" />
 
   <link name="base">
       </link>
@@ -809,156 +810,362 @@
     <dynamics damping="0.3"/>
   </joint>
 
-  <ros2_control name="MujocoSystem" type="system">
-    <hardware>
-      <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
-      <!-- Select MuJoCo actuators automatically based on control_mode:
-             position -> position servos, velocity -> velocity servos, torque -> direct motors. -->
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
-        <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_position.xml</param>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_velocity.xml</param>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_torque.xml</param>
-      </xacro:unless>
-    </hardware>
+  <!-- ============================= MuJoCo ============================= -->
+  <xacro:if value="${'$(arg hardware)' == 'mujoco'}">
+    <ros2_control name="MujocoSystem" type="system">
+      <hardware>
+        <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+        <!-- Select MuJoCo actuators automatically based on control_mode:
+               position -> position servos, velocity -> velocity servos, torque -> direct motors. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_position.xml</param>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_velocity.xml</param>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <param name="mujoco_model">$(find cho_description_franka)/xml/fr3_with_ft_sensor/scene_torque.xml</param>
+        </xacro:unless>
+      </hardware>
 
-    <joint name="fr3_joint1">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
+      <joint name="fr3_joint1">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint2">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">-0.785</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint3">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint4">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">-2.356</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint5">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint6">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">1.57</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint7">
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.7853</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_finger_joint1">
         <command_interface name="position"/>
         <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
         <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
+        <state_interface name="position"><param name="initial_value">0.04</param></state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </ros2_control>
+  </xacro:if>
 
-    <joint name="fr3_joint2">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
+  <!-- ============================ Isaac Sim ============================ -->
+  <!-- ros2_control talks to Isaac Sim over sensor_msgs/JointState topics via
+       topic_based_ros2_control. Isaac's OmniGraph ROS 2 bridge publishes
+       /isaac_joint_states and drives the articulation from the command topics
+       (see cho_bringup_franka/isaac/run_isaac_franka.py).
+
+       The arm and the hand are TWO separate hardware components on purpose:
+       TopicBasedSystem::write() push_back()s only the command interfaces a joint
+       declares, so mixing effort-commanded arm joints and position-commanded
+       finger joints inside one component would misalign the position/effort
+       arrays against the name array. Splitting them keeps every message uniform.
+
+       Both components subscribe to the SAME /isaac_joint_states topic; read()
+       matches entries by joint name, so extra joints in the message are ignored. -->
+  <xacro:if value="${'$(arg hardware)' == 'isaac'}">
+
+    <ros2_control name="IsaacArmSystem" type="system">
+      <hardware>
+        <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
+        <param name="joint_commands_topic">/isaac_joint_commands</param>
+        <param name="joint_states_topic">/isaac_joint_states</param>
+        <!-- Negative threshold: always publish. The upstream throttle compares the
+             POSITION state against the POSITION command, which is meaningless when
+             the arm is commanded in effort or velocity. -->
+        <param name="trigger_joint_command_threshold">-1.0</param>
+      </hardware>
+
+      <joint name="fr3_joint1">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint2">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">-0.785</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint3">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint4">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">-2.356</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint5">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.0</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint6">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">1.57</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+
+      <joint name="fr3_joint7">
+        <!-- Exactly ONE command interface per mode. TopicBasedSystem publishes every
+             declared command interface whether or not a controller claims it, so an
+             extra unclaimed interface would send a constant 0 command to Isaac. -->
+        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+          <command_interface name="position"/>
+        </xacro:if>
+        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+          <command_interface name="velocity"/>
+        </xacro:if>
+        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+          <command_interface name="effort"/>
+        </xacro:unless>
+        <state_interface name="position">
+          <param name="initial_value">0.7853</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </ros2_control>
+
+    <ros2_control name="IsaacHandSystem" type="system">
+      <hardware>
+        <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
+        <param name="joint_commands_topic">/isaac_gripper_commands</param>
+        <param name="joint_states_topic">/isaac_joint_states</param>
+        <param name="trigger_joint_command_threshold">-1.0</param>
+      </hardware>
+
+      <!-- The gripper is position-controlled regardless of the arm's control_mode,
+           matching MuJoCo (all three actuators_*.xml use the same position servo). -->
+      <joint name="fr3_finger_joint1">
         <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">-0.785</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
+        <state_interface name="position">
+          <param name="initial_value">0.04</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
 
-    <joint name="fr3_joint3">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
+      <!-- URDF <mimic> of fr3_finger_joint1. TopicBasedSystem mirrors the command
+           and the state itself, so Isaac receives both finger joints explicitly and
+           does not have to rely on a PhysX mimic joint surviving USD conversion. -->
+      <joint name="fr3_finger_joint2">
+        <param name="mimic">fr3_finger_joint1</param>
+        <param name="multiplier">1.0</param>
         <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
+        <state_interface name="position">
+          <param name="initial_value">0.04</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
 
-    <joint name="fr3_joint4">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
-        <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">-2.356</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
+  </xacro:if>
 
-    <joint name="fr3_joint5">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
-        <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">0.0</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
-
-    <joint name="fr3_joint6">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
-        <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">1.57</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
-
-    <joint name="fr3_joint7">
-      <xacro:if value="${'$(arg control_mode)' == 'position'}">
-        <command_interface name="position"/>
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
-        <command_interface name="velocity"/>
-      </xacro:if>
-      <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
-        <command_interface name="effort"/>
-      </xacro:unless>
-      <state_interface name="position">
-        <param name="initial_value">0.7853</param>
-      </state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
-
-    <joint name="fr3_finger_joint1">
-      <command_interface name="position"/>
-      <command_interface name="velocity"/>
-      <command_interface name="effort"/>
-      <state_interface name="position"><param name="initial_value">0.04</param></state_interface>
-      <state_interface name="velocity"/>
-      <state_interface name="effort"/>
-    </joint>
-  </ros2_control>
 
 </robot>

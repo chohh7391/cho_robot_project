@@ -9,6 +9,9 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <exec_depend>cho_bringup_isaac</exec_depend>
+  <exec_depend>mujoco_ros2_control</exec_depend>
+  <exec_depend>topic_based_ros2_control</exec_depend>
   <exec_depend>cho_description_ur</exec_depend>
   <exec_depend>cho_controller_ur</exec_depend>
   <exec_depend>controller_manager</exec_depend>

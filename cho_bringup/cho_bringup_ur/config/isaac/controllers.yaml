@@ -1,0 +1,51 @@
+# Controller configuration for the UR5e under Isaac Sim.
+#
+# Derived from config/mujoco/controllers.yaml. The UR runs position-controlled
+# drives inside Isaac, so unlike the Franka torque bringup it is not sensitive to
+# the DDS round trip and the MuJoCo gains carry over unchanged; only the loop rate
+# and the per-cycle slew limit had to be rescaled.
+
+controller_manager:
+  ros__parameters:
+    # MUST equal the Isaac physics rate (bringup_isaac_robot.launch.py's
+    # physics_rate argument): the controller_manager is paced by the /clock
+    # Isaac publishes, so a mismatch makes cycles fire in bursts with a zero
+    # measured period.
+    update_rate: 250
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_space_position_controller:
+      type: cho_controller_ur/JointSpacePositionController
+
+    task_space_ik_controller:
+      type: cho_controller_ur/TaskSpaceIKController
+
+joint_space_position_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+
+task_space_ik_controller:
+  ros__parameters:
+    robot_type: ur5e
+    bringup_type: isaac
+    control_mode: position
+    ee_name: tool0
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    lambda: 0.02
+    # Per cycle, so it scales with update_rate: 0.02 rad/cycle at the MuJoCo
+    # 500 Hz is the same joint speed as 0.04 at 250 Hz.
+    max_delta_q: 0.04

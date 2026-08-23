@@ -3,3 +3,12 @@ install/
 log/
 .vscode/
 *.pyc
+
+# workspace 공통 규약 (절대경로 심볼릭 링크 — 커밋하지 않는다)
+.conventions/
+
+# Isaac Sim USD assets are generated from the URDFs by
+# cho_bringup_franka/isaac/convert_urdf_to_usd.py (see usd/README.md).
+# They are large binaries and always reproducible, so they stay out of git.
+cho_description/*/usd/*
+!cho_description/*/usd/README.md

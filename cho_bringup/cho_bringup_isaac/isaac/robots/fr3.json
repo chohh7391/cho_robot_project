@@ -1,0 +1,72 @@
+{
+  "_comment": [
+    "Physics profile for the Franka FR3 under Isaac Sim, consumed by run_isaac_sim.py.",
+    "Joint names, home pose and the hand's command interface must match the IsaacArmSystem /",
+    "IsaacHandSystem blocks in cho_description_franka/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf."
+  ],
+  "prim_path": "/fr3",
+  "arm_joints": [
+    "fr3_joint1",
+    "fr3_joint2",
+    "fr3_joint3",
+    "fr3_joint4",
+    "fr3_joint5",
+    "fr3_joint6",
+    "fr3_joint7"
+  ],
+  "hand_joints": [
+    "fr3_finger_joint1",
+    "fr3_finger_joint2"
+  ],
+  "_home_comment": "Matches the URDF <state_interface> initial_value. MuJoCo's <keyframe> has joint7 = -0.785; ros2_control uses +0.7853, and we follow ros2_control so hardware and simulator agree at t=0.",
+  "arm_home": [
+    0.0,
+    -0.785,
+    0.0,
+    -2.356,
+    0.0,
+    1.57,
+    0.7853
+  ],
+  "hand_home": [
+    0.04,
+    0.04
+  ],
+  "_armature_comment": "Rotor inertia (kg*m^2) from the MuJoCo model this project tunes against (xml/fr3_with_ft_sensor/fr3.xml). The URDF cannot express it, so the import leaves only link inertia; the wrist links are ~15x lighter than their rotor, which puts sqrt(kp/I) far above what the ROS round trip tolerates and fr3_joint7 sits in a limit cycle.",
+  "arm_armature": [
+    0.195,
+    0.195,
+    0.195,
+    0.195,
+    0.074,
+    0.074,
+    0.074
+  ],
+  "hand_armature": [
+    0.1,
+    0.1
+  ],
+  "_position_gain_comment": "NVIDIA's franka.usd authors physics:stiffness 400 / damping 80 per DEGREE; these are the same numbers in per-radian units. Stiffness matters because the position-mode threshold is 0.015 rad and a joint carrying 25 Nm droops by torque/stiffness.",
+  "arm_position_stiffness": 22918.3,
+  "arm_position_damping": 4583.7,
+  "_velocity_gain_comment": "Velocity mode drives with damping only; this is the velocity tracking gain, started from MuJoCo's actuators_velocity.xml kv.",
+  "arm_velocity_damping": 450.0,
+  "_torque_damping_comment": "Left at what the importer derives from the URDF's <dynamics damping='0.003'> (0.172 in per-radian units). Adding more was measured to break joint_space_impedance_controller's moves, because the extra drag is not in the controller's model.",
+  "arm_torque_damping": [
+    0.172,
+    0.172,
+    0.172,
+    0.172,
+    0.172,
+    0.172,
+    0.172
+  ],
+  "_hand_gain_comment": "The gripper is position-driven in every control mode, as in MuJoCo. Prismatic, so N/m and N*s/m.",
+  "hand_stiffness": 300.0,
+  "hand_damping": 30.0,
+  "ft_link": "bota_ft_sensor_wrench",
+  "joint_friction": 0.05,
+  "solver_position_iterations": 32,
+  "solver_velocity_iterations": 1,
+  "enable_self_collisions": false
+}

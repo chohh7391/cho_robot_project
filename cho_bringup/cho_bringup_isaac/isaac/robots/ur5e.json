@@ -1,0 +1,81 @@
+{
+  "_comment": [
+    "Physics profile for the UR5e under Isaac Sim, consumed by run_isaac_sim.py.",
+    "Joint names and home pose must match the IsaacSystem block in",
+    "cho_description_ur/urdf/ur5e.urdf. The UR arm is position-controlled only,",
+    "so there is no hand and no torque/velocity gain set in use."
+  ],
+  "prim_path": "/ur5e",
+  "arm_joints": [
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint"
+  ],
+  "hand_joints": [],
+  "_home_comment": "Matches the <state_interface> initial_value entries in ur5e.urdf.",
+  "arm_home": [
+    0.0,
+    -1.57,
+    1.57,
+    -1.57,
+    -1.57,
+    0.0
+  ],
+  "hand_home": [],
+  "_armature_comment": "Rotor inertia from the MuJoCo model (xml/ur5e.xml: <joint armature='0.1'> for every joint). NVIDIA's ur5e.usd authors none, but armature was decisive for the Franka wrist and costs nothing here.",
+  "arm_armature": [
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1
+  ],
+  "hand_armature": [],
+  "_position_gain_comment": [
+    "MuJoCo's actuator gains for this arm (xml/ur5e.xml): class size3 (shoulder_pan,",
+    "shoulder_lift, elbow) uses gainprm 20000 / biasprm -2500, class size1 (the three",
+    "wrists) uses 10000 / -1500. Those are already per-radian and consistently damped.",
+    "NVIDIA's ur5e.usd instead authors per-joint stiffness 9400/10021/10230/3941/3941/1000",
+    "in per-DEGREE units (538k-57k per radian) with damping 0.004-4, which is far stiffer",
+    "and essentially undamped - it works there only because the drive saturates at",
+    "maxForce 150/28 and behaves bang-bang. The MuJoCo numbers are the project's own",
+    "reference for this robot, so they are what is used."
+  ],
+  "arm_position_stiffness": [
+    20000.0,
+    20000.0,
+    20000.0,
+    10000.0,
+    10000.0,
+    10000.0
+  ],
+  "arm_position_damping": [
+    2500.0,
+    2500.0,
+    2500.0,
+    1500.0,
+    1500.0,
+    1500.0
+  ],
+  "arm_velocity_damping": 450.0,
+  "arm_torque_damping": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "hand_stiffness": 0.0,
+  "hand_damping": 0.0,
+  "_friction_comment": "NVIDIA's ur5e.usd authors no joint friction. Unlike the Franka torque bringup, the UR runs position-controlled drives that dissipate on their own, so there is nothing here that needs the plant to settle it.",
+  "joint_friction": 0.0,
+  "ft_link": null,
+  "solver_position_iterations": 32,
+  "solver_velocity_iterations": 1,
+  "enable_self_collisions": false
+}
