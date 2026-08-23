@@ -1,0 +1,357 @@
+# Namespace-agnostic controller configuration for the bimanual OpenArm v1.0 under
+# Isaac Sim.
+#
+# config/mujoco/controllers_bimanual.yaml with the Isaac gains: one controller
+# instance per arm, each given only its own arm's joints, and each deriving its
+# action-server name and /ee_state topics from its instance name. The base
+# controller resolves joints to Pinocchio indices by NAME, which is what makes
+# this work - the right arm starts at index 9 of an 18-DOF configuration vector.
+#
+# update_rate MUST equal the Isaac physics rate: the controller_manager is paced
+# by /clock, so a faster rate fires cycles that see measured_period == 0.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 250   # MUST equal the Isaac physics rate (launch arg physics_rate)
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      left_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+      right_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      left_joint_space_impedance_controller:
+        type: cho_controller_openarm/JointSpaceImpedanceController
+      right_joint_space_impedance_controller:
+        type: cho_controller_openarm/JointSpaceImpedanceController
+
+      left_joint_space_position_controller:
+        type: cho_controller_openarm/JointSpacePositionController
+      right_joint_space_position_controller:
+        type: cho_controller_openarm/JointSpacePositionController
+
+      left_joint_space_velocity_controller:
+        type: cho_controller_openarm/JointSpaceVelocityController
+      right_joint_space_velocity_controller:
+        type: cho_controller_openarm/JointSpaceVelocityController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+        - openarm_left_finger_joint1
+        - openarm_right_finger_joint1
+
+  left_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      # Both arms report in the torso frame so the two EE poses are comparable.
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      pose_topic: /ee_state/left/pose
+      twist_topic: /ee_state/left/twist
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+
+  left_joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+      # Mirrored from the profile so the controller's M(q) is the simulator's. See
+      # config/isaac/controllers.yaml for why leaving it out under-commands.
+      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0049]
+      # NOT stiffness and damping: the controller multiplies all three by M(q),
+      # so kp is a squared natural frequency [1/s^2], kd is 2*zeta*wn [1/s] and
+      # ki is wn^2 * (integral corner) [1/s^3].
+      #
+      # wn = 15 rad/s, zeta = 1. This is set by STABILITY, not by accuracy, and
+      # the ceiling is sharp - it is a delay margin, not a gain-tuning
+      # preference. The command crosses a DDS round trip in each direction
+      # (controller_manager -> /isaac_joint_commands -> OmniGraph -> PhysX ->
+      # /isaac_joint_states -> back), worth roughly 20-25 ms, which at the PD
+      # loop's gain crossover is most of the available phase. Measured on a step
+      # to [0.3, 0.2, 0, 0.8, 0, 0.2, 0]:
+      #
+      #   wn = 12   stable, 0.021 rad p-p residual
+      #   wn = 15   stable, 0.014 rad p-p residual   <- here
+      #   wn = 18   LIMIT CYCLE, 1.3 rad p-p at 4 Hz
+      #   wn = 22   LIMIT CYCLE, 2.0 rad p-p
+      #   wn = 30   LIMIT CYCLE, 2.7 rad p-p at 4-8 Hz   <- the previous value
+      #
+      # Every joint locks to one frequency, which is what identifies it as a
+      # loop-level delay instability rather than per-joint mistuning. Do not
+      # raise wn to chase tracking error; raise ki, or accept the error.
+      #
+      # ki exists because PhysX joint friction is Coulomb (see joint_friction in
+      # cho_bringup_isaac/isaac/robots/openarm.json - it cannot be set to zero,
+      # that is what holds the arm at rest). A proportional law therefore creeps
+      # toward the goal asymptotically instead of converging: at ki = 0 the
+      # 7-joint error norm went 0.107 -> 0.060 -> 0.043 -> 0.028 over 8 s and
+      # crossed the action server's 0.05 threshold at 6.9 s, against its
+      # duration + 2 s deadline - so every goal aborted despite tracking fine.
+      # ki = 1350 puts the integral corner at 6 rad/s. Measured margin against
+      # the action server's deadline, worst case of the poses tried (a return to
+      # the home pose, which is the slowest):
+      #
+      #   ki = 0      norm crosses 0.05 at 6.9 s, deadline 6.0  -> ABORT
+      #   ki = 900    crosses at 5.4 s                          -> 0.6 s margin
+      #   ki = 1350   crosses at 3.5 s                          -> 2.5 s margin
+      #
+      # Timings are repeatable to 0.01 s across runs: the controller_manager is
+      # paced by Isaac's /clock, so wall-clock load on the machine changes how
+      # fast this runs but not the loop's behaviour in sim time. 1350 shows no
+      # more residual motion than 900 (0.2-0.3 mean crossings/s either way,
+      # including on a deliberately aggressive 2 s large step that saturates
+      # joint 2 and exercises the anti-windup rollback).
+      #
+      # MuJoCo leaves ki unset: it has no Coulomb friction term and converges to
+      # 1e-3 rad on the proportional law alone.
+      #
+      # These gains are shared by both physics engines. Under Newton there is no
+      # Coulomb joint friction to fight (Isaac cannot set it - see
+      # cho_bringup_isaac/isaac/robots/openarm.json), so the integral term has
+      # nothing to grind out and simply converges: measured 0.0000 rad final
+      # error holding a pose over 24 s, against PhysX's 0.006-0.027, with no
+      # hunting. Keeping one set of numbers for both is deliberate; the delay
+      # ceiling that sets wn is the DDS round trip, which is the same either way.
+      kp_joint: [225.0, 225.0, 225.0, 225.0, 225.0, 225.0, 225.0]
+      kd_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      ki_joint: [1350.0, 1350.0, 1350.0, 1350.0, 1350.0, 1350.0, 1350.0]
+      # Anti-windup bound on the integrated error [rad*s]. At ki = 1350 this
+      # caps the integral's contribution at 1350 * 0.05 = 67 [1/s^2] of
+      # commanded acceleration. The controller additionally rolls back a
+      # cycle's integration on any joint whose torque was clipped, so this
+      # bound is a backstop rather than the primary anti-windup.
+      integral_clamp: 0.05
+      home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+      home_duration: 3.0
+
+  right_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      # Both arms report in the torso frame so the two EE poses are comparable.
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      pose_topic: /ee_state/right/pose
+      twist_topic: /ee_state/right/twist
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+
+  right_joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+      # Mirrored from the profile so the controller's M(q) is the simulator's. See
+      # config/isaac/controllers.yaml for why leaving it out under-commands.
+      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0049]
+      # NOT stiffness and damping: the controller multiplies all three by M(q),
+      # so kp is a squared natural frequency [1/s^2], kd is 2*zeta*wn [1/s] and
+      # ki is wn^2 * (integral corner) [1/s^3].
+      #
+      # wn = 15 rad/s, zeta = 1. This is set by STABILITY, not by accuracy, and
+      # the ceiling is sharp - it is a delay margin, not a gain-tuning
+      # preference. The command crosses a DDS round trip in each direction
+      # (controller_manager -> /isaac_joint_commands -> OmniGraph -> PhysX ->
+      # /isaac_joint_states -> back), worth roughly 20-25 ms, which at the PD
+      # loop's gain crossover is most of the available phase. Measured on a step
+      # to [0.3, 0.2, 0, 0.8, 0, 0.2, 0]:
+      #
+      #   wn = 12   stable, 0.021 rad p-p residual
+      #   wn = 15   stable, 0.014 rad p-p residual   <- here
+      #   wn = 18   LIMIT CYCLE, 1.3 rad p-p at 4 Hz
+      #   wn = 22   LIMIT CYCLE, 2.0 rad p-p
+      #   wn = 30   LIMIT CYCLE, 2.7 rad p-p at 4-8 Hz   <- the previous value
+      #
+      # Every joint locks to one frequency, which is what identifies it as a
+      # loop-level delay instability rather than per-joint mistuning. Do not
+      # raise wn to chase tracking error; raise ki, or accept the error.
+      #
+      # ki exists because PhysX joint friction is Coulomb (see joint_friction in
+      # cho_bringup_isaac/isaac/robots/openarm.json - it cannot be set to zero,
+      # that is what holds the arm at rest). A proportional law therefore creeps
+      # toward the goal asymptotically instead of converging: at ki = 0 the
+      # 7-joint error norm went 0.107 -> 0.060 -> 0.043 -> 0.028 over 8 s and
+      # crossed the action server's 0.05 threshold at 6.9 s, against its
+      # duration + 2 s deadline - so every goal aborted despite tracking fine.
+      # ki = 1350 puts the integral corner at 6 rad/s. Measured margin against
+      # the action server's deadline, worst case of the poses tried (a return to
+      # the home pose, which is the slowest):
+      #
+      #   ki = 0      norm crosses 0.05 at 6.9 s, deadline 6.0  -> ABORT
+      #   ki = 900    crosses at 5.4 s                          -> 0.6 s margin
+      #   ki = 1350   crosses at 3.5 s                          -> 2.5 s margin
+      #
+      # Timings are repeatable to 0.01 s across runs: the controller_manager is
+      # paced by Isaac's /clock, so wall-clock load on the machine changes how
+      # fast this runs but not the loop's behaviour in sim time. 1350 shows no
+      # more residual motion than 900 (0.2-0.3 mean crossings/s either way,
+      # including on a deliberately aggressive 2 s large step that saturates
+      # joint 2 and exercises the anti-windup rollback).
+      #
+      # MuJoCo leaves ki unset: it has no Coulomb friction term and converges to
+      # 1e-3 rad on the proportional law alone.
+      #
+      # These gains are shared by both physics engines. Under Newton there is no
+      # Coulomb joint friction to fight (Isaac cannot set it - see
+      # cho_bringup_isaac/isaac/robots/openarm.json), so the integral term has
+      # nothing to grind out and simply converges: measured 0.0000 rad final
+      # error holding a pose over 24 s, against PhysX's 0.006-0.027, with no
+      # hunting. Keeping one set of numbers for both is deliberate; the delay
+      # ceiling that sets wn is the DDS round trip, which is the same either way.
+      kp_joint: [225.0, 225.0, 225.0, 225.0, 225.0, 225.0, 225.0]
+      kd_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      ki_joint: [1350.0, 1350.0, 1350.0, 1350.0, 1350.0, 1350.0, 1350.0]
+      # Anti-windup bound on the integrated error [rad*s]. At ki = 1350 this
+      # caps the integral's contribution at 1350 * 0.05 = 67 [1/s^2] of
+      # commanded acceleration. The controller additionally rolls back a
+      # cycle's integration on any joint whose torque was clipped, so this
+      # bound is a backstop rather than the primary anti-windup.
+      integral_clamp: 0.05
+      home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+      home_duration: 3.0
+
+  left_joint_space_position_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+
+  right_joint_space_position_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+
+  left_joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+      # Same as the single-arm build: the reference slew and the output clamp are
+      # one setting expressed twice, so they must move together.
+      # Reference-tracking gain, not a stiffness. At steady state the drive holds
+      # the joint where kv*kp*e balances gravity, so the residual is
+      # tau_g / (kv * kp) - inversely proportional to this. kp = 10 left the
+      # 7-joint error norm at 0.0165 rad against a 0.02 threshold on a single arm
+      # and 0.0246 (ABORT) on the bimanual torso, whose arms hang at a different
+      # angle and so carry more gravity torque. 30 divides both by three.
+      kp_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      max_joint_vel: 2.0
+
+  right_joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+      # Same as the single-arm build: the reference slew and the output clamp are
+      # one setting expressed twice, so they must move together.
+      # Reference-tracking gain, not a stiffness. At steady state the drive holds
+      # the joint where kv*kp*e balances gravity, so the residual is
+      # tau_g / (kv * kp) - inversely proportional to this. kp = 10 left the
+      # 7-joint error norm at 0.0165 rad against a 0.02 threshold on a single arm
+      # and 0.0246 (ABORT) on the bimanual torso, whose arms hang at a different
+      # angle and so carry more gravity torque. 30 divides both by three.
+      kp_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      max_joint_vel: 2.0

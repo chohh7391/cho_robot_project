@@ -9,7 +9,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('task', default_value='pick_place'),
         DeclareLaunchArgument('robot_type', default_value='franka',
-                              description='Robot type: franka or ur5e'),
+                              description='Robot type: franka, ur5e or openarm'),
         DeclareLaunchArgument('debug_tree', default_value='true'),
         DeclareLaunchArgument('print_tree', default_value='true'),
         Node(

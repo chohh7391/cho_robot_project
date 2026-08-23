@@ -1,0 +1,14 @@
+# Single source of truth for OpenArm v1.0 controller roles.
+# Loaded at runtime by cho_task_manager.utils.controller_names.load_robot_config().
+#
+# The names must come from the ControllerNames enum, not be OpenArm-specific:
+# EXCLUSIVE_ARM_CONTROLLERS is a hardcoded enum list, and SwitchControllerService
+# Behavior builds its deactivate set from it. A name outside the enum would never
+# be deactivated by any switch, and the next STRICT activation would fail on a
+# claimed-interface conflict that is invisible from the tree.
+robot_type: openarm
+controllers:
+  joint_space: joint_space_impedance_controller
+  task_space: null   # no task-space controller ported yet
+  gripper: null      # behaviors/action/gripper.py hardcodes ControllerNames.GRIPPER
+  vla: null

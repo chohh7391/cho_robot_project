@@ -1,0 +1,22 @@
+<library path="cho_controller_openarm">
+    <class name="cho_controller_openarm/EEStateBroadcaster"
+           type="cho_controller::openarm::EEStateBroadcaster"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>Publishes /ee_state/pose and /ee_state/twist for OpenArm</description>
+    </class>
+    <class name="cho_controller_openarm/JointSpaceImpedanceController"
+           type="cho_controller::openarm::JointSpaceImpedanceController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>Joint-space impedance controller with gravity compensation for OpenArm</description>
+    </class>
+    <class name="cho_controller_openarm/JointSpacePositionController"
+           type="cho_controller::openarm::JointSpacePositionController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>Joint-space position controller for OpenArm</description>
+    </class>
+    <class name="cho_controller_openarm/JointSpaceVelocityController"
+           type="cho_controller::openarm::JointSpaceVelocityController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>Joint-space velocity controller for OpenArm</description>
+    </class>
+</library>

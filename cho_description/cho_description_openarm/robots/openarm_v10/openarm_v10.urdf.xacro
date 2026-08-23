@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Copyright 2025 Enactic, Inc.
+Copyright 2026 Hyunho Cho
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="openarm">
+
+  <!--
+    The single description entry point for OpenArm v1.0.
+
+    Every environment and both builds go through this file: real, gazebo, mujoco
+    and isaac differ only in the `hardware` argument, and the bimanual torso is
+    `bimanual:=true`. There is deliberately no second, pre-flattened URDF for the
+    simulators - that is how cho_description_ur ended up with initial joint values
+    that disagree with its own xacro.
+
+      xacro openarm_v10.urdf.xacro hardware:=mujoco control_mode:=torque
+      xacro openarm_v10.urdf.xacro hardware:=mujoco bimanual:=true
+      xacro openarm_v10.urdf.xacro hardware:=real   can_interface:=can0
+
+    Single arm gives openarm_joint1..7; bimanual gives openarm_left_joint1..7 and
+    openarm_right_joint1..7 hanging off openarm_body_link0.
+  -->
+
+  <xacro:include filename="$(find cho_description_openarm)/assets/robot/openarm_v1.0/urdf/robot/openarm_robot.xacro"/>
+  <xacro:include filename="$(find cho_description_openarm)/robots/openarm_v10/openarm_v10.ros2_control.xacro"/>
+
+  <xacro:arg name="ros2_control"  default="true"/>
+  <xacro:arg name="hardware"      default="mujoco"/>
+  <xacro:arg name="control_mode"  default="torque"/>
+  <xacro:arg name="bimanual"      default="false"/>
+  <xacro:arg name="arm_prefix"    default=""/>
+  <xacro:arg name="hand"          default="true"/>
+  <!-- real hardware only -->
+  <xacro:arg name="can_interface" default="can0"/>
+  <!-- Bimanual only: one CAN bus per arm. -->
+  <xacro:arg name="left_can_interface"  default="can1"/>
+  <xacro:arg name="right_can_interface" default="can0"/>
+  <!-- Bimanual only: where each arm bolts onto the torso. These are upstream's
+       own defaults (openarm_v10.urdf.xacro) and they must match the MJCF, which
+       places openarm_*_link0 at (0, +-0.031, 0.698) rotated +-90 deg about x.
+       Leaving them at the macro's 0/0 default mounts both arms at the origin
+       pointing up: MuJoCo still simulates the real geometry, so the controller's
+       gravity feed-forward is then computed for a robot that does not exist. -->
+  <xacro:arg name="left_arm_base_xyz"   default="0.0 0.031 0.698"/>
+  <xacro:arg name="left_arm_base_rpy"   default="-1.5708 0 0"/>
+  <xacro:arg name="right_arm_base_xyz"  default="0.0 -0.031 0.698"/>
+  <xacro:arg name="right_arm_base_rpy"  default="1.5708 0 0"/>
+  <xacro:arg name="can_fd"        default="true"/>
+  <xacro:arg name="kp_scale"      default="0.0"/>
+  <xacro:arg name="kd_scale"      default="1.0"/>
+  <xacro:arg name="fake_sensor_commands" default="false"/>
+  <!-- mounting. attach_to_world is a boolean rather than "parent is empty":
+       xacro only accepts an empty value written as parent:="" on the command
+       line, and a bare parent:= silently keeps the default. -->
+  <xacro:arg name="attach_to_world" default="true"/>
+  <xacro:arg name="parent" default="world"/>
+  <xacro:arg name="xyz"    default="0 0 0"/>
+  <xacro:arg name="rpy"    default="0 0 0"/>
+  <!-- gazebo only: Gazebo's controller_manager lives inside the plugin, so its
+       parameter files are embedded in the description instead of being handed to
+       a spawner. Passed in by the launch file so this package stays standalone. -->
+  <xacro:arg name="controllers_file" default=""/>
+  <xacro:arg name="runtime_param_file" default=""/>
+
+  <xacro:property name="arm_cfg" value="$(find cho_description_openarm)/assets/robot/openarm_v1.0/config/arm"/>
+  <xacro:property name="body_cfg" value="$(find cho_description_openarm)/assets/robot/openarm_v1.0/config/body"/>
+  <xacro:property name="ee_cfg" value="$(find cho_description_openarm)/assets/end_effector/parallel_link/config"/>
+  <xacro:property name="gains" value="${xacro.load_yaml(arm_cfg + '/control_gains.yaml')}"/>
+  <xacro:property name="prefix" value="${'openarm_' + '$(arg arm_prefix)'}"/>
+
+  <!-- Kinematics and inertias: identical in every environment. bimanual:=false
+       makes openarm_robot emit one arm with connected_to='', i.e. link0 is the
+       root; the world attachment below is ours. ros2_control:=false suppresses
+       the upstream hardware block so ours is the only one. -->
+  <xacro:openarm_robot
+    arm_type="v10"
+    body_type="v10"
+    joint_limits="${xacro.load_yaml(arm_cfg + '/joint_limits.yaml')}"
+    control_gains="${gains}"
+    inertials="${xacro.load_yaml(arm_cfg + '/inertials.yaml')}"
+    kinematics="${xacro.load_yaml(arm_cfg + '/kinematics.yaml')}"
+    kinematics_link="${xacro.load_yaml(arm_cfg + '/kinematics_link.yaml')}"
+    kinematics_offset="${xacro.load_yaml(arm_cfg + '/kinematics_offset.yaml')}"
+    body_inertials="${xacro.load_yaml(body_cfg + '/inertials.yaml')}"
+    body_kinematics="${xacro.load_yaml(body_cfg + '/kinematics.yaml')}"
+    body_kinematics_link="${xacro.load_yaml(body_cfg + '/kinematics_link.yaml')}"
+    ee_inertials="${xacro.load_yaml(ee_cfg + '/inertials.yaml')}"
+    ee_kinematics="${xacro.load_yaml(ee_cfg + '/kinematics.yaml')}"
+    ee_kinematics_link="${xacro.load_yaml(ee_cfg + '/kinematics_link.yaml')}"
+    ee_joints_limits="${xacro.load_yaml(ee_cfg + '/joint_limits.yaml')}"
+    ee_type="parallel_link"
+    bimanual="$(arg bimanual)"
+    left_can_interface="$(arg left_can_interface)"
+    right_can_interface="$(arg right_can_interface)"
+    left_arm_base_xyz="$(arg left_arm_base_xyz)"
+    left_arm_base_rpy="$(arg left_arm_base_rpy)"
+    right_arm_base_xyz="$(arg right_arm_base_xyz)"
+    right_arm_base_rpy="$(arg right_arm_base_rpy)"
+    ros2_control="false"
+    arm_prefix="$(arg arm_prefix)"
+    arm_connected_to=""
+    no_prefix="false"/>
+
+  <!-- Gazebo drops an unanchored model onto the floor, so the base needs a fixed
+       joint to a world link. MuJoCo does not care (its own MJCF welds link0 into
+       <worldbody>) and Pinocchio treats a fixed root the same either way, so this
+       is emitted by default to keep every environment's frame tree identical.
+       Isaac opts out with attach_to_world:=false: fix_base already anchors the
+       articulation there, and an extra world body confuses the importer's
+       articulation-root resolution. -->
+  <!-- The bimanual branch of openarm_robot already emits its own world link and
+       bolts the torso to it, so only the single-arm build needs this. -->
+  <xacro:if value="${'$(arg attach_to_world)'.lower() == 'true' and '$(arg bimanual)'.lower() != 'true'}">
+    <link name="$(arg parent)"/>
+    <joint name="${prefix}base_joint" type="fixed">
+      <origin xyz="$(arg xyz)" rpy="$(arg rpy)"/>
+      <parent link="$(arg parent)"/>
+      <child link="${prefix}link0"/>
+    </joint>
+  </xacro:if>
+
+  <xacro:if value="$(arg ros2_control)">
+    <xacro:openarm_v10_ros2_control
+      control_gains="${gains}"
+      hardware="$(arg hardware)"
+      control_mode="$(arg control_mode)"
+      bimanual="$(arg bimanual)"
+      arm_prefix="$(arg arm_prefix)"
+      left_can_interface="$(arg left_can_interface)"
+      right_can_interface="$(arg right_can_interface)"
+      hand="$(arg hand)"
+      can_interface="$(arg can_interface)"
+      can_fd="$(arg can_fd)"
+      ee_type="parallel_link"
+      kp_scale="$(arg kp_scale)"
+      kd_scale="$(arg kd_scale)"
+      fake_sensor_commands="$(arg fake_sensor_commands)"
+      controllers_file="$(arg controllers_file)"
+      runtime_param_file="$(arg runtime_param_file)"/>
+  </xacro:if>
+
+</robot>

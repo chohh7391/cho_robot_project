@@ -1,0 +1,46 @@
+<!--
+Copyright 2025 Enactic, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+<!-- Torque control: every arm joint is a direct motor driven by the effort
+     command interface. Used when control_mode:=torque.
+
+     ctrlrange follows the URDF effort limits in
+     assets/robot/openarm_v1.0/config/arm/joint_limits.yaml (40/40/27/27/7/7/7),
+     NOT the -10..10 default of the upstream MJCF "motor" class. The upstream
+     range clips shoulder torque well below what gravity compensation needs on
+     an extended arm, which makes the arm sag under any torque controller.
+
+     The finger stays position-controlled: the arm-side controllers never claim
+     it, so a torque actuator there would just leave the gripper limp. 
+     Actuator names deliberately match the ros2_control joint names.
+     MujocoSystemInterface::get_actuator_id() resolves a joint first
+     (mjTRN_JOINT + actuator_trnid), and only falls back to matching the
+     actuator's own name. The finger actuator drives the "split" tendon, not a
+     joint, so it is *only* reachable through that fallback - rename it and the
+     gripper silently becomes a passive joint. Same trick as fr3.
+-->
+<mujoco model="openarm v1.0 actuators (torque)">
+  <actuator>
+    <motor class="motor" name="openarm_joint1" joint="openarm_joint1" ctrlrange="-40 40"/>
+    <motor class="motor" name="openarm_joint2" joint="openarm_joint2" ctrlrange="-40 40"/>
+    <motor class="motor" name="openarm_joint3" joint="openarm_joint3" ctrlrange="-27 27"/>
+    <motor class="motor" name="openarm_joint4" joint="openarm_joint4" ctrlrange="-27 27"/>
+    <motor class="motor" name="openarm_joint5" joint="openarm_joint5" ctrlrange="-7 7"/>
+    <motor class="motor" name="openarm_joint6" joint="openarm_joint6" ctrlrange="-7 7"/>
+    <motor class="motor" name="openarm_joint7" joint="openarm_joint7" ctrlrange="-7 7"/>
+    <position class="motor" name="openarm_finger_joint1" tendon="split" kp="300" kv="30" ctrlrange="0 0.044"/>
+  </actuator>
+</mujoco>

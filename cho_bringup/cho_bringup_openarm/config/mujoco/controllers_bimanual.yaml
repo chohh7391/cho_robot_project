@@ -1,0 +1,282 @@
+# Namespace-agnostic controller configuration for the bimanual OpenArm v1.0 in
+# MuJoCo.
+#
+# The same controller classes as the single-arm config, spawned once per arm. The
+# instance names carry the arm prefix, and the controller derives its action
+# server name and its /ee_state topics from that instance name, so nothing
+# collides. Each instance is given only its own arm's joints; the base controller
+# resolves them to Pinocchio indices by NAME, which is what makes this work at all
+# - the right arm's joints start at index 9 of an 18-DOF configuration vector.
+#
+# The two arm controllers claim disjoint command interfaces, so both are active at
+# once. They are not mutually exclusive the way two controllers on one arm are.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      left_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+      right_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      left_joint_space_impedance_controller:
+        type: cho_controller_openarm/JointSpaceImpedanceController
+      right_joint_space_impedance_controller:
+        type: cho_controller_openarm/JointSpaceImpedanceController
+
+      left_joint_space_position_controller:
+        type: cho_controller_openarm/JointSpacePositionController
+      right_joint_space_position_controller:
+        type: cho_controller_openarm/JointSpacePositionController
+
+      left_joint_space_velocity_controller:
+        type: cho_controller_openarm/JointSpaceVelocityController
+      right_joint_space_velocity_controller:
+        type: cho_controller_openarm/JointSpaceVelocityController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+        - openarm_left_finger_joint1
+        - openarm_right_finger_joint1
+
+  left_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      # Both arms report in the torso frame rather than their own link0, so the
+      # two EE poses are directly comparable - which is the whole point of having
+      # two of them.
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      pose_topic: /ee_state/left/pose
+      twist_topic: /ee_state/left/twist
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+
+  left_joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+      # NOT stiffness and damping: the controller multiplies these by M(q), so kp
+      # is a squared natural frequency [1/s^2] and kd is 2*zeta*wn [1/s]. See
+      # joint_space_impedance_controller.cpp for why the diagonal form cannot
+      # work on this arm.
+      #
+      # Per joint, and it has to be. Inertia weighting makes the commanded torque
+      # proportional to the joint's own inertia, so one global bandwidth cannot
+      # serve both ends of the arm: the joints span 0.0011 to 0.43 kg m^2, a
+      # factor of 380. A wn that lets the wrist overcome the model's own
+      # frictionloss saturates the shoulder on ordinary tracking error - measured
+      # at wn = 100, where every joint pinned its torque limit and the arm
+      # oscillated for four seconds before settling.
+      #
+      # Each kp is bounded on both sides, from crba() at the home pose:
+      #   above  friction/(M*kp) < 0.01 rad, so friction alone cannot eat the
+      #          0.05 rad success threshold
+      #   below  M*kp*0.05 < the joint's torque limit, so ordinary tracking error
+      #          never saturates
+      # These values sit inside both bounds for the single-arm and the bimanual
+      # build. Discrete-time damping wants kd*dt < 2; the largest here is 0.2 at
+      # the 1 ms MuJoCo timestep. kd is 2*sqrt(kp), i.e. zeta = 1.
+      #   j1..j7  M(single) 0.012 0.416 0.010 0.097 0.0011 0.0058 0.0052
+      #           M(bimanual) differs only on j1, which the sideways mount loads
+      #           at 0.425 instead.
+      kp_joint: [400.0, 400.0, 4000.0, 1000.0, 10000.0, 4000.0, 4000.0]
+      kd_joint: [40.0, 40.0, 126.5, 63.2, 200.0, 126.5, 126.5]
+      home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+      home_duration: 3.0
+
+  right_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      # Both arms report in the torso frame rather than their own link0, so the
+      # two EE poses are directly comparable - which is the whole point of having
+      # two of them.
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      pose_topic: /ee_state/right/pose
+      twist_topic: /ee_state/right/twist
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+
+  right_joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+      # NOT stiffness and damping: the controller multiplies these by M(q), so kp
+      # is a squared natural frequency [1/s^2] and kd is 2*zeta*wn [1/s]. See
+      # joint_space_impedance_controller.cpp for why the diagonal form cannot
+      # work on this arm.
+      #
+      # Per joint, and it has to be. Inertia weighting makes the commanded torque
+      # proportional to the joint's own inertia, so one global bandwidth cannot
+      # serve both ends of the arm: the joints span 0.0011 to 0.43 kg m^2, a
+      # factor of 380. A wn that lets the wrist overcome the model's own
+      # frictionloss saturates the shoulder on ordinary tracking error - measured
+      # at wn = 100, where every joint pinned its torque limit and the arm
+      # oscillated for four seconds before settling.
+      #
+      # Each kp is bounded on both sides, from crba() at the home pose:
+      #   above  friction/(M*kp) < 0.01 rad, so friction alone cannot eat the
+      #          0.05 rad success threshold
+      #   below  M*kp*0.05 < the joint's torque limit, so ordinary tracking error
+      #          never saturates
+      # These values sit inside both bounds for the single-arm and the bimanual
+      # build. Discrete-time damping wants kd*dt < 2; the largest here is 0.2 at
+      # the 1 ms MuJoCo timestep. kd is 2*sqrt(kp), i.e. zeta = 1.
+      #   j1..j7  M(single) 0.012 0.416 0.010 0.097 0.0011 0.0058 0.0052
+      #           M(bimanual) differs only on j1, which the sideways mount loads
+      #           at 0.425 instead.
+      kp_joint: [400.0, 400.0, 4000.0, 1000.0, 10000.0, 4000.0, 4000.0]
+      kd_joint: [40.0, 40.0, 126.5, 63.2, 200.0, 126.5, 126.5]
+      home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+      home_duration: 3.0
+
+  left_joint_space_position_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+
+  right_joint_space_position_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+
+  left_joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      joints:
+        - openarm_left_joint1
+        - openarm_left_joint2
+        - openarm_left_joint3
+        - openarm_left_joint4
+        - openarm_left_joint5
+        - openarm_left_joint6
+        - openarm_left_joint7
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints:
+        - openarm_left_finger_joint2
+      # Same as the single-arm build: the reference slew and the output clamp are
+      # one setting expressed twice, so they must move together.
+      # Reference-tracking gain, not a stiffness. At steady state the drive holds
+      # the joint where kv*kp*e balances gravity, so the residual is
+      # tau_g / (kv * kp) - inversely proportional to this. kp = 10 left the
+      # 7-joint error norm at 0.0165 rad against a 0.02 threshold on a single arm
+      # and 0.0246 (ABORT) on the bimanual torso, whose arms hang at a different
+      # angle and so carry more gravity torque. 30 divides both by three.
+      kp_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      max_joint_vel: 2.0
+
+  right_joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      joints:
+        - openarm_right_joint1
+        - openarm_right_joint2
+        - openarm_right_joint3
+        - openarm_right_joint4
+        - openarm_right_joint5
+        - openarm_right_joint6
+        - openarm_right_joint7
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints:
+        - openarm_right_finger_joint2
+      # Same as the single-arm build: the reference slew and the output clamp are
+      # one setting expressed twice, so they must move together.
+      # Reference-tracking gain, not a stiffness. At steady state the drive holds
+      # the joint where kv*kp*e balances gravity, so the residual is
+      # tau_g / (kv * kp) - inversely proportional to this. kp = 10 left the
+      # 7-joint error norm at 0.0165 rad against a 0.02 threshold on a single arm
+      # and 0.0246 (ABORT) on the bimanual torso, whose arms hang at a different
+      # angle and so carry more gravity torque. 30 divides both by three.
+      kp_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      max_joint_vel: 2.0

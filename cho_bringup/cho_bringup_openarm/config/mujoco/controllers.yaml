@@ -1,0 +1,146 @@
+# Namespace-agnostic controller configuration for OpenArm v1.0 in MuJoCo.
+#
+# bringup_type, control_mode and ee_name are NOT set here: they are generated per
+# launch into a runtime parameter file (see utils/launch_utils.py), because they
+# are the only values that differ between the mujoco/gazebo/isaac/real bringups.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      joint_space_impedance_controller:
+        type: cho_controller_openarm/JointSpaceImpedanceController
+
+      joint_space_position_controller:
+        type: cho_controller_openarm/JointSpacePositionController
+
+      joint_space_velocity_controller:
+        type: cho_controller_openarm/JointSpaceVelocityController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+        - openarm_finger_joint1
+
+  ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      # Pinned rather than derived. The description attaches the arm to a world
+      # link, so the URDF root is "world"; without this, /ee_state/pose would be
+      # stamped "world" here and "openarm_link0" in a bringup that opts out of
+      # the world joint, for identical numbers.
+      base_frame: openarm_link0
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+      gripper_joint: openarm_finger_joint1
+
+  joint_space_impedance_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_link0
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+      gripper_joint: openarm_finger_joint1
+      # NOT stiffness and damping: the controller multiplies these by M(q), so kp
+      # is a squared natural frequency [1/s^2] and kd is 2*zeta*wn [1/s]. See
+      # joint_space_impedance_controller.cpp for why the diagonal form cannot
+      # work on this arm.
+      #
+      # Per joint, and it has to be. Inertia weighting makes the commanded torque
+      # proportional to the joint's own inertia, so one global bandwidth cannot
+      # serve both ends of the arm: the joints span 0.0011 to 0.43 kg m^2, a
+      # factor of 380. A wn that lets the wrist overcome the model's own
+      # frictionloss saturates the shoulder on ordinary tracking error - measured
+      # at wn = 100, where every joint pinned its torque limit and the arm
+      # oscillated for four seconds before settling.
+      #
+      # Each kp is bounded on both sides, from crba() at the home pose:
+      #   above  friction/(M*kp) < 0.01 rad, so friction alone cannot eat the
+      #          0.05 rad success threshold
+      #   below  M*kp*0.05 < the joint's torque limit, so ordinary tracking error
+      #          never saturates
+      # These values sit inside both bounds for the single-arm and the bimanual
+      # build. Discrete-time damping wants kd*dt < 2; the largest here is 0.2 at
+      # the 1 ms MuJoCo timestep. kd is 2*sqrt(kp), i.e. zeta = 1.
+      #   j1..j7  M(single) 0.012 0.416 0.010 0.097 0.0011 0.0058 0.0052
+      #           M(bimanual) differs only on j1, which the sideways mount loads
+      #           at 0.425 instead.
+      kp_joint: [400.0, 400.0, 4000.0, 1000.0, 10000.0, 4000.0, 4000.0]
+      kd_joint: [40.0, 40.0, 126.5, 63.2, 200.0, 126.5, 126.5]
+      # Where to go once the controller takes over. Nothing commands torque
+      # between the hardware activating and this controller activating, so the
+      # arm free-falls for about a second first; without this it would then hold
+      # the fallen pose. joint4's lower limit is 0.0, so it is lifted off the stop.
+      home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+      home_duration: 3.0
+
+  # control_mode:=position. The command chain is open-loop into the actuator's
+  # own position servo, so there are no gains here.
+  joint_space_position_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_link0
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+      gripper_joint: openarm_finger_joint1
+
+  # control_mode:=velocity.
+  joint_space_velocity_controller:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_link0
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+      gripper_joint: openarm_finger_joint1
+      # Proportional term on position error, in 1/s: a 0.1 rad error asks for
+      # 1 rad/s. Unlike the impedance controller's gains this one is not
+      # inertia-weighted, because a velocity command does not have to overcome
+      # the arm's inertia - the actuator's own inner loop does.
+      # Reference-tracking gain, not a stiffness. At steady state the drive holds
+      # the joint where kv*kp*e balances gravity, so the residual is
+      # tau_g / (kv * kp) - inversely proportional to this. kp = 10 left the
+      # 7-joint error norm at 0.0165 rad against a 0.02 threshold on a single arm
+      # and 0.0246 (ABORT) on the bimanual torso, whose arms hang at a different
+      # angle and so carry more gravity torque. 30 divides both by three.
+      kp_joint: [30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+      # Well under the URDF velocity limits (5.4 rad/s on the slowest joint);
+      # raise it once the mode has been exercised.
+      max_joint_vel: 2.0

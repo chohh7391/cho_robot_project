@@ -1,0 +1,312 @@
+<?xml version="1.0"?>
+<!--
+Copyright 2025 Enactic, Inc.
+Copyright 2026 Hyunho Cho
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    ros2_control block for a single OpenArm v1.0.
+
+    One macro serves every environment: `hardware` picks the plugin, `control_mode`
+    picks which command interfaces are declared. Derived from the upstream
+    openarm.ros2_control.xacro (real + mock only), extended with the mujoco,
+    gazebo and isaac branches this project needs.
+  -->
+  <xacro:macro name="openarm_v10_ros2_control" params="
+      control_gains
+      hardware:=mujoco
+      control_mode:=torque
+      bimanual:=false
+      arm_prefix:=''
+      hand:=true
+      can_interface:=can0
+      left_can_interface:=can1
+      right_can_interface:=can0
+      can_fd:=true
+      ee_type:=parallel_link
+      kp_scale:=0.0
+      kd_scale:=1.0
+      fake_sensor_commands:=false
+      controllers_file:=''
+      runtime_param_file:=''
+      description_pkg:=cho_description_openarm">
+
+    <xacro:property name="mit_gains" value="${hardware == 'real' or hardware == 'mock'}"/>
+    <xacro:property name="scene_dir" value="${'openarm_v10_bimanual' if bimanual else 'openarm_v10'}"/>
+
+    <!--
+      Command interfaces are environment-dependent, and deliberately so.
+
+      real/mock: declare position + velocity + effort. OpenArmHW exports all
+      three unconditionally anyway (it ignores this list), and the torque
+      controllers must own position/velocity to hold them at (q_measured, 0) so
+      the MIT packet carries no stale target. See the kp_scale comment below.
+
+      simulators: declare exactly the one interface the mode drives.
+      MujocoSystemInterface::perform_command_mode_switch() clears every
+      per-joint mode flag and enables exactly one, last-started-wins;
+      gz_ros2_control does the same, and TopicBasedSystem publishes every
+      declared interface whether or not a controller claims it, so an extra one
+      would send a constant zero command to the simulator.
+    -->
+    <!-- OpenArmHW parameters for one arm. Factored out because the bimanual
+         build needs two of these, one per CAN bus. -->
+    <xacro:macro name="openarm_hw_params" params="prefix can">
+      <plugin>openarm_hardware/OpenArmHW</plugin>
+          <param name="arm_type">v10</param>
+          <param name="arm_prefix">${prefix}</param>
+          <param name="can_interface">${can}</param>
+          <param name="can_fd">${can_fd}</param>
+          <param name="hand">${hand}</param>
+          <param name="ee_type">${ee_type}</param>
+          <!--
+            Damiao MIT gains, applied by OpenArmHW::write() every cycle as
+              tau = kp*(pos_cmd - pos) + kd*(vel_cmd - vel) + tau_cmd
+            regardless of which command interfaces the active controller wrote.
+
+            kp_scale defaults to 0.0 so torque controllers get pure feed-forward:
+            the upstream gains (kp 70/70/70/60/10/10/10) would otherwise fight
+            every torque command with a full-stiffness pull toward pos_cmd. The
+            command buffers are zero-initialised, not NaN, so that pull would be
+            toward q = 0 - which for openarm_joint4 (range [0, 2.443]) is a joint
+            limit. Pass kp_scale:=1.0 only from a position-mode bringup.
+
+            kd is kept: with kp = 0 it is pure motor-rate joint damping, which is
+            what you want on a direct-drive arm. Halve it (kd_scale:=0.5) on a
+            first power-on.
+          -->
+          <param name="kp1">${control_gains['joint1']['kp'] * kp_scale}</param>
+          <param name="kp2">${control_gains['joint2']['kp'] * kp_scale}</param>
+          <param name="kp3">${control_gains['joint3']['kp'] * kp_scale}</param>
+          <param name="kp4">${control_gains['joint4']['kp'] * kp_scale}</param>
+          <param name="kp5">${control_gains['joint5']['kp'] * kp_scale}</param>
+          <param name="kp6">${control_gains['joint6']['kp'] * kp_scale}</param>
+          <param name="kp7">${control_gains['joint7']['kp'] * kp_scale}</param>
+          <param name="kd1">${control_gains['joint1']['kd'] * kd_scale}</param>
+          <param name="kd2">${control_gains['joint2']['kd'] * kd_scale}</param>
+          <param name="kd3">${control_gains['joint3']['kd'] * kd_scale}</param>
+          <param name="kd4">${control_gains['joint4']['kd'] * kd_scale}</param>
+          <param name="kd5">${control_gains['joint5']['kd'] * kd_scale}</param>
+          <param name="kd6">${control_gains['joint6']['kd'] * kd_scale}</param>
+          <param name="kd7">${control_gains['joint7']['kd'] * kd_scale}</param>
+          <param name="kp_hand">${control_gains['hand']['kp']}</param>
+          <param name="kd_hand">${control_gains['hand']['kd']}</param>
+    </xacro:macro>
+
+    <xacro:macro name="configure_joint" params="joint_name initial_position:=0.0 gripper:=false">
+      <joint name="${joint_name}">
+        <xacro:if value="${mit_gains}">
+          <command_interface name="position"/>
+          <command_interface name="velocity"/>
+          <command_interface name="effort"/>
+        </xacro:if>
+        <xacro:unless value="${mit_gains}">
+          <!-- The gripper is position-driven in every simulator actuator set
+               (its MJCF actuator is a position servo on the "split" tendon in
+               all of actuators_{position,velocity,torque}.xml), so it does not
+               follow the arm's control_mode. Declaring effort here makes
+               MujocoSystemInterface reject the interface outright:
+               "Effort command interface ... is not supported with position or
+               velocity actuator. Skipping it." -->
+          <xacro:if value="${gripper}">
+            <command_interface name="position"/>
+          </xacro:if>
+          <xacro:unless value="${gripper}">
+            <xacro:if value="${control_mode == 'position'}">
+              <command_interface name="position"/>
+            </xacro:if>
+            <xacro:if value="${control_mode == 'velocity'}">
+              <command_interface name="velocity"/>
+            </xacro:if>
+            <xacro:unless value="${control_mode == 'position' or control_mode == 'velocity'}">
+              <command_interface name="effort"/>
+            </xacro:unless>
+          </xacro:unless>
+        </xacro:unless>
+
+        <state_interface name="position">
+          <param name="initial_value">${initial_position}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:macro name="one_arm_joints" params="prefix">
+      <xacro:configure_joint joint_name="openarm_${prefix}joint1"/>
+      <xacro:configure_joint joint_name="openarm_${prefix}joint2"/>
+      <xacro:configure_joint joint_name="openarm_${prefix}joint3"/>
+      <!-- joint4 range is [0.0, 2.443]: 0.0 is the lower limit, so the arm starts
+           on a limit unless we lift it off. 0.3 rad keeps every environment's
+           initial pose identical and away from the stop. -->
+      <xacro:configure_joint joint_name="openarm_${prefix}joint4" initial_position="0.3"/>
+      <xacro:configure_joint joint_name="openarm_${prefix}joint5"/>
+      <xacro:configure_joint joint_name="openarm_${prefix}joint6"/>
+      <xacro:configure_joint joint_name="openarm_${prefix}joint7"/>
+    </xacro:macro>
+
+    <!-- Only finger_joint1 is actuated. finger_joint2 is a URDF <mimic> of it
+         (and a MuJoCo equality constraint), so it carries no interfaces. -->
+    <xacro:macro name="one_hand_joints" params="prefix">
+      <xacro:if value="${hand}">
+        <xacro:configure_joint joint_name="openarm_${prefix}finger_joint1" gripper="true"/>
+      </xacro:if>
+    </xacro:macro>
+
+    <!-- The bimanual build is one model with two chains, so both arms' joints go
+         into the same hardware component wherever the hardware allows it. Only
+         the real bringup splits them, because each arm has its own CAN bus. -->
+    <xacro:macro name="arm_joints" params="">
+      <xacro:if value="${bimanual}">
+        <xacro:one_arm_joints prefix="left_"/>
+        <xacro:one_arm_joints prefix="right_"/>
+      </xacro:if>
+      <xacro:unless value="${bimanual}">
+        <xacro:one_arm_joints prefix="${arm_prefix}"/>
+      </xacro:unless>
+    </xacro:macro>
+
+    <xacro:macro name="hand_joints" params="">
+      <xacro:if value="${bimanual}">
+        <xacro:one_hand_joints prefix="left_"/>
+        <xacro:one_hand_joints prefix="right_"/>
+      </xacro:if>
+      <xacro:unless value="${bimanual}">
+        <xacro:one_hand_joints prefix="${arm_prefix}"/>
+      </xacro:unless>
+    </xacro:macro>
+
+    <!-- ============================ Isaac Sim ============================ -->
+    <!--
+      Two components, not one. TopicBasedSystem::write() push_back()s only the
+      command interfaces a joint declares, so mixing an effort-commanded arm with
+      a position-commanded finger inside one component would misalign the
+      position/effort arrays against the name array.
+
+      Both subscribe to the SAME joint-states topic: read() matches by joint
+      name, so the extra joints in the message are ignored.
+    -->
+    <xacro:if value="${hardware == 'isaac'}">
+      <ros2_control name="IsaacArmSystem" type="system">
+        <hardware>
+          <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
+          <param name="joint_commands_topic">/isaac_joint_commands</param>
+          <param name="joint_states_topic">/isaac_joint_states</param>
+          <!-- Negative threshold: always publish. The upstream throttle compares
+               the POSITION state against the POSITION command, which is
+               meaningless when the arm is commanded in effort or velocity. -->
+          <param name="trigger_joint_command_threshold">-1.0</param>
+        </hardware>
+        <xacro:arm_joints/>
+      </ros2_control>
+
+      <xacro:if value="${hand}">
+        <ros2_control name="IsaacHandSystem" type="system">
+          <hardware>
+            <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
+            <param name="joint_commands_topic">/isaac_gripper_commands</param>
+            <param name="joint_states_topic">/isaac_joint_states</param>
+            <param name="trigger_joint_command_threshold">-1.0</param>
+          </hardware>
+          <xacro:hand_joints/>
+        </ros2_control>
+      </xacro:if>
+    </xacro:if>
+
+    <!-- ===================== real hardware, bimanual ====================== -->
+    <!-- Two components, one per CAN bus. Unlike the simulators, the two arms are
+         genuinely separate hardware here: each is its own OpenArmHW instance
+         talking to its own socket. -->
+    <xacro:if value="${hardware == 'real' and bimanual}">
+      <ros2_control name="OpenArmLeftHardwareInterface" type="system">
+        <hardware>
+          <xacro:openarm_hw_params prefix="left_" can="${left_can_interface}"/>
+        </hardware>
+        <xacro:one_arm_joints prefix="left_"/>
+        <xacro:one_hand_joints prefix="left_"/>
+      </ros2_control>
+
+      <ros2_control name="OpenArmRightHardwareInterface" type="system">
+        <hardware>
+          <xacro:openarm_hw_params prefix="right_" can="${right_can_interface}"/>
+        </hardware>
+        <xacro:one_arm_joints prefix="right_"/>
+        <xacro:one_hand_joints prefix="right_"/>
+      </ros2_control>
+    </xacro:if>
+
+    <!-- ============== mock / mujoco / gazebo, and real single-arm ========= -->
+    <xacro:unless value="${hardware == 'isaac' or (hardware == 'real' and bimanual)}">
+      <ros2_control name="OpenArmHardwareInterface" type="system">
+        <hardware>
+          <xacro:if value="${hardware == 'real'}">
+            <xacro:openarm_hw_params prefix="${arm_prefix}" can="${can_interface}"/>
+          </xacro:if>
+
+          <xacro:if value="${hardware == 'mock'}">
+            <plugin>mock_components/GenericSystem</plugin>
+            <param name="fake_sensor_commands">${fake_sensor_commands}</param>
+            <param name="state_following_offset">0.0</param>
+          </xacro:if>
+
+          <xacro:if value="${hardware == 'mujoco'}">
+            <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+            <!-- Pick the actuator set that matches control_mode. MuJoCo writes the
+                 raw command into mjData.ctrl with no unit conversion, so a position
+                 command sent to a <motor> would be read as a torque. -->
+            <xacro:if value="${control_mode == 'position'}">
+              <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_position.xml</param>
+            </xacro:if>
+            <xacro:if value="${control_mode == 'velocity'}">
+              <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_velocity.xml</param>
+            </xacro:if>
+            <xacro:unless value="${control_mode == 'position' or control_mode == 'velocity'}">
+              <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_torque.xml</param>
+            </xacro:unless>
+          </xacro:if>
+
+          <xacro:if value="${hardware == 'gazebo'}">
+            <plugin>ign_ros2_control/IgnitionSystem</plugin>
+          </xacro:if>
+        </hardware>
+
+        <xacro:arm_joints/>
+        <xacro:hand_joints/>
+      </ros2_control>
+    </xacro:unless>
+
+    <!-- Gazebo runs its own controller_manager inside the plugin, so the YAML is
+         handed over here rather than through a spawner's -p flag.
+
+         Both paths are arguments rather than $(find cho_bringup_openarm)/...
+         literals: a description package that resolves a bringup package cannot
+         be built or tested on its own, and CI covers descriptions while
+         deliberately excluding bringup. The launch file passes them in. -->
+    <xacro:if value="${hardware == 'gazebo'}">
+      <gazebo>
+        <plugin filename="ign_ros2_control-system" name="ign_ros2_control::IgnitionROS2ControlPlugin">
+          <xacro:if value="${controllers_file != ''}">
+            <parameters>${controllers_file}</parameters>
+          </xacro:if>
+          <xacro:if value="${runtime_param_file != ''}">
+            <parameters>${runtime_param_file}</parameters>
+          </xacro:if>
+        </plugin>
+      </gazebo>
+    </xacro:if>
+
+  </xacro:macro>
+</robot>

@@ -11,6 +11,9 @@ from cho_task_manager.tasks.franka import (
     create_franka_controller_check_torque_tree,
     create_franka_controller_check_velocity_tree,
 )
+from cho_task_manager.tasks.openarm import (
+    create_openarm_controller_check_torque_tree,
+)
 from cho_task_manager.tasks.ur import (
     create_ur_pick_place_tree,
     create_ur_multi_move_tree,
@@ -35,6 +38,9 @@ _TASK_REGISTRY = {
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,
         'multi_move': create_ur_multi_move_tree,
+    },
+    'openarm': {
+        'controller_check_torque': create_openarm_controller_check_torque_tree,
     },
 }
 
