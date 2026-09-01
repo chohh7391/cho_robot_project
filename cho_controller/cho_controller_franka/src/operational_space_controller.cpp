@@ -84,11 +84,15 @@ controller_interface::return_type OperationalSpaceController::update(
     return controller_interface::return_type::ERROR;
   }
 
+  // twist_des_world is the reference EE twist [linear; angular] in world-aligned
+  // axes; rotated into the local frame at the error computation below. Zero when idle.
+  Vector6d twist_des_world = Vector6d::Zero();
   if (action_server_ && action_server_->is_running()) {
     action_server_->compute(time, state_);
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
+    twist_des_world = trajectory_sample.vel;
   } else {
     state_.H_ee_ref = state_.H_ee_init;
     state_.H_ee_des = state_.H_ee_ref;
@@ -127,7 +131,12 @@ controller_interface::return_type OperationalSpaceController::update(
   error.tail<3>() = pinocchio::log3(R_err);
 
   Vector6d v_curr = J * v;
+  // Reference twist feed-forward. twist_des_world is world-aligned; error/v_curr are
+  // in the LOCAL EE frame (J = frameJacobianLocal), so rotate it in with R_ee^T.
   Vector6d v_des = Vector6d::Zero();
+  const Eigen::Matrix3d R_ee_T = H_ee.rotation().transpose();
+  v_des.head<3>() = R_ee_T * twist_des_world.head<3>();
+  v_des.tail<3>() = R_ee_T * twist_des_world.tail<3>();
   Vector6d error_dot = v_des - v_curr;
   // Vector6d desired_acc = kp_task_ * error + kd_task_ * error_dot;
   Vector6d desired_acc = kp_task_.cwiseProduct(error) + kd_task_.cwiseProduct(error_dot);

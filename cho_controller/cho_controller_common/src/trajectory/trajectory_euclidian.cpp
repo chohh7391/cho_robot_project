@@ -7,6 +7,7 @@
 // cho_robot_project. Full license text: LICENSES/BSD-2-Clause-TSID.txt
 //
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
+#include <algorithm>
 #include <iostream>
 
 using namespace std;
@@ -89,29 +90,43 @@ const TrajectorySample & TrajectoryEuclidianCubic::operator()(double)
 
 const TrajectorySample & TrajectoryEuclidianCubic::computeNext()
 {
+  const Eigen::Index n = m_init.size();
+  // vel/acc are the feed-forward terms the impedance/QP tasks already consume.
+  // Keep pos/vel/acc sized to the trajectory and zeroed outside the active window.
+  if (m_sample.pos.size() != n) m_sample.pos.setZero(n);
+  if (m_sample.vel.size() != n) m_sample.vel.setZero(n);
+  if (m_sample.acc.size() != n) m_sample.acc.setZero(n);
+
   if (m_time < m_stime) {
-    m_sample.pos = m_init;		
+    m_sample.pos = m_init;
+    m_sample.vel.setZero(n);
+    m_sample.acc.setZero(n);
     return m_sample;
   }
   else if (m_time > m_stime + m_duration) {
     m_sample.pos = m_goal;
-
+    m_sample.vel.setZero(n);
+    m_sample.acc.setZero(n);
     return m_sample;
   }
   else {
-    double a0, a1, a2, a3;
-    Vector cubic_tra = m_init;
+    // Cubic with zero boundary velocity:
+    //   pos = init + a2 t^2 + a3 t^3,  a2 = 3 d / T^2,  a3 = -2 d / T^3,  d = goal-init
+    //   vel = 2 a2 t + 3 a3 t^2,       acc = 2 a2 + 6 a3 t
+    // The analytic vel/acc are the feed-forward the tasks were wired to consume but
+    // previously always received as zero -> pure PD, so tracking lagged during motion.
+    // Written straight into m_sample (no per-cycle heap temporaries -> RT-clean).
+    const double t = m_time - m_stime;
+    const double T = std::max(m_duration, 1e-6);  // guard 1/T^k; servers already reject T<=0
+    for (Eigen::Index i = 0; i < n; i++) {
+      const double d  = m_goal(i) - m_init(i);
+      const double a2 = 3.0 * d / (T * T);
+      const double a3 = -2.0 * d / (T * T * T);
 
-    for (int i = 0; i < m_init.size(); i++) {
-      a0 = m_init(i);
-      a1 = 0.0; //m_init.vel(i);
-      a2 = 3.0 / pow(m_duration, 2) * (m_goal(i) - m_init(i));
-      a3 = -1.0 * 2.0 / pow(m_duration, 3) * (m_goal(i) - m_init(i));
-
-      cubic_tra(i) = a0 + a1 * (m_time - m_stime) + a2 * pow(m_time - m_stime, 2) + a3 * pow(m_time - m_stime, 3);
+      m_sample.pos(i) = m_init(i) + a2 * t * t + a3 * t * t * t;
+      m_sample.vel(i) = 2.0 * a2 * t + 3.0 * a3 * t * t;
+      m_sample.acc(i) = 2.0 * a2 + 6.0 * a3 * t;
     }
-    m_sample.pos = cubic_tra;
-
     return m_sample;
   }
 }

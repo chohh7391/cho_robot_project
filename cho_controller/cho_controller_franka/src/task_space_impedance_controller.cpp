@@ -71,12 +71,16 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  // 1. Update the target pose from the action server
+  // 1. Update the target pose + reference twist from the action server.
+  // v_des_world is the reference EE twist [linear; angular] in world-aligned axes,
+  // matching J_arm_world below; zero when idle so the law reduces to pure damping.
+  Vector6d v_des_world = Vector6d::Zero();
   if (action_server_ && action_server_->is_running()) {
     action_server_->compute(time, state_);
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
+    v_des_world = trajectory_sample.vel;
   } else {
     state_.H_ee_ref = state_.H_ee_init;
     state_.H_ee_des = state_.H_ee_ref;
@@ -115,7 +119,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // 3. Task wrench (world frame)
   Vector6d ee_vel = J * state_.v_arm;
   Vector6d task_wrench;
-  task_wrench = kp_task_.cwiseProduct(delta_pose) - kd_task_.cwiseProduct(ee_vel);
+  task_wrench = kp_task_.cwiseProduct(delta_pose) + kd_task_.cwiseProduct(v_des_world - ee_vel);
 
   // 4. Motion Torque
   Vector7d torque_motion = J_T * task_wrench;

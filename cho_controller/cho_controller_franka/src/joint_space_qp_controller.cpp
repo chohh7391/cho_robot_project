@@ -137,10 +137,12 @@ controller_interface::return_type JointSpaceQPController::update(
     // Fill only the arm entries (head) from the trajectory
     sample_posture.pos.head(num_dof_) = trajectory_sample.pos;
     sample_posture.vel.head(num_dof_) = trajectory_sample.vel;
-    
+    sample_posture.acc.head(num_dof_) = trajectory_sample.acc;
+
     // Zero the remaining gripper entries (tail)
     sample_posture.pos.tail(model_na - num_dof_).setZero();
     sample_posture.vel.tail(model_na - num_dof_).setZero();
+    sample_posture.acc.tail(model_na - num_dof_).setZero();
 
     state_.q_arm_des = trajectory_sample.pos; 
   } else {

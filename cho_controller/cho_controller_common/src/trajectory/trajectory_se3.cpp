@@ -9,6 +9,7 @@
 #include "cho_controller_common/trajectory/trajectory_se3.hpp"
 #include "cho_controller_common/math/util.hpp"
 #include <unsupported/Eigen/MatrixFunctions>
+#include <algorithm>
 #include <iostream>
 using namespace cho_controller::common::math;
 using namespace std;
@@ -92,48 +93,61 @@ namespace trajectory{
 
   const TrajectorySample & TrajectorySE3Cubic::computeNext()
   {
-    Eigen::Vector3d rot_diff_vec;
-    Eigen::Vector3d cubic_tra;
-    Eigen::Vector3d cubic_rot_tra;
-    Eigen::Matrix3d cubic_rot;
-    m_sample.resize(12, 6);
+    m_sample.resize(12, 6);  // zeroes vel/acc; they stay zero outside the active window
 
-    Eigen::Matrix3d rot_diff = (m_init.rotation().transpose() * m_goal.rotation()).log();
-    
     typedef Eigen::Matrix<double, 9, 1> Vector9;
+
+    const Eigen::Matrix3d rot_diff = (m_init.rotation().transpose() * m_goal.rotation()).log();
+
     if (m_time < m_stime) {
       m_sample.pos.head<3>() = m_init.translation();
       m_sample.pos.tail<9>() = Eigen::Map<const Vector9>(&m_init.rotation()(0), 9);
-
       return m_sample;
     }
     else if (m_time > m_stime + m_duration) {
       m_sample.pos.head<3>() = m_goal.translation();
       m_sample.pos.tail<9>() = Eigen::Map<const Vector9>(&m_goal.rotation()(0), 9);
-
       return m_sample;
     }
     else {
-      double a0, a1, a2, a3;
-      double tau = this->cubic(m_time, m_stime, m_stime + m_duration, 0, 1, 0, 0);
+      const double t = m_time - m_stime;
+      const double T = std::max(m_duration, 1e-6);  // guard 1/T^k; servers already reject T<=0
+      // Shared cubic timing law s(t): 0->1 with zero boundary slope. Translation uses
+      // it per-axis (identical to the a2/a3 form); rotation scales the fixed geodesic
+      // rot_diff by it.
+      const double s   = 3.0 * t * t / (T * T) - 2.0 * t * t * t / (T * T * T);
+      const double sd  = 6.0 * t / (T * T) - 6.0 * t * t / (T * T * T);
+      const double sdd = 6.0 / (T * T) - 12.0 * t / (T * T * T);
 
-      for (int i = 0; i < 3; i++) {
-        a0 = m_init.translation()(i);
-        a1 = 0.0; //m_init.vel(i);
-        a2 = 3.0 / pow(m_duration, 2) * (m_goal.translation()(i) - m_init.translation()(i));
-        a3 = -1.0 * 2.0 / pow(m_duration, 3) * (m_goal.translation()(i) - m_init.translation()(i));
+      // Translation: world-frame position / linear velocity / linear acceleration.
+      const Eigen::Vector3d d = m_goal.translation() - m_init.translation();
+      const Eigen::Vector3d cubic_tra = m_init.translation() + d * s;
+      const Eigen::Vector3d cubic_vel = d * sd;
+      const Eigen::Vector3d cubic_acc = d * sdd;
 
-        cubic_tra(i) = a0 + a1 * (m_time - m_stime) + a2 * pow(m_time - m_stime, 2) + a3 * pow(m_time - m_stime, 3);
-      }
-
-      m_cubic.rotation() = m_init.rotation() * (rot_diff * tau).exp();
+      // NOTE: omega_world/alpha_world below are world-aligned reference twists. They
+      // are frame-consistent with TaskSE3Equality only while the TCP offset is zero;
+      // a nonzero ee_offset would combine these with a local-frame lever arm in the
+      // task's offset handling (task_se3_equality.cpp). All current controllers use
+      // offset {0,0,0}.
+      // Rotation: R(t) = R_init * exp(rot_diff * s). The reference angular velocity /
+      // acceleration in world-aligned axes are R(t)*w*sd and R(t)*w*sdd, with w the
+      // fixed rotation vector (vee of rot_diff). This is the world-oriented twist
+      // TaskSE3Equality expects (it rotates it back into the local frame internally).
+      Eigen::Vector3d rot_diff_vec;
+      rot_diff_vec << rot_diff(2, 1), rot_diff(0, 2), rot_diff(1, 0);
+      m_cubic.rotation() = m_init.rotation() * (rot_diff * s).exp();
       m_cubic.translation() = cubic_tra;
-    
-      m_sample.pos.head<3>() = m_cubic.translation();
-      m_sample.pos.tail<9>() = Eigen::Map<const Vector9>(&m_cubic.rotation()(0), 9);
+
+      const Eigen::Vector3d omega_world = m_cubic.rotation() * rot_diff_vec * sd;
+      const Eigen::Vector3d alpha_world = m_cubic.rotation() * rot_diff_vec * sdd;
 
       m_sample.pos.head<3>() = m_cubic.translation();
       m_sample.pos.tail<9>() = Eigen::Map<const Vector9>(&m_cubic.rotation()(0), 9);
+      m_sample.vel.head<3>() = cubic_vel;
+      m_sample.vel.tail<3>() = omega_world;
+      m_sample.acc.head<3>() = cubic_acc;
+      m_sample.acc.tail<3>() = alpha_world;
 
       return m_sample;
     }
