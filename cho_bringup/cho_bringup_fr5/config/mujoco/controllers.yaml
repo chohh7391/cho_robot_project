@@ -1,0 +1,49 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 500
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_space_position_controller:
+      type: cho_controller_fr5/JointSpacePositionController
+
+    task_space_ik_controller:
+      type: cho_controller_fr5/TaskSpaceIKController
+
+joint_space_position_controller:
+  ros__parameters:
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+
+task_space_ik_controller:
+  ros__parameters:
+    robot_type: fr5
+    bringup_type: mujoco
+    control_mode: position
+    ee_name: wrist3_link
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+    # lambda damps the DLS near singularities (traded against tracking accuracy);
+    # the per-cycle clamp (max_delta_q, now active in the controller) is the hard
+    # cap on any residual spike, so lambda can stay small for tight tracking.
+    lambda: 0.02
+    max_delta_q: 0.005
+    # Base-frame workspace plane guard (not full mesh collision checking).
+    enforce_workspace_floor: true
+    minimum_ee_height: 0.15
+    workspace_floor_tolerance: 0.0001
+    recovery_minimum_height_gain: 0.01
+    recovery_monotonic_tolerance: 0.00001
+    recovery_maximum_lateral_displacement: 0.002
+    recovery_maximum_orientation_error: 0.01

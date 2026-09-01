@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    ros2_control block for the FR5, with the hardware backend selected by the
+    `hardware` argument:
+
+      mujoco  - mujoco_ros2_control/MujocoSystemInterface (xml/scene.xml)
+      isaac   - topic_based_ros2_control/TopicBasedSystem (Isaac Sim bridge)
+      gazebo  - gz_ros2_control/GazeboSimSystem
+      mock    - mock_components/GenericSystem (lifecycle / switching smoke tests)
+      fairino - fairino_hardware/FairinoHardwareInterface (real FR5, libfairino)
+
+    Simulation backends command {position, velocity} and expose
+    {position, velocity, effort}; the cho controllers only ever claim the
+    position command, but MuJoCo/Isaac publish every declared interface. The
+    real fairino HW is position-command only and, after the A2-velocity patch,
+    exposes exactly {position, velocity} state - so its joints declare only
+    those, matching the vendor on_init contract.
+  -->
+
+  <!-- One joint's interfaces, tailored to the active hardware backend. -->
+  <xacro:macro name="fr5_joint" params="joint_name init hardware">
+    <joint name="${joint_name}">
+      <command_interface name="position"/>
+      <xacro:if value="${hardware in ['mujoco', 'gazebo', 'mock']}">
+        <command_interface name="velocity"/>
+      </xacro:if>
+      <state_interface name="position">
+        <param name="initial_value">${init}</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+      <xacro:if value="${hardware in ['mujoco', 'isaac']}">
+        <state_interface name="effort"/>
+      </xacro:if>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="fr5_ros2_control" params="name prefix hardware robot_ip initial_positions">
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <xacro:if value="${hardware == 'mujoco'}">
+          <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+          <param name="mujoco_model">$(find cho_description_fr5)/xml/scene.xml</param>
+        </xacro:if>
+        <xacro:if value="${hardware == 'isaac'}">
+          <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
+          <param name="joint_commands_topic">/isaac_joint_commands</param>
+          <param name="joint_states_topic">/isaac_joint_states</param>
+          <!-- Negative threshold: always publish (see the UR isaac block). -->
+          <param name="trigger_joint_command_threshold">-1.0</param>
+        </xacro:if>
+        <xacro:if value="${hardware == 'gazebo'}">
+          <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+        </xacro:if>
+        <xacro:if value="${hardware == 'mock'}">
+          <plugin>mock_components/GenericSystem</plugin>
+          <param name="state_following_offset">0.0</param>
+          <param name="calculate_dynamics">true</param>
+        </xacro:if>
+        <xacro:if value="${hardware == 'fairino'}">
+          <!-- Real FR5 over libfairino. The fork reads robot_ip from this
+               hardware parameter (the upstream v3_9_9 hardcodes it). -->
+          <plugin>fairino_hardware/FairinoHardwareInterface</plugin>
+          <param name="robot_ip">${robot_ip}</param>
+        </xacro:if>
+      </hardware>
+
+      <xacro:fr5_joint joint_name="${prefix}j1" init="${initial_positions['j1']}" hardware="${hardware}"/>
+      <xacro:fr5_joint joint_name="${prefix}j2" init="${initial_positions['j2']}" hardware="${hardware}"/>
+      <xacro:fr5_joint joint_name="${prefix}j3" init="${initial_positions['j3']}" hardware="${hardware}"/>
+      <xacro:fr5_joint joint_name="${prefix}j4" init="${initial_positions['j4']}" hardware="${hardware}"/>
+      <xacro:fr5_joint joint_name="${prefix}j5" init="${initial_positions['j5']}" hardware="${hardware}"/>
+      <xacro:fr5_joint joint_name="${prefix}j6" init="${initial_positions['j6']}" hardware="${hardware}"/>
+    </ros2_control>
+  </xacro:macro>
+</robot>

@@ -48,6 +48,11 @@ DEFAULT_ACTION_PREFERENCES = {
         "task": [f"{ACTION_SERVER_PREFIX}/task_space_ik_controller"],
         "gripper": [],
     },
+    "fr5": {
+        "joint": [f"{ACTION_SERVER_PREFIX}/joint_space_position_controller"],
+        "task": [f"{ACTION_SERVER_PREFIX}/task_space_ik_controller"],
+        "gripper": [],
+    },
 }
 
 
@@ -363,7 +368,10 @@ class ControlSuiteShell(cmd.Cmd):
         goal.target_joints = JointState()
 
         if arg.strip() == "0":
-            if self.robot_type == "ur5e":
+            if self.robot_type == "fr5":
+                # home 0 = the zero spawn pose (matches initial_positions.yaml).
+                goal.target_joints.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            elif self.robot_type == "ur5e":
                 goal.target_joints.position = [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
             else:
                 goal.target_joints.position = [
@@ -376,7 +384,11 @@ class ControlSuiteShell(cmd.Cmd):
                     np.pi/4,
                 ]
         elif arg.strip() == "1":
-            if self.robot_type == "ur5e":
+            if self.robot_type == "fr5":
+                # home 1 = a non-singular, task-ready pose (j5=-90 clears the wrist
+                # singularity). Use this before task-space `reach` control.
+                goal.target_joints.position = [0.0, -0.5236, -2.0944, 1.2217, -1.5708, 1.0472]
+            elif self.robot_type == "ur5e":
                 goal.target_joints.position = [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
             else:
                 goal.target_joints.position = [
@@ -389,7 +401,9 @@ class ControlSuiteShell(cmd.Cmd):
                     0.0
                 ]
         elif arg.strip() == "2":
-            if self.robot_type == "ur5e":
+            if self.robot_type == "fr5":
+                goal.target_joints.position = [0.4, -0.7, -1.8, 1.2, 0.4, 1.0]
+            elif self.robot_type == "ur5e":
                 goal.target_joints.position = [0.2, -1.4, 1.4, -1.6, -1.5, 0.2]
             else:
                 goal.target_joints.position = [
@@ -402,7 +416,9 @@ class ControlSuiteShell(cmd.Cmd):
                     0.30928418040275574
                 ]
         elif arg.strip() == "3":
-            if self.robot_type == "ur5e":
+            if self.robot_type == "fr5":
+                goal.target_joints.position = [-0.4, -0.7, -1.8, 1.2, -0.4, 1.0]
+            elif self.robot_type == "ur5e":
                 goal.target_joints.position = [-0.2, -1.4, 1.4, -1.6, -1.5, -0.2]
             else:
                 goal.target_joints.position = [
@@ -439,7 +455,22 @@ class ControlSuiteShell(cmd.Cmd):
         goal.target_pose = Pose()
         goal.relative = False
 
-        if selector == "0":
+        if self.robot_type == "fr5":
+            # FR5: relative moves in the wrist3_link local frame (identity
+            # rotation). These are NOT inherently floor-safe: the world direction
+            # depends on the current wrist orientation. Move to `home 1` with the
+            # joint controller before using these task-space smoke-test commands.
+            fr5_moves = {"0": (0.0, 0.0, 0.10), "1": (0.0, 0.0, -0.10),
+                         "2": (0.10, 0.0, 0.0), "3": (0.0, 0.10, 0.0)}
+            if selector not in fr5_moves:
+                print("Usage: reach 0|1|2|3")
+                return
+            goal.relative = True
+            (goal.target_pose.position.x,
+             goal.target_pose.position.y,
+             goal.target_pose.position.z) = fr5_moves[selector]
+            goal.target_pose.orientation.w = 1.0
+        elif selector == "0":
             goal.relative = False
             goal.target_pose.position.x = 0.2
             goal.target_pose.position.y = -0.2
@@ -570,7 +601,7 @@ class ControlSuiteShell(cmd.Cmd):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--robot_type", "--robot-type", choices=["franka", "ur5e"], default="franka")
+    parser.add_argument("--robot_type", "--robot-type", choices=["franka", "ur5e", "fr5"], default="franka")
     parser.add_argument("--control_space", choices=["joint", "task"], default="task")
     parser.add_argument("--joint-controller")
     parser.add_argument("--task-controller")

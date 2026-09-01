@@ -1,0 +1,8 @@
+# Real FR5 connection settings. Edit robot_ip to match your controller before
+# launching bringup_real_robot.launch.py. The FR5 default is 192.168.58.2.
+fr5:
+  robot_ip: 192.168.58.2
+  tool: 0
+  user: 0
+  ee_name: wrist3_link
+  controller_name: joint_space_position_controller

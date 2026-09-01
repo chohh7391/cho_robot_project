@@ -1,2 +1,0 @@
-sensor_msgs/JointState desired_state
-sensor_msgs/JointState current_state

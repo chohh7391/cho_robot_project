@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Physics profile for the FAIRINO FR5 under Isaac Sim, consumed by",
+    "run_isaac_sim.py. Joint names and home pose must match the isaac branch of",
+    "cho_description_fr5/urdf/fr5.ros2_control.xacro. The FR5 is position-",
+    "controlled only, so there is no hand and no torque/velocity drive."
+  ],
+  "prim_path": "/fr5",
+  "arm_joints": ["j1", "j2", "j3", "j4", "j5", "j6"],
+  "hand_joints": [],
+  "_home_comment": "Spawn pose = zeros, matching config/initial_positions.yaml and the <state_interface> initial_value entries. (Zeros is a wrist singularity; move to a non-singular pose before task control.)",
+  "arm_home": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "hand_home": [],
+  "_armature_comment": "Rotor inertia. The FR5 MuJoCo model authors none; 0.1 is the value used for the UR5e and Franka wrists and costs nothing here.",
+  "arm_armature": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+  "_position_gain_comment": [
+    "MuJoCo position-actuator gains for this arm (xml/fr5.xml): kp 3000 / kv 300",
+    "for the three proximal joints and kp 1000 / kv 100 for the three wrists.",
+    "Use the same per-radian gains in Isaac so the two position-controlled plants",
+    "start from the same verified tuning. Effort still saturates at the URDF joint",
+    "limits (150/28 Nm), so validate and retune from an Isaac runtime trace."
+  ],
+  "arm_position_stiffness": [3000.0, 3000.0, 3000.0, 1000.0, 1000.0, 1000.0],
+  "arm_position_damping": [300.0, 300.0, 300.0, 100.0, 100.0, 100.0],
+  "arm_velocity_damping": 0.0,
+  "arm_torque_damping": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "hand_stiffness": 0.0,
+  "hand_damping": 0.0,
+  "joint_friction": 0.0,
+  "ft_link": null,
+  "solver_position_iterations": 32,
+  "solver_velocity_iterations": 1,
+  "enable_self_collisions": false
+}

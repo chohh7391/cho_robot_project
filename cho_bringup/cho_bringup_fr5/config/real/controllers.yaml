@@ -1,0 +1,80 @@
+# Controller configuration for the real FR5 over the vendor libfairino HW.
+#
+# update_rate is 125 Hz to match the vendor write()'s ServoJ command time
+# (cmdT = 0.008 s). A mismatch desynchronises the trajectory clock from the
+# servo stream buffer.
+
+controller_manager:
+  ros__parameters:
+    update_rate: 125
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    joint_space_position_controller:
+      type: cho_controller_fr5/JointSpacePositionController
+
+    task_space_ik_controller:
+      type: cho_controller_fr5/TaskSpaceIKController
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+
+joint_space_position_controller:
+  ros__parameters:
+    robot_type: fr5
+    bringup_type: real
+    control_mode: position
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+
+task_space_ik_controller:
+  ros__parameters:
+    robot_type: fr5
+    bringup_type: real
+    control_mode: position
+    ee_name: wrist3_link
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+    lambda: 0.02
+    # Per-cycle dq clamp: conservative for the real arm (125 Hz) and bounds any DLS
+    # spike near a singularity. The open-loop IK integrates dq, so this is the hard
+    # joint-velocity cap.
+    max_delta_q: 0.005
+    # Base-frame workspace plane guard (not full mesh collision checking).
+    enforce_workspace_floor: true
+    minimum_ee_height: 0.15
+    workspace_floor_tolerance: 0.0001
+    recovery_minimum_height_gain: 0.01
+    recovery_monotonic_tolerance: 0.00001
+    recovery_maximum_lateral_displacement: 0.002
+    recovery_maximum_orientation_error: 0.01
+    default_dof_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

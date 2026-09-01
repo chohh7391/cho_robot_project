@@ -13,30 +13,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Convert a cho_description URDF into a USD asset for Isaac Sim.
+"""Convert a cho_description URDF or xacro into a USD asset for Isaac Sim.
 
 Run under Isaac Sim's interpreter, once, whenever the URDF changes:
 
     ~/isaacsim/python.sh convert_urdf_to_usd.py \\
-        --urdf  $(ros2 pkg prefix cho_description_franka)/share/cho_description_franka/\\
-urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf \\
-        --usd-path <src>/cho_description/cho_description_franka/usd/fr3_with_ft_sensor \\
-        --ros-package cho_description_franka:$(ros2 pkg prefix cho_description_franka)/share/cho_description_franka
+        --urdf <description-share>/urdf/<robot>.urdf.xacro \\
+        --usd-path <description-share>/usd \\
+        --ros-package <description-package>:<description-share> \\
+        --require-link <controller-ee-frame>
 
 This is a thin wrapper around Isaac's own URDF importer that pins the settings
 this project needs and then checks the result. The defaults are the point:
 
   merge_fixed_joints = False
-      fr3_hand_tcp (the EE frame every controller resolves through ee_name) and
-      bota_ft_sensor_wrench (the FT measurement frame) are attached by fixed
-      joints. Merging would delete both.
+      Controller EE and sensor frames are often attached by fixed joints.
+      Merging would delete them; use --require-link to verify critical frames.
 
   fix_base = True
-      The arm is bolted down; the URDF has no world link on this path.
+      The robot is treated as bolted down for these controller bringups.
 
   joint_target_type = "none", stiffness = damping = 0
-      Drive gains belong to the control mode, and run_isaac_franka.py sets them
-      at runtime. Baking them in would need one USD per mode.
+      Drive gains belong to the control mode, and run_isaac_sim.py sets them at
+      runtime. Baking them in would need one USD per mode.
 
 The importer does not look at <ros2_control>, so the USD is control-mode
 independent -- one asset serves position, velocity and torque.
@@ -153,11 +152,17 @@ def expand_xacro(path, xacro_args):
             "(set CHO_WS_SETUP=<ws>/install/setup.bash if the URDF uses $(find ...))"
             % (path, result.stderr.strip(), path, " ".join(xacro_args))
         )
-    # Keep the source basename: the importer names the output directory and the
-    # .usda after the input file, so a mkstemp-style random name would produce
-    # an unpredictable asset path.
+    # Keep the source stem so the importer produces a predictable asset name,
+    # but always hand it a .urdf file. Isaac Sim 6's importer rejects expanded
+    # XML whose filename still ends in .xacro ("Expected file with extension
+    # '.urdf'"). For foo.urdf.xacro this intentionally becomes foo.urdf.
     tmp_dir = tempfile.mkdtemp(prefix="cho_isaac_")
-    out = os.path.join(tmp_dir, os.path.basename(path))
+    basename = os.path.basename(path)
+    if basename.endswith(".xacro"):
+        basename = basename[:-len(".xacro")]
+    if not basename.endswith(".urdf"):
+        basename += ".urdf"
+    out = os.path.join(tmp_dir, basename)
     with open(out, "w", encoding="utf-8") as f:
         f.write(result.stdout)
     return out

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cho_controller_fr5</name>
+  <version>0.1.0</version>
+  <description>ROS2 controllers for the FAIRINO FR5 with Pinocchio-based kinematics</description>
+  <maintainer email="chohh7391@gmail.com">chohh7391</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>ament_index_cpp</depend>
+  <depend>cho_controller_common</depend>
+  <depend>cho_interfaces</depend>
+  <depend>control_msgs</depend>
+  <depend>controller_interface</depend>
+  <depend>eigen</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hardware_interface</depend>
+  <depend>pinocchio</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>realtime_tools</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

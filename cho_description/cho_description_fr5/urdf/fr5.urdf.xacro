@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr5">
+  <!--
+    Top-level FR5 description. One entry point for every backend; pick it with
+    the `hardware` argument (mujoco | isaac | gazebo | mock | fairino).
+
+    MuJoCo and Isaac bringups expand this file with xacro.process_file(...,
+    mappings={'hardware': ...}); the Gazebo bringup passes hardware:=gazebo plus
+    simulation_controllers:=<controllers.yaml>; the real bringup passes
+    hardware:=fairino plus robot_ip:=<FR5 IP>.
+  -->
+  <xacro:arg name="prefix" default=""/>
+  <xacro:arg name="hardware" default="mujoco"/>
+  <xacro:arg name="robot_ip" default="192.168.58.2"/>
+  <xacro:arg name="simulation_controllers" default=""/>
+  <xacro:arg name="initial_positions_file"
+             default="$(find cho_description_fr5)/config/initial_positions.yaml"/>
+
+  <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
+  <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)}"/>
+
+  <xacro:include filename="$(find cho_description_fr5)/urdf/fr5_macro.xacro"/>
+  <xacro:include filename="$(find cho_description_fr5)/urdf/fr5.ros2_control.xacro"/>
+
+  <link name="world"/>
+
+  <xacro:fr5_robot prefix="$(arg prefix)" parent="world">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:fr5_robot>
+
+  <xacro:fr5_ros2_control
+    name="fr5_system"
+    prefix="$(arg prefix)"
+    hardware="$(arg hardware)"
+    robot_ip="$(arg robot_ip)"
+    initial_positions="${initial_positions}"/>
+
+  <!-- Gazebo (Ignition) ros2_control system plugin. -->
+  <xacro:if value="${'$(arg hardware)' == 'gazebo'}">
+    <gazebo>
+      <plugin filename="libgz_ros2_control-system.so"
+              name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>$(arg simulation_controllers)</parameters>
+        <controller_manager_node_name>controller_manager</controller_manager_node_name>
+      </plugin>
+    </gazebo>
+  </xacro:if>
+</robot>

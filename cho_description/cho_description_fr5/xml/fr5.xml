@@ -1,0 +1,83 @@
+<mujoco model="fairino5_v6_robot">
+  <compiler angle="radian" meshdir="assets"/>
+
+  <option integrator="implicitfast"/>
+
+  <default>
+    <!-- Rotor inertia + a little joint damping. The bundle model has neither,
+         which left the (velocity-undamped) position actuators oscillating on the
+         heavy links; armature is what stabilises the discrete-time servo, matching
+         the UR/Franka MuJoCo models (armature 0.1). -->
+    <joint armature="0.1" damping="1.0"/>
+    <!-- The bundle reuses each link's full visual mesh as its collision geom, so at
+         the folded home pose adjacent links and the base self-collide and jam the
+         joints (j1 could not rotate under 500+ Nm of servo torque). This model is
+         for controller tracking, not contact, so geoms are visual-only. The cho
+         controllers own the real joint/velocity limits. -->
+    <geom contype="0" conaffinity="0"/>
+  </default>
+
+  <asset>
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="shoulder_link" file="shoulder_link.STL"/>
+    <mesh name="upperarm_link" file="upperarm_link.STL"/>
+    <mesh name="forearm_link" file="forearm_link.STL"/>
+    <mesh name="wrist1_link" file="wrist1_link.STL"/>
+    <mesh name="wrist2_link" file="wrist2_link.STL"/>
+    <mesh name="wrist3_link" file="wrist3_link.STL"/>
+  </asset>
+
+  <worldbody>
+    <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="base_link"/>
+    <body name="shoulder_link">
+      <inertial pos="5.0029e-07 -0.0040922 0.14629" quat="0.999588 0.0287044 7.54149e-06 -1.58789e-05" mass="4.3771" diaginertia="0.010731 0.0104154 0.00817191"/>
+      <joint name="j1" pos="0 0 0" axis="0 0 1" range="-3.0543 3.0543"/>
+      <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="shoulder_link"/>
+      <body name="upperarm_link" pos="0 0 0.152" quat="0.707105 0.707108 0 0">
+        <inertial pos="-0.2125 -5.7643e-09 0.1346" quat="0.5 0.5 0.5 0.5" mass="14.458" diaginertia="0.4559 0.44974 0.028392"/>
+        <joint name="j2" pos="0 0 0" axis="0 0 1" range="-4.6251 1.4835"/>
+        <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="upperarm_link"/>
+        <body name="forearm_link" pos="-0.425 0 0">
+          <inertial pos="-0.18793 -8.4503e-07 0.0066357" quat="0.510607 0.489172 0.489196 0.510568" mass="7.6737" diaginertia="0.16971 0.168834 0.00821541"/>
+          <joint name="j3" pos="0 0 0" axis="0 0 1" range="-2.8274 2.8274"/>
+          <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="forearm_link"/>
+          <body name="wrist1_link" pos="-0.39501 0 0">
+            <inertial pos="4.98e-07 -0.003754 0.097155" quat="0.736149 0.676819 -6.33095e-05 7.15237e-05" mass="1.6266" diaginertia="0.00216 0.00199337 0.00154233"/>
+            <joint name="j4" pos="0 0 0" axis="0 0 1" range="-4.6251 1.4835"/>
+            <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist1_link"/>
+            <body name="wrist2_link" pos="0 0 0.1021" quat="0.707105 0.707108 0 0">
+              <inertial pos="-4.5588e-07 0.0038617 0.098257" quat="0.68712 0.726544 0.000128667 -0.000114125" mass="1.5812" diaginertia="0.0020612 0.00195889 0.00144611"/>
+              <joint name="j5" pos="0 0 0" axis="0 0 1" range="-3.0543 3.0543"/>
+              <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist2_link"/>
+              <body name="wrist3_link" pos="0 0 0.102" quat="0.707105 -0.707108 0 0">
+                <inertial pos="7.7496e-05 1.7751e-05 0.076122" quat="7.93213e-05 0.706804 0.00108234 0.707408" mass="0.52542" diaginertia="0.00041605 0.00027839 0.00027721"/>
+                <joint name="j6" pos="0 0 0" axis="0 0 1" range="-3.0543 3.0543"/>
+                <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist3_link"/>
+                <site name="attachment_site" pos="0 0 0.1"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Named actuators: mujoco_ros2_control matches joints to actuators by name
+         and dereferences mj_id2name(actuator), which is null for an unnamed one.
+         kv adds the velocity feedback the bundle model lacked, so the position
+         servo is critically-ish damped instead of ringing. -->
+    <position name="j1" joint="j1" kp="3000" kv="300"/>
+    <position name="j2" joint="j2" kp="3000" kv="300"/>
+    <position name="j3" joint="j3" kp="3000" kv="300"/>
+    <position name="j4" joint="j4" kp="1000" kv="100"/>
+    <position name="j5" joint="j5" kp="1000" kv="100"/>
+    <position name="j6" joint="j6" kp="1000" kv="100"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home"
+         qpos="0 0 0 0 0 0"
+         ctrl="0 0 0 0 0 0"/>
+  </keyframe>
+</mujoco>
