@@ -33,7 +33,7 @@
 
 #include <Eigen/Eigen>
 #include <cho_interfaces/msg/pose_log.hpp>
-#include <cho_interfaces/msg/joint_log.hpp>
+#include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -105,6 +105,9 @@ public:
     double nominal_period(const rclcpp::Duration & period);
     void log_ee_pose();
     void log_joint_pos();
+    // Always-active controllers (ee_state_broadcaster) override this to false so
+    // they do not publish un-updated desired values onto ~/controller_state / ~/ee_state.
+    virtual bool should_publish_arm_log() const { return true; }
 
 protected:
     // Command-interface layout for a controller driving `interface`
@@ -184,10 +187,15 @@ protected:
     // because compute() only runs while we are active.
     std::atomic<bool> controller_active_{false};
 
-    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
-    rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> pose_log_rt_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>> joint_log_rt_pub_;
+    // Per-controller namespaced logs. Relative names ("~/...") resolve to this
+    // controller's own node, so a bimanual build gets one pair per arm.
+    //   ~/controller_state : control_msgs/JointTrajectoryControllerState
+    //   ~/ee_state         : cho_interfaces/PoseLog
+    rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
+    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>
+        ctrl_state_rt_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> ee_state_rt_pub_;
 
     // gains, sized from the parameter arrays in each subclass
     Eigen::VectorXd kp_joint_;

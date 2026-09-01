@@ -291,17 +291,23 @@ CallbackReturn OpenArmBaseController::on_configure(const rclcpp_lifecycle::State
     state_.M_arm.setZero(num_dof_, num_dof_);
     dq_filtered_.setZero(num_dof_);
 
-    pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
-    joint_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::JointLog>("/log/joint_pos", 10);
-    pose_log_rt_pub_ =
-        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(pose_log_pub_);
-    joint_log_rt_pub_ =
-        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>>(joint_log_pub_);
-    // Size the log message once so the per-cycle resize() is a no-op and the
-    // control loop never touches the heap.
-    joint_log_rt_pub_->msg_.desired_state.position.resize(num_dof_);
-    joint_log_rt_pub_->msg_.current_state.position.resize(num_dof_);
-    joint_log_rt_pub_->msg_.current_state.velocity.resize(num_dof_);
+    // Per-controller namespaced logs. Relative names give each controller node its
+    // own topic; on a bimanual build that is one pair per arm.
+    ctrl_state_pub_ = get_node()->create_publisher<control_msgs::msg::JointTrajectoryControllerState>(
+        "~/controller_state", 10);
+    ee_state_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("~/ee_state", 10);
+    ctrl_state_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>(
+            ctrl_state_pub_);
+    ee_state_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(ee_state_pub_);
+    // Preallocate the controller_state vectors (and fill joint_names once) so the
+    // per-cycle fill is heap-free, matching the joint-log publisher above.
+    ctrl_state_rt_pub_->msg_.joint_names = joint_names_;
+    ctrl_state_rt_pub_->msg_.reference.positions.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.reference.velocities.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.feedback.positions.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.feedback.velocities.resize(num_dof_);
 
     RCLCPP_INFO(get_node()->get_logger(),
         "OpenArmBaseController configured: %d DOF, ee=%s, base=%s, bringup=%s, mit_command=%s",
@@ -322,6 +328,7 @@ CallbackReturn OpenArmBaseController::on_activate(const rclcpp_lifecycle::State 
     state_.H_ee_ref = state_.H_ee;
     state_.H_ee_des = state_.H_ee;
     state_.q_arm_ref = state_.q_arm;
+    state_.q_arm_des = state_.q_arm;
 
     // One-time sanity check on the interface layout. update_joint_states() and
     // write_arm_command() index by position, which is only valid because the
@@ -355,8 +362,10 @@ controller_interface::return_type OpenArmBaseController::update(
 {
     update_joint_states();
     compute_all_terms();
-    log_ee_pose();
-    log_joint_pos();
+    if (should_publish_arm_log()) {
+        log_ee_pose();
+        log_joint_pos();
+    }
     return controller_interface::return_type::OK;
 }
 
@@ -563,28 +572,32 @@ void OpenArmBaseController::log_ee_pose()
         msg.orientation.w = q.w();
     };
 
-    if (!pose_log_rt_pub_ || !pose_log_rt_pub_->trylock()) {
-        return;  // publisher busy: drop the sample rather than block the RT loop
+    // Per-controller ~/ee_state carries the three poses (ref / desired / current).
+    if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
+        fill_pose(ee_state_rt_pub_->msg_.pose_ref, state_.H_ee_ref);
+        fill_pose(ee_state_rt_pub_->msg_.pose_des, state_.H_ee_des);
+        fill_pose(ee_state_rt_pub_->msg_.pose_curr, state_.H_ee);
+        ee_state_rt_pub_->unlockAndPublish();
     }
-    fill_pose(pose_log_rt_pub_->msg_.pose_ref, state_.H_ee_ref);
-    fill_pose(pose_log_rt_pub_->msg_.pose_des, state_.H_ee_des);
-    fill_pose(pose_log_rt_pub_->msg_.pose_curr, state_.H_ee);
-    pose_log_rt_pub_->unlockAndPublish();
 }
 
 void OpenArmBaseController::log_joint_pos()
 {
-    if (!joint_log_rt_pub_ || !joint_log_rt_pub_->trylock()) {
-        return;
+    // Per-controller ~/controller_state. Vectors and joint_names were preallocated
+    // in on_configure (resize() here is a no-op, so no RT heap traffic).
+    if (ctrl_state_rt_pub_ && ctrl_state_rt_pub_->trylock()) {
+        auto & cs = ctrl_state_rt_pub_->msg_;
+        cs.header.stamp = get_node()->now();
+        cs.reference.positions.resize(num_dof_);
+        cs.reference.velocities.resize(num_dof_);
+        cs.feedback.positions.resize(num_dof_);
+        cs.feedback.velocities.resize(num_dof_);
+        Eigen::VectorXd::Map(cs.reference.positions.data(), num_dof_) = state_.q_arm_des;
+        Eigen::VectorXd::Map(cs.reference.velocities.data(), num_dof_) = state_.v_arm_des;
+        Eigen::VectorXd::Map(cs.feedback.positions.data(), num_dof_) = state_.q_arm;
+        Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v_arm;
+        ctrl_state_rt_pub_->unlockAndPublish();
     }
-    auto & msg = joint_log_rt_pub_->msg_;
-    msg.desired_state.position.resize(num_dof_);
-    msg.current_state.position.resize(num_dof_);
-    msg.current_state.velocity.resize(num_dof_);
-    Eigen::VectorXd::Map(msg.desired_state.position.data(), num_dof_) = state_.q_arm_des;
-    Eigen::VectorXd::Map(msg.current_state.position.data(), num_dof_) = state_.q_arm;
-    Eigen::VectorXd::Map(msg.current_state.velocity.data(), num_dof_) = state_.v_arm;
-    joint_log_rt_pub_->unlockAndPublish();
 }
 
 }  // namespace openarm

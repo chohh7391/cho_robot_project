@@ -35,6 +35,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
+find_package(control_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
 find_package(cho_interfaces REQUIRED)
 
@@ -58,6 +59,7 @@ ament_target_dependencies(${PROJECT_NAME}
     rclcpp_action
     rclcpp_lifecycle
     realtime_tools
+    control_msgs
     cho_controller_common
     cho_interfaces
 )

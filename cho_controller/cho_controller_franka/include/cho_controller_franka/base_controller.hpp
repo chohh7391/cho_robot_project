@@ -27,7 +27,7 @@
 #include <Eigen/Eigen>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <cho_interfaces/msg/pose_log.hpp>
-#include <cho_interfaces/msg/joint_log.hpp>
+#include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 #include <realtime_tools/realtime_publisher.hpp>
 
 using namespace std;
@@ -141,11 +141,11 @@ public:
     void log_ee_pose();
     void log_joint_pos();
 
-    // Whether this controller owns the arm tracking log (/log/joint_pos,
-    // /log/ee_pose). True for arm-motion controllers; overridden to false by
+    // Whether this controller owns the arm tracking log (~/controller_state,
+    // ~/ee_state). True for arm-motion controllers; overridden to false by
     // controllers that inherit this base only for its kinematics/dynamics
     // (e.g. ee_state_broadcaster) and would otherwise publish an uninitialized
-    // desired state onto the shared log topics.
+    // desired state onto those log topics.
     virtual bool should_publish_arm_log() const { return true; }
 
 protected:
@@ -195,13 +195,18 @@ protected:
     // run, so the goal would hang forever).
     std::atomic<bool> controller_active_{false};
 
-    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
-    rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
+    // Per-controller namespaced logs. Relative names ("~/...") resolve to this
+    // controller's own node, e.g. /joint_space_qp_controller/controller_state.
     // Realtime-safe wrappers: the 1 kHz update() publishes through these (lock-free
     // try-lock + a separate publisher thread) instead of calling ->publish() directly,
     // which can allocate/lock in the DDS path inside the control loop.
-    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> pose_log_rt_pub_;
-    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>> joint_log_rt_pub_;
+    //   ~/controller_state : control_msgs/JointTrajectoryControllerState
+    //   ~/ee_state         : cho_interfaces/PoseLog
+    rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
+    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>
+        ctrl_state_rt_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> ee_state_rt_pub_;
 
     // gains
     // joint space

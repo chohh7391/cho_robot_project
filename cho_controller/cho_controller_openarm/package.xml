@@ -12,6 +12,7 @@
   <depend>ament_index_cpp</depend>
   <depend>cho_controller_common</depend>
   <depend>cho_interfaces</depend>
+  <depend>control_msgs</depend>
   <depend>controller_interface</depend>
   <depend>eigen</depend>
   <depend>geometry_msgs</depend>

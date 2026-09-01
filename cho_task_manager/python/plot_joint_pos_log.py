@@ -8,13 +8,25 @@ import argparse
 # 제공해주신 Joint 1~7의 velocity limit 정보 (절댓값 기준)
 VELOCITY_LIMITS = [2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26]
 
-def get_joint_data(db_path, start_t=None, end_t=None):
-    msg_type = get_message('cho_interfaces/msg/JointLog')
+def get_joint_data(db_path, topic, start_t=None, end_t=None):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = '/log/joint_pos' ORDER BY timestamp ASC"
-    cursor.execute(query)
+    # Look up the message type stored for this topic, so the same script reads
+    # both the legacy cho_interfaces/JointLog and the new per-controller
+    # control_msgs/JointTrajectoryControllerState (~/controller_state).
+    cursor.execute("SELECT type FROM topics WHERE name = ?", (topic,))
+    trow = cursor.fetchone()
+    if trow is None:
+        print(f"토픽 '{topic}' 이 bag에 없습니다. (ros2 bag info 로 토픽 확인)")
+        conn.close()
+        return None
+    type_str = trow[0]
+    msg_type = get_message(type_str)
+    is_jtcs = type_str.endswith('JointTrajectoryControllerState')
+
+    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = ? ORDER BY timestamp ASC"
+    cursor.execute(query, (topic,))
 
     timestamps = []
     des_pos = []
@@ -30,24 +42,35 @@ def get_joint_data(db_path, start_t=None, end_t=None):
 
     for ts, data in rows:
         current_sec = (ts / 1e9) - first_ts
-        
+
         if start_t is not None and current_sec < start_t:
             continue
         if end_t is not None and current_sec > end_t:
             continue
 
         msg = deserialize_message(data, msg_type)
+        if is_jtcs:
+            dp = list(msg.reference.positions)
+            cp = list(msg.feedback.positions)
+            cv = list(msg.feedback.velocities)
+        else:
+            dp = list(msg.desired_state.position)
+            cp = list(msg.current_state.position)
+            cv = list(msg.current_state.velocity)
+        # velocity fields can be empty (e.g. a controller that logs no velocity);
+        # pad to the position length so the arrays stay rectangular.
+        if len(cv) != len(cp):
+            cv = [0.0] * len(cp)
         timestamps.append(current_sec)
-        
-        des_pos.append(list(msg.desired_state.position))
-        curr_pos.append(list(msg.current_state.position))
-        curr_vel.append(list(msg.current_state.velocity))
+        des_pos.append(dp)
+        curr_pos.append(cp)
+        curr_vel.append(cv)
 
     conn.close()
     return np.array(timestamps), np.array(des_pos), np.array(curr_pos), np.array(curr_vel)
 
-def plot_results(bag_db_path, start_t, end_t):
-    data = get_joint_data(bag_db_path, start_t, end_t)
+def plot_results(bag_db_path, topic, start_t, end_t):
+    data = get_joint_data(bag_db_path, topic, start_t, end_t)
     
     if data is None or len(data[0]) == 0:
         print("조건에 맞는 시간대의 데이터가 없습니다.")
@@ -115,10 +138,14 @@ def plot_results(bag_db_path, start_t, end_t):
     plt.show()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot JointLog from ROS 2 sqlite3 database")
+    parser = argparse.ArgumentParser(description="Plot joint desired-vs-current from a ROS 2 sqlite3 bag")
     parser.add_argument("--path", type=str, required=True, help="Path to the sqlite3 database (.db3)")
+    parser.add_argument("--topic", type=str, default="/log/joint_pos",
+                        help="Topic to read. Legacy: /log/joint_pos (cho_interfaces/JointLog). "
+                             "New: /<controller>/controller_state (control_msgs/JointTrajectoryControllerState). "
+                             "The message type is auto-detected from the bag.")
     parser.add_argument("--start", type=float, default=None, help="Start time in seconds")
     parser.add_argument("--end", type=float, default=None, help="End time in seconds")
-    
+
     args = parser.parse_args()
-    plot_results(args.path, args.start, args.end)
+    plot_results(args.path, args.topic, args.start, args.end)

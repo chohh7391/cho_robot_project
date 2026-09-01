@@ -6,13 +6,16 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 import argparse
 
-def get_pose_data(db_path, start_t=None, end_t=None):
+def get_pose_data(db_path, topic, start_t=None, end_t=None):
+    # Both the legacy /log/ee_pose and the new per-controller ~/ee_state
+    # (/<controller>/ee_state) are cho_interfaces/msg/PoseLog, so only the
+    # topic name changes.
     msg_type = get_message('cho_interfaces/msg/PoseLog')
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = '/log/ee_pose' ORDER BY timestamp ASC"
-    cursor.execute(query)
+    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = ? ORDER BY timestamp ASC"
+    cursor.execute(query, (topic,))
 
     timestamps = []
     des_pos = []
@@ -48,8 +51,8 @@ def get_pose_data(db_path, start_t=None, end_t=None):
     conn.close()
     return np.array(timestamps), np.array(des_pos), np.array(curr_pos), np.array(des_quat), np.array(curr_quat)
 
-def plot_results(bag_db_path, start_t, end_t):
-    data = get_pose_data(bag_db_path, start_t, end_t)
+def plot_results(bag_db_path, topic, start_t, end_t):
+    data = get_pose_data(bag_db_path, topic, start_t, end_t)
     # 필터링 후 데이터가 완전히 비었을 경우를 방지
     if data is None or len(data[0]) == 0:
         print("조건에 맞는 시간대의 데이터가 없습니다.")
@@ -115,8 +118,11 @@ def plot_results(bag_db_path, start_t, end_t):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="db3 path with time range")
     parser.add_argument("--path", type=str, required=True, help="Path to the sqlite3 database")
+    parser.add_argument("--topic", type=str, default="/log/ee_pose",
+                        help="Topic to read (cho_interfaces/PoseLog). Legacy: /log/ee_pose. "
+                             "New: /<controller>/ee_state.")
     parser.add_argument("--start", type=float, default=None, help="Start time in seconds")
     parser.add_argument("--end", type=float, default=None, help="End time in seconds")
-    
+
     args = parser.parse_args()
-    plot_results(args.path, args.start, args.end)
+    plot_results(args.path, args.topic, args.start, args.end)

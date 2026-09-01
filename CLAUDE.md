@@ -59,7 +59,7 @@ cho_controller/
   cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
   utils/cho_trajectory_smoother/  # Time-optimal trajectory generation
 
-cho_interfaces/              # ROS2 msgs (ActionChunk, PoseLog, JointLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
+cho_interfaces/              # ROS2 msgs (ActionChunk, PoseLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
 
 cho_description/cho_description_franka/
   robots/                    # Xacro entry points per robot variant
@@ -119,7 +119,11 @@ Key controllers:
 - `joint_space_qp_controller` — joint-level QP controller
 - `vla_controller` — receives `ActionChunk` from VLA inference and streams joint/task commands
 - `ee_state_broadcaster` — publishes `/ee_state/pose` and `/ee_state/twist` (Cartesian state used by Python tasks)
-- `joint_trajectory_controller` — executes trajectories with joint logging to `/log/joint_states`
+- `joint_trajectory_controller` — executes trajectories; logs desired-vs-current on its own `~/controller_state`
+
+Each arm controller publishes its state on **per-controller namespaced topics** (`BaseController`):
+`/<controller>/controller_state` (`control_msgs/JointTrajectoryControllerState`, reference=desired / feedback=current)
+and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replaced the old global `/log/joint_pos` and `/log/ee_pose`. Plot via `python/plot_joint_pos_log.py --topic <t>` / `plot_pose_log.py --topic <t>`.
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 

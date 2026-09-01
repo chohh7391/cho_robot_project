@@ -14,7 +14,7 @@
 
 #include <Eigen/Eigen>
 #include <cho_interfaces/msg/pose_log.hpp>
-#include <cho_interfaces/msg/joint_log.hpp>
+#include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -71,8 +71,13 @@ protected:
     Eigen::VectorXd kp_task_;
     Eigen::VectorXd kd_task_;
 
-    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr pose_log_pub_;
-    rclcpp::Publisher<cho_interfaces::msg::JointLog>::SharedPtr joint_log_pub_;
+    // Per-controller namespaced logs. Relative names ("~/...") resolve to this
+    // controller's own node. UR has no realtime_tools wrappers and no arm-log gate,
+    // so these use direct publish, unconditionally.
+    //   ~/controller_state : control_msgs/JointTrajectoryControllerState
+    //   ~/ee_state         : cho_interfaces/PoseLog
+    rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
+    rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
 };
 
 } // namespace ur

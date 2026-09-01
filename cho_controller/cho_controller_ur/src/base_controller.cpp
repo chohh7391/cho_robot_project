@@ -109,8 +109,11 @@ CallbackReturn URBaseController::on_configure(const rclcpp_lifecycle::State & /*
     state_.J.setZero(6, nv_);
     state_.J_world.setZero(6, nv_);
 
-    pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
-    joint_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::JointLog>("/log/joint_pos", 10);
+    // Per-controller namespaced logs. Relative names give each controller node its
+    // own topic (e.g. /<controller_name>/controller_state, /<controller_name>/ee_state).
+    ctrl_state_pub_ = get_node()->create_publisher<control_msgs::msg::JointTrajectoryControllerState>(
+        "~/controller_state", 10);
+    ee_state_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("~/ee_state", 10);
 
     RCLCPP_INFO(get_node()->get_logger(),
         "URBaseController configured: %d DOF, ee=%s", num_dof_, ee_name_.c_str());
@@ -190,23 +193,28 @@ void URBaseController::log_ee_pose()
         msg.orientation.z = q.z();
         msg.orientation.w = q.w();
     };
-    auto msg = cho_interfaces::msg::PoseLog();
-    fill_pose(msg.pose_ref, state_.H_ee_ref);
-    fill_pose(msg.pose_des, state_.H_ee_des);
-    fill_pose(msg.pose_curr, state_.H_ee);
-    pose_log_pub_->publish(msg);
+    // Per-controller ~/ee_state carries the three poses (ref / desired / current).
+    auto ee_msg = cho_interfaces::msg::PoseLog();
+    fill_pose(ee_msg.pose_ref, state_.H_ee_ref);
+    fill_pose(ee_msg.pose_des, state_.H_ee_des);
+    fill_pose(ee_msg.pose_curr, state_.H_ee);
+    ee_state_pub_->publish(ee_msg);
 }
 
 void URBaseController::log_joint_pos()
 {
-    auto msg = cho_interfaces::msg::JointLog();
-    msg.desired_state.position.resize(state_.q_des.size());
-    Eigen::VectorXd::Map(msg.desired_state.position.data(), state_.q_des.size()) = state_.q_des;
-    msg.current_state.position.resize(num_dof_);
-    Eigen::VectorXd::Map(msg.current_state.position.data(), num_dof_) = state_.q.head(num_dof_);
-    msg.current_state.velocity.resize(num_dof_);
-    Eigen::VectorXd::Map(msg.current_state.velocity.data(), num_dof_) = state_.v.head(num_dof_);
-    joint_log_pub_->publish(msg);
+    // Per-controller ~/controller_state. UR carries no desired velocity, so
+    // reference.velocities is left empty.
+    auto cs = control_msgs::msg::JointTrajectoryControllerState();
+    cs.header.stamp = get_node()->now();
+    cs.joint_names = joint_names_;
+    cs.reference.positions.resize(state_.q_des.size());
+    Eigen::VectorXd::Map(cs.reference.positions.data(), state_.q_des.size()) = state_.q_des;
+    cs.feedback.positions.resize(num_dof_);
+    Eigen::VectorXd::Map(cs.feedback.positions.data(), num_dof_) = state_.q.head(num_dof_);
+    cs.feedback.velocities.resize(num_dof_);
+    Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v.head(num_dof_);
+    ctrl_state_pub_->publish(cs);
 }
 
 } // namespace ur

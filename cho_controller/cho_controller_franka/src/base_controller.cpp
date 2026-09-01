@@ -141,17 +141,26 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     state_.J.setZero(6, nv_);
     state_.J_world.setZero(6, nv_);
 
-    pose_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("/log/ee_pose", 10);
-    joint_log_pub_ = get_node()->create_publisher<cho_interfaces::msg::JointLog>("/log/joint_pos", 10);
-    pose_log_rt_pub_ =
-        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(pose_log_pub_);
-    joint_log_rt_pub_ =
-        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::JointLog>>(joint_log_pub_);
-    // Preallocate the joint-log vectors once so the per-cycle resize() is a no-op
-    // (no realtime heap traffic).
-    joint_log_rt_pub_->msg_.desired_state.position.resize(num_dof_);
-    joint_log_rt_pub_->msg_.current_state.position.resize(num_dof_);
-    joint_log_rt_pub_->msg_.current_state.velocity.resize(num_dof_);
+    // Per-controller namespaced logs. Relative names give each controller node its
+    // own topic (e.g. /<controller_name>/controller_state, /<controller_name>/ee_state).
+    ctrl_state_pub_ = get_node()->create_publisher<control_msgs::msg::JointTrajectoryControllerState>(
+        "~/controller_state", 10);
+    ee_state_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("~/ee_state", 10);
+    ctrl_state_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>(
+            ctrl_state_pub_);
+    ee_state_rt_pub_ =
+        std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(ee_state_pub_);
+    // Preallocate the controller_state vectors (and fill joint_names once) so the
+    // per-cycle fill is heap-free, matching the joint-log publisher above.
+    ctrl_state_rt_pub_->msg_.joint_names.clear();
+    for (int i = 1; i <= num_dof_; ++i) {
+        ctrl_state_rt_pub_->msg_.joint_names.push_back(robot_type_ + "_joint" + std::to_string(i));
+    }
+    ctrl_state_rt_pub_->msg_.reference.positions.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.reference.velocities.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.feedback.positions.resize(num_dof_);
+    ctrl_state_rt_pub_->msg_.feedback.velocities.resize(num_dof_);
 
     // gravity compensation parameter
     mass_ = get_node()->get_parameter("mass").as_double();
@@ -181,6 +190,9 @@ CallbackReturn FrankaBaseController::on_activate(
   // that has not written a desired yet (gravity_compensation, or an arm controller
   // between goals) never publishes an uninitialized q_arm_des / H_ee_des / H_ee_ref.
   state_.q_arm_des = state_.q_arm;
+  // Seed the desired velocity too, so the new ~/controller_state reference never
+  // publishes an uninitialized v_arm_des before a controller has written one.
+  state_.v_arm_des.setZero();
   state_.H_ee_des = state_.H_ee;
   state_.H_ee_ref = state_.H_ee;
 
@@ -436,37 +448,33 @@ void FrankaBaseController::log_ee_pose()
         msg.orientation.w = q.w();
     };
 
-    if (!pose_log_rt_pub_ || !pose_log_rt_pub_->trylock()) {
-        return;  // publisher busy: drop this sample rather than block the RT loop
+    // Per-controller ~/ee_state carries the three poses (ref / desired / current).
+    if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
+        auto & e = ee_state_rt_pub_->msg_;
+        fill_pose(e.pose_ref, state_.H_ee_ref);
+        fill_pose(e.pose_des, state_.H_ee_des);
+        fill_pose(e.pose_curr, state_.H_ee);
+        ee_state_rt_pub_->unlockAndPublish();
     }
-    auto & m = pose_log_rt_pub_->msg_;
-    fill_pose(m.pose_ref, state_.H_ee_ref);
-    fill_pose(m.pose_des, state_.H_ee_des);
-    fill_pose(m.pose_curr, state_.H_ee);
-    pose_log_rt_pub_->unlockAndPublish();
 }
 
 void FrankaBaseController::log_joint_pos()
 {
-    if (!joint_log_rt_pub_ || !joint_log_rt_pub_->trylock()) {
-        return;  // publisher busy: drop this sample rather than block the RT loop
+    // Per-controller ~/controller_state. Vectors and joint_names were preallocated
+    // in on_configure (resize() here is a no-op, so no RT heap traffic).
+    if (ctrl_state_rt_pub_ && ctrl_state_rt_pub_->trylock()) {
+        auto & cs = ctrl_state_rt_pub_->msg_;
+        cs.header.stamp = get_node()->now();
+        cs.reference.positions.resize(num_dof_);
+        cs.reference.velocities.resize(num_dof_);
+        cs.feedback.positions.resize(num_dof_);
+        cs.feedback.velocities.resize(num_dof_);
+        Eigen::VectorXd::Map(cs.reference.positions.data(), num_dof_) = state_.q_arm_des;
+        Eigen::VectorXd::Map(cs.reference.velocities.data(), num_dof_) = state_.v_arm_des;
+        Eigen::VectorXd::Map(cs.feedback.positions.data(), num_dof_) = state_.q_arm;
+        Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v_arm;
+        ctrl_state_rt_pub_->unlockAndPublish();
     }
-    auto & m = joint_log_rt_pub_->msg_;
-
-    // resize() is a no-op after the on_configure preallocation (no RT heap traffic).
-    // 1. Desired joint positions
-    m.desired_state.position.resize(state_.q_arm_des.size());
-    Eigen::VectorXd::Map(&m.desired_state.position[0], state_.q_arm_des.size()) = state_.q_arm_des;
-
-    // 2. Current joint positions
-    m.current_state.position.resize(state_.q_arm.size());
-    Eigen::VectorXd::Map(&m.current_state.position[0], state_.q_arm.size()) = state_.q_arm;
-
-    // 3. Current joint velocities
-    m.current_state.velocity.resize(state_.v_arm.size());
-    Eigen::VectorXd::Map(&m.current_state.velocity[0], state_.v_arm.size()) = state_.v_arm;
-
-    joint_log_rt_pub_->unlockAndPublish();
 }
 
 } // namespace franka

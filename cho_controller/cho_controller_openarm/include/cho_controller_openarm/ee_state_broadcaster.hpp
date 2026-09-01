@@ -31,6 +31,9 @@ public:
     CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
     controller_interface::return_type update(
         const rclcpp::Time & time, const rclcpp::Duration & period) override;
+    // Always active alongside the arm controller; must not clobber the shared
+    // /log topics with desired values it never updates.
+    bool should_publish_arm_log() const override { return false; }
 
 private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;

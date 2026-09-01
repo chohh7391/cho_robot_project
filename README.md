@@ -281,16 +281,25 @@ See [docs/multi_pc.md](docs/multi_pc.md).
 
 
 ## Log
-- log desired & current pose
+Each arm controller publishes its own desired-vs-current state on **per-controller
+namespaced topics** (these replaced the old global `/log/*` topics):
+- `/<controller>/controller_state` — `control_msgs/JointTrajectoryControllerState`
+  (`reference` = desired joint pos/vel, `feedback` = current pos/vel)
+- `/<controller>/ee_state` — `cho_interfaces/PoseLog` (Cartesian ref/des/curr pose)
+
+- record (example: `joint_space_qp_controller`)
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 bag record /log/ee_pose
+ros2 bag record /joint_space_qp_controller/controller_state /joint_space_qp_controller/ee_state
 ```
 
-- plot /log/ee_pose
+- plot (`--topic` selects the controller; the joint plotter auto-detects the msg type)
 ```bash
 source ~/ros2_ws/install/setup.bash
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py --path <DB3_PATH>
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_joint_pos_log.py \
+  --path <DB3_PATH> --topic /joint_space_qp_controller/controller_state
+python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py \
+  --path <DB3_PATH> --topic /joint_space_qp_controller/ee_state
 ```
 
 # Trouble Shooting
