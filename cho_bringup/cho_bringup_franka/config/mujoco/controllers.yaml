@@ -11,6 +11,16 @@
 # (or use a different config file, but then you have to mody the launch script to reference that file)
 
 
+# --- Per-environment torque feedforward regime (why the mujoco gains differ) ---
+# bringup_type "mujoco": NOTHING external compensates gravity, so the torque
+# controllers feed forward the FULL non-linear effects -- Coriolis + full gravity
+# (cho_controller_franka/src/base_controller.cpp:262-272, the else branch; isaac
+# shares this branch). The loop runs at a true 1 kHz with no actuator servo
+# between controller and joints. That is why mujoco stiffnesses are HIGHER than
+# the real/gazebo values (which lean on external arm-gravity compensation and a
+# 1 kHz servo) -- the gap is by design, not drift.
+
+
 /**:
   controller_manager:
     ros__parameters:
@@ -134,6 +144,9 @@
   task_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
+      # NOTE(gain-review): translation kp=1500 here vs gazebo 100 / real 300 --
+      # the spread across sims has no recorded justification; flag for
+      # reconciliation. Left unchanged pending re-validation.
       kp_task: [1500.0, 1500.0, 1500.0, 40.0, 40.0, 40.0]
       kd_task: [60.0, 60.0, 60.0, 5.0, 5.0, 5.0]
       kp_null: 10.0
@@ -147,7 +160,12 @@
     ros__parameters:
       robot_type: "fr3"
       kp_task: [900.0, 900.0, 900.0, 7200.0, 7200.0, 7200.0]
-      kd_task: [60.0, 60.0, 60.0, 33.9, 33.9, 33.9]
+      # Rotation kd re-derived to critical damping 2*sqrt(7200)=169.7 (was 33.9,
+      # under-damped/stale -- only the rotation block had not been updated when the
+      # kp_task rotation was raised; translation's 60 = 2*sqrt(900) was already
+      # critical). MuJoCo A/B verified 2026-09-01: rot RMS 0.069 vs 0.077 deg (-10%),
+      # translation unchanged within run noise. PLAN.md WS-3.
+      kd_task: [60.0, 60.0, 60.0, 169.7, 169.7, 169.7]
       kp_null: 10.0
       kd_null: 2.0
       # null-space posture toward default_dof_pos (verified in MuJoCo)
@@ -166,7 +184,10 @@
     ros__parameters:
       robot_type: "fr3"
       kp_joint: [4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0]
-      kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      # kd re-derived to critical damping 2*sqrt(4000)=126.5 (was 40, under-damped/
+      # stale -- not updated when kp was raised 400->4000). MuJoCo A/B verified
+      # 2026-09-01: RMS 0.0005 rad (= old), peak 0.0017 vs 0.0023 rad (-26%). PLAN.md WS-3.
+      kd_joint: [126.5, 126.5, 126.5, 126.5, 126.5, 126.5, 126.5]
 
 /**:
   task_space_qp_controller:

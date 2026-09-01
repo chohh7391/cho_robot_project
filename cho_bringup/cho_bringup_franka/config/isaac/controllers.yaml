@@ -198,11 +198,14 @@
   task_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
-      # Left at the MuJoCo values. Both lowering the rotation gain alone and
-      # lowering translation with it were measured: neither removes the wrist
-      # limit cycle (fr3_joint5/6 bang-bang at their 12 Nm limit regardless), and
-      # the softer task only adds steady-state offset. The residual is a transport
-      # delay problem, not a stiffness one - see SESSION_LOG.
+      # Re-tuned for the 250 Hz DDS loop, NOT left at the MuJoCo values: the task
+      # gains here are translation-high / rotation-low (kp_task 800/400), whereas
+      # MuJoCo is translation-low / rotation-high (kp_task 200/800) -- the two
+      # blocks are swapped and rescaled, not copied. Both lowering the rotation
+      # gain alone and lowering translation with it were measured: neither removes
+      # the wrist limit cycle (fr3_joint5/6 bang-bang at their 12 Nm limit
+      # regardless), and the softer task only adds steady-state offset. The
+      # residual is a transport delay problem, not a stiffness one - see SESSION_LOG.
       kp_task: [800.0, 800.0, 800.0, 400.0, 400.0, 400.0]
       kd_task: [56.57, 56.57, 56.57, 40.0, 40.0, 40.0]
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]

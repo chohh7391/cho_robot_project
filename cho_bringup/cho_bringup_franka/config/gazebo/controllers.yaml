@@ -11,6 +11,20 @@
 # (or use a different config file, but then you have to mody the launch script to reference that file)
 
 
+# --- Per-environment torque feedforward regime (why the gazebo gains differ) ---
+# bringup_type "gazebo": franka_ros2 compensates ARM gravity, so the torque
+# controllers here feed forward Coriolis + HAND-payload gravity ONLY
+# (cho_controller_franka/src/base_controller.cpp:262-272, the "gazebo" branch).
+# This is a genuinely different feedforward regime from mujoco/isaac, where
+# nothing external compensates and the controller must feed forward the FULL
+# non-linear effects (Coriolis + full gravity) -- hence the differing torque gains.
+#
+# Tuning consequence: gazebo, like `real`, has arm-gravity compensation AND a
+# 1 kHz actuator servo, so its torque gains intentionally TRACK THE `real` VALUES
+# rather than the `mujoco` values. The gazebo<->mujoco gain gap is therefore by
+# design, not drift -- do not "fix" it by copying mujoco's higher stiffnesses here.
+
+
 /**:
   controller_manager:
     ros__parameters:
