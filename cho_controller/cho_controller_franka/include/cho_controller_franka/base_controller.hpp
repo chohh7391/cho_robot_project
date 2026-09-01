@@ -141,6 +141,13 @@ public:
     void log_ee_pose();
     void log_joint_pos();
 
+    // Whether this controller owns the arm tracking log (/log/joint_pos,
+    // /log/ee_pose). True for arm-motion controllers; overridden to false by
+    // controllers that inherit this base only for its kinematics/dynamics
+    // (e.g. ee_state_broadcaster) and would otherwise publish an uninitialized
+    // desired state onto the shared log topics.
+    virtual bool should_publish_arm_log() const { return true; }
+
 protected:
     std::string robot_type_;
     std::string robot_description_;

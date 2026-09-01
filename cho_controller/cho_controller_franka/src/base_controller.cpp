@@ -177,6 +177,12 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.H_ee_init = state_.H_ee;
   // Seed the command reference from the current measurement (rate-limit baseline for clip_position).
   state_.q_arm_ref = state_.q_arm;
+  // Seed the logged "desired" from the current measurement too, so a controller
+  // that has not written a desired yet (gravity_compensation, or an arm controller
+  // between goals) never publishes an uninitialized q_arm_des / H_ee_des / H_ee_ref.
+  state_.q_arm_des = state_.q_arm;
+  state_.H_ee_des = state_.H_ee;
+  state_.H_ee_ref = state_.H_ee;
 
   controller_active_.store(true, std::memory_order_release);
 
@@ -195,9 +201,11 @@ controller_interface::return_type FrankaBaseController::update(
     update_joint_states();
     compute_all_terms();
 
-    // logging
-    log_ee_pose();
-    log_joint_pos();
+    // logging (only the arm-tracking controller; see should_publish_arm_log())
+    if (should_publish_arm_log()) {
+        log_ee_pose();
+        log_joint_pos();
+    }
 
     return controller_interface::return_type::OK;
 }
