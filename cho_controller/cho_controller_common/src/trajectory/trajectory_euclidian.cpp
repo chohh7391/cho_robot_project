@@ -270,8 +270,8 @@ const TrajectorySample & TrajectoryEuclidianTimeopt::computeNext()
   else{
     cout << "m_traj is not valid" << endl;
     assert(false);
+    return m_sample;  // release build (NDEBUG): assert is a no-op, so return to avoid UB fall-through
   }
-  
 }
 void TrajectoryEuclidianTimeopt::setReference(const ConstRefVector ref) {
   m_sample.pos = ref;

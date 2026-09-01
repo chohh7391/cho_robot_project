@@ -245,11 +245,6 @@ namespace trajectory{
       
     }
     if (m_traj->isValid()){
-        
-      Eigen::Vector3d rot_diff_vec;
-      Eigen::Vector3d cubic_tra;
-      Eigen::Vector3d cubic_rot_tra;
-      Eigen::Matrix3d cubic_rot;
 
       Eigen::Matrix3d rot_diff = (m_init.rotation().transpose() * m_goal.rotation()).log();
       
@@ -275,6 +270,7 @@ namespace trajectory{
     }
     else{
       assert(false);
+      return m_sample;  // release build (NDEBUG): assert is a no-op, so return to avoid UB fall-through
     }
   }
 

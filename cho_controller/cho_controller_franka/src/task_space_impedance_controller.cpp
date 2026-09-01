@@ -91,10 +91,6 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   Matrix7d M_inv = M.inverse();
   
   Eigen::Matrix3d R_curr = state_.H_ee.rotation();
-  
-  Eigen::Matrix<double, 6, 6> R_spatial = Eigen::Matrix<double, 6, 6>::Zero();
-  R_spatial.topLeftCorner(3, 3) = R_curr;
-  R_spatial.bottomRightCorner(3, 3) = R_curr;
 
   Eigen::Matrix<double, 6, 7> J = state_.J_arm_world;
   Eigen::Matrix<double, 7, 6> J_T = J.transpose();
