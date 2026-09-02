@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="openarm">
+  <group name="left_arm">
+    <chain base_link="openarm_left_link0" tip_link="openarm_left_hand_tcp"/>
+  </group>
+  <group name="right_arm">
+    <chain base_link="openarm_right_link0" tip_link="openarm_right_hand_tcp"/>
+  </group>
+  <group name="both_arms">
+    <group name="left_arm"/>
+    <group name="right_arm"/>
+  </group>
+  <group_state name="home0" group="left_arm">
+    <joint name="openarm_left_joint1" value="0"/><joint name="openarm_left_joint2" value="0"/><joint name="openarm_left_joint3" value="0"/><joint name="openarm_left_joint4" value="0.3"/><joint name="openarm_left_joint5" value="0"/><joint name="openarm_left_joint6" value="0"/><joint name="openarm_left_joint7" value="0"/>
+  </group_state>
+  <group_state name="home1" group="left_arm">
+    <joint name="openarm_left_joint1" value="0"/><joint name="openarm_left_joint2" value="-0.5"/><joint name="openarm_left_joint3" value="0"/><joint name="openarm_left_joint4" value="1.2"/><joint name="openarm_left_joint5" value="0"/><joint name="openarm_left_joint6" value="0.4"/><joint name="openarm_left_joint7" value="0"/>
+  </group_state>
+  <group_state name="home0" group="right_arm">
+    <joint name="openarm_right_joint1" value="0"/><joint name="openarm_right_joint2" value="0"/><joint name="openarm_right_joint3" value="0"/><joint name="openarm_right_joint4" value="0.3"/><joint name="openarm_right_joint5" value="0"/><joint name="openarm_right_joint6" value="0"/><joint name="openarm_right_joint7" value="0"/>
+  </group_state>
+  <group_state name="home1" group="right_arm">
+    <joint name="openarm_right_joint1" value="0"/><joint name="openarm_right_joint2" value="-0.5"/><joint name="openarm_right_joint3" value="0"/><joint name="openarm_right_joint4" value="1.2"/><joint name="openarm_right_joint5" value="0"/><joint name="openarm_right_joint6" value="0.4"/><joint name="openarm_right_joint7" value="0"/>
+  </group_state>
+  <group_state name="home1" group="both_arms">
+    <joint name="openarm_left_joint1" value="0"/><joint name="openarm_left_joint2" value="-0.5"/><joint name="openarm_left_joint3" value="0"/><joint name="openarm_left_joint4" value="1.2"/><joint name="openarm_left_joint5" value="0"/><joint name="openarm_left_joint6" value="0.4"/><joint name="openarm_left_joint7" value="0"/>
+    <joint name="openarm_right_joint1" value="0"/><joint name="openarm_right_joint2" value="-0.5"/><joint name="openarm_right_joint3" value="0"/><joint name="openarm_right_joint4" value="1.2"/><joint name="openarm_right_joint5" value="0"/><joint name="openarm_right_joint6" value="0.4"/><joint name="openarm_right_joint7" value="0"/>
+  </group_state>
+  <!-- Only rigidly adjacent links within each arm are exempt.  In particular,
+       no left/right link pair is disabled: inter-arm collision checking stays on. -->
+  <disable_collisions link1="openarm_left_link0" link2="openarm_left_link1" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link1" link2="openarm_left_link2" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link2" link2="openarm_left_link3" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link3" link2="openarm_left_link4" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link4" link2="openarm_left_link5" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link5" link2="openarm_left_link6" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link6" link2="openarm_left_link7" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_link7" link2="openarm_left_hand" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_hand" link2="openarm_left_hand_tcp" reason="Adjacent"/>
+  <disable_collisions link1="openarm_left_left_finger" link2="openarm_left_right_finger" reason="Never"/>
+  <disable_collisions link1="openarm_right_link0" link2="openarm_right_link1" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link1" link2="openarm_right_link2" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link2" link2="openarm_right_link3" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link3" link2="openarm_right_link4" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link4" link2="openarm_right_link5" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link5" link2="openarm_right_link6" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link6" link2="openarm_right_link7" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_link7" link2="openarm_right_hand" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_hand" link2="openarm_right_hand_tcp" reason="Adjacent"/>
+  <disable_collisions link1="openarm_right_left_finger" link2="openarm_right_right_finger" reason="Never"/>
+</robot>

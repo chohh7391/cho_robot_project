@@ -1,0 +1,42 @@
+schema_version: 1
+robot_type: fr5
+model:
+  base_frame: world
+  arm_base_link: base_link
+  ee_link: wrist3_link
+  joints: [j1, j2, j3, j4, j5, j6]
+controllers:
+  hold: joint_space_position_controller
+  direct_joint: joint_space_position_controller
+  direct_task: task_space_ik_controller
+  moveit_trajectory: joint_trajectory_controller
+  gripper: null
+  vla: null
+moveit:
+  config_package: cho_moveit_fr5
+  planning_group: fr5_arm
+  execution:
+    max_velocity_scaling_factor: 0.25
+    max_acceleration_scaling_factor: 0.25
+actions:
+  preferences:
+    joint: [/fr5/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller]
+    task: [/fr5/controller_action_server/moveit_task, /controller_action_server/task_space_ik_controller]
+    gripper: []
+poses:
+  home:
+    '0': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    '1': [0.0, -0.7853981634, -1.5707963268, 0.7853981634, -1.5707963268, 0.0]
+    '2': [0.4, -0.7, -1.8, 1.2, 0.4, 1.0]
+    '3': [-0.4, -0.7, -1.8, 1.2, -0.4, 1.0]
+  home_safety:
+    '0':
+      enabled: false
+      reason: zero pose places the FR5 wrist at the floor and is diagnostic-only
+      max_joint_distance: 0.01
+motions:
+  reach:
+    '0': {relative: true, position: [0.0, 0.0, 0.10], orientation: [0.0, 0.0, 0.0, 1.0]}
+    '1': {relative: true, position: [0.0, 0.0, -0.10], orientation: [0.0, 0.0, 0.0, 1.0]}
+    '2': {relative: true, position: [0.10, 0.0, 0.0], orientation: [0.0, 0.0, 0.0, 1.0]}
+    '3': {relative: true, position: [0.0, 0.10, 0.0], orientation: [0.0, 0.0, 0.0, 1.0]}

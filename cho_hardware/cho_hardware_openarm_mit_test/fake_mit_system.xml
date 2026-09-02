@@ -1,0 +1,7 @@
+<library path="cho_hardware_openarm_mit_test">
+  <class name="cho_hardware_openarm_mit_test/FakeMitSystem"
+         type="cho_hardware_openarm_mit_test::FakeMitSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>Non-driving synchronous MIT contract test double.</description>
+  </class>
+</library>

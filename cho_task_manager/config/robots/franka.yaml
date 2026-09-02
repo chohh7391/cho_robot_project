@@ -1,8 +1,0 @@
-# Single source of truth for Franka controller roles.
-# Loaded at runtime by cho_task_manager.utils.controller_names.load_robot_config().
-robot_type: franka
-controllers:
-  joint_space: joint_space_qp_controller
-  task_space: task_space_qp_controller
-  gripper: gripper_controller
-  vla: vla_controller

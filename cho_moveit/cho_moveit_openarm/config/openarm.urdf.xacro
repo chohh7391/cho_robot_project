@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="openarm">
+  <!-- Keep planning and control on the same canonical Cho description. -->
+  <xacro:include filename="$(find cho_description_openarm)/robots/openarm_v10/openarm_v10.urdf.xacro"/>
+</robot>

@@ -1,0 +1,16 @@
+<?xml version="1.0" ?>
+<!-- Copyright 2026 Hyunho Cho. Licensed under the Apache License, Version 2.0. -->
+<!-- MoveIt-only position servos. Four times the standard stiffness reduces the
+     gravity steady-state offset; damping is doubled to preserve damping ratio. -->
+<mujoco model="openarm v1.0 MoveIt position actuators">
+  <actuator>
+    <position class="motor" name="openarm_joint1" joint="openarm_joint1" kp="3200" kv="80" forcerange="-40 40"/>
+    <position class="motor" name="openarm_joint2" joint="openarm_joint2" kp="3200" kv="80" forcerange="-40 40"/>
+    <position class="motor" name="openarm_joint3" joint="openarm_joint3" kp="2000" kv="50" forcerange="-27 27"/>
+    <position class="motor" name="openarm_joint4" joint="openarm_joint4" kp="2000" kv="50" forcerange="-27 27"/>
+    <position class="motor" name="openarm_joint5" joint="openarm_joint5" kp="480" kv="16" forcerange="-7 7"/>
+    <position class="motor" name="openarm_joint6" joint="openarm_joint6" kp="480" kv="16" forcerange="-7 7"/>
+    <position class="motor" name="openarm_joint7" joint="openarm_joint7" kp="480" kv="16" forcerange="-7 7"/>
+    <position class="motor" name="openarm_finger_joint1" tendon="split" kp="300" kv="30" ctrlrange="0 0.044"/>
+  </actuator>
+</mujoco>

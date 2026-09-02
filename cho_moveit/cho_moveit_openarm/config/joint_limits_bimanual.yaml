@@ -1,0 +1,17 @@
+default_velocity_scaling_factor: 0.1
+default_acceleration_scaling_factor: 0.1
+joint_limits:
+  openarm_left_joint1: &arm_limit {has_velocity_limits: true, max_velocity: 5.4, has_acceleration_limits: true, max_acceleration: 5.0}
+  openarm_left_joint2: *arm_limit
+  openarm_left_joint3: *arm_limit
+  openarm_left_joint4: *arm_limit
+  openarm_left_joint5: *arm_limit
+  openarm_left_joint6: *arm_limit
+  openarm_left_joint7: *arm_limit
+  openarm_right_joint1: *arm_limit
+  openarm_right_joint2: *arm_limit
+  openarm_right_joint3: *arm_limit
+  openarm_right_joint4: *arm_limit
+  openarm_right_joint5: *arm_limit
+  openarm_right_joint6: *arm_limit
+  openarm_right_joint7: *arm_limit

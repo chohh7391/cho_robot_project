@@ -1,0 +1,93 @@
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      joint_position_mit_controller:
+        type: cho_controller_openarm_mit/JointPositionMitController
+
+      joint_impedance_mit_controller:
+        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+
+      task_space_impedance_mit_controller:
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4,
+               openarm_joint5, openarm_joint6, openarm_joint7, openarm_finger_joint1]
+
+  ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_link0
+      joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4,
+               openarm_joint5, openarm_joint6, openarm_joint7]
+      gripper_joint: openarm_finger_joint1
+
+  joint_position_mit_controller:
+    ros__parameters:
+      arm: single
+      safety_profile_name: mujoco_sim_safe
+      # Resolved from cho_description_openarm's installed share directory by launch.
+      safety_profile_file: ''
+      kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+      torque_limit: [3.0, 3.0, 2.0, 2.0, 0.5, 0.5, 0.5]
+
+  # Direct impedance remains a one-arm producer.  The 14-axis paired command
+  # path is exclusively BimanualFollowJointTrajectoryController for MoveIt.
+  # `torque_limit` caps only the explicit action tau_ff field before the MIT
+  # equation; it is *not* the final actuator-torque limit.  The latter remains
+  # the mujoco_sim_safe wrapper limit/slew gate.  Pinocchio nle sampled over
+  # the action-client's 5 s home 0 -> reach 0 cubic path peaks at
+  # [0.004, 4.259, 1.823, 3.356, 0.225, 0.308, 0.437] Nm.  The former
+  # [2.0, 2.0, 1.5, 1.5, 0.4, 0.4, 0.4] tuple clipped J2--J4 gravity,
+  # leaving a steady tracking error outside the action tolerance.  These
+  # deliberately modest values cover that validated MuJoCo-only envelope and
+  # remain below profile tau_ff_magnitude; they do not widen real hardware.
+  joint_impedance_mit_controller:
+    ros__parameters:
+      arm: single
+      safety_profile_name: mujoco_sim_safe
+      # Resolved from cho_description_openarm's installed share directory by launch.
+      safety_profile_file: ''
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      torque_limit: [2.0, 5.0, 2.5, 4.0, 1.0, 1.0, 1.0]
+
+  # Primary Cartesian law: tau_ff = J^T(Kx*pose_error +
+  # Dx*(twist_des-J*dq)) + nle. The DLS q/dq tuple is only a bounded
+  # reference posture; the MIT wrapper remains final torque/slew authority.
+  task_space_impedance_mit_controller:
+    ros__parameters:
+      arm: single
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      ee_frame: openarm_hand_tcp
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+      startup_kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      startup_kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_duration: 5.0
+      startup_tolerance: 0.05
+      # The task law may use the full *profile* tau_ff envelope; its ultimate
+      # actuator output is still bounded by the wrapper's final torque/slew.
+      torque_limit: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      kp_task: [150.0, 150.0, 150.0, 8.0, 8.0, 8.0]
+      kd_task: [20.0, 20.0, 20.0, 1.2, 1.2, 1.2]
+      max_task_wrench: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
+      lambda: 0.05
+      max_delta_q: 0.002
+      max_goal_translation: 0.20
+      max_goal_rotation: 1.20
+      max_absolute_radius: 1.20
+      max_cartesian_velocity: 0.10
+      max_angular_velocity: 0.80

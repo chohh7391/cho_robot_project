@@ -1,0 +1,143 @@
+schema: cho.openarm.mit_command
+schema_version: 1.0.0-draft
+approval: math_and_shape_only
+scope: arm_only
+joint_order:
+  single: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4, openarm_joint5, openarm_joint6, openarm_joint7]
+  left: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7]
+  right: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
+interfaces:
+  - {name: position, symbol: q_des, unit: rad, minimum: null}
+  - {name: velocity, symbol: dq_des, unit: rad/s, minimum: null}
+  - {name: stiffness, symbol: kp, unit: N*m/rad, minimum: 0.0}
+  - {name: damping, symbol: kd, unit: N*m*s/rad, minimum: 0.0}
+  - {name: effort, symbol: tau_ff, unit: N*m, minimum: null}
+equation: tau_raw = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
+state_interfaces: [position, velocity, effort]
+invalid_policy: reject_whole_arm_command
+non_finite_allowed: false
+claim_policy: all_five_per_joint
+atomicity: one_ros2_control_update_per_arm
+topology: single_synchronous_controller_manager
+protocol_interfaces:
+  resources:
+    single: openarm_arm
+    left: openarm_left_arm
+    right: openarm_right_arm
+  command:
+    - {name: mit_session_echo, encoding: consumer_session_integer_double}
+    - {name: mit_lease_cycles, encoding: positive_integer_double}
+    - {name: mit_commit_generation, encoding: monotonic_integer_double_written_last}
+    - {name: mit_safe_request_generation, encoding: monotonic_integer_double_written_last_for_safe_transition}
+  state:
+    - {name: mit_session_id, encoding: consumer_restart_integer_double}
+    - {name: mit_ack_generation, encoding: accepted_integer_double}
+    - {name: mit_safe_generation, encoding: hardware_requested_integer_double}
+    - {name: mit_safe_ack_generation, encoding: hardware_submitted_integer_double}
+    - {name: mit_status, encoding: enum_integer_double}
+  paired_ownership:
+    resource: openarm_bimanual
+    command: {name: mit_pair_ownership, encoding: shared_session_integer_double, owner: both_arms_fjt_only}
+    state: {name: mit_pair_stop_ready, encoding: boolean_double, true_only_after_both_safe_ack}
+generation_max: 9007199254740991
+freshness: consumer_successful_write_cycles
+moveit_producer: cho_follow_joint_trajectory_mit_controller
+real_consumer: cho_system_interface_composing_openarm_can
+bimanual_consumer: one_system_interface_two_can_sockets
+bimanual_fault_policy:
+  faulty_arm: mandatory_safe
+  peer_default: controlled_hold
+  both_arms_moveit_session: abort_and_safe_both
+both_arms_producer: one_14_joint_follow_joint_trajectory_controller
+direct_aggregate_must_not_claim_pair_token: true
+moveit_map_scope: both_arms_only
+pair_commit: preflight_shadow_submit_and_ack_both
+fault_latch_reset: lifecycle_cleanup_configure_new_session
+lease_cap_owner: hardware_configuration
+gripper_fault_policy: safe_same_bus_arm
+session_policy:
+  allocate: successful_hardware_on_configure
+  invalidate: hardware_cleanup
+  producer_retry: bounded_update_cycles_while_seeding
+status_enum: {SAFE: 0, ACTIVE: 1, SAFE_TRANSITION: 2, STALE: 3, INVALID: 4, FAULT: 5, DISABLED: 6}
+numeric_policy:
+  selection_required: true
+  authoritative_source: mit_safety_profiles_v1.yaml
+  default_profile: null
+  profiles:
+    mujoco_sim_safe:
+      status: prototype_experiment_allowed
+      backend: mujoco
+      hardware_enable_allowed: false
+      update_rate_hz: 1000
+      # q bounds and physical velocity/effort ceilings come from the Cho v1.0
+      # URDF data.  The command velocity and tau_ff limits below are deliberate
+      # simulation deratings, not motor ratings.
+      joint_limits:
+        position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        command_velocity: [2.0, 2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
+        physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      gains:
+        kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+        kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
+        kd_slew_per_s: [13.75, 12.5, 10.0, 10.0, 3.5, 3.0, 2.5]
+        safe_hold_stiffness: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        safe_hold_damping: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+      torque:
+        tau_ff_magnitude: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+        tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
+        final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+        final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
+        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      timing:
+        lease_default_cycles: 20
+        lease_cap_cycles: 100
+        producer_refresh_cycles: 10
+        controller_write_watchdog_ms: 100
+        state_stale_cycles: 100
+        bimanual_send_skew_us: null
+        bimanual_send_skew_gate: measure_before_enforcement
+    real_conservative_unapproved:
+      status: unapproved
+      backend: real
+      hardware_enable_allowed: false
+      approval_gate: manual_low_output_commissioning_required
+      # These are deliberately low commissioning candidates.  They are not a
+      # claim about safe hardware operation and must never enable motors.
+      joint_limits:
+        position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        command_velocity: [0.25, 0.25, 0.20, 0.20, 0.30, 0.30, 0.30]
+        physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      gains:
+        kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
+        kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25]
+        kp_slew_per_s: null
+        kd_slew_per_s: null
+        safe_hold_stiffness: null
+        safe_hold_damping: null
+      torque:
+        tau_ff_magnitude: [2.0, 2.0, 1.35, 1.35, 0.35, 0.35, 0.35]
+        tau_ff_slew_per_s: null
+        final_magnitude: [4.0, 4.0, 2.7, 2.7, 0.7, 0.7, 0.7]
+        final_slew_per_s: null
+        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      timing:
+        lease_default_cycles: null
+        lease_cap_cycles: null
+        producer_refresh_cycles: null
+        controller_write_watchdog_ms: null
+        state_stale_cycles: null
+        bimanual_send_skew_us: null
+        bimanual_send_skew_gate: measure_before_enforcement
+gripper_contract: separate_position_control
+safe_seed:
+  q_des: measured_position
+  dq_des: 0.0
+  kp: safe_hold_stiffness
+  kd: safe_hold_damping
+  tau_ff: 0.0

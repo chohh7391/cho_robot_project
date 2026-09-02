@@ -40,6 +40,9 @@ limitations under the License.
   <xacro:arg name="ros2_control"  default="true"/>
   <xacro:arg name="hardware"      default="mujoco"/>
   <xacro:arg name="control_mode"  default="torque"/>
+  <xacro:arg name="mujoco_position_profile" default="standard"/>
+  <xacro:arg name="mujoco_mit_prototype" default="false"/>
+  <xacro:arg name="mujoco_mit_headless" default="false"/>
   <xacro:arg name="bimanual"      default="false"/>
   <xacro:arg name="arm_prefix"    default=""/>
   <xacro:arg name="hand"          default="true"/>
@@ -137,6 +140,9 @@ limitations under the License.
       control_gains="${gains}"
       hardware="$(arg hardware)"
       control_mode="$(arg control_mode)"
+      mujoco_position_profile="$(arg mujoco_position_profile)"
+      mujoco_mit_prototype="$(arg mujoco_mit_prototype)"
+      mujoco_mit_headless="$(arg mujoco_mit_headless)"
       bimanual="$(arg bimanual)"
       arm_prefix="$(arg arm_prefix)"
       left_can_interface="$(arg left_can_interface)"

@@ -1,7 +1,7 @@
 # Multi-PC Setup (PC1 & PC2)
 
 - PC1: discovery server + bringup (controllers, action servers)
-- PC2: clients (action_client.py, task manager, `ros2` CLI, rqt, rviz)
+- PC2: `cho_control_tools` clients, task manager, `ros2` CLI, rqt, rviz
 
 Communication runs over Tailscale + Fast DDS Discovery Server, managed by
 [`dds/dds_mode.sh`](../dds/dds_mode.sh).
@@ -41,7 +41,7 @@ ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=<mode>
 ```bash
 source ~/ros2_ws/src/cho_robot_project/dds/dds_mode.sh client
 source ~/ros2_ws/install/setup.bash
-python3 cho_task_manager/python/action_client.py   # or: ros2 topic list, rqt, rviz ...
+ros2 run cho_control_tools debug_action_client   # or: ros2 topic list, rqt, rviz ...
 ```
 
 Client mode loads `dds/super_client.xml` (Fast DDS `SUPER_CLIENT`), so graph

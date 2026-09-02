@@ -1,8 +1,0 @@
-# Single source of truth for UR5e controller roles.
-# Loaded at runtime by cho_task_manager.utils.controller_names.load_robot_config().
-robot_type: ur5e
-controllers:
-  joint_space: joint_space_position_controller
-  task_space: task_space_ik_controller
-  gripper: gripper_controller  # cho_controller_ur/GripperController -> Robotiq 2F-85
-  vla: null

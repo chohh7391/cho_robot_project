@@ -9,10 +9,18 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+
   <exec_depend>cho_bringup_isaac</exec_depend>
   <exec_depend>cho_controller_openarm</exec_depend>
   <exec_depend>cho_description_openarm</exec_depend>
+  <exec_depend>cho_hardware_openarm_mit_mujoco</exec_depend>
+  <exec_depend>cho_controller_openarm_mit</exec_depend>
   <exec_depend>controller_manager</exec_depend>
+  <exec_depend>cho_moveit_openarm</exec_depend>
+  <exec_depend>cho_robot_config</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

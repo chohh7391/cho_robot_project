@@ -74,6 +74,11 @@
       joint_trajectory_controller:
         type: cho_controller_franka/JointTrajectoryController
 
+      # Standard FollowJointTrajectory backend used only by MoveIt.  The
+      # existing Cho controller above is a separate identification trajectory.
+      moveit_joint_trajectory_controller:
+        type: joint_trajectory_controller/JointTrajectoryController
+
 
 /**:
   joint_state_broadcaster:
@@ -196,3 +201,19 @@
       kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]
       kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]
       duration: 6.0
+
+/**:
+  moveit_joint_trajectory_controller:
+    ros__parameters:
+      joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      # Gazebo's native position servo is stable for planned trajectories. The
+      # upstream effort gains are intended for Franka hardware and were
+      # under-damped in this simulation (notably joint 6).
+      command_interfaces: [position]
+      state_interfaces: [position, velocity]
+      allow_partial_joints_goal: false
+      open_loop_control: false
+      allow_integration_in_goal_trajectories: true
+      constraints:
+        stopped_velocity_tolerance: 0.05
+        goal_time: 1.0

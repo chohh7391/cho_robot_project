@@ -24,6 +24,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 SWITCHABLE_CONTROLLERS = [
+    'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
@@ -74,8 +75,13 @@ def setup_control_environment(context):
     bringup_type = LaunchConfiguration('bringup_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
+    mujoco_initial_keyframe = LaunchConfiguration('mujoco_initial_keyframe').perform(context)
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
+        if controller_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_mujoco_moveit.launch.py instead.")
         raise RuntimeError(
             f"Unknown controller_name '{controller_name}'. "
             f"Valid options: {SWITCHABLE_CONTROLLERS}"
@@ -89,7 +95,11 @@ def setup_control_environment(context):
     # MuJoCo, Isaac, Gazebo, mock or real ros2_control block. Expand it here with
     # hardware:=mujoco rather than reading it verbatim.
     robot_description_content = xacro.process_file(
-        urdf_path, mappings={'hardware': 'mujoco'}
+        urdf_path,
+        mappings={
+            'hardware': 'mujoco',
+            'mujoco_initial_keyframe': mujoco_initial_keyframe,
+        },
     ).toxml()
 
     robot_description = {'robot_description': robot_description_content}
@@ -183,7 +193,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name',
             default_value='joint_space_position_controller',
-            description='Cho controller to activate: joint_space_position_controller or task_space_ik_controller',
+            description=(
+                'Controller to activate: joint_trajectory_controller, '
+                'joint_space_position_controller, or task_space_ik_controller'
+            ),
         ),
         DeclareLaunchArgument(
             'ee_name',
@@ -199,6 +212,15 @@ def generate_launch_description():
             'use_sim_time',
             default_value='true',
             description='Use simulation time',
+        ),
+        DeclareLaunchArgument(
+            'mujoco_initial_keyframe',
+            default_value='home1',
+            description=(
+                'MuJoCo keyframe applied before controllers start. The default '
+                'home1 is the canonical planning-safe simulation ready pose; use '
+                'zero explicitly for the legacy all-zero pose.'
+            ),
         ),
         DeclareLaunchArgument(
             'urdf_file',

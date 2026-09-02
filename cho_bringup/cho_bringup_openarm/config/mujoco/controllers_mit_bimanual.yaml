@@ -1,0 +1,81 @@
+# Opt-in MIT trajectory configuration for one independently controlled arm of
+# the bimanual OpenArm MuJoCo model.  The launch file spawns exactly one of the
+# two FJT instances.  Neither instance claims the bimanual pair token; that
+# token is reserved for the 14-axis MoveIt controller.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      left_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+      right_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      left_follow_joint_trajectory_mit_controller:
+        type: cho_controller_openarm_mit/SingleArmFollowJointTrajectoryController
+      right_follow_joint_trajectory_mit_controller:
+        type: cho_controller_openarm_mit/SingleArmFollowJointTrajectoryController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3,
+               openarm_left_joint4, openarm_left_joint5, openarm_left_joint6,
+               openarm_left_joint7, openarm_right_joint1, openarm_right_joint2,
+               openarm_right_joint3, openarm_right_joint4, openarm_right_joint5,
+               openarm_right_joint6, openarm_right_joint7,
+               openarm_left_finger_joint1, openarm_right_finger_joint1]
+
+  left_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      pose_topic: /ee_state/left/pose
+      twist_topic: /ee_state/left/twist
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3,
+               openarm_left_joint4, openarm_left_joint5, openarm_left_joint6,
+               openarm_left_joint7]
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints: [openarm_left_finger_joint2]
+
+  right_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      pose_topic: /ee_state/right/pose
+      twist_topic: /ee_state/right/twist
+      joints: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3,
+               openarm_right_joint4, openarm_right_joint5, openarm_right_joint6,
+               openarm_right_joint7]
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints: [openarm_right_finger_joint2]
+
+  left_follow_joint_trajectory_mit_controller:
+    ros__parameters:
+      arm: left
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      stiffness: 10.0
+      damping: 0.5
+      constraints:
+        path_tolerance: 0.2
+        goal_tolerance: 0.02
+        goal_time: 0.5
+
+  right_follow_joint_trajectory_mit_controller:
+    ros__parameters:
+      arm: right
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      stiffness: 10.0
+      damping: 0.5
+      constraints:
+        path_tolerance: 0.2
+        goal_tolerance: 0.02
+        goal_time: 0.5

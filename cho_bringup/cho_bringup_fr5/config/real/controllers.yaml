@@ -37,6 +37,15 @@ joint_trajectory_controller:
     state_publish_rate: 100.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.02
+      goal_time: 1.5
+      j1: {trajectory: 0.10, goal: 0.03}
+      j2: {trajectory: 0.10, goal: 0.03}
+      j3: {trajectory: 0.10, goal: 0.03}
+      j4: {trajectory: 0.10, goal: 0.03}
+      j5: {trajectory: 0.10, goal: 0.03}
+      j6: {trajectory: 0.10, goal: 0.03}
 
 joint_space_position_controller:
   ros__parameters:

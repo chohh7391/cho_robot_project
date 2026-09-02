@@ -1,0 +1,6 @@
+<?xml version="1.0" ?>
+<!-- Copyright 2026 Hyunho Cho. Licensed under the Apache License, Version 2.0. -->
+<mujoco model="openarm v1.0 bimanual scene (MoveIt position)">
+  <include file="scene.xml"/>
+  <include file="actuators_position_moveit.xml"/>
+</mujoco>

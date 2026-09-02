@@ -29,6 +29,9 @@ limitations under the License.
       control_gains
       hardware:=mujoco
       control_mode:=torque
+      mujoco_position_profile:=standard
+      mujoco_mit_prototype:=false
+      mujoco_mit_headless:=false
       bimanual:=false
       arm_prefix:=''
       hand:=true
@@ -114,6 +117,11 @@ limitations under the License.
           <command_interface name="effort"/>
         </xacro:if>
         <xacro:unless value="${mit_gains}">
+          <xacro:if value="${hardware == 'mujoco' and mujoco_mit_prototype}">
+            <xacro:if value="${gripper}"><command_interface name="position"/></xacro:if>
+            <xacro:unless value="${gripper}"><command_interface name="position"/><command_interface name="velocity"/><command_interface name="stiffness"/><command_interface name="damping"/><command_interface name="effort"/></xacro:unless>
+          </xacro:if>
+          <xacro:unless value="${hardware == 'mujoco' and mujoco_mit_prototype}">
           <!-- The gripper is position-driven in every simulator actuator set
                (its MJCF actuator is a position servo on the "split" tendon in
                all of actuators_{position,velocity,torque}.xml), so it does not
@@ -134,6 +142,7 @@ limitations under the License.
             <xacro:unless value="${control_mode == 'position' or control_mode == 'velocity'}">
               <command_interface name="effort"/>
             </xacro:unless>
+          </xacro:unless>
           </xacro:unless>
         </xacro:unless>
 
@@ -263,12 +272,26 @@ limitations under the License.
           </xacro:if>
 
           <xacro:if value="${hardware == 'mujoco'}">
-            <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+            <xacro:if value="${mujoco_mit_prototype}">
+              <plugin>cho_hardware_openarm_mit_mujoco/MitMujocoSystem</plugin>
+              <param name="mit_safety_profile_file">$(find cho_description_openarm)/config/mit_safety_profiles_v1.yaml</param>
+              <param name="mit_safety_profile">mujoco_sim_safe</param>
+              <param name="mit_expected_update_rate_hz">1000</param>
+              <param name="headless">${mujoco_mit_headless}</param>
+            </xacro:if>
+            <xacro:unless value="${mujoco_mit_prototype}">
+              <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+            </xacro:unless>
             <!-- Pick the actuator set that matches control_mode. MuJoCo writes the
                  raw command into mjData.ctrl with no unit conversion, so a position
                  command sent to a <motor> would be read as a torque. -->
             <xacro:if value="${control_mode == 'position'}">
-              <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_position.xml</param>
+              <xacro:if value="${mujoco_position_profile == 'moveit'}">
+                <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_position_moveit.xml</param>
+              </xacro:if>
+              <xacro:unless value="${mujoco_position_profile == 'moveit'}">
+                <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_position.xml</param>
+              </xacro:unless>
             </xacro:if>
             <xacro:if value="${control_mode == 'velocity'}">
               <param name="mujoco_model">$(find cho_description_openarm)/xml/${scene_dir}/scene_velocity.xml</param>
@@ -285,6 +308,16 @@ limitations under the License.
 
         <xacro:arm_joints/>
         <xacro:hand_joints/>
+        <xacro:if value="${hardware == 'mujoco' and mujoco_mit_prototype}">
+          <xacro:if value="${bimanual}">
+            <gpio name="openarm_left_arm"><command_interface name="mit_session_echo"/><command_interface name="mit_lease_cycles"/><command_interface name="mit_commit_generation"/><command_interface name="mit_safe_request_generation"/><state_interface name="mit_session_id"/><state_interface name="mit_ack_generation"/><state_interface name="mit_safe_generation"/><state_interface name="mit_safe_ack_generation"/><state_interface name="mit_status"/></gpio>
+            <gpio name="openarm_right_arm"><command_interface name="mit_session_echo"/><command_interface name="mit_lease_cycles"/><command_interface name="mit_commit_generation"/><command_interface name="mit_safe_request_generation"/><state_interface name="mit_session_id"/><state_interface name="mit_ack_generation"/><state_interface name="mit_safe_generation"/><state_interface name="mit_safe_ack_generation"/><state_interface name="mit_status"/></gpio>
+            <gpio name="openarm_bimanual"><command_interface name="mit_pair_ownership"/><state_interface name="mit_pair_stop_ready"/></gpio>
+          </xacro:if>
+          <xacro:unless value="${bimanual}">
+            <gpio name="openarm_arm"><command_interface name="mit_session_echo"/><command_interface name="mit_lease_cycles"/><command_interface name="mit_commit_generation"/><command_interface name="mit_safe_request_generation"/><state_interface name="mit_session_id"/><state_interface name="mit_ack_generation"/><state_interface name="mit_safe_generation"/><state_interface name="mit_safe_ack_generation"/><state_interface name="mit_status"/></gpio>
+          </xacro:unless>
+        </xacro:if>
       </ros2_control>
     </xacro:unless>
 

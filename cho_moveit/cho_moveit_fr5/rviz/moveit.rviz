@@ -1,0 +1,38 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: moveit_rviz_plugin/MotionPlanning
+    Name: Motion Planning
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Plane: XY
+      Cell Size: 1
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: MotionPlanning
+      Enabled: true
+      Planning Group: fr5_arm
+      Planning Request:
+        Planning Time: 5
+        Planning Attempts: 10
+        Velocity Scaling: 0.1
+        Acceleration Scaling: 0.1
+      Planned Path:
+        Loop Animation: false
+        State Display Time: 0.05 s
+      Scene Robot:
+        Robot Alpha: 1
+      Scene Geometry:
+        Scene Alpha: 0.9
+  Enabled: true
+  Name: root
+Window Geometry:
+  Width: 1200
+  Height: 800

@@ -19,11 +19,17 @@ find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(${PROJECT_NAME}_urdf_tests test/urdf_tests.py)
+  set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} 1)
+  ament_add_pytest_test(${PROJECT_NAME}_urdf_tests test/urdf_tests.py
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  ament_add_pytest_test(${PROJECT_NAME}_mit_contract_tests test/mit_contract_tests.py
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  ament_add_pytest_test(${PROJECT_NAME}_mit_protocol_model_tests test/mit_protocol_model_tests.py
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
 endif()
 
 install(DIRECTORY
-  assets robots xml launch rviz test
+  assets config robots xml launch rviz test
   DESTINATION share/${PROJECT_NAME}/
 )
 

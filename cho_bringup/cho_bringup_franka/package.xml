@@ -10,12 +10,17 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>cho_description_franka</exec_depend>
+  <exec_depend>cho_moveit_franka</exec_depend>
+  <exec_depend>cho_robot_config</exec_depend>
   <exec_depend>franka_gripper</exec_depend>
   <exec_depend>franka_hardware</exec_depend>
   <exec_depend>franka_ign_ros2_control</exec_depend>
   <exec_depend>franka_robot_state_broadcaster</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>

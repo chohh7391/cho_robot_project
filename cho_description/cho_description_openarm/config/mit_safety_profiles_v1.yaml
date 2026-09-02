@@ -1,0 +1,59 @@
+schema: cho.openarm.mit_safety_profiles
+schema_version: 1.0.0-draft
+default_profile: null
+profiles:
+  mujoco_sim_safe:
+    status: prototype_experiment_allowed
+    backend: mujoco
+    hardware_enable_allowed: false
+    update_rate_hz: 1000
+    joint_limits:
+      position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      command_velocity: [2.0, 2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
+      physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    gains:
+      kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+      kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
+      kd_slew_per_s: [13.75, 12.5, 10.0, 10.0, 3.5, 3.0, 2.5]
+      safe_hold_stiffness: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      safe_hold_damping: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+    torque:
+      tau_ff_magnitude: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
+      final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
+      ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      slew_reference: last_successfully_submitted_command
+    timing:
+      priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
+      lease_default_cycles: 20
+      lease_cap_cycles: 100
+      producer_refresh_cycles: 10
+      controller_write_watchdog_ms: 100
+      state_stale_cycles: 100
+      counters_advance_on: successful_consumer_write_cycle
+      bimanual_send_skew_us: null
+      bimanual_send_skew_gate: measure_before_enforcement
+      skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us
+    safe_transition:
+      normal_policy: measured_position_hold_uses_same_gain_and_torque_slew
+      fault_exception: immediate_transport_disable_no_slew
+  real_conservative_unapproved:
+    status: unapproved
+    backend: real
+    hardware_enable_allowed: false
+    update_rate_hz: null
+    approval_gate: manual_low_output_commissioning_required
+    joint_limits:
+      position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      command_velocity: [0.25, 0.25, 0.20, 0.20, 0.30, 0.30, 0.30]
+      physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
+    torque: {tau_ff_magnitude: [2.0, 2.0, 1.35, 1.35, 0.35, 0.35, 0.35], tau_ff_slew_per_s: null, final_magnitude: [4.0, 4.0, 2.7, 2.7, 0.7, 0.7, 0.7], final_slew_per_s: null, ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew, slew_reference: last_successfully_submitted_command}
+    timing: {priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease, lease_default_cycles: null, lease_cap_cycles: null, producer_refresh_cycles: null, controller_write_watchdog_ms: null, state_stale_cycles: null, counters_advance_on: successful_consumer_write_cycle, bimanual_send_skew_us: null, bimanual_send_skew_gate: measure_before_enforcement, skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us}
+    safe_transition: {normal_policy: measured_position_hold_uses_same_gain_and_torque_slew, fault_exception: immediate_transport_disable_no_slew}

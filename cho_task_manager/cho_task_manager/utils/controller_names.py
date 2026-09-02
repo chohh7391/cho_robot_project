@@ -1,9 +1,8 @@
-import os
 from enum import Enum
 from typing import List
 
-import yaml
-from ament_index_python.packages import get_package_share_directory
+from cho_robot_config import available_robot_types as registry_robot_types
+from cho_robot_config import load_robot_config as load_registry_config
 
 
 ACTION_SERVER_NAMESPACE = '/controller_action_server'
@@ -18,6 +17,10 @@ class ControllerNames(str, Enum):
 
     # Joint Space Controllers
     JOINT_IMPEDANCE = 'joint_space_impedance_controller'
+    # OpenArm MuJoCo MIT adapter. It deliberately has the same JointSpace
+    # action contract as JOINT_IMPEDANCE, so the existing action_client
+    # home/reach commands need only select this controller name.
+    JOINT_IMPEDANCE_MIT = 'joint_impedance_mit_controller'
     JOINT_QP = 'joint_space_qp_controller'
     JOINT_POSITION = 'joint_space_position_controller'
     JOINT_VELOCITY = 'joint_space_velocity_controller'
@@ -62,33 +65,17 @@ EXCLUSIVE_ARM_CONTROLLERS = [
 
 
 # ---------------------------------------------------------------------------
-# Config-backed controller registry (single source of truth: config/robots/*.yaml)
+# Compatibility view of the canonical cho_robot_config registry.
 # ---------------------------------------------------------------------------
 
-_config_cache: dict = {}
-
-
-def _robot_config_dir() -> str:
-    return os.path.join(
-        get_package_share_directory('cho_task_manager'), 'config', 'robots'
-    )
-
-
 def available_robot_types() -> List[str]:
-    """Robot types discoverable from config/robots/*.yaml."""
-    config_dir = _robot_config_dir()
-    if not os.path.isdir(config_dir):
-        return []
-    return sorted(
-        os.path.splitext(f)[0]
-        for f in os.listdir(config_dir)
-        if f.endswith('.yaml')
-    )
+    """Robot types discoverable from the canonical robot registry."""
+    return registry_robot_types()
 
 
 def load_robot_config(robot_type: str) -> dict:
     """
-    Load the controller config for *robot_type* from config/robots/<robot_type>.yaml.
+    Load the task-manager controller view for *robot_type* from cho_robot_config.
 
     Returns a flat dict, e.g.::
 
@@ -97,23 +84,16 @@ def load_robot_config(robot_type: str) -> dict:
 
     Raises ValueError for unknown robot types.
     """
-    if robot_type in _config_cache:
-        return dict(_config_cache[robot_type])
-
-    path = os.path.join(_robot_config_dir(), f'{robot_type}.yaml')
-    if not os.path.exists(path):
-        raise ValueError(
-            f"Unknown robot_type '{robot_type}'. "
-            f"Valid options: {available_robot_types()}"
-        )
-
-    with open(path, 'r') as f:
-        raw = yaml.safe_load(f) or {}
-
-    config = dict(raw.get('controllers', {}) or {})
-    config['robot_type'] = raw.get('robot_type', robot_type)
-    _config_cache[robot_type] = config
-    return dict(config)
+    raw = load_registry_config(robot_type)
+    controllers = raw['controllers']
+    compatibility = raw.get('compatibility', {}).get('task_manager', {})
+    return {
+        'robot_type': raw['robot_type'],
+        'joint_space': compatibility.get('joint_space', controllers['direct_joint']),
+        'task_space': compatibility.get('task_space', controllers['direct_task']),
+        'gripper': compatibility.get('gripper', controllers['gripper']),
+        'vla': compatibility.get('vla', controllers['vla']),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,11 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: cho_description_fr5
+    relative_path: urdf/fr5.urdf.xacro
+    xacro_args: hardware:=mock
+  srdf:
+    relative_path: config/fr5.srdf
+  package_settings:
+    author_name: cho_robot_project maintainers
+    author_email: maintainer@example.com
+    generated_timestamp: 2026-09-01 00:00:00.000000

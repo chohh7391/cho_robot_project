@@ -13,9 +13,11 @@ from launch_ros.substitutions import FindPackageShare
 
 
 SWITCHABLE_CONTROLLERS = [
+    'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
+CONTROLLER_MODES = list(SWITCHABLE_CONTROLLERS)
 
 
 def create_runtime_controller_params(ee_name, bringup_type):
@@ -67,7 +69,7 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = LaunchConfiguration('launch_rviz')
     gazebo_gui = LaunchConfiguration('gazebo_gui')
     world_file = LaunchConfiguration('world_file')
-    load_gripper = LaunchConfiguration('load_gripper')
+    requested_load_gripper = LaunchConfiguration('load_gripper').perform(context)
     tf_prefix = LaunchConfiguration('tf_prefix')
     use_sim_time = LaunchConfiguration('use_sim_time')
     robot_name = LaunchConfiguration('robot_name')
@@ -79,11 +81,17 @@ def launch_setup(context, *args, **kwargs):
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout')
     runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
 
-    if controller_name not in SWITCHABLE_CONTROLLERS:
+    if controller_name not in CONTROLLER_MODES:
+        if controller_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_gz_moveit.launch.py instead.")
         raise RuntimeError(
             f"Unknown controller_name '{controller_name}'. "
-            f"Valid options: {SWITCHABLE_CONTROLLERS}"
+            f"Valid options: {CONTROLLER_MODES}"
         )
+    load_gripper = requested_load_gripper
+    active_controller = controller_name
 
     controller_config = PathJoinSubstitution([
         FindPackageShare('cho_bringup_ur'),
@@ -189,7 +197,7 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=[
             'joint_state_broadcaster',
-            controller_name,
+            active_controller,
             '-p',
             runtime_param_file,
             '--controller-manager',
@@ -201,11 +209,8 @@ def launch_setup(context, *args, **kwargs):
     )
 
     inactive_controllers = [
-        'joint_trajectory_controller',
-        *[
-            controller for controller in SWITCHABLE_CONTROLLERS
-            if controller != controller_name
-        ],
+        *[controller for controller in SWITCHABLE_CONTROLLERS
+          if controller != active_controller],
     ]
 
     inactive_controller_spawner = Node(
@@ -256,7 +261,7 @@ def launch_setup(context, *args, **kwargs):
         )
     )
 
-    return [
+    actions = [
         robot_state_publisher,
         gz_spawn_entity,
         gz_launch_with_gui,
@@ -270,6 +275,7 @@ def launch_setup(context, *args, **kwargs):
             )
         ),
     ]
+    return actions
 
 
 def generate_launch_description():
@@ -292,7 +298,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name',
             default_value='joint_space_position_controller',
-            description='Initial Cho arm controller to activate.',
+            description='Actual ros2_control arm controller to activate initially.',
         ),
         DeclareLaunchArgument(
             'load_gripper',

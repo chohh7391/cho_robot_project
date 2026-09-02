@@ -1,309 +1,225 @@
 # Cho Robot Project
-This repository provides a General Robot Control Framework for ROS2 Humble.
 
-# Installation
+ROS 2 Humble workspace packages for the Cho robot-control stack. The project
+keeps robot descriptions, `ros2_control` hardware adapters, controllers,
+MoveIt integration, task orchestration, and manual tools as separate layers.
 
-See [docs/installation.md](docs/installation.md).
+## Workspace setup
 
-# PC1 & PC2 Setting
+```bash
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
 
-See [docs/multi_pc.md](docs/multi_pc.md) — Tailscale + Fast DDS Discovery Server,
-managed by [`dds/dds_mode.sh`](dds/dds_mode.sh).
+Build a changed subset when iterating:
 
+```bash
+colcon build --symlink-install --packages-select <package> [<package> ...]
+source install/setup.bash
+```
 
-# Run
+Use a fresh `ROS_DOMAIN_ID` for independent simulation runs. Do not run two
+simulators publishing `/clock` in the same domain.
 
-## Bringup
+## Package map
 
-### Franka (`cho_bringup_franka`)
+```text
+cho_description/      Robot URDF/xacro, meshes, simulator assets, safety profiles
+cho_controller/       ros2_control controller plugins
+cho_hardware/         Hardware/protocol adapters
+cho_bringup/          Backend-specific launch and controller configuration
+cho_moveit/           MoveIt configuration and launch wrappers
+cho_robot_config/     Robot/controller/action metadata registry
+cho_task_manager/     py_trees behaviors, tasks, and task-manager node
+cho_control_tools/    Manual action clients, VLA tools, and bag plotters
+cho_interfaces/       Project ROS messages and actions
+```
 
-One launch file per environment (`real` / `gz` / `mujoco` / `isaac`), same arguments everywhere:
+`cho_task_manager` is not the manual-client package. Use
+`cho_control_tools` for interactive operation and diagnostics.
+
+## Robots and backends
+
+| Robot | Bringup packages | Current guidance |
+| --- | --- | --- |
+| Franka | `cho_bringup_franka` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Validate the selected backend and mode before hardware use. |
+| UR5e | `cho_bringup_ur` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Real Robot/Robotiq setup has extra vendor-driver requirements. |
+| FAIRINO FR5 | `cho_bringup_fr5` | MuJoCo joint/task control is the verified path. Gazebo, Isaac Sim, and real launch/configuration paths require backend-specific validation. |
+| OpenArm | `cho_bringup_openarm` | MuJoCo legacy control and the opt-in MIT direct/paired paths are verified. MIT real/CAN control is intentionally disabled. |
+
+Launch files follow the pattern:
+
+```bash
+ros2 launch cho_bringup_<robot> bringup_<backend>_robot.launch.py
+```
+
+See the launch file's `--show-args` output for backend-specific parameters.
+
+## Manual control clients
+
+Robot-specific clients choose compatible active action servers automatically;
+normal operation does not require controller names or `use_task` / `use_joint`.
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 launch cho_bringup_franka bringup_<env>_robot.launch.py control_mode:=<mode> controller_name:=<controller>
-
-# VLA: spawns and activates vla_controller instead of controller_name
-ros2 launch cho_bringup_franka bringup_<env>_robot.launch.py control_mode:=<mode> vla:=true
+ros2 run cho_control_tools openarm_action_client
+ros2 run cho_control_tools fr5_action_client
+ros2 run cho_control_tools franka_action_client
+ros2 run cho_control_tools ur5e_action_client
 ```
 
-Real robot: set the robot IP in `cho_bringup_franka/config/real/franka.config.yaml` first.
-
-Isaac Sim: build the USD asset once before the first run (see
-[`cho_description_franka/usd/README.md`](cho_description/cho_description_franka/usd/README.md)),
-then
+OpenArm side selection is explicit only when needed:
 
 ```bash
-ros2 launch cho_bringup_franka bringup_isaac_robot.launch.py \
-     control_mode:=torque controller_name:=task_space_qp_controller
+ros2 run cho_control_tools openarm_action_client --arm left
+ros2 run cho_control_tools openarm_action_client --arm right
+ros2 run cho_control_tools openarm_action_client --arm both
 ```
 
-Extra arguments on this environment only: `physics_rate` (default 250 — must match
-`controller_manager.update_rate` in `config/isaac/controllers.yaml`), `headless`,
-`device` (`cpu`/`cuda`), `robot_usd`, `isaac_sim_path`, `publish_ft`.
+Inside a robot client, use `home <0-3>`, `reach <0-3>`, `grasp <0|1>`,
+`status`, and `quit`. `reach` chooses an active task action server when one is
+available, otherwise the robot's registered joint-space preset.
 
-All three control modes pass their `controller_check_<mode>` smoke test end to
-end. At rest the arm is still to within 0.0006 rad on every joint.
-
-| mode | controllers exercised |
-| --- | --- |
-| `torque` | `joint_space_impedance`, `joint_space_qp`, `task_space_qp`, `task_space_impedance`, `operational_space`, `gravity_compensation` + gripper |
-| `position` | `joint_space_position`, `task_space_ik` + gripper |
-| `velocity` | `joint_space_velocity`, `task_space_velocity` |
-
-### Why `config/isaac/controllers.yaml` gains differ from MuJoCo's
-
-MuJoCo embeds the controller_manager in the simulator and runs at 1 kHz with no
-transport delay. Isaac is reached over DDS at 250 Hz, so a command takes about
-10 ms to close the loop. These are acceleration-level gains, so the closed-loop
-frequency is `sqrt(kp)` independent of inertia, and stability needs roughly
-
-    sqrt(kp) x tau  <  0.4     ->  sqrt(kp) < 40   at tau = 10 ms
-
-Every gain in the Isaac config is at or under that. Two of the MuJoCo values were
-not: `joint_space_qp_controller` at kp 4000 (`sqrt(kp)` = 63) and
-`operational_space_controller`'s rotation at 7200 (85). Both oscillated instead of
-settling until they were brought down to 1600 (40). Damping is set to
-`2*sqrt(kp)`, because the Isaac asset has no joint friction to dissipate with -
-NVIDIA's own Franka authors none either.
-
-Run Isaac on its own `ROS_DOMAIN_ID` if anything else on the machine is
-simulating: two simulators publishing `/clock` makes sim time jump backwards and
-every controller misbehaves.
-
-FT sensor: `publish_ft:=true` emulates the Bota sensor from the simulated joint
-reaction at `bota_ft_sensor_wrench`, publishing `bota_ft_sensor/wrench` and serving
-`/bota_ft_sensor/tare` — enough for the forge task trees.
-
-VLA: `vla:=true` works in all three control modes. The goal lifecycle is complete
-(goal accepted -> `ActionChunk` stream consumed -> `/vla/trigger_success` ->
-`Goal Succeeded`), and the end-effector follows the commanded trajectory; the
-per-mode fidelity is in the table above.
-
-Note when testing with `cho_task_manager/python/vla_action_client.py`: run it with
-`--ros-args -p use_sim_time:=true`, and set `is_relative = False`. Its **relative**
-chunk pattern produces no visible motion in *either* simulator (measured: Isaac
-0.1 mm, MuJoCo 1.7 mm against a commanded 50 mm circle), because each chunk
-re-anchors on the current pose and only commands a sub-millimetre offset.
-
-Every controller of the chosen `control_mode` is spawned (the requested one active, the
-rest inactive), so `cho_task_manager` can switch between them at runtime:
-
-| `control_mode` | switchable controllers |
-| --- | --- |
-| `position` | `joint_space_position_controller`, `task_space_ik_controller` |
-| `torque` | `joint_space_impedance_controller`, `joint_space_qp_controller`, `task_space_impedance_controller`, `task_space_qp_controller`, `operational_space_controller`, `gravity_compensation_controller` |
-| `velocity` | `joint_space_velocity_controller`, `task_space_velocity_controller` (+ `vla_controller` with `vla:=true`) |
-
-Always active regardless of mode: `gripper_controller`, `joint_state_broadcaster`,
-`ee_state_broadcaster` (+ `simulation_gripper_controller` in sim). `vla:=true` works
-with any `control_mode` (`torque` maps to the controller's internal `effort` mode).
-
-Smoke check — exercises every controller of the running mode through its action server:
+The configurable diagnostic shell remains available, but is not the normal
+operator interface:
 
 ```bash
-ros2 launch cho_task_manager run_task_manager.launch.py task:=controller_check_<control_mode>
+ros2 run cho_control_tools debug_action_client --help
 ```
 
-#### `vla_controller` support by environment
+Additional tools:
 
-| environment | position | torque | velocity |
-| --- | --- | --- | --- |
-| mujoco | ✅ | ✅ | ✅ verified (joint/task space, idle-hold, goal switching) |
-| real | ✅ | ✅ | ⚠️ code/URDF ready but **untested on hardware** — libfranka velocity mode gravity-compensates internally; start at low speed/gains with the e-stop in hand |
-| gazebo | ✅ | ✅ | ❌ not functional: the vendored `franka_ign_ros2_control` plugin ignores velocity commands (correct commands verified via debug logging); do not use until that plugin is fixed |
-| isaac | ✅ 98% of the commanded amplitude | ✅ 63% — the loop's bandwidth attenuates it (MuJoCo: 93%) | ⚠️ tracks but overshoots to ~145% (MuJoCo: 99.8%); needs tuning before use |
-
-### UR (`cho_bringup_ur`)
-
-UR arms run position-based controllers (`joint_space_position_controller`,
-`task_space_ik_controller`); there is no `control_mode` argument. The Robotiq
-2F-85 gripper (`gripper_controller`) is attached with `load_gripper:=true` (gazebo only).
-
-- gazebo (with Robotiq 2F-85 gripper)
 ```bash
-source ~/ros2_ws/install/setup.bash
-
-# arm only
-ros2 launch cho_bringup_ur bringup_gz_robot.launch.py controller_name:=joint_space_position_controller load_gripper:=false
-
-# arm + Robotiq 2F-85 gripper (spawns gripper_controller)
-ros2 launch cho_bringup_ur bringup_gz_robot.launch.py controller_name:=task_space_ik_controller load_gripper:=true
+ros2 run cho_control_tools vla_action_client --help
+ros2 run cho_control_tools vla_success_gui --help
+ros2 run cho_control_tools plot_joint_pos_log --help
+ros2 run cho_control_tools plot_pose_log --help
 ```
 
-- isaac (arm only; build the USD once first, see `cho_description_franka/usd/README.md`)
+Detailed client behavior is in [docs/action_clients.md](docs/action_clients.md).
+
+## OpenArm MIT control in MuJoCo
+
+The normal OpenArm controllers and the MIT adapter are separate paths. The
+default bringup remains the legacy controller path; set
+`mujoco_mit_prototype:=true` only for the MIT prototype.
+
+### Direct, independent seven-axis control
+
+Direct MIT joint/task controllers own one arm's 39 MIT command interfaces.
+For a single arm, for example:
+
 ```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch cho_bringup_ur bringup_isaac_robot.launch.py controller_name:=task_space_ik_controller
-```
-
-`cho_task_manager`'s `multi_move` (six Cartesian waypoints plus two controller
-switches) runs clean on it:
-
-```bash
-ros2 launch cho_task_manager run_task_manager.launch.py task:=multi_move robot_type:=ur5e use_sim_time:=true
-```
-
-- mujoco (arm only; the native MuJoCo scene has no gripper)
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch cho_bringup_ur bringup_mujoco_robot.launch.py controller_name:=joint_space_position_controller
-```
-
-- real (set **robot ip** via `robot_ip:=<UR_IP>`)
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch cho_bringup_ur bringup_real_robot.launch.py robot_ip:=<UR_IP> controller_name:=joint_space_position_controller
-```
-
-> **Real Robotiq gripper:** `robotiq_description`/`robotiq_controllers` are installed
-> via apt, but the real hardware interface (`robotiq_driver`,
-> `RobotiqGripperHardwareInterface`) is not available as a Humble binary. To drive a
-> real 2F-85, clone `PickNik/ros2_robotiq_gripper` into the workspace, build
-> `robotiq_driver`, then add `gripper_controller` to `cho_bringup_ur/config/real/controllers.yaml`
-> and spawn it from the real launch.
-
-### OpenArm (`cho_bringup_openarm`)
-
-[enactic OpenArm](https://github.com/enactic/openarm_ros2) v1.0, as a single arm or
-as the two-arm torso (`bimanual:=true`). Simulation only so far — MuJoCo and Isaac
-Sim are supported and verified; there is no real-hardware bringup yet (see
-`todo/OPENARM_TODO.md`).
-
-All three `control_mode`s work on both simulators, single and bimanual. Pick the
-`controller_name` to match the mode:
-
-| `control_mode` | `controller_name` |
-| --- | --- |
-| `torque` (default) | `joint_space_impedance_controller` |
-| `position` | `joint_space_position_controller` |
-| `velocity` | `joint_space_velocity_controller` |
-
-- mujoco
-```bash
-source ~/ros2_ws/install/setup.bash
-
-# single arm
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
-    control_mode:=torque controller_name:=joint_space_impedance_controller
+  mujoco_mit_prototype:=true control_mode:=torque \
+  mit_controller_name:=task_space_impedance_mit_controller
 
-# bimanual torso - only bimanual:=true changes
+ros2 run cho_control_tools openarm_action_client
+```
+
+For the bimanual torso, direct controllers remain independent: each owns one
+seven-axis arm and can receive a separate client/action goal. This path does
+not plan inter-arm collision avoidance.
+
+```bash
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
-    control_mode:=torque controller_name:=joint_space_impedance_controller bimanual:=true
+  mujoco_mit_prototype:=true control_mode:=torque bimanual:=true \
+  mit_controller_name:=task_space_impedance_mit_controller \
+  mit_arm:=both_independent
+
+# Run in separate terminals.
+ros2 run cho_control_tools openarm_action_client --arm left
+ros2 run cho_control_tools openarm_action_client --arm right
 ```
 
-- isaac (build the USD once first, see `cho_description_openarm/usd/README.md`)
-```bash
-source ~/ros2_ws/install/setup.bash
+The task-space MIT controller uses absolute world-frame `reach` targets, so a
+repeated selector is not a cumulative relative move. It first settles into its
+configured non-singular startup posture; a client may briefly retry a goal
+during that bounded startup window.
 
-# physics_engine defaults to physx; newton is equally supported
-ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py \
-    control_mode:=torque controller_name:=joint_space_impedance_controller \
-    physics_engine:=newton
+### Paired fourteen-axis MoveIt control
 
-ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py \
-    control_mode:=torque controller_name:=joint_space_impedance_controller \
-    physics_engine:=newton bimanual:=true
-```
-
-> Give Isaac its own `ROS_DOMAIN_ID` if anything else on the machine simulates:
-> two `/clock` publishers make sim time jump backwards and every controller misbehaves.
-
-#### Sending goals
-
-Action names are `/controller_action_server/<controller instance name>`. A bimanual
-build spawns one controller instance per arm, so the names carry a `left_` / `right_`
-prefix; the two claim disjoint interfaces, so both are active and can be commanded
-at the same time.
+Use the paired MIT FollowJointTrajectory controller only through the OpenArm
+MoveIt wrapper. It owns both arms as one 14-axis transaction and reserves the
+pair-ownership token; this is the path for collision-aware bimanual planning.
 
 ```bash
-# single arm
-ros2 action send_goal /controller_action_server/joint_space_impedance_controller \
-  cho_interfaces/action/JointSpace \
-  "{target_joints: {position: [0.3, 0.2, 0.0, 0.8, 0.0, 0.2, 0.0]}, duration: 4.0}"
-
-# bimanual - send both to move both arms at once
-ros2 action send_goal /controller_action_server/right_joint_space_impedance_controller \
-  cho_interfaces/action/JointSpace \
-  "{target_joints: {position: [0.4, 0.3, 0.0, 1.0, 0.0, 0.3, 0.0]}, duration: 5.0}" &
-
-ros2 action send_goal /controller_action_server/left_joint_space_impedance_controller \
-  cho_interfaces/action/JointSpace \
-  "{target_joints: {position: [-0.4, -0.3, 0.0, 1.0, 0.0, -0.3, 0.0]}, duration: 5.0}"
+ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py \
+  bimanual:=true arm:=both mujoco_mit_prototype:=true
 ```
 
-The two arms are mirrored, so their joint limits are mirrored too (left `joint2` is
-`[-3.316, 0.175]`, right is `[-0.175, 3.316]`). A goal outside them is REJECTED up
-front with the offending joint named, rather than accepted and aborted two seconds
-after the requested duration.
+Do not activate direct MIT controllers and the paired controller together.
+The hardware wrapper rejects incompatible claim/switch combinations.
 
-#### PhysX vs Newton
+### Safety and real hardware
 
-Both are fully supported and give the same tracking error; `physics_engine:=physx`
-is the default. Newton applies no Coulomb joint friction and no effort limit, so it
-holds a pose slightly tighter in torque mode and the controller's own `clip_torque`
-against the URDF limits is what bounds the command. Newton also needs the asset's
-`physics` Physics variant rather than the `mujoco` one its own auto-switch selects —
-the runner handles that, and `cho_description_openarm/usd/README.md` explains why it
-matters.
+- MIT tuple commands are bounded by the checked safety profile and final
+  hardware-side limiter.
+- SAFE/session/generation acknowledgement is required before controller
+  handoff or deactivation.
+- The MuJoCo profile is prototype-only. It is not a production approval.
+- No OpenArm MIT CAN/real adapter is enabled. The real safety allowlist is
+  empty, so a real profile is rejected before any actuator transport can open.
 
-## Test
-- run general action client
-```bash
-source ~/ros2_ws/install/setup.bash
-# change code for using desired controller before run
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/action_client.py
-```
+## FR5 MuJoCo quick start
 
-- run vla action client
-```bash
-source ~/ros2_ws/install/setup.bash
-# real
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py
-# simulation
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/vla_action_client.py --ros-args -p use_sim_time:=true
-```
-
-## Task (Behavior Tree)
-
-See [docs/tasks.md](docs/tasks.md) for the full task table (per-robot tasks, required
-bringup, launch arguments). Quick example:
+FR5's verified path starts from the non-singular `home1` simulation pose.
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_type:=franka use_sim_time:=true
+export ROS_DOMAIN_ID=94
+
+ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py \
+  controller_name:=joint_space_position_controller
 ```
 
-## Run with 2 PC
+In another terminal using the same domain:
 
-See [docs/multi_pc.md](docs/multi_pc.md).
-
-
-## Log
-Each arm controller publishes its own desired-vs-current state on **per-controller
-namespaced topics** (these replaced the old global `/log/*` topics):
-- `/<controller>/controller_state` — `control_msgs/JointTrajectoryControllerState`
-  (`reference` = desired joint pos/vel, `feedback` = current pos/vel)
-- `/<controller>/ee_state` — `cho_interfaces/PoseLog` (Cartesian ref/des/curr pose)
-
-- record (example: `joint_space_qp_controller`)
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 bag record /joint_space_qp_controller/controller_state /joint_space_qp_controller/ee_state
+export ROS_DOMAIN_ID=94
+ros2 run cho_control_tools fr5_action_client
 ```
 
-- plot (`--topic` selects the controller; the joint plotter auto-detects the msg type)
+Use `home 1` for the task-ready posture. Before direct task-space action
+control, switch to the task controller, then use `reach <0-3>`:
+
 ```bash
-source ~/ros2_ws/install/setup.bash
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_joint_pos_log.py \
-  --path <DB3_PATH> --topic /joint_space_qp_controller/controller_state
-python3 ~/ros2_ws/src/cho_robot_project/cho_task_manager/python/plot_pose_log.py \
-  --path <DB3_PATH> --topic /joint_space_qp_controller/ee_state
+ros2 control switch_controllers \
+  --activate task_space_ik_controller \
+  --deactivate joint_space_position_controller
 ```
 
-# Trouble Shooting
-- if gazebo screen is black long time
+For collision-aware planning, launch the FR5 MoveIt wrapper instead:
+
 ```bash
-export IGN_IP=127.0.0.1
+ros2 launch cho_bringup_fr5 bringup_mujoco_moveit.launch.py
 ```
+
+`home 0` is a diagnostic/singular pose and is not appropriate for task-space
+motion near the floor.
+
+## Tasks, VLA, and logs
+
+Task behavior trees remain in `cho_task_manager`:
+
+```bash
+ros2 launch cho_task_manager run_task_manager.launch.py \
+  task:=pick_place robot_type:=franka use_sim_time:=true
+```
+
+See [docs/tasks.md](docs/tasks.md) for task requirements and
+[docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup.
+
+Controllers publish desired-versus-measured state on per-controller topics:
+
+```text
+/<controller>/controller_state   control_msgs/JointTrajectoryControllerState
+/<controller>/ee_state           cho_interfaces/PoseLog
+```
+
+Record with `ros2 bag record`, then use the plot commands above with
+`--path <DB3_PATH> --topic <topic>`.

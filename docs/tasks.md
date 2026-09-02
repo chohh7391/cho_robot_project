@@ -3,7 +3,7 @@
 The task manager builds a py_trees behavior tree and dispatches it by `robot_type`,
 so Franka and UR implementations are fully separated under
 `cho_task_manager/tasks/franka/` and `cho_task_manager/tasks/ur/`.
-Controller roles per robot are read from `cho_task_manager/config/robots/<robot>.yaml`
+Controller roles per robot are read from `cho_robot_config/config/<robot>.yaml`
 (single source of truth).
 
 ## Run
@@ -42,7 +42,7 @@ Running a task against the wrong bringup fails at the first controller switch wi
 
 The VLA tasks wait for an external VLA policy: an ActionChunk publisher on
 `/vla/action/ee_pose` plus the VLA action goal
-(see `cho_task_manager/python/vla_action_client.py` for a reference client).
+(see `ros2 run cho_control_tools vla_action_client` for a reference client).
 
 The `controller_check_*` smoke checks switch through every switchable controller of
 that bringup mode and drive a small motion through its action server — run one after

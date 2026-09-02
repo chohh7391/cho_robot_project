@@ -48,12 +48,109 @@ TORQUE_CONTROLLERS = [
 # would fail on a missing interface - get_switchable_controllers() keeps them
 # apart.
 POSITION_CONTROLLERS = [
+    'joint_trajectory_controller',
     'joint_space_position_controller',
 ]
 
 VELOCITY_CONTROLLERS = [
     'joint_space_velocity_controller',
 ]
+
+# Direct producers are always one seven-axis producer per arm.  On the
+# bimanual model they may be brought up as two *independent* controller
+# instances; they never use the 14-axis pair ownership token.  That token is
+# reserved for the MoveIt FJT controller below.
+MIT_DIRECT_CONTROLLERS = frozenset({
+    'joint_position_mit_controller',
+    'joint_impedance_mit_controller',
+    'task_space_impedance_mit_controller',
+})
+MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
+MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
+
+
+def enforce_mujoco_mit_description(enabled, requested_xacro, canonical_xacro):
+    """Forbid replacing the hardware/plugin boundary of the MIT prototype."""
+    if not as_bool(enabled):
+        return
+    if os.path.realpath(requested_xacro) != os.path.realpath(canonical_xacro):
+        raise RuntimeError(
+            "xacro_file overrides are forbidden with mujoco_mit_prototype:=true; "
+            "the canonical OpenArm description selects the approved MIT wrapper.")
+
+
+def resolve_mujoco_mit_selection(enabled, control_mode, bimanual,
+                                 controller_name, arm, controllers_file=''):
+    """Resolve the opt-in MIT controller without starting any launch actions.
+
+    ``None`` is deliberately returned when disabled so the legacy selection
+    path remains authoritative.  A direct controller is a one-arm producer:
+    bimanual direct bringup selects one or two disjoint seven-axis instances.
+    The 14-axis ownership token is a separate MoveIt-only boundary.
+    """
+    if not as_bool(enabled):
+        return None
+    if controllers_file:
+        raise RuntimeError(
+            "controllers_file overrides are forbidden with mujoco_mit_prototype:=true; "
+            "the approved MIT controller-to-plugin mapping is fail-closed.")
+    if control_mode != 'torque':
+        raise RuntimeError(
+            "'mujoco_mit_prototype' requires control_mode:=torque for its internal "
+            "effort actuator. The approved MIT producer path owns that actuator.")
+    paired_fjt = controller_name == MIT_PAIRED_FJT_CONTROLLER
+    if paired_fjt:
+        if not as_bool(bimanual) or arm != 'both':
+            raise RuntimeError(
+                "The paired MIT FJT requires bimanual:=true and mit_arm:=both")
+        return {
+            'controller_name': MIT_PAIRED_FJT_CONTROLLER,
+            'controller_names': [MIT_PAIRED_FJT_CONTROLLER],
+            'controllers_file': 'controllers_mit_moveit_bimanual.yaml',
+            'controller_overrides': {},
+        }
+    mit_fjt = controller_name == MIT_SINGLE_FJT_CONTROLLER
+    if controller_name not in MIT_DIRECT_CONTROLLERS | {MIT_SINGLE_FJT_CONTROLLER}:
+        raise RuntimeError(f"Unknown MIT controller: {controller_name}")
+    if mit_fjt and not as_bool(bimanual):
+        raise RuntimeError(
+            "The single-arm MIT FJT selects left or right names from the bimanual "
+            "model; set bimanual:=true and mit_arm:=left|right.")
+    if mit_fjt:
+        if arm not in ('left', 'right'):
+            raise RuntimeError("single-arm MIT FJT requires mit_arm:=left or mit_arm:=right")
+        name = f'{arm}_follow_joint_trajectory_mit_controller'
+        return {
+            'controller_name': name,
+            'controller_names': [name],
+            'controllers_file': 'controllers_mit_bimanual.yaml',
+            'controller_overrides': {name: {'arm': arm}},
+        }
+    if not as_bool(bimanual):
+        # The single-arm description exports unprefixed interfaces. `mit_arm`
+        # is intentionally ignored here so one operator command cannot remap
+        # the physical resource contract.
+        return {
+            'controller_name': controller_name,
+            'controller_names': [controller_name],
+            'controllers_file': 'controllers_mit.yaml',
+            'controller_overrides': {},
+        }
+    if arm not in ('left', 'right', 'both_independent'):
+        raise RuntimeError(
+            "bimanual direct MIT requires mit_arm:=left, right, or both_independent; "
+            "use mit_arm:=both only with the paired MoveIt FJT")
+    sides = ('left', 'right') if arm == 'both_independent' else (arm,)
+    names = [f'{side}_{controller_name}' for side in sides]
+    return {
+        # Kept for compatibility with callers that display one selected name;
+        # `controller_names` is authoritative for activation.
+        'controller_name': names[0],
+        'controller_names': names,
+        'controllers_file': 'controllers_mit_direct_bimanual.yaml',
+        'controller_overrides': {
+            name: {'arm': side} for name, side in zip(names, sides)},
+    }
 
 
 def load_yaml(file_path):
@@ -115,7 +212,8 @@ def get_switchable_controllers(control_mode, requested_controller=None, bimanual
         [name for base in base_names for name in per_arm(base, bimanual)])
 
 
-def create_runtime_param_file(controller_names, bringup_type, control_mode, ee_name):
+def create_runtime_param_file(controller_names, bringup_type, control_mode, ee_name,
+                              controller_overrides=None):
     """Write the per-bringup controller parameters and return the file path.
 
     bringup_type, control_mode and ee_name are the same for every controller in a
@@ -134,6 +232,8 @@ def create_runtime_param_file(controller_names, bringup_type, control_mode, ee_n
         # file; overriding it from here would point both arms at one hand.
         if ee_name:
             params['ee_name'] = ee_name
+        if controller_overrides and controller_name in controller_overrides:
+            params.update(controller_overrides[controller_name])
         wildcard_params[controller_name] = {'ros__parameters': params}
 
     # Written under ROS_HOME (default ~/.ros) rather than /tmp. The file is read

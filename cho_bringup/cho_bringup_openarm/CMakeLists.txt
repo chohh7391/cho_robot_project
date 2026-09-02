@@ -17,6 +17,16 @@ project(cho_bringup_openarm)
 
 find_package(ament_cmake REQUIRED)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  # A user-local anyio plugin targets a newer pytest than ROS 2 Humble ships.
+  # Keep package tests deterministic and limited to explicitly requested tests.
+  set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} 1)
+  ament_add_pytest_test(test_mujoco_mit_launch_boundaries
+    test/test_mujoco_mit_launch_boundaries.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+endif()
+
 install(
   DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}

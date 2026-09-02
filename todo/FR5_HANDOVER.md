@@ -15,7 +15,7 @@ for several robot arms. Each robot is a **vertical stack of parallel packages**:
   (namespace `cho_controller::<robot>`), each inheriting a `<Robot>BaseController`.
 - `cho_bringup/cho_bringup_<robot>` — launch files + per-env `controllers.yaml`
   (mujoco / gz / isaac / real).
-- `cho_task_manager/config/robots/<robot>.yaml` — controller-role single source of truth.
+- `cho_robot_config/config/<robot>.yaml` — controller-role single source of truth.
 - `cho_bringup/cho_bringup_isaac/isaac/robots/<robot>.json` — Isaac physics profile.
 
 Existing robots: **franka** (torque-controlled, the most mature — QP/impedance/IK),
@@ -65,9 +65,9 @@ Vendored (copied into `extern/`, patched — see §6):
 - `extern/fairino_hardware_v3_9_9/` (+ `CHO_PATCHES.md`) and `extern/fairino_msgs/`.
 
 Added to existing packages:
-- `cho_task_manager/config/robots/fr5.yaml`.
+- `cho_robot_config/config/fr5.yaml`.
 - `cho_bringup/cho_bringup_isaac/isaac/robots/fr5.json` (Isaac physics profile).
-- `cho_task_manager/python/action_client.py` — added `fr5` robot_type (home/reach poses).
+- `cho_control_tools` generic action client — added `fr5` robot type (home/reach poses).
 
 Modified existing (explicitly requested):
 - `cho_interfaces/CMakeLists.txt` + deleted `cho_interfaces/msg/JointLog.msg` — FR5 was
@@ -144,11 +144,24 @@ trajectory bug — see comment), `clamp_to_joint_limits`, `held_command_position
   (the bundle reused visual meshes as collision → self-collision jammed joints). Also
   **named the actuators** (an unnamed MuJoCo actuator makes `mj_id2name` return null →
   the mujoco_ros2_control plugin segfaults in `register_urdf_joints`).
-- **Spawn pose = ALL ZEROS** (user's explicit request), in `initial_positions.yaml`,
-  the `fr5.xml` `home` keyframe, and `fr5.json` `arm_home`. Zeros holds stably. BUT
-  **zeros is a wrist singularity (j5=0)** — task-space IK from the spawn pose is
-  ill-conditioned. The `home 1` action_client pose is a non-singular, task-ready pose:
-  the workflow is spawn → `home 1` → switch to task → `reach`.
+- **Canonical simulation ready pose (updated 2026-09-02)** is
+  `[0, -pi/4, -pi/2, pi/4, -pi/2, 0] rad` (`[0, -45, -90, 45, -90, 0] deg`).
+  Gazebo reads it from `initial_positions.yaml`; MuJoCo direct and MoveIt bringups both
+  select the `home1` keyframe by default; the Isaac `arm_home` file is aligned but Isaac
+  has not been run. The same pose is action-client `home 1` and MoveIt SRDF `home1`.
+  Explicit all-zero remains recorded as `home 0`, but normal action-client and MoveIt
+  execution reject it because the wrist is at the floor. It is available only as the
+  diagnostic MuJoCo keyframe `zero` (`mujoco_initial_keyframe:=zero`) or through a
+  deliberately issued raw direct-controller goal. Zero is a wrist singularity (`j5=0`)
+  and is not the default simulation spawn anymore. Real bringup still reads the physical
+  robot state and never auto-moves to the ready pose.
+- **Ready-pose validation evidence (2026-09-02):** Pinocchio FK placed `wrist3_link` at
+  `z=0.731834 m`; Jacobian `sigma_min=0.085573`, condition number `21.106` (previous
+  home1: `0.086316`/`20.418`; zero: `1.54e-17`/singular). An actual MoveIt
+  `/check_state_validity` request after applying the 4 x 4 x 0.1 m floor at z=-0.05
+  returned `valid=true`, no contacts (self + floor collision model). Static registry
+  tests separately enforce joint order/limits, cross-file consistency, FK height, and
+  Jacobian conditioning; they do not substitute for the MoveIt collision runtime gate.
 - **`lambda=0.02`, `max_delta_q` ≈ 2.5 rad/s cap** in every `controllers.yaml`
   (real is 0.005 @125 Hz = 0.625 rad/s, conservative). The open-loop `dq` clamp is the
   hard joint-velocity limit.
@@ -189,7 +202,9 @@ patches tracked upstream.
 ## 7. Isaac — implemented, UNTESTED (needs a one-time USD build + Isaac Sim)
 
 `bringup_isaac_robot.launch.py` + `isaac/robots/fr5.json` (profile: joints, `arm_home`
-= zeros, armature 0.1, PD gains from the MuJoCo `kp`, solver iters). Uses
+= canonical ready/home1, armature 0.1, PD gains from the MuJoCo `kp`, solver iters).
+The file is aligned with the other simulation backends, but this revised pose has not
+yet been executed in Isaac. Uses
 `topic_based_ros2_control/TopicBasedSystem` (the isaac branch of the xacro).
 **Must build the USD once** before first run (the launch prints the exact command and
 exits if missing): `~/isaacsim/python.sh <cho_bringup_isaac share>/isaac/convert_urdf_to_usd.py
@@ -223,19 +238,24 @@ Everything builds clean:
 
 ```bash
 cd ~/ros2_ws && source install/setup.bash
-# terminal 1 — spawns at zeros
+# terminal 1 — spawns at the canonical non-singular ready/home1 pose
 ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py controller_name:=joint_space_position_controller
 # terminal 2 — joint control
-python3 src/cho_robot_project/cho_task_manager/python/action_client.py --robot_type fr5 --control_space joint
-#   (csuite) home 1     # move OFF the singularity to a task-ready pose
+ros2 run cho_control_tools debug_action_client --robot_type fr5 --control_space joint
+#   (csuite) home 1     # optional: re-command the already active ready pose
 # then switch to task space:
 ros2 control switch_controllers --activate task_space_ik_controller --deactivate joint_space_position_controller
-python3 .../action_client.py --robot_type fr5 --control_space task
+ros2 run cho_control_tools debug_action_client --robot_type fr5 --control_space task
 #   (csuite) reach 0|1|2|3      # small relative moves; smooth + succeeds
 ```
 `home N` needs `joint_space_position_controller` active; `reach N` needs
 `task_space_ik_controller` active (the WARN about the inactive one is normal).
 Direct one-liner also works: `ros2 action send_goal /controller_action_server/joint_space_position_controller cho_interfaces/action/JointSpace "{target_joints: {position: [...]}, duration: 4.0}"`.
+
+To reproduce the legacy singular zero spawn for diagnostics, add
+`mujoco_initial_keyframe:=zero`. The action-client `home 0` command is intentionally
+disabled; use a deliberately issued raw direct-controller goal to leave zero, and move
+back to `home 1` before direct task-space control.
 
 ---
 

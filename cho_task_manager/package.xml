@@ -8,9 +8,11 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
   <depend>py_trees</depend>
   <depend>py_trees_ros</depend>
   <depend>cho_interfaces</depend>
+  <depend>cho_robot_config</depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>

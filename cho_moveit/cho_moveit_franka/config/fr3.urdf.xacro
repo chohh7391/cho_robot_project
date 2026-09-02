@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr3">
+  <xacro:include filename="$(find cho_description_franka)/robots/fr3/fr3.urdf.xacro"/>
+</robot>

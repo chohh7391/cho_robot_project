@@ -1,0 +1,138 @@
+# Opt-in OpenArm MIT direct-controller configuration for the bimanual MuJoCo
+# model.  Each controller claims exactly one arm's 39 MIT interfaces.  The
+# launch selector may activate left, right, or both instances concurrently;
+# `both_independent` is intentionally not a 14-axis transaction.  MoveIt owns
+# the only paired 14-axis controller in controllers_mit_moveit_bimanual.yaml.
+
+/**:
+  controller_manager:
+    ros__parameters:
+      update_rate: 1000
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      left_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+      right_ee_state_broadcaster:
+        type: cho_controller_openarm/EEStateBroadcaster
+
+      left_joint_impedance_mit_controller:
+        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+      right_joint_impedance_mit_controller:
+        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+      left_task_space_impedance_mit_controller:
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+      right_task_space_impedance_mit_controller:
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+
+  joint_state_broadcaster:
+    ros__parameters:
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3,
+               openarm_left_joint4, openarm_left_joint5, openarm_left_joint6,
+               openarm_left_joint7, openarm_right_joint1, openarm_right_joint2,
+               openarm_right_joint3, openarm_right_joint4, openarm_right_joint5,
+               openarm_right_joint6, openarm_right_joint7,
+               openarm_left_finger_joint1, openarm_right_finger_joint1]
+
+  left_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_left_hand_tcp
+      pose_topic: /ee_state/left/pose
+      twist_topic: /ee_state/left/twist
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3,
+               openarm_left_joint4, openarm_left_joint5, openarm_left_joint6,
+               openarm_left_joint7]
+      gripper_joint: openarm_left_finger_joint1
+      gripper_mimic_joints: [openarm_left_finger_joint2]
+
+  right_ee_state_broadcaster:
+    ros__parameters:
+      robot_type: openarm
+      base_frame: openarm_body_link0
+      ee_name: openarm_right_hand_tcp
+      pose_topic: /ee_state/right/pose
+      twist_topic: /ee_state/right/twist
+      joints: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3,
+               openarm_right_joint4, openarm_right_joint5, openarm_right_joint6,
+               openarm_right_joint7]
+      gripper_joint: openarm_right_finger_joint1
+      gripper_mimic_joints: [openarm_right_finger_joint2]
+
+  left_joint_impedance_mit_controller:
+    ros__parameters:
+      arm: left
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      torque_limit: [2.0, 5.0, 2.5, 4.0, 1.0, 1.0, 1.0]
+
+  right_joint_impedance_mit_controller:
+    ros__parameters:
+      arm: right
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      torque_limit: [2.0, 5.0, 2.5, 4.0, 1.0, 1.0, 1.0]
+
+  # Each Cartesian controller has its own robot-model joint map and TCP frame.
+  # These targets are world-frame, not accumulating relative offsets. They are
+  # evaluated from the matching arm's startup posture.
+  left_task_space_impedance_mit_controller:
+    ros__parameters:
+      arm: left
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      ee_frame: openarm_left_hand_tcp
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+      startup_kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      startup_kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_duration: 5.0
+      startup_tolerance: 0.05
+      torque_limit: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      kp_task: [150.0, 150.0, 150.0, 8.0, 8.0, 8.0]
+      kd_task: [20.0, 20.0, 20.0, 1.2, 1.2, 1.2]
+      max_task_wrench: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
+      lambda: 0.05
+      max_delta_q: 0.002
+      max_goal_translation: 0.20
+      max_goal_rotation: 1.20
+      max_absolute_radius: 1.20
+      max_cartesian_velocity: 0.10
+      max_angular_velocity: 0.80
+
+  right_task_space_impedance_mit_controller:
+    ros__parameters:
+      arm: right
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      ee_frame: openarm_right_hand_tcp
+      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      # The right chain is mirrored in the torso MJCF.  Its symmetric-looking
+      # left-arm home is outside the validated startup envelope at the
+      # prototype gains and would time out into SAFE.  This is a separately
+      # FK-checked, non-singular right-side posture that converges from the
+      # MuJoCo initial state without enlarging any safety limit.
+      startup_posture: [0.0, -0.15, 0.0, 1.14, 0.0, 0.38, 0.0]
+      startup_kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      startup_kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_duration: 5.0
+      startup_tolerance: 0.05
+      torque_limit: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      kp_task: [150.0, 150.0, 150.0, 8.0, 8.0, 8.0]
+      kd_task: [20.0, 20.0, 20.0, 1.2, 1.2, 1.2]
+      max_task_wrench: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
+      lambda: 0.05
+      max_delta_q: 0.002
+      max_goal_translation: 0.20
+      max_goal_rotation: 1.20
+      max_absolute_radius: 1.20
+      max_cartesian_velocity: 0.10
+      max_angular_velocity: 0.80

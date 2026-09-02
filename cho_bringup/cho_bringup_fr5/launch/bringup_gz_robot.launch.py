@@ -3,9 +3,9 @@
     ros2 launch cho_bringup_fr5 bringup_gz_robot.launch.py \
          controller_name:=joint_space_position_controller
 
-The zero spawn pose is a wrist singularity. Use the joint-space action client
-to move to ``home 1`` first, switch from ``joint_space_position_controller``
-to ``task_space_ik_controller``, and only then send a task-space ``reach`` goal.
+Gazebo spawns at the canonical non-singular ``home 1`` ready pose. Re-commanding
+``home 1`` is optional before switching from ``joint_space_position_controller``
+to ``task_space_ik_controller`` and sending a task-space ``reach`` goal.
 
 fr5.urdf.xacro is expanded with hardware:=gazebo, which emits the
 gz_ros2_control/GazeboSimSystem ros2_control block plus the Gazebo system
@@ -36,9 +36,11 @@ from ament_index_python.packages import get_package_share_directory
 
 
 SWITCHABLE_CONTROLLERS = [
+    'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
+CONTROLLER_MODES = list(SWITCHABLE_CONTROLLERS)
 
 
 def launch_setup(context, *args, **kwargs):
@@ -52,11 +54,16 @@ def launch_setup(context, *args, **kwargs):
     robot_name = LaunchConfiguration('robot_name').perform(context)
     allow_renaming = LaunchConfiguration('allow_renaming')
 
-    if controller_name not in SWITCHABLE_CONTROLLERS:
+    if controller_name not in CONTROLLER_MODES:
+        if controller_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_gz_moveit.launch.py instead.")
         raise RuntimeError(
             f"Unknown controller_name '{controller_name}'. "
-            f"Valid options: {SWITCHABLE_CONTROLLERS}"
+            f"Valid options: {CONTROLLER_MODES}"
         )
+    active_controller = controller_name
 
     fr5_desc = get_package_share_directory('cho_description_fr5')
     bringup = get_package_share_directory('cho_bringup_fr5')
@@ -135,7 +142,7 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=[
             'joint_state_broadcaster',
-            controller_name,
+            active_controller,
             '--controller-manager', '/controller_manager',
             '--controller-manager-timeout', cm_timeout,
         ],
@@ -143,8 +150,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     inactive_controllers = [
-        'joint_trajectory_controller',
-        *[c for c in SWITCHABLE_CONTROLLERS if c != controller_name],
+        c for c in SWITCHABLE_CONTROLLERS if c != active_controller
     ]
     inactive_controller_spawner = Node(
         package='controller_manager',
@@ -171,7 +177,7 @@ def launch_setup(context, *args, **kwargs):
         )
     )
 
-    return [
+    actions = [
         SetEnvironmentVariable('IGN_GAZEBO_RESOURCE_PATH', ignition_resource_path),
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', gz_resource_path),
         robot_state_publisher,
@@ -182,6 +188,7 @@ def launch_setup(context, *args, **kwargs):
         delayed_spawners,
         delayed_inactive_spawner,
     ]
+    return actions
 
 
 def generate_launch_description():

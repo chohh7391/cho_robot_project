@@ -76,8 +76,15 @@
   </actuator>
 
   <keyframe>
-    <key name="home"
+    <key name="zero"
          qpos="0 0 0 0 0 0"
          ctrl="0 0 0 0 0 0"/>
+    <!-- Canonical planning-safe, non-singular simulation ready pose. -->
+    <key name="home"
+         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"
+         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"/>
+    <key name="home1"
+         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"
+         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"/>
   </keyframe>
 </mujoco>

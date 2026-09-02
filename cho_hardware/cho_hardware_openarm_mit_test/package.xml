@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_hardware_openarm_mit_test</name>
+  <version>0.1.0</version>
+  <description>Test-only ros2_control hardware fixture for the OpenArm MIT contract.</description>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>cho_openarm_mit_core</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

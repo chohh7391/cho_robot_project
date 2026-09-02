@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_moveit_openarm</name>
+  <version>0.1.0</version>
+  <description>MoveIt 2 planning configuration for the Cho OpenArm v1.0 single arm.</description>
+  <maintainer email="chohh7391@gmail.com">cho_robot_project maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>cho_description_openarm</exec_depend>
+  <exec_depend>cho_moveit_common</exec_depend>
+  <exec_depend>cho_robot_config</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_kinematics</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>moveit_planners_ompl</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>moveit_simple_controller_manager</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

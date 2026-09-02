@@ -17,7 +17,7 @@ Trees (match the switchable-controller sets in cho_bringup_franka launch_utils.p
   controller_check_velocity : joint_space_velocity, task_space_velocity (motion),
                               vla_controller (activation + stable hold only -- driving
                               VLA needs an ActionChunk publisher, see
-                              python/vla_action_client.py)
+                              ros2 run cho_control_tools vla_action_client)
 """
 
 import py_trees

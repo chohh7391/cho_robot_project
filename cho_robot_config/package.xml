@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_robot_config</name>
+  <version>0.1.0</version>
+  <description>Canonical robot metadata registry for the Cho robot project.</description>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

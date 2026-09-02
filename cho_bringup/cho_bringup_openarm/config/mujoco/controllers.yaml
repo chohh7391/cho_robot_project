@@ -24,6 +24,9 @@
       joint_space_velocity_controller:
         type: cho_controller_openarm/JointSpaceVelocityController
 
+      joint_trajectory_controller:
+        type: joint_trajectory_controller/JointTrajectoryController
+
   joint_state_broadcaster:
     ros__parameters:
       joints:
@@ -115,6 +118,28 @@
         - openarm_joint6
         - openarm_joint7
       gripper_joint: openarm_finger_joint1
+
+  # MoveIt execution backend. This controller is valid only when the description
+  # exports position command interfaces (control_mode:=position).
+  joint_trajectory_controller:
+    ros__parameters:
+      joints:
+        - openarm_joint1
+        - openarm_joint2
+        - openarm_joint3
+        - openarm_joint4
+        - openarm_joint5
+        - openarm_joint6
+        - openarm_joint7
+      command_interfaces: [position]
+      state_interfaces: [position, velocity]
+      state_publish_rate: 100.0
+      action_monitor_rate: 20.0
+      allow_partial_joints_goal: false
+      open_loop_control: false
+      constraints:
+        stopped_velocity_tolerance: 0.05
+        goal_time: 1.0
 
   # control_mode:=velocity.
   joint_space_velocity_controller:

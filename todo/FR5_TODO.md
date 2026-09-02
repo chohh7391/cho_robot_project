@@ -31,7 +31,12 @@
   forearm_link → wrist1_link → wrist2_link → wrist3_link → tool_tcp(fixed)`. 벤더 URDF도 `j1..j6` 규약 동일.
 - EE 프레임: **`ee_name = wrist3_link`** (확정). 번들 URDF에 존재 + 사용자 DLS 검증 프레임과 일치.
 - 관절 한계 [rad]: j1 ±3.0543, j2 [-4.6251, 1.4835], j3 ±2.8274, j4 [-4.6251, 1.4835], j5 ±3.0543, j6 ±3.0543.
-- 토크 한계 [Nm]: j1–j3 = 150, j4–j6 = 28. 홈 자세(번들): `[0, -30, -120, 70, 0, 60]°`.
+- 토크 한계 [Nm]: j1–j3 = 150, j4–j6 = 28. 번들 원본 홈 자세는
+  `[0, -30, -120, 70, 0, 60]°`였으나 이 초기 결정은 **2026-09-02에 superseded**되었다.
+  현재 canonical simulation ready/home1은 `[0, -45, -90, 45, -90, 0]°`
+  (`[0, -pi/4, -pi/2, pi/4, -pi/2, 0] rad`)이다. FK EE 높이 0.731834 m,
+  Jacobian `sigma_min=0.085573`, condition number 21.106이며, 실제 MoveIt
+  state-validity 검사에서 floor/self collision 없이 `valid=true`를 확인했다.
 - 실기: IP 기본 `192.168.58.2`, TOOL/USER=0, FR 서보 주기 **8 ms(125 Hz)**.
 - 단위: FR SDK/ServoJ는 **deg**, ros2_control은 **rad** (벤더 HW가 read/write에서 변환함).
 - 재사용 자산: 벤더 `fairino_description`(URDF/메시) + 번들 MuJoCo xml(`fr5_p.xml`, `fr5_v.xml`) + DLS 로직(`solvers.py`).
@@ -46,7 +51,7 @@
 | `cho_controller/cho_controller_fr5` | ns `cho_controller::fr5` base/joint_space_position/task_space_ik + 액션서버 + `cho_controller_fr5.xml` | `cho_controller_ur/` (거의 그대로) |
 | `cho_bringup/cho_bringup_fr5` | `bringup_{real,mujoco,gz,isaac}_robot.launch.py`, `config/{real,mujoco}/controllers.yaml`, `config/real/fr5.config.yaml` | `cho_bringup_ur/` |
 | `extern/frcobot_ros2` (서브모듈, 포크) | 벤더 HW(`fairino_hardware_v3_9_9` +libfairino.so 동봉) + `fairino_msgs`; **필요한 것만 빌드**(COLCON_IGNORE) | `.gitmodules`에 추가 |
-| `cho_task_manager/config/robots/fr5.yaml` | 컨트롤러 역할 single-source-of-truth | `config/robots/ur5e.yaml` |
+| `cho_robot_config/config/fr5.yaml` | 컨트롤러 역할 single-source-of-truth | `cho_robot_config/config/ur5e.yaml` |
 
 ---
 
@@ -107,7 +112,7 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
       (`_ur`→`_fr5`, ns `ur`→`fr5`, 기본 조인트명 `j1..j6`, 플러그인 등록명, package.xml/CMake).
 - [ ] `fr5.ros2_control.xacro`: 하드웨어 스위칭(`mock_components/GenericSystem` / MuJoCo /
       **`fairino_hardware/FairinoHardwareInterface`**). 벤더 xacro/URDF·메시 이식 또는 참조.
-- [ ] `cho_task_manager/config/robots/fr5.yaml` 추가.
+- [ ] `cho_robot_config/config/fr5.yaml` 추가.
 - [ ] 빌드 클린: `cbp cho_description_fr5 cho_controller_fr5 cho_bringup_fr5 fairino_hardware`.
 - [ ] **FK 정합성 검증**: cho URDF FK ↔ 로봇 `GetActualTCPPose`/`GetForwardKin`(mm/deg). ← 번들 리뷰 7번.
 
@@ -187,7 +192,11 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 - [ ] `urdf/fr5.ros2_control.xacro`: 하드웨어 스위칭 — mock(`mock_components/GenericSystem`) / mujoco /
       real(`fairino_hardware/FairinoHardwareInterface` + `<param name="robot_ip">${robot_ip}</param>`).
       조인트 j1..j6: `command position`, `state position` + **`state velocity`**.
-- [ ] `meshes/` 번들 STL 이식. `config/initial_positions.yaml`(홈 `[0,-30,-120,70,0,60]°`→rad).
+- [ ] `meshes/` 번들 STL 이식. ~~`config/initial_positions.yaml`에 번들 홈
+      `[0,-30,-120,70,0,60]°` 적용~~ — **superseded 2026-09-02**: canonical
+      ready/home1 `[0,-45,-90,45,-90,0]°`를 사용한다. 명시적 zero는 registry의
+      진단용 `home 0`과 MuJoCo `zero` keyframe으로 보존하되, 일반 action-client와
+      MoveIt 실행에서는 바닥 접촉 때문에 거부한다.
 - [ ] `xml/` 번들 MuJoCo(`fr5_p.xml`) 이식(시뮬용). `launch/view_fr5.launch.py`(선택).
 
 ### 8.D `cho_controller_fr5` (복제원본 `cho_controller_ur`, 거의 그대로)
@@ -209,7 +218,7 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 - [ ] `config/mujoco/controllers.yaml` + `launch/bringup_mujoco_robot.launch.py`(복제원본 ur mujoco): 시뮬 검증용.
 
 ### 8.F `cho_task_manager`
-- [ ] `config/robots/fr5.yaml`: robot_type fr5, controllers{joint_space: joint_space_position_controller,
+- [ ] `cho_robot_config/config/fr5.yaml`: robot_type fr5, controllers{joint_space: joint_space_position_controller,
       task_space: task_space_ik_controller, gripper: null, vla: null}.
 - [ ] `tasks/__init__.py` 디스패치에 fr5 등록(필요 시), fr5 트리(선택).
 

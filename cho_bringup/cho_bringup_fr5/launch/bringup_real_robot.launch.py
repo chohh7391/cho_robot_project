@@ -36,6 +36,7 @@ from launch_ros.actions import Node
 
 
 SWITCHABLE_CONTROLLERS = [
+    'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
@@ -97,6 +98,10 @@ def setup_control_environment(context):
     ee_name = LaunchConfiguration('ee_name').perform(context) or str(fr5_cfg.get('ee_name', 'wrist3_link'))
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
+        if controller_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_real_moveit.launch.py instead.")
         raise RuntimeError(
             f"Unknown controller_name '{controller_name}'. "
             f"Valid options: {SWITCHABLE_CONTROLLERS}"
@@ -147,8 +152,7 @@ def setup_control_environment(context):
     )
 
     inactive_controllers = [
-        'joint_trajectory_controller',
-        *[c for c in SWITCHABLE_CONTROLLERS if c != controller_name],
+        c for c in SWITCHABLE_CONTROLLERS if c != controller_name
     ]
     inactive_spawner = Node(
         package='controller_manager',
@@ -192,7 +196,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name',
             default_value='joint_space_position_controller',
-            description='joint_space_position_controller or task_space_ik_controller',
+            description=(
+                'joint_trajectory_controller, joint_space_position_controller, '
+                'or task_space_ik_controller'
+            ),
         ),
         DeclareLaunchArgument(
             'robot_ip',

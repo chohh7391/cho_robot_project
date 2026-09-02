@@ -1,10 +1,9 @@
-# FR5 initial (spawn) pose, in radians. All zeros per project convention.
-# NOTE: [0,0,0,0,0,0] is a wrist singularity (j5 = 0 aligns the j4/j6 axes), so
-# task-space (reach) control directly from the spawn pose is poorly conditioned.
-# Move to a non-singular pose first (action_client `home 1`) before task control.
+# FR5 simulation ready/spawn pose, in radians. This compact elbow pose is clear of
+# the floor and avoids the all-zero wrist singularity. The explicit zero pose remains
+# available as action_client `home 0` and as the MuJoCo `zero` keyframe.
 j1: 0.0
-j2: 0.0
-j3: 0.0
-j4: 0.0
-j5: 0.0
+j2: -0.7853981634
+j3: -1.5707963268
+j4: 0.7853981634
+j5: -1.5707963268
 j6: 0.0

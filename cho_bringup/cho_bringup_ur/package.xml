@@ -14,6 +14,8 @@
   <exec_depend>topic_based_ros2_control</exec_depend>
   <exec_depend>cho_description_ur</exec_depend>
   <exec_depend>cho_controller_ur</exec_depend>
+  <exec_depend>cho_moveit_ur</exec_depend>
+  <exec_depend>cho_robot_config</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>

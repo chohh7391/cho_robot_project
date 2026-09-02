@@ -35,12 +35,15 @@
     </joint>
   </xacro:macro>
 
-  <xacro:macro name="fr5_ros2_control" params="name prefix hardware robot_ip initial_positions">
+  <xacro:macro name="fr5_ros2_control" params="name prefix hardware robot_ip initial_positions mujoco_initial_keyframe:=''">
     <ros2_control name="${name}" type="system">
       <hardware>
         <xacro:if value="${hardware == 'mujoco'}">
           <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
           <param name="mujoco_model">$(find cho_description_fr5)/xml/scene.xml</param>
+          <xacro:if value="${bool(mujoco_initial_keyframe)}">
+            <param name="initial_keyframe">${mujoco_initial_keyframe}</param>
+          </xacro:if>
         </xacro:if>
         <xacro:if value="${hardware == 'isaac'}">
           <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>

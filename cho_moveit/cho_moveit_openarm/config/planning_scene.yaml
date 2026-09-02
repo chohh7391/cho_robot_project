@@ -1,0 +1,6 @@
+/**:
+  ros__parameters:
+    frame_id: world
+    object_id: floor
+    size_csv: 4.0,4.0,0.10
+    position_csv: 0.0,0.0,-0.05

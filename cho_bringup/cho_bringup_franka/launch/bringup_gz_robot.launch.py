@@ -2,9 +2,15 @@ import importlib.util
 import os
 import xacro
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription, LaunchContext
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    RegisterEventHandler,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -31,6 +37,32 @@ get_switchable_controllers = launch_utils.get_switchable_controllers
 def generate_launch_description():
     pkg_description = get_package_share_directory('cho_description_franka')
     pkg_bringup = get_package_share_directory('cho_bringup_franka')
+
+    # The Franka Gazebo ros2_control plugin is installed outside Gazebo's
+    # default system-plugin search path in some overlay layouts.  Resolve the
+    # active installation instead of assuming a workspace location, and keep
+    # any caller-provided search paths after it.
+    franka_plugin_path = os.path.join(
+        get_package_prefix('franka_ign_ros2_control'), 'lib'
+    )
+
+    def prepend_plugin_path(variable_name):
+        existing_paths = [
+            path for path in os.environ.get(variable_name, '').split(os.pathsep)
+            if path and path != franka_plugin_path
+        ]
+        return os.pathsep.join([franka_plugin_path, *existing_paths])
+
+    plugin_path_actions = [
+        SetEnvironmentVariable(
+            'IGN_GAZEBO_SYSTEM_PLUGIN_PATH',
+            prepend_plugin_path('IGN_GAZEBO_SYSTEM_PLUGIN_PATH'),
+        ),
+        SetEnvironmentVariable(
+            'GZ_SIM_SYSTEM_PLUGIN_PATH',
+            prepend_plugin_path('GZ_SIM_SYSTEM_PLUGIN_PATH'),
+        ),
+    ]
     
     # 1. Launch Arguments
     declared_arguments = [
@@ -60,7 +92,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name',
             default_value='task_space_impedance_controller',
-            description='Which controller to activate initially'
+            description='Actual ros2_control controller to activate initially'
         ),
         DeclareLaunchArgument(
             'bringup_type',
@@ -77,7 +109,10 @@ def generate_launch_description():
             default_value='fr3_hand_tcp',
             description='Name of End-Effector',
             choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
-        )
+        ),
+        DeclareLaunchArgument('launch_rviz', default_value='true'),
+        DeclareLaunchArgument('load_moveit_controller', default_value='false'),
+        DeclareLaunchArgument('load_ft_sensor', default_value='true'),
     ]
 
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
@@ -110,7 +145,8 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         arguments=['-d', os.path.join(pkg_description, 'rviz', 'visualize_franka.rviz')],
-        parameters=[use_sim_time]
+        parameters=[use_sim_time],
+        condition=IfCondition(LaunchConfiguration('launch_rviz')),
     )
 
     # 3. OpaqueFunction: mode-dependent dynamic setup
@@ -124,24 +160,42 @@ def generate_launch_description():
             'robot_description' if not namespace_str else f'/{namespace_str}/robot_description'
         )
         use_vla = LaunchConfiguration('vla').perform(context)
-        mode = LaunchConfiguration('control_mode').perform(context)
+        requested_mode = LaunchConfiguration('control_mode').perform(context)
         
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
         ee_name = LaunchConfiguration('ee_name').perform(context)
+        if ctrl_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_gz_moveit.launch.py instead.")
+        mode = requested_mode
+        requested_controller = ctrl_name
+        load_moveit_controller = launch_utils.as_bool(
+            LaunchConfiguration('load_moveit_controller').perform(context))
+        load_ft_sensor = launch_utils.as_bool(
+            LaunchConfiguration('load_ft_sensor').perform(context))
 
         # Controller list + runtime param file: in Gazebo, controller_manager runs
         # inside the Gazebo plugin, so this file has to be injected via the URDF's
         # <parameters> tag -- built before xacro processing and passed in as a mapping.
         # Loaded as a node parameter the same way as real/mujoco, so no spawner -p
         # handoff is needed.
-        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
+        initial_active_controller = get_initial_active_controller(requested_controller, use_vla)
         switchable_controllers = get_switchable_controllers(
             control_mode=mode,
             use_vla=use_vla,
-            requested_controller=ctrl_name,
-            extra_torque_controllers=['joint_trajectory_controller'],
+            requested_controller=requested_controller,
+            extra_torque_controllers=[
+                'joint_trajectory_controller',
+                *(['moveit_joint_trajectory_controller'] if load_moveit_controller else []),
+            ],
         )
+        # Position-mode MoveIt execution also needs the standard trajectory
+        # controller loaded inactive until the planning-scene gate switches it.
+        if (load_moveit_controller and
+                'moveit_joint_trajectory_controller' not in switchable_controllers):
+            switchable_controllers.append('moveit_joint_trajectory_controller')
         load_gripper_bool = load_gripper_str.lower() == 'true'
         always_active_controllers = [
             controller for controller in ALWAYS_ACTIVE_CONTROLLERS
@@ -150,7 +204,10 @@ def generate_launch_description():
                 'gripper_controller',
             )
         ]
-        all_runtime_param_controllers = always_active_controllers + switchable_controllers
+        all_runtime_param_controllers = [
+            controller for controller in always_active_controllers + switchable_controllers
+            if controller != 'moveit_joint_trajectory_controller'
+        ]
         payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
         runtime_param_file = create_runtime_param_file(
             payload_config_path=payload_config_path,
@@ -177,7 +234,9 @@ def generate_launch_description():
                 'gazebo': 'true',
                 'ee_id': franka_hand_str,
                 'gazebo_effort': gazebo_effort_str,
-                'special_connection': 'ft_sensor',
+                # A composition wrapper can omit this optional adapter when its
+                # planning model is the arm plus hand only.
+                'special_connection': 'ft_sensor' if load_ft_sensor else '',
                 'xyz_ee': '0 0 0',
                 'runtime_param_file': runtime_param_file,
             }
@@ -239,18 +298,19 @@ def generate_launch_description():
             )
         )
 
-        return [
+        actions = [
             robot_state_publisher,
             spawn_robot,
             delayed_controller_spawner,
             cleanup_runtime_param,
         ]
+        actions.append(rviz)
+        return actions
 
     return LaunchDescription(
-        declared_arguments + [
+        declared_arguments + plugin_path_actions + [
             gazebo_sim,
             clock_bridge,
-            rviz,
             OpaqueFunction(function=launch_setup)
         ]
     )

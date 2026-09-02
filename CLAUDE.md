@@ -99,9 +99,13 @@ cho_task_manager/
     behaviors/               # py_trees leaf nodes: action/, service/
     tasks/                   # Behavior trees, split per robot: franka/ (pick_and_place, forge), ur/ (pick_and_place, multi_move); __init__.py dispatches by robot_type via build_task_tree()
     task_manager_node.py     # ROS2 node that runs the selected tree
-    utils/controller_names.py  # Loads config/robots/<robot>.yaml (single source of truth for controller roles)
-  config/robots/             # Per-robot controller role config (franka.yaml, ur5e.yaml)
-  python/                    # Standalone scripts: action_client, vla_action_client, plot_*
+    utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
+
+cho_robot_config/
+  config/*.yaml              # Per-robot controller/action role registry
+
+cho_control_tools/
+  cho_control_tools/         # Interactive clients, VLA tools, and bag plotters
 
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)
@@ -123,7 +127,7 @@ Key controllers:
 
 Each arm controller publishes its state on **per-controller namespaced topics** (`BaseController`):
 `/<controller>/controller_state` (`control_msgs/JointTrajectoryControllerState`, reference=desired / feedback=current)
-and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replaced the old global `/log/joint_pos` and `/log/ee_pose`. Plot via `python/plot_joint_pos_log.py --topic <t>` / `plot_pose_log.py --topic <t>`.
+and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replaced the old global `/log/joint_pos` and `/log/ee_pose`. Plot via `ros2 run cho_control_tools plot_joint_pos_log --topic <t>` / `ros2 run cho_control_tools plot_pose_log --topic <t>`.
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 

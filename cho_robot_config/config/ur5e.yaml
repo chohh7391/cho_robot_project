@@ -1,0 +1,41 @@
+schema_version: 1
+robot_type: ur5e
+model:
+  base_frame: world
+  arm_base_link: base_link
+  ee_link: tool0
+  joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+controllers:
+  hold: joint_space_position_controller
+  direct_joint: joint_space_position_controller
+  direct_task: task_space_ik_controller
+  moveit_trajectory: joint_trajectory_controller
+  gripper: gripper_controller
+  vla: null
+moveit:
+  config_package: cho_moveit_ur
+  planning_group: ur_manipulator
+  execution:
+    max_velocity_scaling_factor: 0.25
+    max_acceleration_scaling_factor: 0.25
+actions:
+  preferences:
+    joint: [/ur5e/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller]
+    task: [/ur5e/controller_action_server/moveit_task, /controller_action_server/task_space_ik_controller]
+    gripper: []
+  gripper_command:
+    topic: /robotiq_controller/commands
+    open: 0.0
+    close: 0.7929
+poses:
+  home:
+    '0': [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
+    '1': [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
+    '2': [0.2, -1.4, 1.4, -1.6, -1.5, 0.2]
+    '3': [-0.2, -1.4, 1.4, -1.6, -1.5, -0.2]
+motions:
+  reach:
+    '0': {relative: false, position: [0.2, -0.2, 0.5], orientation: [1.0, 0.0, 0.0, 0.0]}
+    '1': {relative: false, position: [0.2, 0.2, 0.6], orientation: [1.0, 0.0, 0.0, 0.0]}
+    '2': {relative: true, position: [0.0, 0.0, -0.2], orientation: [0.0, 0.0, 0.0, 1.0]}
+    '3': {relative: false, position: [0.6, 0.0, 0.1], orientation: [1.0, 0.0, 0.0, 0.0]}

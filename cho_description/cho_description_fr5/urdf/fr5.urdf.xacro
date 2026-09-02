@@ -15,6 +15,7 @@
   <xacro:arg name="simulation_controllers" default=""/>
   <xacro:arg name="initial_positions_file"
              default="$(find cho_description_fr5)/config/initial_positions.yaml"/>
+  <xacro:arg name="mujoco_initial_keyframe" default=""/>
 
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
   <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)}"/>
@@ -33,7 +34,8 @@
     prefix="$(arg prefix)"
     hardware="$(arg hardware)"
     robot_ip="$(arg robot_ip)"
-    initial_positions="${initial_positions}"/>
+    initial_positions="${initial_positions}"
+    mujoco_initial_keyframe="$(arg mujoco_initial_keyframe)"/>
 
   <!-- Gazebo (Ignition) ros2_control system plugin. -->
   <xacro:if value="${'$(arg hardware)' == 'gazebo'}">

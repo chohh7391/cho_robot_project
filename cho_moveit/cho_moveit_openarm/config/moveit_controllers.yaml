@@ -1,0 +1,12 @@
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.5
+  allowed_goal_duration_margin: 1.0
+  allowed_start_tolerance: 0.02
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+moveit_simple_controller_manager:
+  controller_names: [joint_trajectory_controller]
+  joint_trajectory_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4, openarm_joint5, openarm_joint6, openarm_joint7]

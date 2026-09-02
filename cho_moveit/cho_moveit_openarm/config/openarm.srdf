@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot name="openarm">
+  <group name="openarm_manipulator">
+    <chain base_link="openarm_link0" tip_link="openarm_hand_tcp"/>
+  </group>
+  <group_state name="home0" group="openarm_manipulator">
+    <joint name="openarm_joint1" value="0"/><joint name="openarm_joint2" value="0"/>
+    <joint name="openarm_joint3" value="0"/><joint name="openarm_joint4" value="0.3"/>
+    <joint name="openarm_joint5" value="0"/><joint name="openarm_joint6" value="0"/>
+    <joint name="openarm_joint7" value="0"/>
+  </group_state>
+  <group_state name="home1" group="openarm_manipulator">
+    <joint name="openarm_joint1" value="0"/><joint name="openarm_joint2" value="-0.5"/>
+    <joint name="openarm_joint3" value="0"/><joint name="openarm_joint4" value="1.2"/>
+    <joint name="openarm_joint5" value="0"/><joint name="openarm_joint6" value="0.4"/>
+    <joint name="openarm_joint7" value="0"/>
+  </group_state>
+  <!-- Only rigidly adjacent pairs are disabled. Non-adjacent geometry remains
+       collision checked; this conservative ACM is safe without sampled guesses. -->
+  <disable_collisions link1="openarm_link0" link2="openarm_link1" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link1" link2="openarm_link2" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link2" link2="openarm_link3" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link3" link2="openarm_link4" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link4" link2="openarm_link5" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link5" link2="openarm_link6" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link6" link2="openarm_link7" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link7" link2="openarm_hand" reason="Adjacent"/>
+  <disable_collisions link1="openarm_hand" link2="openarm_hand_tcp" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link7" link2="openarm_left_finger" reason="Adjacent"/>
+  <disable_collisions link1="openarm_link7" link2="openarm_right_finger" reason="Adjacent"/>
+  <!-- The two mechanically coupled fingers touch in their valid closed state;
+       treating that designed contact as self-collision makes every arm start
+       state invalid. Object collisions remain enabled. -->
+  <disable_collisions link1="openarm_left_finger" link2="openarm_right_finger" reason="Never"/>
+</robot>

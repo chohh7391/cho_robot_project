@@ -18,7 +18,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, Shutdown
+from launch.actions import (DeclareLaunchArgument, OpaqueFunction,
+                            RegisterEventHandler, Shutdown)
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessIO, OnShutdown
 from launch.substitutions import Command, LaunchConfiguration
@@ -48,6 +49,32 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'control_mode', default_value='torque', choices=['position', 'velocity', 'torque'],
             description='Command interface the arm controllers drive'),
+        DeclareLaunchArgument(
+            'mujoco_position_profile', default_value='standard',
+            choices=['standard', 'moveit'],
+            description='Position actuator tuning profile; moveit reduces consecutive-goal sag'),
+        DeclareLaunchArgument(
+            'mujoco_mit_prototype', default_value='false', choices=['true', 'false'],
+            description='Opt in to the isolated MIT MuJoCo hardware wrapper. '
+                        'The default standard backend is unchanged.'),
+        DeclareLaunchArgument(
+            'mujoco_mit_headless', default_value='false', choices=['true', 'false'],
+            description='Run the opt-in MIT MuJoCo wrapper without its GUI'),
+        DeclareLaunchArgument(
+            'mit_controller_name', default_value='joint_position_mit_controller',
+            choices=['joint_position_mit_controller',
+                     'joint_impedance_mit_controller',
+                     'task_space_impedance_mit_controller',
+                     'single_arm_follow_joint_trajectory_mit_controller',
+                     'bimanual_follow_joint_trajectory_mit_controller'],
+            description='MIT producer for the opt-in prototype. The single-arm FJT '
+                        'producer operates one selected arm of a bimanual model.'),
+        DeclareLaunchArgument(
+            'mit_arm', default_value='both_independent',
+            choices=['left', 'right', 'both_independent', 'both'],
+            description='Direct MIT bimanual ownership: left, right, or two independent '
+                        '7-axis instances (both_independent). `both` is reserved exclusively '
+                        'for the paired 14-axis MoveIt FJT.'),
         DeclareLaunchArgument(
             'controller_name', default_value='joint_space_impedance_controller',
             description='Controller class to activate initially. On a bimanual '
@@ -86,6 +113,9 @@ def generate_launch_description():
                 'xacro ', LaunchConfiguration('xacro_file'),
                 ' hardware:=mujoco',
                 ' control_mode:=', LaunchConfiguration('control_mode'),
+                ' mujoco_position_profile:=', LaunchConfiguration('mujoco_position_profile'),
+                ' mujoco_mit_prototype:=', LaunchConfiguration('mujoco_mit_prototype'),
+                ' mujoco_mit_headless:=', LaunchConfiguration('mujoco_mit_headless'),
                 ' bimanual:=', LaunchConfiguration('bimanual'),
             ]),
             value_type=str,
@@ -114,29 +144,62 @@ def generate_launch_description():
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
         bringup_type = LaunchConfiguration('bringup_type').perform(context)
         bimanual = launch_utils.as_bool(LaunchConfiguration('bimanual').perform(context))
+        mit_prototype = launch_utils.as_bool(
+            LaunchConfiguration('mujoco_mit_prototype').perform(context))
+        canonical_xacro = os.path.join(
+            description_path, 'robots', 'openarm_v10', 'openarm_v10.urdf.xacro')
+        launch_utils.enforce_mujoco_mit_description(
+            mit_prototype, LaunchConfiguration('xacro_file').perform(context), canonical_xacro)
+        mit_controller_base = LaunchConfiguration('mit_controller_name').perform(context)
+        mit_arm = LaunchConfiguration('mit_arm').perform(context)
+        requested_controllers_file = LaunchConfiguration('controllers_file').perform(context)
+        mit_selection = launch_utils.resolve_mujoco_mit_selection(
+            mit_prototype, mode, bimanual, mit_controller_base, mit_arm,
+            requested_controllers_file)
+        if ctrl_name == 'moveit':
+            raise RuntimeError(
+                "'moveit' is not a ros2_control controller. Launch "
+                "bringup_mujoco_moveit.launch.py instead.")
         # Bimanual gives each arm its own ee_name in the controllers file, so the
         # runtime override has to stay out of the way there.
         ee_name = (LaunchConfiguration('ee_name').perform(context)
                    or ('' if bimanual else 'openarm_hand_tcp'))
 
         always_active = launch_utils.always_active_controllers(bimanual)
-        switchable_controllers = launch_utils.get_switchable_controllers(
-            control_mode=mode, requested_controller=ctrl_name, bimanual=bimanual)
+        mit_controller_names = (mit_selection['controller_names'] if mit_selection else [])
+        switchable_controllers = (mit_controller_names if mit_prototype else
+            launch_utils.get_switchable_controllers(
+                control_mode=mode, requested_controller=ctrl_name, bimanual=bimanual))
+
+        mit_profile_overrides = None
+        if mit_prototype:
+            mit_profile_overrides = {}
+            selection_overrides = mit_selection['controller_overrides']
+            for name in mit_controller_names:
+                mit_profile_overrides[name] = {
+                    'safety_profile_file': os.path.join(
+                        description_path, 'config', 'mit_safety_profiles_v1.yaml'),
+                    **selection_overrides.get(name, {}),
+                }
 
         runtime_param_file = launch_utils.create_runtime_param_file(
             controller_names=always_active + switchable_controllers,
             bringup_type=bringup_type,
             control_mode=mode,
             ee_name=ee_name,
+            controller_overrides=mit_profile_overrides,
         )
-        controllers_file = LaunchConfiguration('controllers_file').perform(context) or os.path.join(
+        controllers_file = requested_controllers_file or os.path.join(
             bringup_path, 'config', 'mujoco',
-            'controllers_bimanual.yaml' if bimanual else 'controllers.yaml')
+            ((mit_selection['controllers_file'])
+             if mit_prototype else
+             ('controllers_bimanual.yaml' if bimanual else 'controllers.yaml')))
 
         controller_spawners = launch_utils.create_controller_spawners(
             always_active=always_active,
             switchable_controllers=switchable_controllers,
-            initial_active_controllers=launch_utils.per_arm(ctrl_name, bimanual),
+            initial_active_controllers=(mit_controller_names if mit_prototype else
+                                        launch_utils.per_arm(ctrl_name, bimanual)),
             # The runtime params are loaded directly on the node below, so no
             # spawner '-p' handoff is needed.
             use_sim_time=use_sim_time,
@@ -179,7 +242,7 @@ def generate_launch_description():
             started['spawners'] = True
             return controller_spawners
 
-        return [
+        actions = [
             node_mujoco_ros2_control,
             RegisterEventHandler(
                 event_handler=OnProcessIO(
@@ -196,6 +259,7 @@ def generate_launch_description():
                 )
             ),
         ]
+        return actions
 
     return LaunchDescription(
         declared_arguments + [

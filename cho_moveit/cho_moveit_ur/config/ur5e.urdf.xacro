@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur">
+  <!-- Reuse the exact Cho UR description; MoveIt mode intentionally omits the gripper. -->
+  <!-- Declare include-time substitutions before xacro parses the upstream root. -->
+  <xacro:arg name="name" default="ur"/>
+  <xacro:arg name="ur_type" default="ur5e"/>
+  <xacro:arg name="tf_prefix" default=""/>
+  <xacro:arg name="safety_limits" default="true"/>
+  <xacro:arg name="safety_pos_margin" default="0.15"/>
+  <xacro:arg name="safety_k_position" default="20"/>
+  <xacro:arg name="sim_gazebo" default="false"/>
+  <xacro:arg name="sim_ignition" default="false"/>
+  <xacro:arg name="simulation_controllers" default=""/>
+  <xacro:arg name="load_gripper" default="false"/>
+  <xacro:include filename="$(find cho_description_ur)/urdf/ur.urdf.xacro"/>
+</robot>

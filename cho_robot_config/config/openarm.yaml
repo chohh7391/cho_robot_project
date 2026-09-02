@@ -1,0 +1,144 @@
+schema_version: 1
+robot_type: openarm
+model:
+  base_frame: world
+  arm_base_link: openarm_link0
+  ee_link: openarm_hand_tcp
+  joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4, openarm_joint5, openarm_joint6, openarm_joint7]
+controllers:
+  hold: joint_space_position_controller
+  direct_joint: joint_space_position_controller
+  direct_task: task_space_impedance_mit_controller
+  moveit_trajectory: joint_trajectory_controller
+  gripper: null
+  vla: null
+compatibility:
+  # The behavior-tree task manager still selects the legacy effort controller.
+  task_manager:
+    joint_space: joint_space_impedance_controller
+moveit:
+  config_package: cho_moveit_openarm
+  planning_group: openarm_manipulator
+  execution:
+    # OpenArm's light wrist links visibly track abrupt position-servo
+    # accelerations; these values cap MoveIt's time parameterization.
+    max_velocity_scaling_factor: 0.15
+    max_acceleration_scaling_factor: 0.05
+actions:
+  preferences:
+    joint: [/openarm/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller, /controller_action_server/joint_impedance_mit_controller]
+    task: [/openarm/controller_action_server/moveit_task, /controller_action_server/task_space_impedance_mit_controller]
+    gripper: []
+poses:
+  home:
+    '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+    '1': [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+    '2': [0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
+    '3': [-0.3, -0.4, -0.2, 1.0, -0.2, 0.2, 0.0]
+  # Joint-space fallback for MIT impedance bringup.  The normal action-client
+  # `reach` command keeps its Cartesian TaskSpace route whenever that action
+  # server exists; when only the MIT JointSpace server is selected it uses these
+  # same named presets rather than requiring a topic-specific command path.
+  reach:
+    '0': [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+    '1': [0.15, -0.5, 0.1, 1.1, 0.1, 0.35, 0.0]
+    '2': [-0.15, -0.45, -0.1, 1.1, -0.1, 0.35, 0.0]
+    '3': [0.0, -0.35, 0.0, 0.95, 0.0, 0.30, 0.0]
+motions:
+  # Fixed world-frame targets, generated from the validated MIT task
+  # controller startup posture `home 1`:
+  #   [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+  # The former values were end-effector-frame relative offsets.  Encoding
+  # their FK-resolved endpoints here makes `reach N` idempotent: repeating a
+  # command returns to this same world target instead of accumulating motion.
+  reach:
+    '0': {relative: false, position: [0.446841389, -0.286500255, 0.414628896], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
+    '1': {relative: false, position: [0.275148419, -0.186149069, 0.393389049], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
+    '2': {relative: false, position: [0.397230680, -0.191640328, 0.322214847], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
+    '3': {relative: false, position: [0.397290216, -0.162259069, 0.460550447], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
+profiles:
+  left:
+    model:
+      arm_base_link: openarm_left_link0
+      ee_link: openarm_left_hand_tcp
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7]
+    controllers:
+      hold: left_joint_space_position_controller
+      direct_joint: left_joint_impedance_mit_controller
+      direct_task: left_task_space_impedance_mit_controller
+      moveit_trajectory: left_joint_trajectory_controller
+    moveit:
+      planning_group: left_arm
+      controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]
+      hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
+    actions:
+      preferences:
+        joint: [/openarm/left/controller_action_server/moveit_joint, /controller_action_server/left_joint_impedance_mit_controller]
+        task: [/openarm/left/controller_action_server/moveit_task, /controller_action_server/left_task_space_impedance_mit_controller]
+        gripper: []
+    # World-frame, idempotent task targets resolved from this arm's MIT
+    # startup posture. They deliberately differ from the single-arm targets:
+    # both arms hang from the bimanual torso at different world transforms.
+    motions:
+      reach:
+        '0': {relative: false, position: [0.360994904, 0.389823628, 0.466489710], orientation: [0.743171722, -0.028219326, 0.563936869, -0.358991182]}
+        '1': {relative: false, position: [0.360994904, 0.389823628, 0.416489710], orientation: [0.743171722, -0.028219326, 0.563936869, -0.358991182]}
+        '2': {relative: false, position: [0.390994904, 0.389823628, 0.416489710], orientation: [0.743171722, -0.028219326, 0.563936869, -0.358991182]}
+        '3': {relative: false, position: [0.360994904, 0.419823628, 0.416489710], orientation: [0.743171722, -0.028219326, 0.563936869, -0.358991182]}
+  right:
+    model:
+      arm_base_link: openarm_right_link0
+      ee_link: openarm_right_hand_tcp
+      joints: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
+    controllers:
+      hold: right_joint_space_position_controller
+      direct_joint: right_joint_impedance_mit_controller
+      direct_task: right_task_space_impedance_mit_controller
+      moveit_trajectory: right_joint_trajectory_controller
+    moveit:
+      planning_group: right_arm
+      controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]
+      hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
+    actions:
+      preferences:
+        joint: [/openarm/right/controller_action_server/moveit_joint, /controller_action_server/right_joint_impedance_mit_controller]
+        task: [/openarm/right/controller_action_server/moveit_task, /controller_action_server/right_task_space_impedance_mit_controller]
+        gripper: []
+    motions:
+      reach:
+        '0': {relative: false, position: [0.353214573, -0.028147131, 0.380270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
+        '1': {relative: false, position: [0.353214573, -0.028147131, 0.330270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
+        '2': {relative: false, position: [0.383214573, -0.028147131, 0.330270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
+        '3': {relative: false, position: [0.353214573, 0.001852869, 0.330270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
+  both:
+    supports_task: false
+    model:
+      arm_base_link: openarm_body_link0
+      ee_link: openarm_left_hand_tcp
+      joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7, openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
+    controllers:
+      hold: left_joint_space_position_controller
+      moveit_trajectory: left_joint_trajectory_controller
+    moveit:
+      planning_group: both_arms
+      controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]
+      hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
+    actions:
+      preferences:
+        joint: [/openarm/both/controller_action_server/moveit_joint]
+        task: []
+        gripper: []
+    poses:
+      home:
+        '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+        '1': [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0, 0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+        '2': [0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0, 0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
+        '3': [-0.3, -0.4, -0.2, 1.0, -0.2, 0.2, 0.0, -0.3, -0.4, -0.2, 1.0, -0.2, 0.2, 0.0]
+      # A dual-end-effector Cartesian goal cannot be represented by TaskSpace.
+      # Endpoints were checked with /check_state_validity; MoveIt still plans and
+      # collision-checks the full path for these both_arms joint-space presets.
+      reach:
+        '0': [0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0, 0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
+        '1': [0.2, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0, 0.4, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
+        '2': [0.3, -0.35, 0.25, 0.9, 0.15, 0.25, 0.0, 0.3, -0.35, 0.25, 0.9, 0.15, 0.25, 0.0]
+        '3': [0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0, 0.4, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
