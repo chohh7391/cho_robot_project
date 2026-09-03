@@ -16,7 +16,7 @@ for several robot arms. Each robot is a **vertical stack of parallel packages**:
 - `cho_bringup/cho_bringup_<robot>` — launch files + per-env `controllers.yaml`
   (mujoco / gz / isaac / real).
 - `cho_robot_config/config/<robot>.yaml` — controller-role single source of truth.
-- `cho_simulation/cho_simulation_isaac/isaac/robots/<robot>.json` — Isaac physics profile.
+- `cho_bringup/cho_bringup_<robot>/config/isaac/robot_profile.json` — Isaac physics profile.
 
 Existing robots: **franka** (torque-controlled, the most mature — QP/impedance/IK),
 **ur** (position-controlled, 6-DOF), **openarm** (sim only). FR5 was added by
@@ -66,7 +66,7 @@ Vendored (copied into `extern/`, patched — see §6):
 
 Added to existing packages:
 - `cho_robot_config/config/fr5.yaml`.
-- `cho_simulation/cho_simulation_isaac/isaac/robots/fr5.json` (Isaac physics profile).
+- `cho_bringup/cho_bringup_fr5/config/isaac/robot_profile.json` (Isaac physics profile).
 - `cho_control_tools` generic action client — added `fr5` robot type (home/reach poses).
 
 Modified existing (explicitly requested):
@@ -201,7 +201,7 @@ patches tracked upstream.
 
 ## 7. Isaac — implemented, UNTESTED (needs a one-time USD build + Isaac Sim)
 
-`bringup_isaac_robot.launch.py` + `isaac/robots/fr5.json` (profile: joints, `arm_home`
+`bringup_isaac_robot.launch.py` + `config/isaac/robot_profile.json` (profile: joints, `arm_home`
 = canonical ready/home1, armature 0.1, PD gains from the MuJoCo `kp`, solver iters).
 The file is aligned with the other simulation backends, but this revised pose has not
 yet been executed in Isaac. Uses
@@ -261,7 +261,7 @@ back to `home 1` before direct task-space control.
 
 ## 10. Suggested next steps
 
-1. Run Gazebo and Isaac in sim; tune `fr5.json` PD gains / MuJoCo `kp,kv` from behavior.
+1. Run Gazebo and Isaac in sim; tune `config/isaac/robot_profile.json` PD gains / MuJoCo `kp,kv` from behavior.
 2. **FK validation gate** (`todo/FR5_TODO.md` Phase 0): compare cho URDF FK vs the robot's
    `GetActualTCPPose`/`GetForwardKin` before real motion.
 3. Real bringup, incrementally (state-only → joint low-speed → task), user-driven.

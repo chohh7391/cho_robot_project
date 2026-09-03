@@ -12,7 +12,7 @@ xacro "$SHARE/robots/openarm_v10/openarm_v10.urdf.xacro" \
       hardware:=isaac attach_to_world:=false > /tmp/openarm_v10.urdf
 
 ~/isaacsim/python.sh \
-  "$(ros2 pkg prefix cho_bringup_openarm)/share/cho_bringup_openarm/isaac/convert_urdf_to_usd.py" \
+  "$(ros2 pkg prefix cho_simulation_isaac)/share/cho_simulation_isaac/isaac/convert_urdf_to_usd.py" \
   --urdf /tmp/openarm_v10.urdf \
   --usd-path "$SHARE/../../../src/cho_robot_project/cho_description/cho_description_openarm/usd/openarm_v10" \
   --ros-package "cho_description_openarm:$SHARE"
@@ -38,7 +38,7 @@ construction, not by tuning. Converting this URDF keeps Isaac, MuJoCo and the
 controller's Pinocchio model on the same numbers.
 
 The USD is control-mode independent: the importer ignores `<ros2_control>`, and
-`run_isaac_openarm.py` authors the drive gains for the requested mode at startup.
+`run_isaac_sim.py` authors the drive gains for the requested mode at startup.
 
 ## Physics variants (PhysX vs Newton)
 

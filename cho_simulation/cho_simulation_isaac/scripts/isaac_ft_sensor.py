@@ -17,7 +17,7 @@
 
 Isaac publishes the raw 6D load carried by bota_ft_sensor_wrench's incoming
 joint as an unstamped geometry_msgs/Wrench (it cannot build a stamped message
-without rclpy -- see run_isaac_franka.py). This node does the ROS-side half:
+without rclpy -- see run_isaac_sim.py). This node does the ROS-side half:
 
   * stamps it and republishes as geometry_msgs/WrenchStamped on the same topic
     the real driver uses, `<sensor_name>/wrench`

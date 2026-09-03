@@ -21,7 +21,7 @@ Unlike Gazebo (controller_manager inside the sim plugin) and MuJoCo (simulator
 inside the hardware component), Isaac Sim runs in its own process under its own
 Python interpreter. This launch therefore starts three things and orders them:
 
-  1. isaac/run_isaac_franka.py under Isaac's python.sh -- physics, the OmniGraph
+  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh -- physics, the OmniGraph
      ROS 2 bridge, /clock and /isaac_joint_states.
   2. a controller_manager whose hardware plugin is
      topic_based_ros2_control/TopicBasedSystem (declared in the URDF's
@@ -29,11 +29,11 @@ Python interpreter. This launch therefore starts three things and orders them:
      build of ros2_control_node: that binary contains no MuJoCo code at all, it
      is upstream's node plus `wait_until_started()` on the clock and sim-time
      pacing, which is exactly what a sim-clocked controller_manager needs.
-  3. the controller spawners, then scripts/isaac_command_gate.py once the
+  3. the controller spawners, then cho_simulation_isaac's isaac_command_gate.py once the
      requested controller is active -- see that script for why the gate exists.
 
 Before the first run, build the USD asset once:
-    ~/isaacsim/python.sh <share>/cho_bringup_franka/isaac/convert_urdf_to_usd.py --help
+    ~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py --help
 """
 
 import importlib.util
@@ -300,7 +300,8 @@ def generate_launch_description():
             isaac_python,
             os.path.join(isaac_path, 'isaac', 'run_isaac_sim.py'),
             '--robot-usd', robot_usd,
-            '--robot-profile', os.path.join(isaac_path, 'isaac', 'robots', 'fr3.json'),
+            '--robot-profile', os.path.join(
+                bringup_path, 'config', 'isaac', 'robot_profile.json'),
             '--control-mode', mode,
             '--physics-rate', physics_rate,
             '--device', device,

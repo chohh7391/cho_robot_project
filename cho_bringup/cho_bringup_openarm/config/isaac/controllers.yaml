@@ -81,7 +81,7 @@
         - openarm_joint7
       gripper_joint: openarm_finger_joint1
       # The rotor inertia run_isaac_sim.py authors onto the Isaac drives, from
-      # cho_simulation_isaac/isaac/robots/openarm.json. It has to be here too or the
+      # config/isaac/robot_profile.json. It has to be here too or the
       # controller's M(q) is the simulator's minus the rotor: on openarm_joint3
       # that is 0.0105 against 0.1705, so the inertia-weighted law would command
       # a sixteenth of the torque it should. The MuJoCo configs leave it empty
@@ -110,7 +110,7 @@
       # raise wn to chase tracking error; raise ki, or accept the error.
       #
       # ki exists because PhysX joint friction is Coulomb (see joint_friction in
-      # cho_simulation_isaac/isaac/robots/openarm.json - it cannot be set to zero,
+      # config/isaac/robot_profile.json - it cannot be set to zero,
       # that is what holds the arm at rest). A proportional law therefore creeps
       # toward the goal asymptotically instead of converging: at ki = 0 the
       # 7-joint error norm went 0.107 -> 0.060 -> 0.043 -> 0.028 over 8 s and
@@ -136,7 +136,7 @@
       #
       # These gains are shared by both physics engines. Under Newton there is no
       # Coulomb joint friction to fight (Isaac cannot set it - see
-      # cho_simulation_isaac/isaac/robots/openarm.json), so the integral term has
+      # config/isaac/robot_profile.json), so the integral term has
       # nothing to grind out and simply converges: measured 0.0000 rad final
       # error holding a pose over 24 s, against PhysX's 0.006-0.027, with no
       # hunting. Keeping one set of numbers for both is deliberate; the delay
@@ -151,7 +151,7 @@
       # bound is a backstop rather than the primary anti-windup.
       integral_clamp: 0.05
       # Nothing commands torque between the hardware activating and this
-      # controller activating, and run_isaac_openarm.py holds the home pose with a
+      # controller activating, and run_isaac_sim.py holds the home pose with a
       # stiff position drive until the gate opens. Homing to the same pose keeps
       # the handover silent.
       home_position: [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
@@ -173,7 +173,7 @@
   # in OpenArmBaseController::nominal_period(), which estimates the rate from
   # the measured period instead. The velocity controller had the same bug.
   #
-  # The drive gains themselves live in cho_simulation_isaac/isaac/robots/openarm.json
+  # The drive gains themselves live in config/isaac/robot_profile.json
   # and were re-sized from the arm's own gravity load at the same time; the old
   # MuJoCo-derived values passed at the test pose but not across the workspace.
   joint_space_position_controller:

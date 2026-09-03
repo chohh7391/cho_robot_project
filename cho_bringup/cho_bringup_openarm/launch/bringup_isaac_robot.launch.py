@@ -22,8 +22,8 @@ Unlike MuJoCo, where the simulator lives inside the hardware component, Isaac Si
 runs in its own process under its own Python interpreter. This launch therefore
 starts three things and orders them:
 
-  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
-     openarm.json (or openarm_bimanual.json) physics profile - physics, the
+  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by this
+     bringup package's robot_profile.json (or robot_profile_bimanual.json) - physics, the
      OmniGraph ROS 2 bridge, /clock and /isaac_joint_states.
   2. a controller_manager whose hardware plugin is
      topic_based_ros2_control/TopicBasedSystem (the IsaacArmSystem /
@@ -186,8 +186,9 @@ def generate_launch_description():
         controllers_file = LaunchConfiguration('controllers_file').perform(context) or os.path.join(
             bringup_path, 'config', 'isaac',
             'controllers_bimanual.yaml' if bimanual else 'controllers.yaml')
-        profile = os.path.join(isaac_path, 'isaac', 'robots',
-                               'openarm_bimanual.json' if bimanual else 'openarm.json')
+        profile = os.path.join(
+            bringup_path, 'config', 'isaac',
+            'robot_profile_bimanual.json' if bimanual else 'robot_profile.json')
 
         always_active = launch_utils.always_active_controllers(bimanual)
         switchable_controllers = launch_utils.get_switchable_controllers(

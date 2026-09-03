@@ -120,7 +120,7 @@
       # raise wn to chase tracking error; raise ki, or accept the error.
       #
       # ki exists because PhysX joint friction is Coulomb (see joint_friction in
-      # cho_simulation_isaac/isaac/robots/openarm.json - it cannot be set to zero,
+      # config/isaac/robot_profile_bimanual.json - it cannot be set to zero,
       # that is what holds the arm at rest). A proportional law therefore creeps
       # toward the goal asymptotically instead of converging: at ki = 0 the
       # 7-joint error norm went 0.107 -> 0.060 -> 0.043 -> 0.028 over 8 s and
@@ -146,7 +146,7 @@
       #
       # These gains are shared by both physics engines. Under Newton there is no
       # Coulomb joint friction to fight (Isaac cannot set it - see
-      # cho_simulation_isaac/isaac/robots/openarm.json), so the integral term has
+      # config/isaac/robot_profile_bimanual.json), so the integral term has
       # nothing to grind out and simply converges: measured 0.0000 rad final
       # error holding a pose over 24 s, against PhysX's 0.006-0.027, with no
       # hunting. Keeping one set of numbers for both is deliberate; the delay
@@ -225,7 +225,7 @@
       # raise wn to chase tracking error; raise ki, or accept the error.
       #
       # ki exists because PhysX joint friction is Coulomb (see joint_friction in
-      # cho_simulation_isaac/isaac/robots/openarm.json - it cannot be set to zero,
+      # config/isaac/robot_profile_bimanual.json - it cannot be set to zero,
       # that is what holds the arm at rest). A proportional law therefore creeps
       # toward the goal asymptotically instead of converging: at ki = 0 the
       # 7-joint error norm went 0.107 -> 0.060 -> 0.043 -> 0.028 over 8 s and
@@ -251,7 +251,7 @@
       #
       # These gains are shared by both physics engines. Under Newton there is no
       # Coulomb joint friction to fight (Isaac cannot set it - see
-      # cho_simulation_isaac/isaac/robots/openarm.json), so the integral term has
+      # config/isaac/robot_profile_bimanual.json), so the integral term has
       # nothing to grind out and simply converges: measured 0.0000 rad final
       # error holding a pose over 24 s, against PhysX's 0.006-0.027, with no
       # hunting. Keeping one set of numbers for both is deliberate; the delay

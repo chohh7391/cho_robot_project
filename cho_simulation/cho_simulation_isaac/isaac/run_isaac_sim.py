@@ -19,7 +19,8 @@ This is NOT a ROS 2 node and must not be launched with `ros2 run`. It runs under
 Isaac Sim's own interpreter, normally via bringup_isaac_robot.launch.py:
 
     ~/isaacsim/python.sh run_isaac_sim.py --robot-usd <robot.usda> \
-        --robot-profile robots/fr3.json --control-mode torque
+        --robot-profile <cho_bringup_<robot> share>/config/isaac/robot_profile.json \
+        --control-mode torque
 
 The arm-specific numbers (joint names, home pose, rotor inertia, drive gains, FT
 link) come from the JSON profile, so the same runner serves the Franka and the UR.
@@ -79,9 +80,10 @@ import sys
 # Robot profile
 #
 # Everything robot-specific - joint names, home pose, rotor inertia, drive gains,
-# the FT link - lives in a JSON profile under isaac/robots/ rather than here, so
-# one runner serves every arm. See isaac/robots/fr3.json for a documented example;
-# the joint names and home pose must match the robot's <ros2_control> block.
+# the FT link - lives in the owning robot bringup package rather than here, so
+# one runner serves every arm. See a bringup package's config/isaac/robot_profile.json
+# for a documented example; the joint names and home pose must match the robot's
+# <ros2_control> block.
 # --------------------------------------------------------------------------- #
 PROFILE_DEFAULTS = {
     "prim_path": "/robot",
@@ -136,7 +138,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--robot-usd", required=True, help="USD produced by convert_urdf_to_usd.py")
     p.add_argument("--robot-profile", required=True,
-                   help="JSON physics profile for this arm (see isaac/robots/)")
+                   help="JSON physics profile from the owning robot bringup package")
     p.add_argument("--control-mode", default="torque", choices=["position", "velocity", "torque"],
                    help="Must match the control_mode the URDF was expanded with")
     p.add_argument("--physics-rate", type=float, default=250.0,

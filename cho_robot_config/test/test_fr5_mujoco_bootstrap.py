@@ -118,8 +118,8 @@ def test_fr5_ready_pose_is_consistent_across_registry_description_srdf_and_isaac
     assert [srdf_values[name] for name in joints] == pytest.approx(expected, abs=1e-9)
 
     import json
-    isaac = json.loads((PROJECT_ROOT / 'cho_simulation' / 'cho_simulation_isaac' /
-                        'isaac' / 'robots' / 'fr5.json').read_text())
+    isaac = json.loads((PROJECT_ROOT / 'cho_bringup' / 'cho_bringup_fr5' /
+                        'config' / 'isaac' / 'robot_profile.json').read_text())
     assert isaac['arm_joints'] == joints
     assert isaac['arm_home'] == pytest.approx(expected, abs=1e-9)
 

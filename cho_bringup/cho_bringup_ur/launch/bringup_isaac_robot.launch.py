@@ -21,8 +21,8 @@ Same three-part structure as the Franka Isaac bringup, and for the same reasons
 (see cho_bringup_franka/launch/bringup_isaac_robot.launch.py, which documents each
 of them):
 
-  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
-     ur5e.json robot profile.
+  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by this
+     bringup package's config/isaac/robot_profile.json.
   2. a controller_manager whose hardware plugin is
      topic_based_ros2_control/TopicBasedSystem (the IsaacArmSystem block in
      cho_description_ur/urdf/ur5e.urdf). It is the mujoco_ros2_control build of
@@ -127,6 +127,7 @@ def setup_control_environment(context):
         )
 
     isaac_path = get_package_share_directory('cho_simulation_isaac')
+    bringup_path = get_package_share_directory('cho_bringup_ur')
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
     runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
@@ -156,7 +157,8 @@ def setup_control_environment(context):
         isaac_python,
         os.path.join(isaac_path, 'isaac', 'run_isaac_sim.py'),
         '--robot-usd', robot_usd,
-        '--robot-profile', os.path.join(isaac_path, 'isaac', 'robots', 'ur5e.json'),
+        '--robot-profile', os.path.join(
+            bringup_path, 'config', 'isaac', 'robot_profile.json'),
         '--control-mode', 'position',
         '--physics-rate', physics_rate,
         '--device', device,

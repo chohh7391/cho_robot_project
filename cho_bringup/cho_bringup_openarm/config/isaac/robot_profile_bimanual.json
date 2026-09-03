@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Physics profile for the bimanual OpenArm v1.0 under Isaac Sim, consumed by run_isaac_sim.py.",
-    "The single-arm profile is openarm.json; everything here is that arm twice, in the joint",
+    "The single-arm profile is robot_profile.json; everything here is that arm twice, in the joint",
     "order the description emits (left first, then right). Joint names, home pose and the hand's",
     "command interface must match the IsaacArmSystem / IsaacHandSystem blocks in",
     "cho_description_openarm/robots/openarm_v10/openarm_v10.ros2_control.xacro, built with",
@@ -53,7 +53,7 @@
     0.0,
     0.0
   ],
-  "_armature_comment": "Damiao rotor inertia, same values as openarm.json: j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6 DM4310 0.0100  j7 DM3507 0.0049. It has to be mirrored in the controller's rotor_inertia parameter or the inertia-weighted law commands the wrong torque - on joint3 the rotor is sixteen times the link inertia.",
+  "_armature_comment": "Damiao rotor inertia, same values as robot_profile.json: j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6 DM4310 0.0100  j7 DM3507 0.0049. It has to be mirrored in the controller's rotor_inertia parameter or the inertia-weighted law commands the wrong torque - on joint3 the rotor is sixteen times the link inertia.",
   "arm_armature": [
     0.0081,
     0.0081,

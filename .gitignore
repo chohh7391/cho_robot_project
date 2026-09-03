@@ -12,7 +12,7 @@ log/
 .conventions/
 
 # Isaac Sim USD assets are generated from the URDFs by
-# cho_bringup_franka/isaac/convert_urdf_to_usd.py (see usd/README.md).
+# cho_simulation/cho_simulation_isaac/isaac/convert_urdf_to_usd.py (see usd/README.md).
 # They are large binaries and always reproducible, so they stay out of git.
 cho_description/*/usd/*
 !cho_description/*/usd/README.md

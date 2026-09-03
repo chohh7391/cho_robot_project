@@ -86,13 +86,16 @@ cho_controller/cho_controller_openarm/    # namespace cho_controller::openarm
 
 cho_bringup/cho_bringup_openarm/          # mujoco + isaac only (no real hardware yet)
   config/{mujoco,isaac}/controllers{,_bimanual}.yaml
+  config/isaac/robot_profile{,_bimanual}.json  # OpenArm-owned Isaac physics
   utils/launch_utils.py      # per_arm() prefixes controller names on a bimanual build
 
 cho_simulation/cho_simulation_isaac/   # Shared by every robot's Isaac bringup
   isaac/run_isaac_sim.py     # Isaac standalone runner (runs under isaacsim/python.sh, NOT ROS)
   isaac/convert_urdf_to_usd.py  # URDF -> USD, also under isaacsim/python.sh
-  isaac/robots/*.json        # Per-robot physics profile: joints, home, armature, drive gains
   scripts/                   # ROS-side helpers: isaac_command_gate.py, isaac_ft_sensor.py
+
+cho_bringup/cho_bringup_<robot>/config/isaac/
+  robot_profile.json         # Robot-owned Isaac physics: joints, home, armature, drive gains
 
 cho_task_manager/
   cho_task_manager/

@@ -969,7 +969,7 @@
   <!-- ros2_control talks to Isaac Sim over sensor_msgs/JointState topics via
        topic_based_ros2_control. Isaac's OmniGraph ROS 2 bridge publishes
        /isaac_joint_states and drives the articulation from the command topics
-       (see cho_bringup_franka/isaac/run_isaac_franka.py).
+       (see cho_simulation/cho_simulation_isaac/isaac/run_isaac_sim.py).
 
        The arm and the hand are TWO separate hardware components on purpose:
        TopicBasedSystem::write() push_back()s only the command interfaces a joint

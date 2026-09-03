@@ -18,7 +18,7 @@
 Background: topic_based_ros2_control zero-initialises its command buffers and
 starts publishing them as soon as the hardware component activates, which is
 before any controller exists. If Isaac acted on those zeros the arm would fall
-(torque mode) or snap to q=0 (position mode). run_isaac_franka.py therefore holds
+(torque mode) or snap to q=0 (position mode). run_isaac_sim.py therefore holds
 the home pose with a stiff position drive and keeps its articulation controllers
 disabled until this node appears.
 
@@ -26,7 +26,7 @@ bringup_isaac_robot.launch.py starts it from the controller spawner's
 OnProcessExit, i.e. once the requested controller is active.
 
 Why sensor_msgs/JointState for a boolean: the Isaac side cannot use rclpy (see
-the module docstring of run_isaac_franka.py), so the gate is read through an
+the module docstring of run_isaac_sim.py), so the gate is read through an
 OmniGraph ROS2SubscribeJointState node, whose outputs are statically typed. The
 runner polls its outputs:jointNames and opens the gate as soon as it is
 non-empty; the contents do not matter.

@@ -45,7 +45,7 @@ and then verifies the result:
 | `strip_links` | `.*_sc$` | **The one that makes the asset usable at all.** The URDF's `*_sc` self-collision helper links carry no `<inertial>`, so the importer turns each into a massless rigid body on a fixed joint. The articulation's mass matrix then becomes so ill-conditioned that *any* joint drive stiffness — even 80 Nm/rad — diverges on the first physics step (`Illegal BroadPhaseUpdateData - non-finite bounds`). Dropping the nine `*_sc` links leaves 13 links and the arm is stable. |
 | `merge_fixed_joints` | `False` | `fr3_hand_tcp` (every controller's `ee_name` resolves to it) and `bota_ft_sensor_wrench` (the FT measurement frame) hang off fixed joints. Merging deletes both, and the FT emulation reads that link's incoming joint force. Merging *also* fixes the instability above, which is why the check matters: use link stripping, not merging. |
 | `fix_base` | `True` | The arm is bolted down and this URDF has no `world` link. |
-| `joint_target_type` / stiffness / damping | `none` / `0` / `0` | Drive gains belong to the control mode; `run_isaac_franka.py` authors them into USD at startup, so one USD serves position, velocity and torque. Effort limits are *not* overridden — the importer already takes `[87]*4 + [12]*3` Nm from the URDF. |
+| `joint_target_type` / stiffness / damping | `none` / `0` / `0` | Drive gains belong to the control mode; `run_isaac_sim.py` authors them into USD at startup, so one USD serves position, velocity and torque. Effort limits are *not* overridden — the importer already takes `[87]*4 + [12]*3` Nm from the URDF. |
 
 The importer ignores `<ros2_control>`, so the asset is control-mode independent.
 After importing, the wrapper asserts that `fr3_link0`, `fr3_link7`, `fr3_hand`,
