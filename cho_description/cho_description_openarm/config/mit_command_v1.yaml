@@ -134,6 +134,41 @@ numeric_policy:
         state_stale_cycles: null
         bimanual_send_skew_us: null
         bimanual_send_skew_gate: measure_before_enforcement
+    # The only real profile that can be selected by the explicit triple
+    # runtime opt-in. This remains commissioning-only and has not been
+    # physically exercised in this repository.
+    real_conservative_commissioning:
+      status: commissioning_experiment_allowed
+      backend: real
+      hardware_enable_allowed: true
+      approval_gate: triple_runtime_opt_in_required
+      joint_limits:
+        position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        command_velocity: [0.15, 0.15, 0.10, 0.10, 0.15, 0.15, 0.15]
+        physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      gains:
+        kp_max: [5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0]
+        kd_max: [0.50, 0.50, 0.40, 0.40, 0.15, 0.15, 0.12]
+        kp_slew_per_s: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
+        kd_slew_per_s: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.24]
+        safe_hold_stiffness: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
+        safe_hold_damping: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      torque:
+        tau_ff_magnitude: [1.0, 1.0, 0.60, 0.60, 0.20, 0.20, 0.20]
+        tau_ff_slew_per_s: [2.0, 2.0, 1.2, 1.2, 0.4, 0.4, 0.4]
+        final_magnitude: [2.0, 2.0, 1.20, 1.20, 0.40, 0.40, 0.40]
+        final_slew_per_s: [4.0, 4.0, 2.4, 2.4, 0.8, 0.8, 0.8]
+        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      timing:
+        lease_default_cycles: 10
+        lease_cap_cycles: 20
+        producer_refresh_cycles: 5
+        controller_write_watchdog_ms: 100
+        state_stale_cycles: 20
+        bimanual_send_skew_us: null
+        bimanual_send_skew_gate: measure_before_enforcement
 gripper_contract: separate_position_control
 safe_seed:
   q_des: measured_position

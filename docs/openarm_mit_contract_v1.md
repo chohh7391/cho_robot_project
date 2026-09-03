@@ -164,12 +164,12 @@ and right controllers remain separate seven-axis producers and may transition in
 ## Numeric safety profiles and evidence
 
 The authoritative machine-readable file is `config/mit_safety_profiles_v1.yaml`; the copy embedded
-in the wider contract is drift-tested against it. It contains two deliberately separate numeric
-profiles. There is no default, selection is mandatory, and neither profile permits hardware enable.
+in the wider contract is drift-tested against it. It contains three deliberately separate numeric
+profiles. There is no default and selection is mandatory. The default real profile remains
+non-driving; the only real profile that permits a commissioning transport is independently gated.
 `cho_openarm_mit_core::load_safety_profile_*` rejects missing/unknown keys, wrong scalar types and
 enums, null required simulation values, backend mismatches and non-finite or misordered limits.
-The real approved allowlist is empty, so a real adapter must call this loader and fail configure
-**before opening a CAN socket**:
+An adapter must call this loader and validate the runtime gates **before opening a CAN socket**:
 
 - `mujoco_sim_safe` has status `prototype_experiment_allowed` only for the 1 kHz MuJoCo consumer;
   it is not a safety approval and cannot become a production default. Its position bounds and physical
@@ -192,6 +192,11 @@ The real approved allowlist is empty, so a real adapter must call this loader an
   lease, stale-state timing, write watchdog and bimanual send-skew limit remain `null`. They require
   supported-arm tests, CAN timing measurement, motor watchdog verification, physical E-stop and a
   recorded manual low-output approval before any real command path may enable motors.
+- `real_conservative_commissioning` is a separately named, 200 Hz, lower-output envelope. It is
+  selectable only when `open_can`, `operator_approval`, and `enable_motors` are all explicitly true
+  at runtime and must never become the default profile. It has not been physically validated in this
+  repository; the profile and three flags are transport gates, not a substitute for an E-stop,
+  verified motor identity/zeroing, or an operator commissioning record.
 
 Timing priority is hardware fault, controller-write watchdog, stale state, then lease. Lease and
 stale counters advance only on a successful consumer write cycle. All gain/feed-forward/final-torque

@@ -25,6 +25,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_mujoco_mit_launch_boundaries
     test/test_mujoco_mit_launch_boundaries.py
     ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  ament_add_pytest_test(test_real_mit_launch_boundaries
+    test/test_real_mit_launch_boundaries.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
 endif()
 
 install(

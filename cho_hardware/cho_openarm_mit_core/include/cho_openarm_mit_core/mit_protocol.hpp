@@ -36,8 +36,9 @@ struct SafetyProfile
   std::size_t lease_default{0}, lease_cap{0}, refresh_cycles{0}, watchdog_ms{0}, stale_cycles{0};
 };
 
-// Strict, fail-closed loader. profile_name must be explicit. The current real allowlist is empty,
-// therefore every REAL request is rejected before a caller may open a socket.
+// Strict, fail-closed loader. profile_name must be explicit. The only loadable
+// REAL profile is the commissioning envelope; callers must still impose their
+// own explicit runtime acknowledgements before opening a transport.
 SafetyProfile load_safety_profile_yaml(
   const std::string & yaml_text, const std::string & profile_name, SafetyBackend requested_backend);
 SafetyProfile load_safety_profile_file(
@@ -114,7 +115,11 @@ bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
 class ArmConsumer
 {
 public:
-  explicit ArmConsumer(ValidationLimits limits, double safe_hold_damping = 1.0);
+  // The defaults preserve the existing simulation/test contract.  Real
+  // adapters must pass both values from their explicit safety profile.
+  explicit ArmConsumer(
+    ValidationLimits limits, double safe_hold_damping = 1.0,
+    double safe_hold_stiffness = 0.0);
   bool configure(std::uint64_t session, const std::array<double, kJointsPerArm> & measured);
   void cleanup();
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
@@ -144,6 +149,7 @@ private:
   ArmCommand submitted_{};
   std::uint64_t accepted_lease_cycles_{0};
   double safe_hold_damping_{1.0};
+  double safe_hold_stiffness_{0.0};
 };
 
 class PairedConsumer

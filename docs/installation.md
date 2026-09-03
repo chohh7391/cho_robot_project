@@ -56,18 +56,17 @@ sudo make install
 
 ## OpenArm
 
-Nothing extra to install. `cho_description_openarm` is a vendored fork (URDF/xacro,
-meshes and MJCF all live in this repository), and the bringup is simulation-only, so
-it builds from the workspace with no submodule and no vendor SDK.
+`cho_description_openarm` is a vendored fork (URDF/xacro, meshes and MJCF all
+live in this repository). Simulation needs no vendor SDK. Real MIT bringup uses
+the pinned `extern/openarm_can` and `extern/openarm_ros2` submodules instead of
+modifying vendor code.
 
 Isaac Sim additionally needs the USD asset built once per variant — see
 `cho_description_openarm/usd/README.md`. The assets are generated and gitignored.
 
-> Real OpenArm hardware is **not** supported yet. The description carries a
-> `hardware:='real'` branch pointing at `openarm_hardware/OpenArmHW`, but the
-> `openarm_ros2` / `openarm_can` submodules are not vendored and there is no
-> `config/real/` or real launch file, so `hardware:=real` does not build. Use
-> `hardware:=mock` for a driver-free smoke test. Tracked in `todo/OPENARM_TODO.md`.
+> Real OpenArm MIT bringup is commissioning-only and physically untested. Its
+> default launch cannot open CAN or enable motors; the explicit three-flag
+> opt-in is documented in [OpenArm real bringup](openarm_real_bringup.md).
 
 ## Build
 

@@ -67,6 +67,10 @@ MIT_DIRECT_CONTROLLERS = frozenset({
 })
 MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
 MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
+REAL_MIT_DIRECT_CONTROLLERS = frozenset({
+    'joint_impedance_mit_controller',
+    'task_space_impedance_mit_controller',
+})
 
 
 def enforce_mujoco_mit_description(enabled, requested_xacro, canonical_xacro):
@@ -148,6 +152,42 @@ def resolve_mujoco_mit_selection(enabled, control_mode, bimanual,
         'controller_name': names[0],
         'controller_names': names,
         'controllers_file': 'controllers_mit_direct_bimanual.yaml',
+        'controller_overrides': {
+            name: {'arm': side} for name, side in zip(names, sides)},
+    }
+
+
+def resolve_real_mit_selection(bimanual, controller_name, arm, controllers_file=''):
+    """Resolve the fixed real-MIT ownership map without launching hardware.
+
+    The real path deliberately accepts only direct seven-axis action
+    controllers.  Collision-aware paired MoveIt remains a separate
+    commissioning item because the real timing and pair-skew evidence has not
+    yet been collected.  No user-supplied YAML may replace this boundary.
+    """
+    if controllers_file:
+        raise RuntimeError(
+            'controllers_file overrides are forbidden for real MIT bringup; '
+            'the hardware/profile boundary is fixed.')
+    if controller_name not in REAL_MIT_DIRECT_CONTROLLERS:
+        raise RuntimeError(
+            f"Unknown real MIT controller '{controller_name}'. Valid options: "
+            f"{sorted(REAL_MIT_DIRECT_CONTROLLERS)}")
+    if not as_bool(bimanual):
+        return {
+            'controller_names': [controller_name],
+            'controllers_file': 'controllers_mit.yaml',
+            'controller_overrides': {},
+        }
+    if arm not in ('left', 'right', 'both_independent'):
+        raise RuntimeError(
+            'real bimanual direct MIT requires mit_arm:=left, right, or '
+            'both_independent')
+    sides = ('left', 'right') if arm == 'both_independent' else (arm,)
+    names = [f'{side}_{controller_name}' for side in sides]
+    return {
+        'controller_names': names,
+        'controllers_file': 'controllers_mit_bimanual.yaml',
         'controller_overrides': {
             name: {'arm': side} for name, side in zip(names, sides)},
     }

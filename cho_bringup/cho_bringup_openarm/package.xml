@@ -16,6 +16,7 @@
   <exec_depend>cho_controller_openarm</exec_depend>
   <exec_depend>cho_description_openarm</exec_depend>
   <exec_depend>cho_hardware_openarm_mit_mujoco</exec_depend>
+  <exec_depend>cho_hardware_openarm_mit_real</exec_depend>
   <exec_depend>cho_controller_openarm_mit</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>cho_moveit_openarm</exec_depend>

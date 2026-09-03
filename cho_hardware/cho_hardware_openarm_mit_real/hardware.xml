@@ -1,0 +1,3 @@
+<library path="cho_hardware_openarm_mit_real">
+  <class name="cho_hardware_openarm_mit_real/OpenArmMitRealSystem" type="cho_hardware_openarm_mit_real::OpenArmMitRealSystem" base_class_type="hardware_interface::SystemInterface"/>
+</library>

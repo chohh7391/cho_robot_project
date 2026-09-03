@@ -73,10 +73,12 @@ SafetyProfile load_safety_profile_yaml(
     throw std::invalid_argument("unsupported schema/version or non-null default profile");
   }
   const auto profiles = root["profiles"];
-  exact_keys(profiles, {"mujoco_sim_safe", "real_conservative_unapproved"}, "profiles");
+  exact_keys(profiles, {"mujoco_sim_safe", "real_conservative_unapproved", "real_conservative_commissioning"}, "profiles");
   const auto profile = profiles[profile_name];
   if (!profile) throw std::invalid_argument("unknown safety profile");
-  const bool real = profile_name == "real_conservative_unapproved";
+  const bool unapproved_real = profile_name == "real_conservative_unapproved";
+  const bool commissioning_real = profile_name == "real_conservative_commissioning";
+  const bool real = unapproved_real || commissioning_real;
   std::set<std::string> keys{"status", "backend", "hardware_enable_allowed", "update_rate_hz",
     "joint_limits", "gains", "torque", "timing", "safe_transition"};
   if (real) keys.insert("approval_gate");
@@ -85,17 +87,25 @@ SafetyProfile load_safety_profile_yaml(
   const auto backend = backend_text == "mujoco" ? SafetyBackend::MUJOCO :
     backend_text == "real" ? SafetyBackend::REAL : throw std::invalid_argument("invalid backend enum");
   if (backend != requested_backend) throw std::invalid_argument("safety profile backend mismatch");
-  if (boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed")) {
-    throw std::invalid_argument("hardware enable is not approved");
-  }
   if (backend == SafetyBackend::REAL) {
-    if (scalar(profile["status"], "status") != "unapproved" ||
-        scalar(profile["approval_gate"], "approval_gate") != "manual_low_output_commissioning_required") {
-      throw std::invalid_argument("real profile is not on the approved allowlist");
+    if (unapproved_real) {
+      if (boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed") ||
+          scalar(profile["status"], "status") != "unapproved" ||
+          scalar(profile["approval_gate"], "approval_gate") != "manual_low_output_commissioning_required") {
+        throw std::invalid_argument("unapproved real profile metadata is invalid");
+      }
+      throw std::invalid_argument("unapproved real profile rejected before socket open");
     }
-    throw std::invalid_argument("no real safety profile is approved; reject before socket open");
+    if (!commissioning_real || !boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed") ||
+        scalar(profile["status"], "status") != "commissioning_experiment_allowed" ||
+        scalar(profile["approval_gate"], "approval_gate") != "triple_runtime_opt_in_required") {
+      throw std::invalid_argument("real profile is not on the commissioning allowlist");
+    }
+  } else if (boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed")) {
+    throw std::invalid_argument("simulation profile must not allow hardware enable");
   }
-  if (scalar(profile["status"], "status") != "prototype_experiment_allowed") {
+  if (backend == SafetyBackend::MUJOCO &&
+      scalar(profile["status"], "status") != "prototype_experiment_allowed") {
     throw std::invalid_argument("invalid simulation status enum");
   }
   SafetyProfile out; out.name = profile_name; out.backend = backend;
@@ -245,15 +255,17 @@ bool validate_tuple(const JointTuple & t, const ValidationLimits & l)
          t.damping <= l.max_damping && std::abs(t.effort) <= l.max_abs_effort;
 }
 
-ArmConsumer::ArmConsumer(ValidationLimits limits, double safe_hold_damping)
-: limits_(limits), safe_hold_damping_(safe_hold_damping)
+ArmConsumer::ArmConsumer(
+  ValidationLimits limits, double safe_hold_damping, double safe_hold_stiffness)
+: limits_(limits), safe_hold_damping_(safe_hold_damping), safe_hold_stiffness_(safe_hold_stiffness)
 {
   const std::array<double, 5> numeric{limits.max_abs_position, limits.max_abs_velocity,
     limits.max_stiffness, limits.max_damping, limits.max_abs_effort};
   if (!std::all_of(numeric.begin(), numeric.end(), [](double x) {return std::isfinite(x) && x >= 0.0;}) ||
       limits.max_lease_cycles == 0 || limits.max_lease_cycles > static_cast<std::uint64_t>(kMaxExactInteger) ||
       !std::isfinite(safe_hold_damping_) || safe_hold_damping_ <= 0.0 ||
-      safe_hold_damping_ > limits.max_damping) {
+      safe_hold_damping_ > limits.max_damping || !std::isfinite(safe_hold_stiffness_) ||
+      safe_hold_stiffness_ < 0.0 || safe_hold_stiffness_ > limits.max_stiffness) {
     throw std::invalid_argument("invalid MIT prototype limits");
   }
 }
@@ -329,7 +341,8 @@ bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
 {
   if (status_ != MitStatus::SAFE_TRANSITION || !transport_succeeded) return false;
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
-    submitted_.joints[i] = {measured_[i], 0.0, 0.0, safe_hold_damping_, 0.0};
+    submitted_.joints[i] = {
+      measured_[i], 0.0, safe_hold_stiffness_, safe_hold_damping_, 0.0};
   }
   safe_ack_generation_ = safe_generation_;
   status_ = MitStatus::SAFE;

@@ -4,24 +4,11 @@ ROS 2 Humble workspace packages for the Cho robot-control stack. The project
 keeps robot descriptions, `ros2_control` hardware adapters, controllers,
 MoveIt integration, task orchestration, and manual tools as separate layers.
 
-## Workspace setup
+## Installation
 
-```bash
-cd ~/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-```
-
-Build a changed subset when iterating:
-
-```bash
-colcon build --symlink-install --packages-select <package> [<package> ...]
-source install/setup.bash
-```
-
-Use a fresh `ROS_DOMAIN_ID` for independent simulation runs. Do not run two
-simulators publishing `/clock` in the same domain.
+Install dependencies, simulator prerequisites, and build the workspace using
+[docs/installation.md](docs/installation.md). That guide is the authoritative
+setup reference for this repository.
 
 ## Package map
 
@@ -47,7 +34,7 @@ cho_interfaces/       Project ROS messages and actions
 | Franka | `cho_bringup_franka` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Validate the selected backend and mode before hardware use. |
 | UR5e | `cho_bringup_ur` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Real Robot/Robotiq setup has extra vendor-driver requirements. |
 | FAIRINO FR5 | `cho_bringup_fr5` | MuJoCo joint/task control is the verified path. Gazebo, Isaac Sim, and real launch/configuration paths require backend-specific validation. |
-| OpenArm | `cho_bringup_openarm` | MuJoCo legacy control and the opt-in MIT direct/paired paths are verified. MIT real/CAN control is intentionally disabled. |
+| OpenArm | `cho_bringup_openarm` | MuJoCo legacy control and the opt-in MIT direct/paired paths are verified. A fail-closed, physically untested real MIT commissioning launch is also provided. |
 
 Launch files follow the pattern:
 
@@ -161,8 +148,9 @@ The hardware wrapper rejects incompatible claim/switch combinations.
 - SAFE/session/generation acknowledgement is required before controller
   handoff or deactivation.
 - The MuJoCo profile is prototype-only. It is not a production approval.
-- No OpenArm MIT CAN/real adapter is enabled. The real safety allowlist is
-  empty, so a real profile is rejected before any actuator transport can open.
+- OpenArm real MIT bringup is commissioning-only and physically untested. Its
+  default launch does not create a hardware component, open CAN, or enable
+  motors; see [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md).
 
 ## FR5 MuJoCo quick start
 
@@ -170,17 +158,15 @@ FR5's verified path starts from the non-singular `home1` simulation pose.
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=94
 
 ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py \
   controller_name:=joint_space_position_controller
 ```
 
-In another terminal using the same domain:
+In another terminal:
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=94
 ros2 run cho_control_tools fr5_action_client
 ```
 

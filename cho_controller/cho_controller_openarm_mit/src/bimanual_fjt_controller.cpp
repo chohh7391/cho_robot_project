@@ -1,5 +1,6 @@
 #include "cho_controller_openarm_mit/bimanual_fjt_controller.hpp"
 #include "cho_controller_openarm_mit/mit_fjt_layout.hpp"
+#include "cho_controller_openarm_mit/safety_backend.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -88,6 +89,7 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
   auto_declare<std::string>("arm", "left");
   auto_declare<std::string>("safety_profile_file", "");
   auto_declare<std::string>("safety_profile_name", "");
+  auto_declare<std::string>("safety_backend", "mujoco");
   auto_declare<double>("constraints.path_tolerance", 0.2);
   auto_declare<double>("constraints.goal_tolerance", 0.02);
   auto_declare<double>("constraints.goal_time", 0.5);
@@ -104,7 +106,11 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
   const auto profile_file=get_node()->get_parameter("safety_profile_file").as_string();
   const auto profile_name=get_node()->get_parameter("safety_profile_name").as_string();
   if(profile_file.empty()||profile_name.empty())return CallbackReturn::ERROR;
-  try{safety_profile_=load_safety_profile_file(profile_file,profile_name,SafetyBackend::MUJOCO);}
+  try {
+    safety_profile_=load_safety_profile_file(
+      profile_file, profile_name,
+      safety_backend_from_parameter(get_node()->get_parameter("safety_backend").as_string()));
+  }
   catch(const std::exception&e){RCLCPP_ERROR(get_node()->get_logger(),"safety profile rejected: %s",e.what());return CallbackReturn::ERROR;}
   lease_cycles_ = static_cast<double>(safety_profile_.lease_default);
   default_path_tolerance_ = get_node()->get_parameter("constraints.path_tolerance").as_double();

@@ -27,16 +27,18 @@ env:
     cho_controller_ur
     cho_controller_openarm
     cho_description_franka
+    cho_description_fr5
     cho_description_ur
     cho_description_openarm
     cho_robot_config
     cho_control_tools
     cho_task_manager
-  # cho_description_franka / cho_description_ur are forks of franka_description
-  # and ur_description and carry their upstream lint debt, so they are built
-  # (the xacro/URDF must still parse) but not linted. cho_description_openarm is
-  # also a fork but its tests are ours, so it is tested too - they are what
-  # catches a xacro branch that has stopped parsing for one environment.
+  # cho_description_franka / cho_description_fr5 / cho_description_ur are forks
+  # of upstream descriptions and carry their upstream lint debt, so they are
+  # built (the xacro/URDF must still parse) but not linted.
+  # cho_description_openarm is also a fork but its tests are ours, so it is
+  # tested too - they catch a xacro branch that has stopped parsing for one
+  # environment.
   TEST_PACKAGES: >-
     cho_interfaces
     cho_trajectory_smoother
@@ -93,6 +95,7 @@ jobs:
             src/cho_robot_project/cho_controller/cho_controller_ur \
             src/cho_robot_project/cho_controller/cho_controller_openarm \
             src/cho_robot_project/cho_description/cho_description_franka \
+            src/cho_robot_project/cho_description/cho_description_fr5 \
             src/cho_robot_project/cho_description/cho_description_ur \
             src/cho_robot_project/cho_description/cho_description_openarm \
             src/cho_robot_project/cho_robot_config \

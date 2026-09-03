@@ -59,6 +59,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_direct_mit_controller test/test_direct_mit_controller.cpp)
   target_link_libraries(test_direct_mit_controller ${PROJECT_NAME})
   ament_target_dependencies(test_direct_mit_controller controller_interface hardware_interface rclcpp)
+  target_compile_definitions(test_direct_mit_controller PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_controller_manager_action test/test_controller_manager_action.cpp)
   target_link_libraries(test_controller_manager_action ${PROJECT_NAME})

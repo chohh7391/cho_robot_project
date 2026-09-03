@@ -34,13 +34,21 @@ TEST(SafetyProfile, ExplicitMujocoSelectionLoadsAndNoDefaultExists)
   EXPECT_THROW(load_safety_profile_yaml(source(), "", SafetyBackend::MUJOCO), std::invalid_argument);
 }
 
-TEST(SafetyProfile, RealAlwaysRejectsBeforeSocketOpenAndFlagsCannotIndividuallyApprove)
+TEST(SafetyProfile, RealUnapprovedRejectsAndCommissioningEnvelopeIsExplicit)
 {
   EXPECT_THROW(load_safety_profile_yaml(source(), "real_conservative_unapproved", SafetyBackend::REAL), std::invalid_argument);
   const auto one_flag = replace_once(source(), "hardware_enable_allowed: false\n    update_rate_hz: null", "hardware_enable_allowed: true\n    update_rate_hz: null");
   EXPECT_THROW(load_safety_profile_yaml(one_flag, "real_conservative_unapproved", SafetyBackend::REAL), std::invalid_argument);
   const auto one_status = replace_once(source(), "status: unapproved", "status: prototype_experiment_allowed");
   EXPECT_THROW(load_safety_profile_yaml(one_status, "real_conservative_unapproved", SafetyBackend::REAL), std::invalid_argument);
+  const auto commissioning = load_safety_profile_yaml(
+    source(), "real_conservative_commissioning", SafetyBackend::REAL);
+  EXPECT_EQ(commissioning.update_rate_hz, 200u);
+  EXPECT_EQ(commissioning.watchdog_ms, 100u);
+  const auto wrong_gate = replace_once(
+    source(), "approval_gate: triple_runtime_opt_in_required", "approval_gate: manual_low_output_commissioning_required");
+  EXPECT_THROW(load_safety_profile_yaml(
+    wrong_gate, "real_conservative_commissioning", SafetyBackend::REAL), std::invalid_argument);
 }
 
 TEST(SafetyProfile, BackendMismatchUnknownAndMissingKeysReject)

@@ -1,4 +1,5 @@
 #include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/safety_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -64,6 +65,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_init()
   auto_declare<std::vector<double>>("kd", std::vector<double>(7, 0));
   auto_declare<std::vector<double>>("torque_limit", std::vector<double>(7, 0));
   auto_declare<std::string>("safety_profile_file", ""); auto_declare<std::string>("safety_profile_name", "");
+  auto_declare<std::string>("safety_backend", "mujoco");
   // controller_manager does not normally carry this parameter in simulation;
   // configure_action_mujoco_dynamics() obtains the canonical description from
   // robot_state_publisher in that case.
@@ -81,7 +83,9 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
   if (kp.size() != 7 || kd.size() != 7 || tl.size() != 7) return CallbackReturn::ERROR;
   for (std::size_t i=0;i<7;++i) {if(!std::isfinite(kp[i])||kp[i]<0||!std::isfinite(kd[i])||kd[i]<0||!std::isfinite(tl[i])||tl[i]<=0)return CallbackReturn::ERROR;kp_[i]=kp[i];kd_[i]=kd[i];torque_limit_[i]=tl[i];}
   try {
-    const auto p=load_safety_profile_file(get_node()->get_parameter("safety_profile_file").as_string(),get_node()->get_parameter("safety_profile_name").as_string(),SafetyBackend::MUJOCO);
+    const auto backend = safety_backend_from_parameter(
+      get_node()->get_parameter("safety_backend").as_string());
+    const auto p=load_safety_profile_file(get_node()->get_parameter("safety_profile_file").as_string(),get_node()->get_parameter("safety_profile_name").as_string(),backend);
     lease_=p.lease_default;max_wait_cycles_=p.stale_cycles;command_timeout_cycles_=std::max<std::size_t>(1,(p.watchdog_ms*p.update_rate_hz+999)/1000);
     for(std::size_t i=0;i<7;++i){
       if(kp_[i]>p.kp_max[i]||kd_[i]>p.kd_max[i]||torque_limit_[i]>std::min(p.tau_ff_max[i],p.final_torque[i])){

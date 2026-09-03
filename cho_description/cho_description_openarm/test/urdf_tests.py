@@ -207,6 +207,26 @@ def test_hand_false_drops_the_gripper_entirely():
     assert set(joints) == set(ARM_JOINTS)
 
 
+def test_real_mit_single_arm_is_exactly_seven_axis_with_full_protocol():
+    root = build(hardware='real', real_mit_hardware='true')
+    block = root.find('ros2_control')
+    assert block.find('hardware/plugin').text == (
+        'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
+    assert {joint.get('name') for joint in block.findall('joint')} == set(ARM_JOINTS)
+    assert block.find("hardware/param[@name='open_can']").text == 'False'
+    assert block.find("hardware/param[@name='enable_motors']").text == 'False'
+    assert block.find("hardware/param[@name='operator_approval']").text == 'False'
+    assert block.find("hardware/param[@name='arm_side']").text == 'single'
+    assert all({c.get('name') for c in joint.findall('command_interface')} ==
+               {'position', 'velocity', 'stiffness', 'damping', 'effort'}
+               for joint in block.findall('joint'))
+    gpio = block.find("gpio[@name='openarm_arm']")
+    assert gpio is not None
+    assert {c.get('name') for c in gpio.findall('command_interface')} == {
+        'mit_session_echo', 'mit_lease_cycles', 'mit_commit_generation',
+        'mit_safe_request_generation'}
+
+
 def test_mujoco_scene_follows_the_control_mode():
     for control_mode in ('torque', 'position', 'velocity'):
         root = build(hardware='mujoco', control_mode=control_mode)
@@ -243,6 +263,20 @@ def test_bimanual_real_splits_by_can_bus():
     assert param(blocks['OpenArmRightHardwareInterface'], 'can_interface') == 'can0'
     assert param(blocks['OpenArmLeftHardwareInterface'], 'arm_prefix') == 'left_'
     assert param(blocks['OpenArmRightHardwareInterface'], 'arm_prefix') == 'right_'
+
+
+def test_bimanual_real_mit_has_one_seven_axis_component_and_gpio_per_side():
+    root = build(hardware='real', real_mit_hardware='true', bimanual='true')
+    blocks = {block.get('name'): block for block in root.findall('ros2_control')}
+    assert set(blocks) == {'OpenArmLeftHardwareInterface', 'OpenArmRightHardwareInterface'}
+    for side, name in (('left', 'OpenArmLeftHardwareInterface'),
+                       ('right', 'OpenArmRightHardwareInterface')):
+        block = blocks[name]
+        assert block.find('hardware/plugin').text == (
+            'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
+        assert {j.get('name') for j in block.findall('joint')} == {
+            f'openarm_{side}_joint{i}' for i in range(1, 8)}
+        assert block.find(f"gpio[@name='openarm_{side}_arm']") is not None
 
 
 @pytest.mark.parametrize('hardware', ['mujoco', 'gazebo', 'mock'])

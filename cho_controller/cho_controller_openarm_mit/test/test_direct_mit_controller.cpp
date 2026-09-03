@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/safety_backend.hpp"
 using namespace cho_controller_openarm_mit;
 using namespace cho_openarm_mit_core;
 namespace {std::array<double,7> fill(double x){std::array<double,7>a{};a.fill(x);return a;}}
@@ -52,4 +53,34 @@ TEST(DirectMitSafeStop, RejectsOlderInflightAckAndRequiresExactOwnGeneration)
   EXPECT_FALSE(exact_safe_stop_ack(requested, 7.0, 8.0, double(MitStatus::SAFE)));
   EXPECT_FALSE(exact_safe_stop_ack(requested, 8.0, 8.0, double(MitStatus::SAFE_TRANSITION)));
   EXPECT_TRUE(exact_safe_stop_ack(requested, 8.0, 8.0, double(MitStatus::SAFE)));
+}
+
+TEST(ControllerSafetyBackend, OnlyExactMujocoAndRealValuesAreAccepted)
+{
+  EXPECT_EQ(safety_backend_from_parameter("mujoco"), SafetyBackend::MUJOCO);
+  EXPECT_EQ(safety_backend_from_parameter("real"), SafetyBackend::REAL);
+  EXPECT_THROW(safety_backend_from_parameter("MuJoCo"), std::invalid_argument);
+  EXPECT_THROW(safety_backend_from_parameter("simulation"), std::invalid_argument);
+  EXPECT_THROW(safety_backend_from_parameter("real "), std::invalid_argument);
+}
+
+TEST(ControllerSafetyBackend, SelectedRealCommissioningProfileUsesRealBackend)
+{
+  const auto profile = load_safety_profile_file(
+    OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_commissioning",
+    safety_backend_from_parameter("real"));
+  EXPECT_EQ(profile.backend, SafetyBackend::REAL);
+  EXPECT_EQ(profile.name, "real_conservative_commissioning");
+  EXPECT_DOUBLE_EQ(profile.command_velocity.front(), 0.15);
+}
+
+TEST(ControllerSafetyBackend, UnapprovedRealProfileRemainsRejected)
+{
+  // The legacy real profile cannot accidentally bypass the commissioning
+  // envelope or reach transport setup.
+  EXPECT_THROW(
+    load_safety_profile_file(
+      OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_unapproved",
+      safety_backend_from_parameter("real")),
+    std::invalid_argument);
 }

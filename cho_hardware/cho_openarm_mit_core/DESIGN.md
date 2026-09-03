@@ -11,5 +11,7 @@ produce; hardware adapters consume it to decide *how* a validated tuple reaches
 a simulator or actuator.  This keeps a future CAN adapter dependent on this
 package rather than on MuJoCo or controller code.
 
-The real-hardware safety allowlist remains empty.  Loading a REAL profile is
-rejected before an adapter can open a transport.
+The default real profile is unapproved and is rejected before an adapter can
+open a transport. `real_conservative_commissioning` is a deliberately narrow,
+untested envelope; a real adapter must require `open_can`,
+`operator_approval`, and `enable_motors` before opening CAN or enabling a motor.
