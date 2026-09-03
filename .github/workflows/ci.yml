@@ -29,6 +29,8 @@ env:
     cho_description_franka
     cho_description_ur
     cho_description_openarm
+    cho_robot_config
+    cho_control_tools
     cho_task_manager
   # cho_description_franka / cho_description_ur are forks of franka_description
   # and ur_description and carry their upstream lint debt, so they are built
@@ -42,6 +44,8 @@ env:
     cho_controller_ur
     cho_controller_openarm
     cho_description_openarm
+    cho_robot_config
+    cho_control_tools
     cho_task_manager
 
 jobs:
@@ -91,6 +95,8 @@ jobs:
             src/cho_robot_project/cho_description/cho_description_franka \
             src/cho_robot_project/cho_description/cho_description_ur \
             src/cho_robot_project/cho_description/cho_description_openarm \
+            src/cho_robot_project/cho_robot_config \
+            src/cho_robot_project/cho_control_tools \
             src/cho_robot_project/cho_task_manager
 
       - name: Build

@@ -4,6 +4,10 @@ log/
 .vscode/
 *.pyc
 
+# Local planning and session handover notes (kept on each developer machine).
+/PLAN.md
+/SESSION_LOG.md
+
 # workspace 공통 규약 (절대경로 심볼릭 링크 — 커밋하지 않는다)
 .conventions/
 
