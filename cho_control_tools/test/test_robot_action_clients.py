@@ -2,6 +2,7 @@
 
 import pytest
 
+from cho_control_tools.clients import operator_client
 from cho_control_tools.clients import robot_action_client as clients
 
 
@@ -23,10 +24,12 @@ def test_robot_entrypoints_fix_robot_identity(monkeypatch, entrypoint, robot_typ
 
 def test_openarm_profile_is_the_only_operator_option(monkeypatch):
     calls = []
-    monkeypatch.setattr(clients, 'RobotActionShell',
-                        lambda robot_type, arm: calls.append((robot_type, arm)) or _Shell())
+    monkeypatch.setattr(operator_client, 'RobotActionShell',
+                        lambda robot_type, arm, **_kwargs:
+                        calls.append((robot_type, arm)) or _Shell())
 
-    assert clients._run('openarm', ['--arm', 'both'], allow_arm=True) == 0
+    assert operator_client.run_robot_client(
+        'openarm', ['--arm', 'both'], allow_arm=True) == 0
     assert calls == [('openarm', 'both')]
 
 
@@ -49,8 +52,8 @@ def test_operator_shell_reports_readiness_without_endpoint_names(monkeypatch, ca
             self.robotiq_command_publisher = None
             self._send_goal_and_wait = lambda *_args: True
 
-    monkeypatch.setattr(clients, '_control_suite_shell', lambda: BaseShell)
-    shell = clients.RobotActionShell('openarm')
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    shell = operator_client.RobotActionShell('openarm')
     shell._shell.do_status('')
 
     output = capsys.readouterr().out
@@ -87,9 +90,9 @@ def test_openarm_mit_startup_retries_only_rejected_task_goal(monkeypatch, capsys
 
             self._send_goal_and_wait = send
 
-    monkeypatch.setattr(clients, '_control_suite_shell', lambda: BaseShell)
-    monkeypatch.setattr(clients.time, 'sleep', lambda _seconds: None)
-    shell = clients.RobotActionShell('openarm')._shell
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    monkeypatch.setattr(operator_client.time, 'sleep', lambda _seconds: None)
+    shell = operator_client.RobotActionShell('openarm')._shell
 
     assert shell._send_goal_and_wait(shell.task_space_action_client, object())
     assert shell.calls == 2
@@ -116,8 +119,8 @@ def test_openarm_mit_does_not_retry_accepted_task_failure(monkeypatch):
 
             self._send_goal_and_wait = send
 
-    monkeypatch.setattr(clients, '_control_suite_shell', lambda: BaseShell)
-    shell = clients.RobotActionShell('openarm')._shell
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    shell = operator_client.RobotActionShell('openarm')._shell
 
     assert not shell._send_goal_and_wait(shell.task_space_action_client, object())
     assert shell.calls == 1
@@ -143,10 +146,10 @@ def test_openarm_mit_startup_rejection_is_not_retried_after_launch_window(monkey
 
             self._send_goal_and_wait = send
 
-    monkeypatch.setattr(clients, '_control_suite_shell', lambda: BaseShell)
-    wrapper = clients.RobotActionShell('openarm')
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    wrapper = operator_client.RobotActionShell('openarm')
     shell = wrapper._shell
-    monkeypatch.setattr(clients.time, 'monotonic',
+    monkeypatch.setattr(operator_client.time, 'monotonic',
                         lambda: wrapper._openarm_task_startup_deadline)
 
     assert not shell._send_goal_and_wait(shell.task_space_action_client, object())

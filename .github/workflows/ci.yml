@@ -67,14 +67,16 @@ jobs:
       # does `#include <qpOASES.hpp>`. qpOASES is not a rosdep key and is not
       # declared in that package's CMakeLists or package.xml - it is the
       # extern/qpOASES submodule, installed to /usr/local on developer
-      # machines. Reproduce that here, or the build fails on a missing header.
+      # machines. cho_description_openarm's MIT contract tests likewise read
+      # their pinned DM motor header from extern/openarm_can. Initialize both
+      # source-only dependencies before building or testing.
       - name: Build and install qpOASES
         shell: bash
         run: |
           set -eo pipefail
           cd src/cho_robot_project
           git config --global --add safe.directory "$(pwd)"
-          git submodule update --init --depth 1 extern/qpOASES
+          git submodule update --init --depth 1 extern/qpOASES extern/openarm_can
           cmake -S extern/qpOASES -B /tmp/qpoases-build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local

@@ -21,9 +21,6 @@ from geometry_msgs.msg import Pose
 from std_msgs.msg import Float64MultiArray
 import time
 
-from cho_robot_config import available_robot_types, home_pose_policy, load_robot_config
-
-
 ACTION_SERVER_PREFIX = "/controller_action_server"
 ACTION_TYPE_NAMES = {
     "joint": "cho_interfaces/action/JointSpace",
@@ -41,6 +38,25 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 
+# Keep robot metadata out of the shared action-client import boundary. A
+# robot-specific executable can therefore live in a workspace that only has
+# metadata for its own robot; importing this module does not inspect a common
+# registry or its other robot YAML files.
+def available_robot_types():
+    from cho_robot_config import available_robot_types as registry_robot_types
+    return registry_robot_types()
+
+
+def load_robot_config(robot_type, profile='single'):
+    from cho_robot_config import load_robot_config as registry_load_robot_config
+    return registry_load_robot_config(robot_type, profile)
+
+
+def home_pose_policy(config, selector):
+    from cho_robot_config import home_pose_policy as registry_home_pose_policy
+    return registry_home_pose_policy(config, selector)
+
+
 class ControlSuiteShell(cmd.Cmd):
     intro = (
         bcolors.OKBLUE
@@ -52,7 +68,8 @@ class ControlSuiteShell(cmd.Cmd):
     def _config(self):
         """Return metadata, also supporting lightweight non-ROS test instances."""
         if not hasattr(self, 'robot_config'):
-            self.robot_config = load_robot_config(
+            loader = getattr(self, '_robot_config_loader', load_robot_config)
+            self.robot_config = loader(
                 self.robot_type, getattr(self, 'arm', 'single'))
         return self.robot_config
 
@@ -70,11 +87,17 @@ class ControlSuiteShell(cmd.Cmd):
         task_controller: str | None = None,
         gripper_controller: str | None = None,
         operator_facing: bool = False,
+        robot_config_loader=None,
+        home_pose_policy_loader=None,
     ):
         super().__init__()
         self.robot_type = robot_type
         self.arm = arm
-        self.robot_config = load_robot_config(robot_type, arm)
+        # Specific executable modules inject a loader pinned to exactly one
+        # robot. The generic debug client retains the lazy registry fallback.
+        self._robot_config_loader = robot_config_loader or load_robot_config
+        self._home_pose_policy_loader = home_pose_policy_loader or home_pose_policy
+        self.robot_config = self._robot_config_loader(robot_type, arm)
         if arm != 'single' and robot_type != 'openarm':
             raise ValueError('--arm variants are supported only for openarm')
         if control_space == 'task' and not self.robot_config.get('supports_task', True):
@@ -448,7 +471,8 @@ class ControlSuiteShell(cmd.Cmd):
         if selector not in home:
             print("Usage: home 0|1|2|3")
             return
-        policy = home_pose_policy(robot_config, selector)
+        policy_loader = getattr(self, '_home_pose_policy_loader', home_pose_policy)
+        policy = policy_loader(robot_config, selector)
         if not policy['enabled']:
             print(
                 f"home {selector} is disabled for {self.robot_type}: "

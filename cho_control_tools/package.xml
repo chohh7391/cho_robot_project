@@ -10,7 +10,6 @@
   <depend>ament_index_python</depend>
   <depend>action_msgs</depend>
   <depend>cho_interfaces</depend>
-  <depend>cho_robot_config</depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>rclpy</depend>
