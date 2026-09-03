@@ -22,7 +22,7 @@ Unlike MuJoCo, where the simulator lives inside the hardware component, Isaac Si
 runs in its own process under its own Python interpreter. This launch therefore
 starts three things and orders them:
 
-  1. cho_bringup_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
+  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
      openarm.json (or openarm_bimanual.json) physics profile - physics, the
      OmniGraph ROS 2 bridge, /clock and /isaac_joint_states.
   2. a controller_manager whose hardware plugin is
@@ -31,11 +31,11 @@ starts three things and orders them:
      build of ros2_control_node: that binary contains no MuJoCo code, it is
      upstream's node plus wait_until_started() on the clock and sim-time pacing,
      which is exactly what a sim-clocked controller_manager needs.
-  3. the controller spawners, then cho_bringup_isaac's isaac_command_gate.py once
+  3. the controller spawners, then cho_simulation_isaac's isaac_command_gate.py once
      the requested controller is active - see that script for why the gate exists.
 
 Build the USD asset once before the first run:
-    ~/isaacsim/python.sh <cho_bringup_isaac share>/isaac/convert_urdf_to_usd.py --help
+    ~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py --help
 """
 
 import importlib.util
@@ -72,7 +72,7 @@ ISAAC_READY_MARKER = '[isaac_sim] running:'
 def generate_launch_description():
     description_path = get_package_share_directory('cho_description_openarm')
     bringup_path = get_package_share_directory('cho_bringup_openarm')
-    isaac_path = get_package_share_directory('cho_bringup_isaac')
+    isaac_path = get_package_share_directory('cho_simulation_isaac')
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -111,7 +111,7 @@ def generate_launch_description():
             default_value='',
             description='USD asset for Isaac. Empty picks the single-arm or '
                         'bimanual asset to match the bimanual argument. Build it '
-                        'once with cho_bringup_isaac/isaac/convert_urdf_to_usd.py; '
+                        'once with cho_simulation_isaac/isaac/convert_urdf_to_usd.py; '
                         'it is not tracked in git. The layout is the URDF '
                         "importer's own convention: it derives the subdirectory "
                         'and the .usda filename from the URDF basename.'),
@@ -274,7 +274,7 @@ def generate_launch_description():
         )
 
         isaac_command_gate = Node(
-            package='cho_bringup_isaac',
+            package='cho_simulation_isaac',
             executable='isaac_command_gate.py',
             output='screen',
             parameters=[use_sim_time],

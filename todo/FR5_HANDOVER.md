@@ -16,7 +16,7 @@ for several robot arms. Each robot is a **vertical stack of parallel packages**:
 - `cho_bringup/cho_bringup_<robot>` — launch files + per-env `controllers.yaml`
   (mujoco / gz / isaac / real).
 - `cho_robot_config/config/<robot>.yaml` — controller-role single source of truth.
-- `cho_bringup/cho_bringup_isaac/isaac/robots/<robot>.json` — Isaac physics profile.
+- `cho_simulation/cho_simulation_isaac/isaac/robots/<robot>.json` — Isaac physics profile.
 
 Existing robots: **franka** (torque-controlled, the most mature — QP/impedance/IK),
 **ur** (position-controlled, 6-DOF), **openarm** (sim only). FR5 was added by
@@ -66,7 +66,7 @@ Vendored (copied into `extern/`, patched — see §6):
 
 Added to existing packages:
 - `cho_robot_config/config/fr5.yaml`.
-- `cho_bringup/cho_bringup_isaac/isaac/robots/fr5.json` (Isaac physics profile).
+- `cho_simulation/cho_simulation_isaac/isaac/robots/fr5.json` (Isaac physics profile).
 - `cho_control_tools` generic action client — added `fr5` robot type (home/reach poses).
 
 Modified existing (explicitly requested):
@@ -207,7 +207,7 @@ The file is aligned with the other simulation backends, but this revised pose ha
 yet been executed in Isaac. Uses
 `topic_based_ros2_control/TopicBasedSystem` (the isaac branch of the xacro).
 **Must build the USD once** before first run (the launch prints the exact command and
-exits if missing): `~/isaacsim/python.sh <cho_bringup_isaac share>/isaac/convert_urdf_to_usd.py
+exits if missing): `~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py
 --urdf <fr5.urdf.xacro> --usd-path <cho_description_fr5 share>/usd/fr5 --ros-package
 cho_description_fr5:<share>`. `physics_rate` (default 250) MUST equal
 `controller_manager.update_rate` in `config/isaac/controllers.yaml`. Give Isaac its own

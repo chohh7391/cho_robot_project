@@ -137,7 +137,7 @@
   <!-- ros2_control reaches Isaac Sim over sensor_msgs/JointState topics via
        topic_based_ros2_control; Isaac's OmniGraph ROS 2 bridge publishes
        /isaac_joint_states and drives the articulation from /isaac_joint_commands
-       (see cho_bringup_isaac/isaac/run_isaac_sim.py). Unlike the Franka, the UR
+       (see cho_simulation_isaac/isaac/run_isaac_sim.py). Unlike the Franka, the UR
        has no gripper here, so one hardware component covers the whole arm. -->
   <xacro:if value="${'$(arg hardware)' == 'isaac'}">
     <ros2_control name="IsaacArmSystem" type="system">

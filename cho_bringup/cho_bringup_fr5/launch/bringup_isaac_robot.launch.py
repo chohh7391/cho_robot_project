@@ -28,7 +28,7 @@ task-space controller before sending ``reach`` goals::
 Same three-part structure as the UR Isaac bringup (see
 cho_bringup_ur/launch/bringup_isaac_robot.launch.py):
 
-  1. cho_bringup_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
+  1. cho_simulation_isaac's run_isaac_sim.py under Isaac's python.sh, driven by the
      fr5.json robot profile.
   2. a controller_manager whose hardware plugin is
      topic_based_ros2_control/TopicBasedSystem (the isaac branch of
@@ -40,7 +40,7 @@ The FR5 has no gripper and is position-controlled only, so there is a single
 hardware component and no control_mode argument.
 
 Build the USD asset once before the first run:
-    ~/isaacsim/python.sh <cho_bringup_isaac share>/isaac/convert_urdf_to_usd.py \
+    ~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py \
         --urdf <cho_description_fr5 share>/urdf/fr5.urdf.xacro \
         --usd-path <cho_description_fr5 share>/usd \
         --ros-package cho_description_fr5:<cho_description_fr5 share> \
@@ -142,7 +142,7 @@ def setup_control_environment(context):
             f"Valid options: {SWITCHABLE_CONTROLLERS}"
         )
 
-    isaac_path = get_package_share_directory('cho_bringup_isaac')
+    isaac_path = get_package_share_directory('cho_simulation_isaac')
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
     runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
@@ -232,7 +232,7 @@ def setup_control_environment(context):
     )
 
     isaac_command_gate = Node(
-        package='cho_bringup_isaac',
+        package='cho_simulation_isaac',
         executable='isaac_command_gate.py',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}],

@@ -72,7 +72,7 @@ get_switchable_controllers = launch_utils.get_switchable_controllers
 
 DEFAULT_ISAAC_SIM_PATH = os.path.join(os.path.expanduser('~'), 'isaacsim')
 
-# Printed by cho_bringup_isaac's run_isaac_sim.py once physics is stepping and the ROS 2
+# Printed by cho_simulation_isaac's run_isaac_sim.py once physics is stepping and the ROS 2
 # bridge is publishing. The spawners key off it; see setup_control_environment.
 ISAAC_READY_MARKER = '[isaac_sim] running:'
 
@@ -81,7 +81,7 @@ def generate_launch_description():
 
     description_path = get_package_share_directory('cho_description_franka')
     bringup_path = get_package_share_directory('cho_bringup_franka')
-    isaac_path = get_package_share_directory('cho_bringup_isaac')
+    isaac_path = get_package_share_directory('cho_simulation_isaac')
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -335,7 +335,7 @@ def generate_launch_description():
         )
 
         isaac_command_gate = Node(
-            package='cho_bringup_isaac',
+            package='cho_simulation_isaac',
             executable='isaac_command_gate.py',
             output='screen',
             parameters=[use_sim_time],
@@ -344,7 +344,7 @@ def generate_launch_description():
         # Turns Isaac's raw geometry_msgs/Wrench into the Bota driver's stamped
         # topic and serves /bota_ft_sensor/tare, which the forge task trees call.
         isaac_ft_sensor = Node(
-            package='cho_bringup_isaac',
+            package='cho_simulation_isaac',
             executable='isaac_ft_sensor.py',
             output='screen',
             parameters=[use_sim_time],

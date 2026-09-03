@@ -26,7 +26,7 @@
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>mujoco_ros2_control</exec_depend>
-  <exec_depend>cho_bringup_isaac</exec_depend>
+  <exec_depend>cho_simulation_isaac</exec_depend>
   <exec_depend>topic_based_ros2_control</exec_depend>
   <exec_depend>franka_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>

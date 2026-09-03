@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(cho_bringup_isaac)
+project(cho_simulation_isaac)
 
 find_package(ament_cmake REQUIRED)
 

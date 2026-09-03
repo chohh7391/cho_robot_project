@@ -10,7 +10,7 @@ Regenerate them whenever `urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf` changes:
 source ~/ros2_ws/install/setup.bash
 
 DESC=$(ros2 pkg prefix cho_description_franka)/share/cho_description_franka
-ISAAC=$(ros2 pkg prefix cho_bringup_isaac)/share/cho_bringup_isaac
+ISAAC=$(ros2 pkg prefix cho_simulation_isaac)/share/cho_simulation_isaac
 
 ~/isaacsim/python.sh $ISAAC/isaac/convert_urdf_to_usd.py \
     --urdf         $DESC/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf \

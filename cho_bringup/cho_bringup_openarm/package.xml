@@ -12,7 +12,7 @@
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
 
-  <exec_depend>cho_bringup_isaac</exec_depend>
+  <exec_depend>cho_simulation_isaac</exec_depend>
   <exec_depend>cho_controller_openarm</exec_depend>
   <exec_depend>cho_description_openarm</exec_depend>
   <exec_depend>cho_hardware_openarm_mit_mujoco</exec_depend>

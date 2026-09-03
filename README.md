@@ -17,6 +17,7 @@ cho_description/      Robot URDF/xacro, meshes, simulator assets, safety profile
 cho_controller/       ros2_control controller plugins
 cho_hardware/         Hardware/protocol adapters
 cho_bringup/          Backend-specific launch and controller configuration
+cho_simulation/       Shared simulator backends (Isaac Sim runner, conversion, ROS helper nodes)
 cho_moveit/           MoveIt configuration and launch wrappers
 cho_robot_config/     Robot/controller/action metadata registry
 cho_task_manager/     py_trees behaviors, tasks, and task-manager node
