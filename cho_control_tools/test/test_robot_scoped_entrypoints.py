@@ -2,6 +2,7 @@
 
 import importlib
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -134,19 +135,11 @@ def test_console_scripts_point_to_robot_scoped_modules():
             f'cho_control_tools.clients.{robot_type}.action_client:main' in setup)
 
 
-@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
-def test_flat_action_client_imports_remain_compatibility_wrappers(robot_type):
-    legacy = importlib.import_module(
-        f'cho_control_tools.clients.{robot_type}_action_client')
-    scoped = importlib.import_module(
-        f'cho_control_tools.clients.{robot_type}.action_client')
-    assert legacy.main is scoped.main
-
-
-@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
-def test_flat_metadata_imports_remain_compatibility_wrappers(robot_type):
-    legacy = importlib.import_module(
-        f'cho_control_tools.clients.{robot_type}_metadata')
-    scoped = importlib.import_module(
-        f'cho_control_tools.clients.{robot_type}.metadata')
-    assert legacy.load is scoped.load
+def test_robot_clients_have_no_flat_compatibility_modules():
+    clients_dir = Path(__file__).parents[1] / 'cho_control_tools' / 'clients'
+    assert not (clients_dir / 'robot_action_client.py').exists()
+    for robot_type in ('fr5', 'franka', 'openarm', 'ur5e'):
+        assert (clients_dir / robot_type / 'action_client.py').is_file()
+        assert (clients_dir / robot_type / 'metadata.py').is_file()
+        assert not (clients_dir / f'{robot_type}_action_client.py').exists()
+        assert not (clients_dir / f'{robot_type}_metadata.py').exists()

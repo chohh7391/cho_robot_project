@@ -48,6 +48,9 @@ See the launch file's `--show-args` output for backend-specific parameters.
 
 Robot-specific clients choose compatible active action servers automatically;
 normal operation does not require controller names or `use_task` / `use_joint`.
+Their implementations are grouped by robot under
+`cho_control_tools/cho_control_tools/clients/{fr5,openarm,franka,ur5e}/`; the
+public ROS commands remain stable.
 
 ```bash
 source ~/ros2_ws/install/setup.bash

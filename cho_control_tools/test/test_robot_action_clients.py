@@ -3,23 +3,38 @@
 import pytest
 
 from cho_control_tools.clients import operator_client
-from cho_control_tools.clients import robot_action_client as clients
+from cho_control_tools.clients.fr5 import action_client as fr5_client
+from cho_control_tools.clients.franka import action_client as franka_client
+from cho_control_tools.clients.openarm import action_client as openarm_client
+from cho_control_tools.clients.ur5e import action_client as ur5e_client
 
 
-@pytest.mark.parametrize('entrypoint,robot_type', [
-    (clients.openarm_main, 'openarm'),
-    (clients.fr5_main, 'fr5'),
-    (clients.franka_main, 'franka'),
-    (clients.ur5e_main, 'ur5e'),
+@pytest.mark.parametrize('module,robot_type,allow_arm', [
+    (openarm_client, 'openarm', True),
+    (fr5_client, 'fr5', False),
+    (franka_client, 'franka', False),
+    (ur5e_client, 'ur5e', False),
 ])
-def test_robot_entrypoints_fix_robot_identity(monkeypatch, entrypoint, robot_type):
+def test_robot_entrypoints_fix_robot_identity(
+        monkeypatch, module, robot_type, allow_arm):
     calls = []
-    monkeypatch.setattr(clients, '_run', lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    entrypoint()
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 0
 
-    expected_kwargs = {'allow_arm': True} if robot_type == 'openarm' else {}
-    assert calls == [((robot_type,), expected_kwargs)]
+    monkeypatch.setattr(module, 'run_robot_client', fake_run)
+
+    assert module.main() == 0
+
+    args, kwargs = calls[0]
+    assert args == (robot_type, None)
+    if allow_arm:
+        assert kwargs['allow_arm'] is True
+    else:
+        assert 'allow_arm' not in kwargs
+    assert callable(kwargs['robot_config_loader'])
+    assert callable(kwargs['home_pose_policy_loader'])
 
 
 def test_openarm_profile_is_the_only_operator_option(monkeypatch):
@@ -35,9 +50,9 @@ def test_openarm_profile_is_the_only_operator_option(monkeypatch):
 
 def test_non_openarm_rejects_robot_and_controller_selectors():
     with pytest.raises(SystemExit):
-        clients._run('fr5', ['--robot-type', 'openarm'])
+        operator_client.run_robot_client('fr5', ['--robot-type', 'openarm'])
     with pytest.raises(SystemExit):
-        clients._run('fr5', ['--task-controller', 'anything'])
+        operator_client.run_robot_client('fr5', ['--task-controller', 'anything'])
 
 
 def test_operator_shell_reports_readiness_without_endpoint_names(monkeypatch, capsys):
