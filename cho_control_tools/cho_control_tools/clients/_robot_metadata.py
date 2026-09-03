@@ -7,23 +7,23 @@ central registry, so each loader imports only its own small metadata module.
 
 
 def _load_fr5(profile):
-    from . import fr5_metadata
-    return fr5_metadata.load(profile)
+    from .fr5 import metadata
+    return metadata.load(profile)
 
 
 def _load_franka(profile):
-    from . import franka_metadata
-    return franka_metadata.load(profile)
+    from .franka import metadata
+    return metadata.load(profile)
 
 
 def _load_openarm(profile):
-    from . import openarm_metadata
-    return openarm_metadata.load(profile)
+    from .openarm import metadata
+    return metadata.load(profile)
 
 
 def _load_ur5e(profile):
-    from . import ur5e_metadata
-    return ur5e_metadata.load(profile)
+    from .ur5e import metadata
+    return metadata.load(profile)
 
 
 _LOADERS = {

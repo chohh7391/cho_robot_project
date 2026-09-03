@@ -1,10 +1,5 @@
-"""UR5e-only operator action-client executable."""
+"""Compatibility import for :mod:`cho_control_tools.clients.ur5e.action_client`."""
 
-from ._robot_metadata import config_loader_for, home_pose_policy
-from .operator_client import run_robot_client
+from .ur5e.action_client import main
 
-
-def main(argv=None):
-    return run_robot_client(
-        'ur5e', argv, robot_config_loader=config_loader_for('ur5e'),
-        home_pose_policy_loader=home_pose_policy)
+__all__ = ['main']

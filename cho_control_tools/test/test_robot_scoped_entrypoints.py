@@ -7,10 +7,10 @@ import pytest
 
 
 @pytest.mark.parametrize('module_name,robot_type,allow_arm', [
-    ('fr5_action_client', 'fr5', False),
-    ('franka_action_client', 'franka', False),
-    ('openarm_action_client', 'openarm', True),
-    ('ur5e_action_client', 'ur5e', False),
+    ('fr5.action_client', 'fr5', False),
+    ('franka.action_client', 'franka', False),
+    ('openarm.action_client', 'openarm', True),
+    ('ur5e.action_client', 'ur5e', False),
 ])
 def test_robot_entrypoint_binds_only_its_robot_loader(
         monkeypatch, module_name, robot_type, allow_arm):
@@ -38,12 +38,12 @@ def test_robot_entrypoint_import_does_not_import_common_ros_shell_or_registry(mo
     # A source checkout normally has both packages importable. Remove cached
     # modules so this checks import-time dependencies rather than test order.
     for name in list(sys.modules):
-        if name.startswith('cho_control_tools.clients.fr5_action_client'):
+        if name.startswith('cho_control_tools.clients.fr5'):
             sys.modules.pop(name)
     sys.modules.pop('cho_robot_config', None)
     sys.modules.pop('cho_control_tools.clients.action_client', None)
 
-    imported = importlib.import_module('cho_control_tools.clients.fr5_action_client')
+    imported = importlib.import_module('cho_control_tools.clients.fr5.action_client')
     assert imported.main is not None
     assert 'cho_robot_config' not in sys.modules
     assert 'cho_control_tools.clients.action_client' not in sys.modules
@@ -53,10 +53,10 @@ def test_fr5_metadata_loader_runs_without_registry_or_other_robot_metadata(monke
     metadata_modules = [
         'cho_robot_config',
         'cho_robot_config.registry',
-        'cho_control_tools.clients.fr5_metadata',
-        'cho_control_tools.clients.franka_metadata',
-        'cho_control_tools.clients.openarm_metadata',
-        'cho_control_tools.clients.ur5e_metadata',
+        'cho_control_tools.clients.fr5.metadata',
+        'cho_control_tools.clients.franka.metadata',
+        'cho_control_tools.clients.openarm.metadata',
+        'cho_control_tools.clients.ur5e.metadata',
     ]
     for name in metadata_modules:
         sys.modules.pop(name, None)
@@ -69,10 +69,10 @@ def test_fr5_metadata_loader_runs_without_registry_or_other_robot_metadata(monke
     config = config_loader_for('fr5')('fr5')
     assert config['robot_type'] == 'fr5'
     assert config['poses']['home']['1'][2] == -1.5707963268
-    assert 'cho_control_tools.clients.fr5_metadata' in sys.modules
-    assert 'cho_control_tools.clients.franka_metadata' not in sys.modules
-    assert 'cho_control_tools.clients.openarm_metadata' not in sys.modules
-    assert 'cho_control_tools.clients.ur5e_metadata' not in sys.modules
+    assert 'cho_control_tools.clients.fr5.metadata' in sys.modules
+    assert 'cho_control_tools.clients.franka.metadata' not in sys.modules
+    assert 'cho_control_tools.clients.openarm.metadata' not in sys.modules
+    assert 'cho_control_tools.clients.ur5e.metadata' not in sys.modules
 
 
 def test_injected_shell_loaders_do_not_fall_back_to_registry(monkeypatch):
@@ -131,4 +131,22 @@ def test_console_scripts_point_to_robot_scoped_modules():
     for robot_type in ('fr5', 'franka', 'openarm', 'ur5e'):
         assert (
             f'{robot_type}_action_client = '
-            f'cho_control_tools.clients.{robot_type}_action_client:main' in setup)
+            f'cho_control_tools.clients.{robot_type}.action_client:main' in setup)
+
+
+@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
+def test_flat_action_client_imports_remain_compatibility_wrappers(robot_type):
+    legacy = importlib.import_module(
+        f'cho_control_tools.clients.{robot_type}_action_client')
+    scoped = importlib.import_module(
+        f'cho_control_tools.clients.{robot_type}.action_client')
+    assert legacy.main is scoped.main
+
+
+@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
+def test_flat_metadata_imports_remain_compatibility_wrappers(robot_type):
+    legacy = importlib.import_module(
+        f'cho_control_tools.clients.{robot_type}_metadata')
+    scoped = importlib.import_module(
+        f'cho_control_tools.clients.{robot_type}.metadata')
+    assert legacy.load is scoped.load
