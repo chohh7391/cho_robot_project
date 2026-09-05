@@ -11,6 +11,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/openarm_task_tour_right.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -34,6 +35,9 @@ setup(
             'ur_action_client = cho_control_tools.clients.ur5e.action_client:main',
             'vla_action_client = cho_control_tools.vla.action_client:main',
             'vla_success_gui = cho_control_tools.vla.success_gui:main',
+            'gravity_compensation_sweep = cho_control_tools.diagnostics.gravity_compensation_sweep:main',
+            'openarm_task_goal = cho_control_tools.openarm_task.goal:main',
+            'openarm_task_tour = cho_control_tools.openarm_task.tour:main',
             'plot_joint_pos_log = cho_control_tools.plotting.joint_pos_log:main',
             'plot_pose_log = cho_control_tools.plotting.pose_log:main',
         ],

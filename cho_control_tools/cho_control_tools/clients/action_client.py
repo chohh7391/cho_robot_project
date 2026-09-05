@@ -533,13 +533,13 @@ class ControlSuiteShell(cmd.Cmd):
             return
 
         goal = TaskSpace.Goal()
-        goal.duration = 5.0
         goal.target_pose = Pose()
         reach = self.robot_config['motions']['reach']
         if selector not in reach:
             print("Usage: reach 0|1|2|3")
             return
         motion = reach[selector]
+        goal.duration = 5.0
         goal.relative = motion['relative']
         (goal.target_pose.position.x,
          goal.target_pose.position.y,

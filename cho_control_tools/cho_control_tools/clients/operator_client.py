@@ -13,6 +13,33 @@ import sys
 import time
 
 
+# Direct MIT task control begins from nominal zero by default.  Selectors 0--2
+# are bounded TCP-frame probes. Quaternion order is x, y, z, w.
+_OPENARM_MIT_NOMINAL_ZERO_RELATIVE_REACH = {
+    # +X translation, preserving tool orientation as the baseline probe.
+    '0': ((0.045, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+    # -X/+Y translation with a +0.20 rad roll.
+    '1': ((-0.040, 0.015, 0.0), (0.0998334166, 0.0, 0.0, 0.9950041653)),
+    # +X/+Y/-Z translation with a -0.25 rad pitch.
+    '2': ((0.010, 0.040, -0.015), (0.0, -0.1246747334, 0.0, 0.9921976672)),
+}
+
+# Absolute world-frame TCP poses computed from the canonical OpenArm URDF at
+# q=[0, 0, 0, pi/2, 0, 0, 0].  Unlike a large relative Cartesian displacement,
+# this asks the controller for the actual forward-bent J4 posture.  The
+# bimanual transforms are intentionally profile-specific.
+_OPENARM_MIT_FORWARD_BEND_REACH = {
+    'single': ((0.402000000000, 0.000000000000, 0.342500000000),
+               (0.0, 0.707106781187, 0.0, 0.707106781187)),
+    'left': ((0.402000000000, 0.153499191895, 0.477999550034),
+             (0.707106781185, 0.000001298672,
+              0.707106781185, 0.000001298672)),
+    'right': ((0.402000000000, -0.153499191895, 0.477999550034),
+              (0.707106781185, -0.000001298672,
+               0.707106781185, -0.000001298672)),
+}
+
+
 def _control_suite_shell():
     """Load the ROS-dependent common shell only when an operator runs it."""
     from .action_client import ControlSuiteShell
@@ -62,7 +89,7 @@ class RobotActionShell:
         self._install_openarm_task_startup_retry()
 
     def _install_openarm_task_startup_retry(self):
-        """Retry only OpenArm MIT's launch-time task goal rejection."""
+        """Apply the direct-MIT zero-start contract and retry launch-time rejection."""
         shell = self._shell
         mit_task_endpoints = {
             '/controller_action_server/task_space_impedance_mit_controller',
@@ -72,6 +99,31 @@ class RobotActionShell:
         if (getattr(shell, 'robot_type', None) != 'openarm' or
                 getattr(shell, 'task_action_name', None) not in mit_task_endpoints):
             return
+
+        # Keep the ordinary metadata untouched for MoveIt/non-MIT task
+        # endpoints. Only the direct MIT endpoint starts from nominal zero, so
+        # only it replaces its presets with these operator goals.
+        motions = getattr(shell, 'robot_config', {}).get('motions')
+        if isinstance(motions, dict):
+            motions['reach'] = {
+                selector: {
+                    'relative': True,
+                    'position': list(translation),
+                    # geometry_msgs quaternion order is x, y, z, w.
+                    'orientation': list(orientation),
+                }
+                for selector, (translation, orientation) in
+                _OPENARM_MIT_NOMINAL_ZERO_RELATIVE_REACH.items()
+            }
+            forward_bend = _OPENARM_MIT_FORWARD_BEND_REACH.get(
+                getattr(shell, 'arm', 'single'))
+            if forward_bend is not None:
+                position, orientation = forward_bend
+                motions['reach']['3'] = {
+                    'relative': False,
+                    'position': list(position),
+                    'orientation': list(orientation),
+                }
 
         original_send = shell._send_goal_and_wait
 

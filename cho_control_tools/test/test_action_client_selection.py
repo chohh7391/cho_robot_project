@@ -159,6 +159,21 @@ def test_openarm_single_arm_reach_keeps_task_space_goal_format(arm):
     assert [goal.target_pose.orientation.x, goal.target_pose.orientation.y,
             goal.target_pose.orientation.z,
             goal.target_pose.orientation.w] == motion['orientation']
+    assert goal.duration == 5.0
+
+
+def test_task_reach_honors_an_optional_motion_duration():
+    shell = bare_shell('openarm')
+    shell.arm = 'single'
+    shell.robot_config = MODULE.load_robot_config('openarm', 'single')
+    shell.task_space_action_client = object()
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append((client, goal)) or True
+
+    shell.do_reach('3')
+
+    assert len(sent) == 1
+    assert sent[0][1].duration == 5.0
 
 
 @pytest.mark.parametrize('arm', ['single', 'left', 'right'])

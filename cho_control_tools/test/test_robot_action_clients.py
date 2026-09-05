@@ -6,6 +6,7 @@ from cho_control_tools.clients import operator_client
 from cho_control_tools.clients.fr5 import action_client as fr5_client
 from cho_control_tools.clients.franka import action_client as franka_client
 from cho_control_tools.clients.openarm import action_client as openarm_client
+from cho_control_tools.clients.openarm import metadata as openarm_metadata
 from cho_control_tools.clients.ur5e import action_client as ur5e_client
 
 
@@ -139,6 +140,84 @@ def test_openarm_mit_does_not_retry_accepted_task_failure(monkeypatch):
 
     assert not shell._send_goal_and_wait(shell.task_space_action_client, object())
     assert shell.calls == 1
+
+
+@pytest.mark.parametrize('endpoint,profile,forward_bend', [
+    ('/controller_action_server/task_space_impedance_mit_controller', 'single',
+     ((0.402, 0.0, 0.3425),
+      (0.0, 0.707106781187, 0.0, 0.707106781187))),
+    ('/controller_action_server/left_task_space_impedance_mit_controller', 'left',
+     ((0.402, 0.153499191895, 0.477999550034),
+      (0.707106781185, 0.000001298672,
+       0.707106781185, 0.000001298672))),
+    ('/controller_action_server/right_task_space_impedance_mit_controller', 'right',
+     ((0.402, -0.153499191895, 0.477999550034),
+      (0.707106781185, -0.000001298672,
+       0.707106781185, -0.000001298672))),
+])
+def test_openarm_mit_task_endpoint_uses_relative_probes_and_absolute_forward_bend(
+        monkeypatch, endpoint, profile, forward_bend):
+    class BaseShell:
+        def __init__(self, **kwargs):
+            self.arm = kwargs.get('arm', 'single')
+            self.robot_type = 'openarm'
+            self.task_action_name = endpoint
+            self.robot_config = openarm_metadata.load(self.arm)
+            self.joint_space_action_client = object()
+            self.task_space_action_client = object()
+            self.gripper_action_client = None
+            self.robotiq_command_publisher = None
+            self._send_goal_and_wait = lambda *_args: True
+
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    shell = operator_client.RobotActionShell('openarm', profile)._shell
+
+    reach = shell.robot_config['motions']['reach']
+    expected_relative = {
+        '0': {'relative': True, 'position': [0.045, 0.0, 0.0],
+              'orientation': [0.0, 0.0, 0.0, 1.0]},
+        '1': {'relative': True, 'position': [-0.040, 0.015, 0.0],
+              'orientation': [0.0998334166, 0.0, 0.0, 0.9950041653]},
+        '2': {'relative': True, 'position': [0.010, 0.040, -0.015],
+              'orientation': [0.0, -0.1246747334, 0.0, 0.9921976672]},
+    }
+    assert set(reach) == {'0', '1', '2', '3'}
+    assert {selector: reach[selector] for selector in ('0', '1', '2')} == expected_relative
+    assert reach['3'] == {
+        'relative': False,
+        'position': list(forward_bend[0]),
+        'orientation': list(forward_bend[1]),
+    }
+
+    # Selectors 0--2 remain TCP-local relative actions. Direct task admission
+    # intentionally has no Cartesian translation/orientation/speed limit;
+    # runtime DLS clamps every reference to the upstream joint limits instead.
+    for selector in ('0', '1', '2'):
+        motion = reach[selector]
+        assert motion['relative']
+
+    # Selector 3 is an absolute, profile-specific world-frame FK target.
+    assert not reach['3']['relative']
+
+
+def test_openarm_non_mit_task_metadata_keeps_its_absolute_presets(monkeypatch):
+    class BaseShell:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.robot_type = 'openarm'
+            self.task_action_name = '/openarm/controller_action_server/moveit_task'
+            self.robot_config = openarm_metadata.load('single')
+            self.joint_space_action_client = object()
+            self.task_space_action_client = object()
+            self.gripper_action_client = None
+            self.robotiq_command_publisher = None
+            self._send_goal_and_wait = lambda *_args: True
+
+    monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
+    shell = operator_client.RobotActionShell('openarm')._shell
+
+    assert all(not motion['relative']
+               for motion in shell.robot_config['motions']['reach'].values())
 
 
 def test_openarm_mit_startup_rejection_is_not_retried_after_launch_window(monkeypatch):

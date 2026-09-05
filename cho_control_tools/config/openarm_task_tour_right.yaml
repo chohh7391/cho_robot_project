@@ -1,0 +1,27 @@
+# Far-waypoint tour for the RIGHT arm of the bimanual OpenArm torso, driven by
+# the task-space MIT impedance controller (ros2 run cho_control_tools
+# openarm_task_tour --arm right). Joint-defined, so every pose is the forward
+# kinematics of a posture inside the joint limits and therefore reachable.
+#
+# Run on hardware 2026-09-05 from the hanging posture at kp_task 120 N/m,
+# friction eps 0.02, 6 s per goal: moves of 18-57 cm and 27-90 deg, no
+# oscillation, no protocol errors. Every raised waypoint ended 2-5 cm short
+# (friction deadband at the elbow and shoulder under 4-9 N*m of gravity load);
+# the descent to hanging landed within 1 cm. Workspace needed: 0.6 m in front
+# of the torso, 0.5 m to the right of the body centre, nothing under the arm.
+- name: top_elbow_90
+  joints: [0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0]
+- name: side_out
+  joints: [0.2, 0.8, 0.0, 0.9, 0.0, 0.0, 0.0]
+- name: low_side
+  joints: [0.3, 0.6, 0.0, 0.4, 0.0, 0.0, 0.0]
+- name: forward_low
+  joints: [0.6, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+- name: forward_high
+  joints: [0.8, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+- name: forward_mid_tilted_hand
+  joints: [0.5, 0.2, 0.0, 1.2, 0.0, -0.6, 0.0]
+- name: top_elbow_90_again
+  joints: [0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0]
+- name: hanging
+  joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
