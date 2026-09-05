@@ -26,6 +26,7 @@ find_package(builtin_interfaces REQUIRED)
 
 set(MSG_FILES
   "msg/ActionChunk.msg"
+  "msg/GripperState.msg"
   "msg/PoseLog.msg"
 )
 
