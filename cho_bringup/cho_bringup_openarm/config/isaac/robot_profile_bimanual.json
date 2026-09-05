@@ -53,7 +53,7 @@
     0.0,
     0.0
   ],
-  "_armature_comment": "Damiao rotor inertia, same values as robot_profile.json: j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6 DM4310 0.0100  j7 DM3507 0.0049. It has to be mirrored in the controller's rotor_inertia parameter or the inertia-weighted law commands the wrong torque - on joint3 the rotor is sixteen times the link inertia.",
+  "_armature_comment": "Damiao rotor inertia, same values as robot_profile.json: j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6,j7 DM4310 0.0100 - joint 7 is a DM4310 because this is an OpenArm v1, not the v2 whose DM3507 wrist these numbers were first read from. It has to be mirrored in the controller's rotor_inertia parameter or the inertia-weighted law commands the wrong torque - on joint3 the rotor is sixteen times the link inertia.",
   "arm_armature": [
     0.0081,
     0.0081,
@@ -61,14 +61,14 @@
     0.16,
     0.01,
     0.01,
-    0.0049,
+    0.01,
     0.0081,
     0.0081,
     0.16,
     0.16,
     0.01,
     0.01,
-    0.0049
+    0.01
   ],
   "hand_armature": [
     0.001,

@@ -25,7 +25,13 @@
   "_armature_comment": [
     "Rotor inertia (kg*m^2) for the Damiao motors, from the per-motor default",
     "classes enactic authored in openarm_mujoco v2/openarm_bimanual.xml:",
-    "j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6 DM4310 0.0100  j7 DM3507 0.0049.",
+    "j1,j2 DM8009 0.0081  j3,j4 DM4340 0.1600  j5,j6,j7 DM4310 0.0100.",
+    "Joint 7 takes the DM4310 value because this is an OpenArm v1. Every source",
+    "that actually opens the CAN bus agrees on DM4310 there: upstream",
+    "openarm_ros2's DEFAULT_MOTOR_TYPES, the openarm_can zero-position",
+    "calibration tool, and our own openarm_mit_real_system. The v2 model these",
+    "numbers were read from mounts a DM3507 on joint 7 (0.0049); carrying that",
+    "over made the simulated wrist half as heavy as the arm we run.",
     "This matters more here than on the FR3. Without armature the articulation's mass",
     "matrix is severely ill-conditioned: joint1 and joint3 rotate about axes that become",
     "parallel whenever joint2 is near zero, and the soft mode carries 6.7e-4 kg m^2",
@@ -34,7 +40,7 @@
     "The v1 MuJoCo model this project simulates against declares none, which is why the",
     "MuJoCo bringup needs an inertia-weighted controller to stay stable."
   ],
-  "arm_armature": [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0049],
+  "arm_armature": [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0100],
   "hand_armature": [0.001, 0.001],
   "_position_gain_comment": [
     "Isaac position-drive gains, per radian. Sized from the arm's own gravity load, not",

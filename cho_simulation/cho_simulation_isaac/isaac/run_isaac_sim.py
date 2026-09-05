@@ -670,7 +670,7 @@ def _apply_newton_runtime_properties():
     this release, and physxJoint:armature is ignored. It is not optional either:
     Newton's default is a flat 0.1 kg m^2 on every joint (NewtonConfig.armature),
     which is twelve times the DM8009 rotor this arm actually has on joints 1-2
-    and twenty times the DM3507 on joint 7. Leaving it would make the simulated
+    and ten times the DM4310 on joint 7. Leaving it would make the simulated
     arm a different robot from the one the controller's M(q) models.
 
     No degree-to-radian scaling here, unlike _author_drive_gains: that conversion

@@ -96,7 +96,7 @@
         - openarm_left_finger_joint2
       # Mirrored from the profile so the controller's M(q) is the simulator's. See
       # config/isaac/controllers.yaml for why leaving it out under-commands.
-      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0049]
+      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0100]
       # NOT stiffness and damping: the controller multiplies all three by M(q),
       # so kp is a squared natural frequency [1/s^2], kd is 2*zeta*wn [1/s] and
       # ki is wn^2 * (integral corner) [1/s^3].
@@ -201,7 +201,7 @@
         - openarm_right_finger_joint2
       # Mirrored from the profile so the controller's M(q) is the simulator's. See
       # config/isaac/controllers.yaml for why leaving it out under-commands.
-      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0049]
+      rotor_inertia: [0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0100]
       # NOT stiffness and damping: the controller multiplies all three by M(q),
       # so kp is a squared natural frequency [1/s^2], kd is 2*zeta*wn [1/s] and
       # ki is wn^2 * (integral corner) [1/s^3].
