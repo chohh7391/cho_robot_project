@@ -68,6 +68,20 @@ limitations under the License.
   <xacro:arg name="right_arm_base_rpy"  default="1.5708 0 0"/>
   <xacro:arg name="can_fd"        default="true"/>
   <xacro:arg name="mit_state_from_command_reply" default="false"/>
+  <!-- Real gripper. The CAN ids are upstream OpenArm's defaults (0x08 / 0x18)
+       expressed in decimal because xacro parses these as numbers. The motor
+       endpoints are measured on the physical hand: zero is wherever it was last
+       zeroed and it opens negative. -->
+  <xacro:arg name="gripper_send_can_id" default="8"/>
+  <xacro:arg name="gripper_recv_can_id" default="24"/>
+  <xacro:arg name="gripper_pos_force" default="true"/>
+  <xacro:arg name="gripper_speed_rad_s" default="5.0"/>
+  <xacro:arg name="gripper_joint_closed" default="0.0"/>
+  <xacro:arg name="gripper_joint_open" default="0.044"/>
+  <xacro:arg name="gripper_motor_closed" default="0.0"/>
+  <xacro:arg name="gripper_motor_open" default="-1.0472"/>
+  <xacro:arg name="gripper_max_force" default="9.0"/>
+  <xacro:arg name="gripper_write_decimation" default="5"/>
   <xacro:arg name="kp_scale"      default="0.0"/>
   <xacro:arg name="kd_scale"      default="1.0"/>
   <xacro:arg name="fake_sensor_commands" default="false"/>
@@ -161,6 +175,16 @@ limitations under the License.
       can_interface="$(arg can_interface)"
       can_fd="$(arg can_fd)"
       mit_state_from_command_reply="$(arg mit_state_from_command_reply)"
+      gripper_send_can_id="$(arg gripper_send_can_id)"
+      gripper_recv_can_id="$(arg gripper_recv_can_id)"
+      gripper_pos_force="$(arg gripper_pos_force)"
+      gripper_speed_rad_s="$(arg gripper_speed_rad_s)"
+      gripper_joint_closed="$(arg gripper_joint_closed)"
+      gripper_joint_open="$(arg gripper_joint_open)"
+      gripper_motor_closed="$(arg gripper_motor_closed)"
+      gripper_motor_open="$(arg gripper_motor_open)"
+      gripper_max_force="$(arg gripper_max_force)"
+      gripper_write_decimation="$(arg gripper_write_decimation)"
       ee_type="parallel_link"
       kp_scale="$(arg kp_scale)"
       kd_scale="$(arg kd_scale)"

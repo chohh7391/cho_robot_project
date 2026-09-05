@@ -46,11 +46,38 @@ public:
     sent.push_back(tuple);
     return !fail_send;
   }
+  bool supports_gripper() const override {return gripper_supported;}
+
+  bool read_gripper(double & position, double & velocity, double & effort) override
+  {
+    events.push_back("read_gripper");
+    if (!gripper_supported || fail_gripper_read) {
+      return false;
+    }
+    position = gripper_motor_position;
+    velocity = 0.0;
+    effort = 0.0;
+    return true;
+  }
+
+  bool send_gripper(const double position, const double torque_pu) override
+  {
+    events.push_back("send_gripper");
+    gripper_sent.push_back({position, torque_pu});
+    return !fail_gripper_send;
+  }
+
   bool fail_send{false};
   bool read_nan{false};
+  bool gripper_supported{true};
+  bool fail_gripper_read{false};
+  bool fail_gripper_send{false};
+  double gripper_motor_position{0.0};
   std::atomic<int> disable_calls{0};
   std::vector<std::string> events;
   std::vector<std::array<cho_openarm_mit_core::JointTuple, 7>> sent;
+  // {motor position [rad], per-unit current cap}
+  std::vector<std::array<double, 2>> gripper_sent;
 };
 
 hardware_interface::HardwareInfo
@@ -75,6 +102,27 @@ hardware_info(
     joint.name = "openarm_" + prefix + "joint" + std::to_string(index);
     info.joints.push_back(joint);
   }
+  return info;
+}
+
+// The same info plus the hand: one extra joint at the END of the list and the
+// gripper's own parameter block. The endpoints are the ones upstream measured
+// on this hand - 44 mm of finger travel over -1.0472 rad of motor.
+hardware_interface::HardwareInfo hardware_info_with_hand(
+  const std::string & arm_side = "single", const std::string & decimation = "1")
+{
+  auto info = hardware_info("real_conservative_commissioning", "false", arm_side);
+  info.hardware_parameters["hand"] = "true";
+  info.hardware_parameters["gripper_joint_closed"] = "0.0";
+  info.hardware_parameters["gripper_joint_open"] = "0.044";
+  info.hardware_parameters["gripper_motor_closed"] = "0.0";
+  info.hardware_parameters["gripper_motor_open"] = "-1.0472";
+  info.hardware_parameters["gripper_max_force"] = "9.0";
+  info.hardware_parameters["gripper_write_decimation"] = decimation;
+  hardware_interface::ComponentInfo finger;
+  finger.name = cho_openarm_mit_core::gripper_joint_name(
+    arm_side == "single" ? std::string{} : arm_side);
+  info.joints.push_back(finger);
   return info;
 }
 
@@ -485,4 +533,273 @@ TEST(OpenArmMitRealSafety, FailedSafeSendDoesNotAdvanceSafeAcknowledgement) {
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
     hardware_interface::return_type::ERROR);
   EXPECT_EQ(safe_ack->get_value(), 1.0);
+}
+
+namespace
+{
+void activate_with_hand(
+  OpenArmMitRealSystem & system, CountingTransport * & transport,
+  const std::string & decimation = "1")
+{
+  ASSERT_EQ(
+    system.on_init(hardware_info_with_hand("single", decimation)),
+    hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.on_configure(rclcpp_lifecycle::State{}),
+    hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_NE(transport, nullptr);
+  ASSERT_EQ(
+    system.on_activate(rclcpp_lifecycle::State{}),
+    hardware_interface::CallbackReturn::SUCCESS);
+}
+}  // namespace
+
+TEST(OpenArmMitRealGripper, TheFingerIsExportedAsAPlainJointOutsideTheArmContract)
+{
+  OpenArmMitRealSystem system;
+  ASSERT_EQ(
+    system.on_init(hardware_info_with_hand("right")),
+    hardware_interface::CallbackReturn::SUCCESS);
+  const auto states = system.export_state_interfaces();
+  const auto commands = system.export_command_interfaces();
+  // 26 arm states plus the finger's position/velocity/effort; 39 arm commands
+  // plus the finger's position and max_effort.
+  EXPECT_EQ(states.size(), 29u);
+  EXPECT_EQ(commands.size(), 41u);
+  std::set<std::string> command_names;
+  for (const auto & command : commands) {
+    command_names.insert(command.get_name());
+  }
+  const std::string finger = "openarm_right_finger_joint1";
+  EXPECT_EQ(command_names.count(finger + "/position"), 1u);
+  EXPECT_EQ(command_names.count(finger + "/max_effort"), 1u);
+  // The gripper controller is a position controller; letting it claim an MIT
+  // field would put the hand inside the arm's lease and SAFE protocol, which
+  // the contract forbids.
+  for (const auto * field : {"velocity", "stiffness", "damping", "effort"}) {
+    EXPECT_EQ(command_names.count(finger + "/" + field), 0u) << field;
+  }
+}
+
+TEST(OpenArmMitRealGripper, WithoutTheHandNoFingerInterfaceExistsAtAll)
+{
+  OpenArmMitRealSystem system;
+  ASSERT_EQ(system.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system.export_state_interfaces().size(), 26u);
+  EXPECT_EQ(system.export_command_interfaces().size(), 39u);
+}
+
+TEST(OpenArmMitRealGripper, AJointListThatDisagreesWithTheHandFlagIsRejected)
+{
+  // hand:=true but only the seven arm joints.
+  {
+    OpenArmMitRealSystem system;
+    auto info = hardware_info();
+    info.hardware_parameters["hand"] = "true";
+    EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR);
+  }
+  // Eight joints but hand:=false.
+  {
+    OpenArmMitRealSystem system;
+    auto info = hardware_info_with_hand();
+    info.hardware_parameters["hand"] = "false";
+    EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR);
+  }
+  // The finger anywhere but last: every arm loop here indexes 0..6, so a
+  // finger in the middle would be commanded as an arm joint.
+  {
+    OpenArmMitRealSystem system;
+    auto info = hardware_info_with_hand();
+    std::swap(info.joints[0], info.joints[7]);
+    EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR);
+  }
+}
+
+TEST(OpenArmMitRealGripper, ADegenerateJointToMotorMapIsRejectedBeforeAnySocketOpens)
+{
+  int construction_attempts = 0;
+  OpenArmMitRealSystem system([&construction_attempts](const TransportConfig &) {
+    ++construction_attempts;
+    return std::make_unique<CountingTransport>();
+  });
+  auto info = hardware_info_with_hand();
+  info.hardware_parameters["gripper_motor_open"] = "0.0";  // equals closed
+  EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR);
+  EXPECT_EQ(construction_attempts, 0);
+}
+
+TEST(OpenArmMitRealGripper, AHandOnATransportThatCannotDriveOneIsRefusedAtConfigure)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    out->gripper_supported = false;
+    transport = out.get();
+    return out;
+  });
+  ASSERT_EQ(
+    system.on_init(hardware_info_with_hand()), hardware_interface::CallbackReturn::SUCCESS);
+  // Refusing here is free. Discovering it at the first write would already be
+  // a SAFE transition with the arm energised.
+  EXPECT_EQ(
+    system.on_configure(rclcpp_lifecycle::State{}),
+    hardware_interface::CallbackReturn::ERROR);
+}
+
+TEST(OpenArmMitRealGripper, TheConfiguredEndpointsMapTheFingerCommandOntoTheMotor)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    transport = out.get();
+    return out;
+  });
+  activate_with_hand(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto * const position = command_interface(commands, "openarm_finger_joint1/position");
+  auto * const force = command_interface(commands, "openarm_finger_joint1/max_effort");
+  ASSERT_NE(position, nullptr);
+  ASSERT_NE(force, nullptr);
+  transport->gripper_sent.clear();
+  position->set_value(0.044);          // fully open
+  force->set_value(4.5);               // half the configured maximum
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->gripper_sent.size(), 1u);
+  EXPECT_NEAR(transport->gripper_sent.back()[0], -1.0472, 1e-9);
+  EXPECT_NEAR(transport->gripper_sent.back()[1], 0.5, 1e-9);
+
+  transport->gripper_sent.clear();
+  position->set_value(0.022);          // half open
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->gripper_sent.size(), 1u);
+  EXPECT_NEAR(transport->gripper_sent.back()[0], -0.5236, 1e-4);
+}
+
+TEST(OpenArmMitRealGripper, ACommandBeyondTheTravelIsClampedRatherThanDrivenIntoTheStop)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    transport = out.get();
+    return out;
+  });
+  activate_with_hand(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto * const position = command_interface(commands, "openarm_finger_joint1/position");
+  ASSERT_NE(position, nullptr);
+  transport->gripper_sent.clear();
+  position->set_value(1.0);
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->gripper_sent.size(), 1u);
+  EXPECT_NEAR(transport->gripper_sent.back()[0], -1.0472, 1e-9);
+}
+
+TEST(OpenArmMitRealGripper, AnUnsetForceCommandsFullCurrentRatherThanLeavingTheFingerLimp)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    transport = out.get();
+    return out;
+  });
+  activate_with_hand(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto * const force = command_interface(commands, "openarm_finger_joint1/max_effort");
+  ASSERT_NE(force, nullptr);
+  transport->gripper_sent.clear();
+  // ros2_control initialises a command interface to zero, and a controller
+  // configured without a force interface never writes it.
+  force->set_value(0.0);
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->gripper_sent.size(), 1u);
+  EXPECT_NEAR(transport->gripper_sent.back()[1], 1.0, 1e-9);
+}
+
+TEST(OpenArmMitRealGripper, TheFingerIsWrittenOnlyEveryNthCycleToLeaveTheBusToTheArm)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    transport = out.get();
+    return out;
+  });
+  activate_with_hand(system, transport, "5");
+  transport->gripper_sent.clear();
+  const auto before_arm_writes = transport->sent.size();
+  for (int cycle = 0; cycle < 20; ++cycle) {
+    ASSERT_EQ(
+      system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+      hardware_interface::return_type::OK);
+  }
+  // The arm keeps its full rate; only the hand is decimated.
+  EXPECT_EQ(transport->sent.size() - before_arm_writes, 20u);
+  EXPECT_EQ(transport->gripper_sent.size(), 4u);
+}
+
+TEST(OpenArmMitRealGripper, ActivationSeedsTheFingerCommandFromWhereTheFingerActuallyIs)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    // Activating while the hand holds something: the motor sits half open.
+    out->gripper_motor_position = -0.5236;
+    transport = out.get();
+    return out;
+  });
+  activate_with_hand(system, transport);
+  auto states = system.export_state_interfaces();
+  auto * const measured = state_interface(states, "openarm_finger_joint1/position");
+  ASSERT_NE(measured, nullptr);
+  EXPECT_NEAR(measured->get_value(), 0.022, 1e-4);
+  transport->gripper_sent.clear();
+  // Nothing has written the command interface yet, which is exactly the window
+  // between hardware activation and the gripper controller's own activation.
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->gripper_sent.size(), 1u);
+  // Not 0 rad, which on this map is fully closed and would slam the hand shut.
+  EXPECT_NEAR(transport->gripper_sent.back()[0], -0.5236, 1e-4);
+}
+
+TEST(OpenArmMitRealGripper, AGripperFailureSafesTheSameBusArm)
+{
+  // Read failure.
+  {
+    CountingTransport * transport = nullptr;
+    OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+    activate_with_hand(system, transport);
+    transport->fail_gripper_read = true;
+    EXPECT_EQ(
+      system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+      hardware_interface::return_type::ERROR);
+    EXPECT_GE(transport->disable_calls.load(), 1);
+  }
+  // Send failure.
+  {
+    CountingTransport * transport = nullptr;
+    OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+    activate_with_hand(system, transport);
+    transport->fail_gripper_send = true;
+    EXPECT_EQ(
+      system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+      hardware_interface::return_type::ERROR);
+    EXPECT_GE(transport->disable_calls.load(), 1);
+  }
 }

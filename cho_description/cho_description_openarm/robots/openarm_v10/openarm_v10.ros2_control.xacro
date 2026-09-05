@@ -44,6 +44,16 @@ limitations under the License.
       right_can_interface:=can0
       can_fd:=true
       mit_state_from_command_reply:=false
+      gripper_send_can_id:=8
+      gripper_recv_can_id:=24
+      gripper_pos_force:=true
+      gripper_speed_rad_s:=5.0
+      gripper_joint_closed:=0.0
+      gripper_joint_open:=0.044
+      gripper_motor_closed:=0.0
+      gripper_motor_open:=-1.0472
+      gripper_max_force:=9.0
+      gripper_write_decimation:=5
       ee_type:=parallel_link
       kp_scale:=0.0
       kd_scale:=1.0
@@ -132,6 +142,26 @@ limitations under the License.
       <param name="can_fd">${can_fd}</param>
           <param name="mit_state_from_command_reply">${mit_state_from_command_reply}</param>
       <param name="arm_side">${side}</param>
+      <!-- The gripper is one more Damiao motor on this same CAN socket, but
+           outside the MIT arm contract: its values never enter an arm vector,
+           a lease generation or a SAFE acknowledgement. Only its failure
+           couples back, and then the arm is safed because they share a bus.
+           The motor endpoints are measured on the physical hand: the motor
+           zero is wherever it was last zeroed and it opens in the negative
+           direction, so both ends are configured rather than assumed. -->
+      <param name="hand">${hand}</param>
+      <xacro:if value="${hand}">
+        <param name="gripper_send_can_id">${gripper_send_can_id}</param>
+        <param name="gripper_recv_can_id">${gripper_recv_can_id}</param>
+        <param name="gripper_pos_force">${gripper_pos_force}</param>
+        <param name="gripper_speed_rad_s">${gripper_speed_rad_s}</param>
+        <param name="gripper_joint_closed">${gripper_joint_closed}</param>
+        <param name="gripper_joint_open">${gripper_joint_open}</param>
+        <param name="gripper_motor_closed">${gripper_motor_closed}</param>
+        <param name="gripper_motor_open">${gripper_motor_open}</param>
+        <param name="gripper_max_force">${gripper_max_force}</param>
+        <param name="gripper_write_decimation">${gripper_write_decimation}</param>
+      </xacro:if>
     </xacro:macro>
 
     <xacro:macro name="configure_joint" params="joint_name initial_position:=0.0 gripper:=false">
@@ -143,7 +173,14 @@ limitations under the License.
         </xacro:if>
         <xacro:unless value="${mit_gains}">
           <xacro:if value="${(hardware == 'mujoco' and mujoco_mit_prototype) or (hardware == 'real' and real_mit_hardware)}">
-            <xacro:if value="${gripper}"><command_interface name="position"/></xacro:if>
+            <!-- max_effort is the grasp force in newtons at the finger; the
+                 adapter scales it into the drive's per-unit current cap. Only
+                 the real adapter exports it - MuJoCo's finger is a position
+                 servo on a tendon and would reject the extra interface. -->
+            <xacro:if value="${gripper}">
+              <command_interface name="position"/>
+              <xacro:if value="${hardware == 'real'}"><command_interface name="max_effort"/></xacro:if>
+            </xacro:if>
             <xacro:unless value="${gripper}"><command_interface name="position"/><command_interface name="velocity"/><command_interface name="stiffness"/><command_interface name="damping"/><command_interface name="effort"/></xacro:unless>
           </xacro:if>
           <xacro:unless value="${(hardware == 'mujoco' and mujoco_mit_prototype) or (hardware == 'real' and real_mit_hardware)}">
@@ -212,9 +249,21 @@ limitations under the License.
          has no gripper transport yet, therefore real_mit_hardware never adds
          a finger interface to that SystemInterface. The hand geometry remains
          in the URDF for visualization. -->
-    <xacro:macro name="one_hand_joints" params="prefix">
-      <xacro:if value="${hand and not (hardware == 'real' and real_mit_hardware)}">
-        <xacro:configure_joint joint_name="openarm_${prefix}finger_joint1" gripper="true"/>
+    <xacro:macro name="one_hand_joints" params="prefix mit_selected:=true">
+      <xacro:if value="${hand}">
+        <!-- A real bimanual arm this bringup did not select is a state-only
+             GenericSystem for visualization, so its finger must not export a
+             command interface either - nothing exists to drive it. -->
+        <xacro:if value="${hardware == 'real' and real_mit_hardware and not mit_selected}">
+          <joint name="openarm_${prefix}finger_joint1">
+            <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+            <state_interface name="velocity"/>
+            <state_interface name="effort"/>
+          </joint>
+        </xacro:if>
+        <xacro:unless value="${hardware == 'real' and real_mit_hardware and not mit_selected}">
+          <xacro:configure_joint joint_name="openarm_${prefix}finger_joint1" gripper="true"/>
+        </xacro:unless>
       </xacro:if>
     </xacro:macro>
 
@@ -317,7 +366,7 @@ limitations under the License.
         </hardware>
         <xacro:if value="${not real_mit_hardware or left_real_mit_selected}"><xacro:one_arm_joints prefix="left_"/></xacro:if>
         <xacro:if value="${real_mit_hardware and not left_real_mit_selected}"><xacro:one_arm_visualization_joints prefix="left_"/></xacro:if>
-        <xacro:one_hand_joints prefix="left_"/>
+        <xacro:one_hand_joints prefix="left_" mit_selected="${left_real_mit_selected}"/>
         <xacro:if value="${real_mit_hardware and left_real_mit_selected}">
           <xacro:mit_arm_gpio resource="openarm_left_arm"/>
         </xacro:if>
@@ -337,7 +386,7 @@ limitations under the License.
         </hardware>
         <xacro:if value="${not real_mit_hardware or right_real_mit_selected}"><xacro:one_arm_joints prefix="right_"/></xacro:if>
         <xacro:if value="${real_mit_hardware and not right_real_mit_selected}"><xacro:one_arm_visualization_joints prefix="right_"/></xacro:if>
-        <xacro:one_hand_joints prefix="right_"/>
+        <xacro:one_hand_joints prefix="right_" mit_selected="${right_real_mit_selected}"/>
         <xacro:if value="${real_mit_hardware and right_real_mit_selected}">
           <xacro:mit_arm_gpio resource="openarm_right_arm"/>
         </xacro:if>

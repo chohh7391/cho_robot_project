@@ -46,6 +46,30 @@ bool strict_bool(const ParameterMap & parameters, const char * name)
   throw std::invalid_argument(std::string{name} + " must be true or false");
 }
 
+// Hardware parameters arrive as strings. An absent optional parameter keeps the
+// declared default rather than becoming zero, which for a gripper endpoint
+// would silently collapse the joint-to-motor map.
+template<typename ParameterMap>
+double optional_double(const ParameterMap & parameters, const char * name, const double fallback)
+{
+  const auto found = parameters.find(name);
+  if (found == parameters.end() || found->second.empty()) {
+    return fallback;
+  }
+  return std::stod(found->second);
+}
+
+template<typename ParameterMap>
+std::size_t optional_size(
+  const ParameterMap & parameters, const char * name, const std::size_t fallback)
+{
+  const auto found = parameters.find(name);
+  if (found == parameters.end() || found->second.empty()) {
+    return fallback;
+  }
+  return static_cast<std::size_t>(std::stoul(found->second));
+}
+
 template<typename ParameterMap>
 std::string required(const ParameterMap & parameters, const char * name)
 {
@@ -80,6 +104,50 @@ public:
       std::vector<uint32_t>{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17},
       std::vector<openarm::damiao_motor::ControlMode>{
           openarm::damiao_motor::ControlMode::MIT});
+    if (config_.hand) {
+      // One more Damiao motor on the same socket. POS_FORCE is what makes the
+      // Gripper action's force field real: the drive caps its own current,
+      // which an MIT tuple cannot express.
+      arm_->init_gripper_motor(
+        openarm::damiao_motor::MotorType::DM4310,
+        config_.gripper_send_can_id, config_.gripper_recv_can_id,
+        config_.gripper_pos_force ? openarm::damiao_motor::ControlMode::POS_FORCE :
+        openarm::damiao_motor::ControlMode::MIT);
+    }
+    return true;
+  }
+
+  bool supports_gripper() const override {return true;}
+
+  bool read_gripper(double & position, double & velocity, double & effort) override
+  {
+    if (!arm_ || !config_.hand) {
+      return false;
+    }
+    // read() has already run recv_all() for this cycle and the same call
+    // dispatches the gripper's reply into its own motor object.
+    const auto * motor = arm_->get_gripper().get_motor();
+    if (motor == nullptr) {
+      return false;
+    }
+    position = motor->get_position();
+    velocity = motor->get_velocity();
+    effort = motor->get_torque();
+    return true;
+  }
+
+  bool send_gripper(const double position, const double torque_pu) override
+  {
+    if (!arm_ || !config_.hand) {
+      return false;
+    }
+    if (config_.gripper_pos_force) {
+      arm_->get_gripper().set_position(position, config_.gripper_speed_rad_s, torque_pu);
+    } else {
+      arm_->get_gripper().set_position_mit(
+        position, config_.gripper_mit_kp, config_.gripper_mit_kd);
+    }
+    command_written_ = true;
     return true;
   }
 
@@ -211,15 +279,78 @@ bool OpenArmMitRealSystem::parse_and_validate_static_config()
     required(info_.hardware_parameters, "mit_safety_profile_file");
   profile_name_ = required(info_.hardware_parameters, "mit_safety_profile");
 
-  if (info_.joints.size() != kArmDof) {
+  hand_ = strict_bool(info_.hardware_parameters, "hand");
+  transport_config_.hand = hand_;
+  if (hand_) {
+    gripper_joint_ = cho_openarm_mit_core::gripper_joint_name(arm_side_);
+    transport_config_.gripper_send_can_id = static_cast<std::uint32_t>(
+      optional_size(info_.hardware_parameters, "gripper_send_can_id", 0x08));
+    transport_config_.gripper_recv_can_id = static_cast<std::uint32_t>(
+      optional_size(info_.hardware_parameters, "gripper_recv_can_id", 0x18));
+    transport_config_.gripper_pos_force =
+      info_.hardware_parameters.count("gripper_pos_force") == 0 ||
+      strict_bool(info_.hardware_parameters, "gripper_pos_force");
+    transport_config_.gripper_speed_rad_s =
+      optional_double(info_.hardware_parameters, "gripper_speed_rad_s", 5.0);
+    transport_config_.gripper_mit_kp =
+      optional_double(info_.hardware_parameters, "gripper_mit_kp", 5.0);
+    transport_config_.gripper_mit_kd =
+      optional_double(info_.hardware_parameters, "gripper_mit_kd", 0.1);
+    gripper_joint_closed_ =
+      optional_double(info_.hardware_parameters, "gripper_joint_closed", 0.0);
+    gripper_joint_open_ =
+      optional_double(info_.hardware_parameters, "gripper_joint_open", 0.044);
+    // The motor zero is wherever the hand was last zeroed and the open
+    // direction is negative on this hand, so both endpoints are measured on the
+    // physical gripper rather than assumed.
+    gripper_motor_closed_ =
+      optional_double(info_.hardware_parameters, "gripper_motor_closed", 0.0);
+    gripper_motor_open_ =
+      optional_double(info_.hardware_parameters, "gripper_motor_open", -1.0472);
+    gripper_max_force_ =
+      optional_double(info_.hardware_parameters, "gripper_max_force", 9.0);
+    gripper_write_decimation_ =
+      optional_size(info_.hardware_parameters, "gripper_write_decimation", 5);
+    const bool finite_map =
+      std::isfinite(gripper_joint_closed_) && std::isfinite(gripper_joint_open_) &&
+      std::isfinite(gripper_motor_closed_) && std::isfinite(gripper_motor_open_) &&
+      std::abs(gripper_joint_open_ - gripper_joint_closed_) > 1e-9 &&
+      std::abs(gripper_motor_open_ - gripper_motor_closed_) > 1e-9;
+    if (!finite_map || !(gripper_max_force_ > 0.0) || gripper_write_decimation_ == 0) {
+      return false;
+    }
+  }
+
+  const std::size_t expected_joints = hand_ ? kArmDof + 1 : kArmDof;
+  if (info_.joints.size() != expected_joints) {
     return false;
   }
   std::vector<std::string> actual;
-  actual.reserve(kArmDof);
+  actual.reserve(expected_joints);
   for (const auto & joint : info_.joints) {
     actual.push_back(joint.name);
   }
-  return actual == cho_openarm_mit_core::joint_names(arm_side_);
+  auto expected = cho_openarm_mit_core::joint_names(arm_side_);
+  if (hand_) {
+    // The finger must be LAST. Every arm loop in this file indexes 0..kArmDof,
+    // so a gripper anywhere else would be silently commanded as an arm joint.
+    expected.push_back(gripper_joint_);
+  }
+  return actual == expected;
+}
+
+double OpenArmMitRealSystem::gripper_joint_to_motor(const double joint) const
+{
+  const double span = gripper_joint_open_ - gripper_joint_closed_;
+  return gripper_motor_closed_ +
+         (joint - gripper_joint_closed_) * (gripper_motor_open_ - gripper_motor_closed_) / span;
+}
+
+double OpenArmMitRealSystem::gripper_motor_to_joint(const double motor) const
+{
+  const double span = gripper_motor_open_ - gripper_motor_closed_;
+  return gripper_joint_closed_ +
+         (motor - gripper_motor_closed_) * (gripper_joint_open_ - gripper_joint_closed_) / span;
 }
 
 hardware_interface::CallbackReturn OpenArmMitRealSystem::on_init(
@@ -252,8 +383,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
   try {
     // This is deliberately before the transport factory: an invalid real
     // profile cannot construct OpenArm (whose constructor opens CAN).
+    // arm_side_ is what selects this arm's joint-position window: the two
+    // torso arms do not share one, and gating a real arm against the other
+    // arm's window is what this argument exists to make impossible.
     safety_profile_ = cho_openarm_mit_core::load_safety_profile_file(
-      profile_file_, profile_name_, cho_openarm_mit_core::SafetyBackend::REAL);
+      profile_file_, profile_name_, cho_openarm_mit_core::SafetyBackend::REAL, arm_side_);
     const auto expected_rate = static_cast<std::size_t>(std::stoul(required(
       info_.hardware_parameters, "mit_expected_update_rate_hz")));
     if (expected_rate == 0 || expected_rate != safety_profile_.update_rate_hz) {
@@ -275,6 +409,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
       limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness);
     auto candidate = factory_(transport_config_);
     if (!candidate || !candidate->initialize()) {
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    // Fail here rather than at the first write: refusing a hand the transport
+    // cannot drive is free at configure time and is a SAFE transition later.
+    if (hand_ && !candidate->supports_gripper()) {
       return hardware_interface::CallbackReturn::ERROR;
     }
     std::lock_guard<std::mutex> lock(transport_mutex_);
@@ -304,6 +443,13 @@ std::vector<hardware_interface::StateInterface> OpenArmMitRealSystem::export_sta
   for (std::size_t index = 0; index < names.size(); ++index) {
     output.emplace_back(arm_resource_name(), names[index], &protocol_[index]);
   }
+  if (hand_) {
+    // Ordinary joint interfaces, no MIT fields: the gripper controller is a
+    // plain position controller and must never be able to claim a tuple field.
+    output.emplace_back(gripper_joint_, "position", &gripper_state_[0]);
+    output.emplace_back(gripper_joint_, "velocity", &gripper_state_[1]);
+    output.emplace_back(gripper_joint_, "effort", &gripper_state_[2]);
+  }
   return output;
 }
 
@@ -320,7 +466,63 @@ std::vector<hardware_interface::CommandInterface> OpenArmMitRealSystem::export_c
   output.emplace_back(arm_resource_name(), "mit_lease_cycles", &protocol_[6]);
   output.emplace_back(arm_resource_name(), "mit_commit_generation", &protocol_[7]);
   output.emplace_back(arm_resource_name(), "mit_safe_request_generation", &protocol_[8]);
+  if (hand_) {
+    output.emplace_back(gripper_joint_, "position", &gripper_command_[0]);
+    // Newtons at the finger. The adapter scales it into the drive's per-unit
+    // current cap, so the controller never has to know the motor.
+    output.emplace_back(gripper_joint_, "max_effort", &gripper_command_[1]);
+  }
   return output;
+}
+
+bool OpenArmMitRealSystem::read_gripper()
+{
+  double motor_position = 0.0, motor_velocity = 0.0, motor_effort = 0.0;
+  bool ok = false;
+  {
+    std::lock_guard<std::mutex> lock(transport_mutex_);
+    ok = transport_ && transport_->read_gripper(motor_position, motor_velocity, motor_effort);
+  }
+  if (!ok || !std::isfinite(motor_position) || !std::isfinite(motor_velocity) ||
+    !std::isfinite(motor_effort))
+  {
+    return false;
+  }
+  const double scale = (gripper_joint_open_ - gripper_joint_closed_) /
+    (gripper_motor_open_ - gripper_motor_closed_);
+  gripper_state_[0] = gripper_motor_to_joint(motor_position);
+  gripper_state_[1] = motor_velocity * scale;
+  // Motor torque to finger force through the same linear ratio; a sign is all
+  // the direction information this map carries.
+  gripper_state_[2] = motor_effort / scale;
+  return std::isfinite(gripper_state_[0]) && std::isfinite(gripper_state_[1]) &&
+         std::isfinite(gripper_state_[2]);
+}
+
+bool OpenArmMitRealSystem::write_gripper()
+{
+  if (++gripper_write_counter_ < gripper_write_decimation_) {
+    return true;
+  }
+  gripper_write_counter_ = 0;
+  const double requested = gripper_command_[0];
+  const double force = gripper_command_[1];
+  if (!std::isfinite(requested) || !std::isfinite(force)) {
+    return false;
+  }
+  // Clamp to the configured travel before mapping. An out-of-range position
+  // would be a motor command past the mechanical stop, which the drive would
+  // happily chase into the end of the finger.
+  const double low = std::min(gripper_joint_closed_, gripper_joint_open_);
+  const double high = std::max(gripper_joint_closed_, gripper_joint_open_);
+  const double clamped = std::clamp(requested, low, high);
+  // An unset force (the controller writes 0 when it has no force interface
+  // configured, and ros2_control initialises command interfaces to 0) must not
+  // mean "no current at all", which would leave the finger limp.
+  const double effective_force = force > 0.0 ? force : gripper_max_force_;
+  const double torque_pu = std::clamp(effective_force / gripper_max_force_, 0.0, 1.0);
+  std::lock_guard<std::mutex> lock(transport_mutex_);
+  return transport_ && transport_->send_gripper(gripper_joint_to_motor(clamped), torque_pu);
 }
 
 bool OpenArmMitRealSystem::finite_state() const
@@ -367,6 +569,20 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
       transition_to_safe(true);
       return hardware_interface::CallbackReturn::ERROR;
     }
+    if (hand_) {
+      if (!read_gripper()) {
+        transition_to_safe(true);
+        return hardware_interface::CallbackReturn::ERROR;
+      }
+      // Seed the command from where the finger actually is. Between hardware
+      // activation and the gripper controller's own activation nothing writes
+      // this interface, and ros2_control initialises it to zero - which on
+      // this map is fully closed, so an unseeded command would slam the hand
+      // shut on whatever it was holding.
+      gripper_command_[0] = gripper_state_[0];
+      gripper_command_[1] = gripper_max_force_;
+      gripper_write_counter_ = 0;
+    }
     // The first MIT tuple is the post-enable measured-position SAFE hold.
     if (!dispatch_safe_hold()) {
       transition_to_safe(true);
@@ -410,6 +626,12 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
       state_[index] = {position[index], velocity[index], effort[index]};
     }
     if (!finite_state()) {
+      transition_to_safe(true);
+      return hardware_interface::return_type::ERROR;
+    }
+    // A gripper that stopped answering is evidence about the shared CAN
+    // socket, not just about the hand, so the contract safes the same-bus arm.
+    if (hand_ && !read_gripper()) {
       transition_to_safe(true);
       return hardware_interface::return_type::ERROR;
     }
@@ -571,6 +793,14 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
     protocol_[2] = static_cast<double>(consumer_->safe_generation());
     protocol_[3] = static_cast<double>(consumer_->safe_ack_generation());
     protocol_[4] = static_cast<double>(consumer_->status());
+    // After the arm, and outside every arm generation/lease/ack path: the
+    // gripper has its own contract and its frames must not be able to change
+    // an arm acknowledgement. A failure still safes the arm, because they
+    // share the socket.
+    if (hand_ && !write_gripper()) {
+      transition_to_safe(true);
+      return hardware_interface::return_type::ERROR;
+    }
     return hardware_interface::return_type::OK;
   } catch (const std::exception &) {
     transition_to_safe(true);

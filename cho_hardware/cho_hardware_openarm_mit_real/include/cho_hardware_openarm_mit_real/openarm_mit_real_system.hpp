@@ -30,6 +30,24 @@ struct TransportConfig
   // default: at 200 Hz that is 5 ms and not obviously worth the bandwidth,
   // while at 750 Hz it is 1.3 ms and the bandwidth is what makes 750 Hz fit.
   bool state_from_command_reply{false};
+
+  // The gripper is one more Damiao motor on the SAME CAN socket as the seven
+  // arm motors, but it is not part of the MIT arm contract: its values never
+  // enter an arm vector, a lease generation or a SAFE acknowledgement (see
+  // docs/openarm_mit_contract_v1.md). It is therefore configured, read and
+  // written separately, and only its FAILURE couples back to the arm, which
+  // must then be safed because both share a bus.
+  bool hand{false};
+  std::uint32_t gripper_send_can_id{0x08};
+  std::uint32_t gripper_recv_can_id{0x18};
+  // POS_FORCE lets the drive firmware cap current, which is the only way the
+  // Gripper action's `force` field means anything. The legacy MIT path is kept
+  // for firmware where that mode is not live; there the grip force is only
+  // kp * error, so `force` degrades to advisory.
+  bool gripper_pos_force{true};
+  double gripper_speed_rad_s{5.0};
+  double gripper_mit_kp{5.0};
+  double gripper_mit_kd{0.1};
 };
 
 // The vendor object opens a SocketCAN descriptor in its constructor.  Keeping
@@ -45,6 +63,22 @@ public:
     std::array<double, kArmDof> & position, std::array<double, kArmDof> & velocity,
     std::array<double, kArmDof> & effort) = 0;
   virtual bool send(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & command) = 0;
+
+  // Gripper, optional. A transport that answers false to supports_gripper()
+  // makes a `hand:=true` configuration fail at configure time rather than at
+  // the first write, which is the only point where refusing is still free.
+  virtual bool supports_gripper() const {return false;}
+  // Motor units: radians for the position, per-unit [0, 1] for the current cap.
+  virtual bool read_gripper(double & position, double & velocity, double & effort)
+  {
+    (void)position; (void)velocity; (void)effort;
+    return false;
+  }
+  virtual bool send_gripper(double position, double torque_pu)
+  {
+    (void)position; (void)torque_pu;
+    return false;
+  }
 };
 
 using TransportFactory = std::function<std::unique_ptr<MitTransport>(const TransportConfig &)>;
@@ -73,6 +107,17 @@ private:
   bool parse_and_validate_static_config();
   bool validate_can_interface() const;
   bool finite_state() const;
+  // Affine map between the finger joint the controller commands (metres of
+  // travel on finger_joint1) and the motor shaft (radians). Both endpoints are
+  // configured because the motor zero is wherever the hand was last zeroed,
+  // and its open direction is negative on this hand.
+  double gripper_joint_to_motor(double joint) const;
+  double gripper_motor_to_joint(double motor) const;
+  // Reads the finger and mirrors it into gripper_state_. A failure safes the
+  // arm: they share one CAN socket, so a gripper that stopped answering is
+  // evidence about the bus, not just about the hand.
+  bool read_gripper();
+  bool write_gripper();
   bool transition_to_safe(bool transport_disable) noexcept;
   bool dispatch_safe_hold(bool force_new_generation = false);
   bool dispatch(const cho_openarm_mit_core::ArmCommand & command);
@@ -86,6 +131,25 @@ private:
   std::array<std::array<double, 5>, kArmDof> command_{};
   std::array<std::array<double, 3>, kArmDof> state_{};
   std::array<double, 9> protocol_{};
+  // position [m], velocity [m/s], effort [N] of the finger joint. Separate
+  // from state_/command_ so no arm loop can ever iterate over the gripper.
+  std::array<double, 3> gripper_state_{};
+  // position [m] and max_effort [N], written by the gripper controller.
+  std::array<double, 2> gripper_command_{};
+  bool hand_{false};
+  std::string gripper_joint_;
+  double gripper_joint_closed_{0.0};
+  double gripper_joint_open_{0.044};
+  double gripper_motor_closed_{0.0};
+  double gripper_motor_open_{-1.0472};
+  // Newtons at a full per-unit current command, i.e. the scale that turns the
+  // controller's max_effort into the drive's torque_pu.
+  double gripper_max_force_{9.0};
+  // The finger has no dynamics worth 750 Hz and every frame it sends is one the
+  // arm cannot use. Writing every Nth cycle keeps the hand responsive at a
+  // fraction of the bus cost.
+  std::size_t gripper_write_decimation_{5};
+  std::size_t gripper_write_counter_{0};
   cho_openarm_mit_core::SafetyProfile safety_profile_{};
   cho_openarm_mit_core::ValidationLimits limits_{1.0, 1.0, 1.0, 1.0, 1.0, 1};
   std::unique_ptr<cho_openarm_mit_core::ArmConsumer> consumer_;
