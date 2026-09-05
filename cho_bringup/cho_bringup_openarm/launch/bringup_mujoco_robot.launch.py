@@ -61,6 +61,10 @@ def generate_launch_description():
             'mujoco_mit_headless', default_value='false', choices=['true', 'false'],
             description='Run the opt-in MIT MuJoCo wrapper without its GUI'),
         DeclareLaunchArgument(
+            'return_to_zero', default_value='true', choices=['true', 'false'],
+            description='Ramp the selected MIT action controller to the bounded nominal-zero '
+                        'joint posture before accepting actions. Set false to opt out.'),
+        DeclareLaunchArgument(
             'mit_controller_name', default_value='joint_position_mit_controller',
             choices=['joint_position_mit_controller',
                      'joint_impedance_mit_controller',
@@ -152,10 +156,21 @@ def generate_launch_description():
             mit_prototype, LaunchConfiguration('xacro_file').perform(context), canonical_xacro)
         mit_controller_base = LaunchConfiguration('mit_controller_name').perform(context)
         mit_arm = LaunchConfiguration('mit_arm').perform(context)
+        return_to_zero = launch_utils.as_bool(
+            LaunchConfiguration('return_to_zero').perform(context))
         requested_controllers_file = LaunchConfiguration('controllers_file').perform(context)
         mit_selection = launch_utils.resolve_mujoco_mit_selection(
             mit_prototype, mode, bimanual, mit_controller_base, mit_arm,
             requested_controllers_file)
+        # The default MuJoCo backend does not expose the direct MIT action
+        # contract, so the default-on initialization applies only after the
+        # caller has opted into that backend.  This keeps the legacy default
+        # launch usable while direct MIT controllers initialize by default.
+        if return_to_zero and mit_prototype:
+            if mit_controller_base not in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS:
+                raise RuntimeError(
+                    "return_to_zero is supported only with joint_impedance_mit_controller "
+                    "or task_space_impedance_mit_controller.")
         if ctrl_name == 'moveit':
             raise RuntimeError(
                 "'moveit' is not a ros2_control controller. Launch "
@@ -181,6 +196,29 @@ def generate_launch_description():
                         description_path, 'config', 'mit_safety_profiles_v1.yaml'),
                     **selection_overrides.get(name, {}),
                 }
+                if return_to_zero and mit_prototype:
+                    # The direct producer owns the entire trajectory after its
+                    # hardware/session handshake, so no second controller can
+                    # race to command these interfaces.
+                    mit_profile_overrides[name].update({
+                        'return_to_zero': True,
+                        'return_to_zero_duration': 5.0,
+                    })
+                    if mit_controller_base == 'task_space_impedance_mit_controller':
+                        # A distinct joint-space initialization phase.  The
+                        # task controller only enables Cartesian actions after
+                        # this phase has converged, then resumes its ordinary
+                        # task gains (no second posture ramp).
+                        mit_profile_overrides[name].update({
+                            'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
+                            'startup_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],
+                            'startup_duration': 5.0,
+                        })
+                    else:
+                        mit_profile_overrides[name].update({
+                            'return_to_zero_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
+                            'return_to_zero_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],
+                        })
 
         runtime_param_file = launch_utils.create_runtime_param_file(
             controller_names=always_active + switchable_controllers,

@@ -39,19 +39,13 @@
       safety_profile_file: ''
       kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
       kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
-      torque_limit: [3.0, 3.0, 2.0, 2.0, 0.5, 0.5, 0.5]
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
 
-  # Direct impedance remains a one-arm producer.  The 14-axis paired command
+  # Direct impedance remains a one-arm producer. The 14-axis paired command
   # path is exclusively BimanualFollowJointTrajectoryController for MoveIt.
   # `torque_limit` caps only the explicit action tau_ff field before the MIT
-  # equation; it is *not* the final actuator-torque limit.  The latter remains
-  # the mujoco_sim_safe wrapper limit/slew gate.  Pinocchio nle sampled over
-  # the action-client's 5 s home 0 -> reach 0 cubic path peaks at
-  # [0.004, 4.259, 1.823, 3.356, 0.225, 0.308, 0.437] Nm.  The former
-  # [2.0, 2.0, 1.5, 1.5, 0.4, 0.4, 0.4] tuple clipped J2--J4 gravity,
-  # leaving a steady tracking error outside the action tolerance.  These
-  # deliberately modest values cover that validated MuJoCo-only envelope and
-  # remain below profile tau_ff_magnitude; they do not widen real hardware.
+  # equation; every direct controller uses the upstream OpenArm V1 motor tMax
+  # tuple, so this is not a backend-specific torque envelope.
   joint_impedance_mit_controller:
     ros__parameters:
       arm: single
@@ -60,34 +54,54 @@
       safety_profile_file: ''
       kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
       kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
-      torque_limit: [2.0, 5.0, 2.5, 4.0, 1.0, 1.0, 1.0]
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
 
-  # Primary Cartesian law: tau_ff = J^T(Kx*pose_error +
-  # Dx*(twist_des-J*dq)) + nle. The DLS q/dq tuple is only a bounded
-  # reference posture; the MIT wrapper remains final torque/slew authority.
+  # Cartesian law matches the Franka controller:
+  # tau_ff = J^T(Kx*pose_error + Dx*(twist_des-J*dq)) + nle.
+  # During action and Cartesian idle MIT kp/kd are zero. Return-to-zero gains
+  # ramp continuously to zero before this mode becomes action-ready.
   task_space_impedance_mit_controller:
     ros__parameters:
       arm: single
       safety_profile_name: mujoco_sim_safe
       safety_profile_file: ''
       ee_frame: openarm_hand_tcp
-      kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
-      kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      drive_side_impedance: true
+      # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
+      # declares no armature, so M_ii is roughly a quarter of the real arm's on
+      # the elbow, and the MJCF's own joint damping="0.4" counts toward zeta.
+      # kp_i = (kd_i + 0.4)^2 / (4 * 0.7^2) / M_ii,p95, clipped by
+      # mujoco_sim_safe's kp_max - which is what binds the wrist at 10.
+      kp: [13.0, 10.0, 32.0, 30.0, 10.0, 10.0, 10.0]
+      kd: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
       startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
       startup_kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
       startup_kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
       startup_duration: 5.0
       startup_tolerance: 0.05
-      # The task law may use the full *profile* tau_ff envelope; its ultimate
-      # actuator output is still bounded by the wrapper's final torque/slew.
-      torque_limit: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      # Manufacturer peak torque per motor, not the packet's tMax encoding
+      # range. The task-space gains below are unchanged.
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       kp_task: [150.0, 150.0, 150.0, 8.0, 8.0, 8.0]
       kd_task: [20.0, 20.0, 20.0, 1.2, 1.2, 1.2]
       max_task_wrench: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
-      lambda: 0.05
-      max_delta_q: 0.002
-      max_goal_translation: 0.20
-      max_goal_rotation: 1.20
-      max_absolute_radius: 1.20
-      max_cartesian_velocity: 0.10
-      max_angular_velocity: 0.80
+
+      # Fix 1: only the model feed-forward (nle) is rate-limited by the profile
+      # tau_ff_slew. The Cartesian PD, null-space and joint-limit torques are
+      # bounded by max_task_wrench/torque_limit instead, so no rate limiter sits
+      # inside the closed loop. Released/canceled references blend to the
+      # measured pose over release_duration rather than stepping.
+      release_duration: 1.0
+      # Fix 2: dq_des = J^+ v_des during an action, so the in-motor kd tracks
+      # the commanded motion instead of braking it (zero while idle).
+      task_velocity_reference_damping: 0.01
+      # Fix 3: dynamically consistent null-space posture (acceleration gains,
+      # Franka convention) and a one-sided joint-limit spring inside
+      # joint_limit_margin of the profile window. The posture reference is the
+      # joint configuration latched when Cartesian control starts unless
+      # nullspace_posture is given explicitly.
+      use_nullspace_posture: true
+      kp_null: 10.0
+      kd_null: 1.0
+      joint_limit_margin: 0.05
+      joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]

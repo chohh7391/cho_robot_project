@@ -71,6 +71,13 @@ REAL_MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
 })
+# Only the action-producing MIT controllers implement the acknowledged,
+# bounded return-to-zero phase.  Topic producers and paired trajectory
+# controllers intentionally remain outside this launch contract.
+RETURN_TO_ZERO_MIT_CONTROLLERS = frozenset({
+    'joint_impedance_mit_controller',
+    'task_space_impedance_mit_controller',
+})
 
 
 def enforce_mujoco_mit_description(enabled, requested_xacro, canonical_xacro):
@@ -190,6 +197,29 @@ def resolve_real_mit_selection(bimanual, controller_name, arm, controllers_file=
         'controllers_file': 'controllers_mit_bimanual.yaml',
         'controller_overrides': {
             name: {'arm': side} for name, side in zip(names, sides)},
+    }
+
+
+def resolve_real_mit_hardware_scope(bimanual, arm):
+    """Limit real bimanual startup to the arm(s) selected for MIT control.
+
+    A non-selected component is a state-only GenericSystem in the canonical
+    description. It keeps the bimanual model visible without constructing a
+    real transport, CAN socket, or motor command interface.
+    """
+    if not as_bool(bimanual):
+        return {
+            'always_active_controllers': always_active_controllers(False),
+        }
+    if arm not in ('left', 'right', 'both_independent'):
+        raise RuntimeError(
+            'real bimanual hardware scope requires mit_arm:=left, right, or '
+            'both_independent')
+    sides = ('left', 'right') if arm == 'both_independent' else (arm,)
+    return {
+        'always_active_controllers': (
+            ['joint_state_broadcaster'] +
+            [f'{side}_ee_state_broadcaster' for side in sides]),
     }
 
 

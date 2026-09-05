@@ -64,14 +64,28 @@ def test_direct_impedance_yaml_has_an_explicit_single_arm_safe_profile():
     assert all(len(config[key]) == 7 for key in ('kp', 'kd', 'torque_limit'))
     assert config['kp'] == [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
     assert config['kd'] == [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
-    # This is the action-only tau_ff cap, not the MIT wrapper final-torque
-    # cap.  It must cover the validated single-arm MuJoCo gravity envelope for
-    # home 0 -> reach 0 while remaining bounded by the named safety profile.
-    assert config['torque_limit'] == [2.0, 5.0, 2.5, 4.0, 1.0, 1.0, 1.0]
+    # Every backend uses the V1 motor packet tMax tuple. It is the explicit
+    # tau_ff cap, not an invented MuJoCo-only torque envelope.
+    assert config['torque_limit'] == [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     profile = yaml.safe_load(SAFETY_PROFILE.read_text())['profiles']['mujoco_sim_safe']
     tau_ff_limit = profile['torque']['tau_ff_magnitude']
     assert all(0.0 < configured <= allowed
                for configured, allowed in zip(config['torque_limit'], tau_ff_limit))
+
+
+def test_all_direct_mit_controller_configs_use_the_upstream_motor_torque_tuple():
+    expected = [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    for path in (DIRECT_CONFIG, DIRECT_BIMANUAL_CONFIG):
+        params = yaml.safe_load(path.read_text())['/**']
+        manager = params['controller_manager']['ros__parameters']
+        for name in manager:
+            if not name.endswith('_mit_controller'):
+                continue
+            assert params[name]['ros__parameters']['torque_limit'] == expected
+    profile = yaml.safe_load(SAFETY_PROFILE.read_text())['profiles']['mujoco_sim_safe']
+    assert profile['joint_limits']['physical_torque'] == expected
+    assert profile['torque']['tau_ff_magnitude'] == expected
+    assert profile['torque']['final_magnitude'] == expected
 
 
 def test_task_impedance_yaml_exposes_explicit_cartesian_wrench_contract():
@@ -85,7 +99,14 @@ def test_task_impedance_yaml_exposes_explicit_cartesian_wrench_contract():
     assert config['ee_frame'] == 'openarm_hand_tcp'
     assert all(len(config[key]) == 7 for key in ('kp', 'kd', 'torque_limit'))
     assert all(len(config[key]) == 6 for key in ('kp_task', 'kd_task'))
-    assert config['lambda'] > 0.0 and config['max_delta_q'] > 0.0
+    # Cartesian goal caps and DLS reference parameters are absent: active task
+    # motion is generated only by Cartesian feed-forward torque.
+    for retired in ('max_delta_q', 'max_goal_translation', 'max_goal_rotation',
+                    'max_absolute_radius', 'max_cartesian_velocity',
+                    'max_angular_velocity', 'use_cartesian_speed_limits',
+                    'lambda', 'task_joint_velocity_limits',
+                    'task_joint_position_lower', 'task_joint_position_upper'):
+        assert retired not in config
 
 
 def test_mit_description_rejects_custom_xacro_but_legacy_keeps_override():
@@ -191,9 +212,26 @@ def test_direct_bimanual_yaml_has_two_disjoint_one_arm_task_and_joint_plugins():
         task_params = params[task]['ros__parameters']
         assert task_params['ee_frame'] == f'openarm_{side}_hand_tcp'
         assert len(task_params['startup_posture']) == 7
+        for retired in ('max_delta_q', 'max_goal_translation', 'max_goal_rotation',
+                        'max_absolute_radius', 'max_cartesian_velocity',
+                        'max_angular_velocity', 'use_cartesian_speed_limits',
+                        'lambda', 'task_joint_velocity_limits',
+                        'task_joint_position_lower', 'task_joint_position_upper'):
+            assert retired not in task_params
     serialized = DIRECT_BIMANUAL_CONFIG.read_text()
     assert 'BimanualFollowJointTrajectoryController' not in serialized
     assert 'mit_pair_ownership' not in serialized
+
+
+def test_return_to_zero_defaults_on_and_is_limited_to_direct_action_producers():
+    launch = PACKAGE / 'launch' / 'bringup_mujoco_robot.launch.py'
+    source = launch.read_text()
+    assert "'return_to_zero', default_value='true'" in source
+    assert 'if return_to_zero and mit_prototype:' in source
+    assert 'RETURN_TO_ZERO_MIT_CONTROLLERS' in source
+    assert "'return_to_zero_duration': 5.0" in source
+    assert "'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]" in source
+    assert "'return_to_zero_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]" in source
 
 
 def test_paired_yaml_contains_only_one_14_axis_producer():

@@ -4,7 +4,12 @@
 /**:
   controller_manager:
     ros__parameters:
-      update_rate: 200
+      # Must equal the safety profile update_rate_hz and the
+      # mit_expected_update_rate_hz launch argument; the hardware refuses
+      # to configure when they disagree. Fits the CAN bus only because the
+      # per-cycle 0xCC state query was removed - with it, 750 Hz needs
+      # about 101% of a 1 Mbps CAN FD bus.
+      update_rate: 750
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
       left_ee_state_broadcaster:
@@ -39,7 +44,6 @@
                openarm_left_joint4, openarm_left_joint5, openarm_left_joint6,
                openarm_left_joint7]
       gripper_joint: ''
-      gripper_mimic_joints: []
 
   right_ee_state_broadcaster:
     ros__parameters:
@@ -52,7 +56,6 @@
                openarm_right_joint4, openarm_right_joint5, openarm_right_joint6,
                openarm_right_joint7]
       gripper_joint: ''
-      gripper_mimic_joints: []
 
   left_joint_impedance_mit_controller:
     ros__parameters:
@@ -62,7 +65,7 @@
       safety_profile_file: ''
       kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
       kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
-      torque_limit: [0.75, 0.75, 0.45, 0.45, 0.15, 0.15, 0.15]
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
 
   right_joint_impedance_mit_controller:
     ros__parameters:
@@ -72,7 +75,7 @@
       safety_profile_file: ''
       kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
       kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
-      torque_limit: [0.75, 0.75, 0.45, 0.45, 0.15, 0.15, 0.15]
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
 
   left_task_space_impedance_mit_controller:
     ros__parameters:
@@ -81,24 +84,156 @@
       safety_profile_name: real_conservative_commissioning
       safety_profile_file: ''
       ee_frame: openarm_left_hand_tcp
-      kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
-      kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      drive_side_impedance: false
+      # PROVISIONAL, not identified. Roughly 3% of each motor's peak torque,
+      # which lands where the hardware data does: a 2-4 N breakaway measured at
+      # the TCP is 1-2 N*m at the shoulder through a ~0.5 m lever, and the
+      # largest tau_ff seen during a probe was 1.4 N*m on joint 1.
+      # friction_scale stays 0 so this does nothing until it is deliberately
+      # walked up at runtime, one step at a time, with a stationary hold
+      # checked at each step. Replace these with identified values by
+      # differencing steady-state tau_ff against the Pinocchio nle prediction
+      # on a slow constant-velocity out-and-back: half the difference between
+      # the two directions is Coulomb, the mean is model error.
+      # Hand-tuned on hardware, not a formula. Started from 3% of each motor's
+      # peak torque and was walked per joint until guiding felt even.
+      #
+      # The result says friction tracks the load a joint carries, not its
+      # motor. Joints 1 and 2 share a DM8009 and 3 and 4 share a DM4340, yet
+      # each pair split the same way: 1.0 vs 1.2 and 0.8 vs 1.2. Joints 2 and 4
+      # take the arm and the forearm about bending axes, while 1 and 3 rotate
+      # about near-axial ones under far less load, and gear tooth normal force
+      # and bearing preload scale with that load.
+      #
+      # These are BREAKAWAY levels, paired with friction_kinetic_ratio below.
+      # They were identified with friction_velocity_source=measured while hand
+      # guiding; the control path uses the reference source, where the same
+      # numbers act on sign(dq_des) instead. That is not obviously the same
+      # optimum and is worth re-checking during Cartesian tuning.
+      friction_level: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+      # 0.85 was validated by hand at every step, each time confirming the arm
+      # stays put with hands off. Hand guiding reached it through the MEASURED
+      # source; the control path uses REFERENCE, where the term rides
+      # sign(dq_des) and is pure feed-forward - it cannot self-excite, and a
+      # stuck joint gets full assist, which is the case that matters most for
+      # breaking away. Gravity compensation overrides this back to 0 and walks
+      # it up under supervision.
+      friction_scale: 0.85
+      # 0.02, not 0.1. With the REFERENCE source there is no dither to reject,
+      # and the term is tanh(dq_des / eps): a 50 mm, 5 s probe peaks at only
+      # 0.024 rad/s on joint 1, so eps 0.1 delivered 29% of the level (0.25 of
+      # 0.85 N*m) while the joint needed 1.07 N*m to break away - measured
+      # 2026-09-05 as three or four stick-slip jumps per leg. The gravity
+      # compensation launch mode switches to the MEASURED source and pins eps
+      # back to 0.1 there, where the dither floor is what sets it.
+      friction_velocity_epsilon: 0.02
+      # Stribeck shaping: the level above is breakaway friction, sliding
+      # friction is lower, and a flat law over-compensates the difference as
+      # negative damping. Measured by hand at scale 0.7 with ratio 1: smooth to
+      # start, then the arm slid away under a harder push while every
+      # stationary check passed - a stationary check cannot see this, since
+      # tanh(0) is zero. Starting below 0.7 because that is where sliding began,
+      # which bounds sliding/breakaway from above. Both are runtime-settable.
+      friction_kinetic_ratio: 0.6
+      friction_stribeck_velocity: 0.15
+      # reference = sign(dq_des), pure feed-forward, cannot self-excite. Hand
+      # guiding overrides this to 'measured' because dq_des is zero there.
+      friction_velocity_source: reference
+      # `kd` stays applied through Cartesian control as actuator-side joint
+      # damping for the null space; see the single-arm profile for the reasoning.
+      # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
+      # not a posture spring underneath a tau_ff law. Sized as the largest kp
+      # each joint can still damp to zeta = 0.7 through the drive at its
+      # WORST-case inertia, since kd is capped at 5 by the MIT packet:
+      # kp_i = (kd_i / 1.4)^2 / M_ii,p95, then clipped by the profile ceiling.
+      # Joints 1-4 are damping-limited, the wrist is ceiling-limited.
+      # Mapped through diag(J^T Kx J) this guarantees >= 86 N/m of Cartesian
+      # stiffness anywhere in the workspace - one kilogram sags 11 cm.
+      # Fixed rather than scheduled per pose: kp_slew_per_s is 10/s while the
+      # mapped stiffness moves 3.4x across the workspace on joint 1, so a
+      # scheduled gain would only ever chase its own reference.
+      kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      kd: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
       startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
       startup_kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
-      startup_kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      startup_kd: [1.00, 1.00, 0.80, 0.80, 0.30, 0.25, 0.20]
       startup_duration: 15.0
       startup_tolerance: 0.05
-      torque_limit: [1.0, 1.0, 0.60, 0.60, 0.20, 0.20, 0.20]
-      kp_task: [20.0, 20.0, 20.0, 1.0, 1.0, 1.0]
-      kd_task: [4.0, 4.0, 4.0, 0.20, 0.20, 0.20]
-      max_task_wrench: [8.0, 8.0, 8.0, 1.0, 1.0, 1.0]
-      lambda: 0.05
-      max_delta_q: 0.00075
-      max_goal_translation: 0.05
-      max_goal_rotation: 0.35
-      max_absolute_radius: 1.20
-      max_cartesian_velocity: 0.03
-      max_angular_velocity: 0.20
+      # Manufacturer peak torque, same as the single-arm profile.
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # Match the single-arm tuning. The upstream torque tuple is unchanged;
+      # kp_task and max_task_wrench should be walked up per arm.
+      # EXPERIMENT: hybrid. Stiffness in tau_ff through the plain Jacobian
+      # transpose, damping in the drive. Each of the three laws tried before it
+      # failed a different way, and this avoids all three:
+      #   drive-side impedance - only diag(J^T Kx J) is representable, so the
+      #     force is not quite aimed at the target: 19 mm and 2-3 deg held, and
+      #     77 mm of drift over 18.5 hours.
+      #   Lambda weighting     - Lambda is not diagonal, so the wrench sits up
+      #     to 69 deg off the error; on a friction-dominated arm that creeps
+      #     along the force rather than accelerating, a 60 mm command drove it
+      #     26 mm the other way.
+      #   plain J^T with Dx    - kd_task 57 multiplied the +/-0.033 rad/s
+      #     velocity dither into ~0.94 N of force noise, against the 1-2 N the
+      #     arm produces at small error. Small-amplitude limit cycle.
+      # So: keep the full stiffness matrix (force always points at the target),
+      # and take damping from the drive, which uses the motor's own high-rate
+      # velocity estimate and costs no CAN bandwidth. kd_task is zero because it
+      # is the term that reads the noisy measured velocity.
+      #
+      # Starting at 40 N/m rather than the 86 that matched drive-side, because
+      # whether the drive damping alone is enough for a Cartesian stiffness is
+      # exactly what is unmeasured here. kp_task is runtime-settable; walk it up.
+      task_inertia_weighting: false
+      # Swept on hardware 2026-09-05 from the hanging posture, +x 50 mm / 5 s:
+      # 40, 60, 86 and 120 N/m all monotonic stick-slip, no reversal beyond the
+      # slip steps, joint 1 peak torque 1.5 -> 2.1 N*m. Out-leg travel 35% ->
+      # 65%, rest residual 32 -> 7 mm. Drive kd 5 gives x-direction zeta ~0.7
+      # at 120 in the wrist-dominated direction; do not raise further without
+      # re-checking damping.
+      kp_task: [120.0, 120.0, 120.0, 7.0, 7.0, 7.0]
+      kd_task: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      max_task_wrench: [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
+      # Measured on hardware 2026-09-04. Joints 1-6 are correct at 1.0: a global
+      # 1.5 visibly drives the arm upward, so they are not undercompensated.
+      # Joint 7 alone will not hold its own weight
+      # at scale 1.0 and falls continuously, while 1.5 holds it dead still
+      # (zero drift over 17 s, torque steady at 0.687 N*m against a modelled
+      # 0.458 N*m). The description therefore understates the first moment
+      # below joint 7 by half. This is a measured stopgap, not the fix: the
+      # right correction is the hand inertial in
+      # assets/robot/openarm_v1.0/config, which would also correct the mass
+      # matrix, the null-space projector and the inertia weighting rather than
+      # this one term. Whether joints 1-6 share the deficit is untested - their
+      # friction is large enough to hide it.
+      # Joint 7 was 1.5 while friction was uncompensated. Cancelling ~85% of
+      # that friction exposed the excess as the wrist lifting, and 1.25 is what
+      # held on hardware afterwards. The general lesson: friction masks gravity
+      # model error in both directions, so these two must be tuned together.
+      gravity_joint_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.25]
+
+      # Fix 1: only the model feed-forward (nle) is rate-limited by the profile
+      # tau_ff_slew (50/50/30/30/10/10/10 N*m/s here). The Cartesian PD,
+      # null-space and joint-limit torques are bounded by
+      # max_task_wrench/torque_limit instead: a rate limiter inside the closed
+      # loop adds phase lag with error amplitude and was a likely contributor
+      # to the kp_task=100 oscillation. Released/canceled references blend to
+      # the measured pose over release_duration rather than stepping.
+      release_duration: 1.0
+      # Fix 2: dq_des = J^+ v_des during an action, so the in-motor kd tracks
+      # the commanded motion instead of braking it (zero while idle).
+      task_velocity_reference_damping: 0.01
+      # Fix 3: dynamically consistent null-space posture (acceleration gains,
+      # Franka convention) plus a one-sided joint-limit spring inside
+      # joint_limit_margin of the profile window. Note the return-to-zero
+      # target sits 0.001 rad above joint 4's lower limit, so this spring
+      # applies a small elbow lift at that idle posture; set the joint 4 entry
+      # to 0.0 if that is unwanted.
+      use_nullspace_posture: true
+      kp_null: 5.0
+      kd_null: 0.5
+      joint_limit_margin: 0.05
+      joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
 
   right_task_space_impedance_mit_controller:
     ros__parameters:
@@ -107,21 +242,154 @@
       safety_profile_name: real_conservative_commissioning
       safety_profile_file: ''
       ee_frame: openarm_right_hand_tcp
-      kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
-      kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      drive_side_impedance: false
+      # PROVISIONAL, not identified. Roughly 3% of each motor's peak torque,
+      # which lands where the hardware data does: a 2-4 N breakaway measured at
+      # the TCP is 1-2 N*m at the shoulder through a ~0.5 m lever, and the
+      # largest tau_ff seen during a probe was 1.4 N*m on joint 1.
+      # friction_scale stays 0 so this does nothing until it is deliberately
+      # walked up at runtime, one step at a time, with a stationary hold
+      # checked at each step. Replace these with identified values by
+      # differencing steady-state tau_ff against the Pinocchio nle prediction
+      # on a slow constant-velocity out-and-back: half the difference between
+      # the two directions is Coulomb, the mean is model error.
+      # Hand-tuned on hardware, not a formula. Started from 3% of each motor's
+      # peak torque and was walked per joint until guiding felt even.
+      #
+      # The result says friction tracks the load a joint carries, not its
+      # motor. Joints 1 and 2 share a DM8009 and 3 and 4 share a DM4340, yet
+      # each pair split the same way: 1.0 vs 1.2 and 0.8 vs 1.2. Joints 2 and 4
+      # take the arm and the forearm about bending axes, while 1 and 3 rotate
+      # about near-axial ones under far less load, and gear tooth normal force
+      # and bearing preload scale with that load.
+      #
+      # These are BREAKAWAY levels, paired with friction_kinetic_ratio below.
+      # They were identified with friction_velocity_source=measured while hand
+      # guiding; the control path uses the reference source, where the same
+      # numbers act on sign(dq_des) instead. That is not obviously the same
+      # optimum and is worth re-checking during Cartesian tuning.
+      friction_level: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+      # 0.85 was validated by hand at every step, each time confirming the arm
+      # stays put with hands off. Hand guiding reached it through the MEASURED
+      # source; the control path uses REFERENCE, where the term rides
+      # sign(dq_des) and is pure feed-forward - it cannot self-excite, and a
+      # stuck joint gets full assist, which is the case that matters most for
+      # breaking away. Gravity compensation overrides this back to 0 and walks
+      # it up under supervision.
+      friction_scale: 0.85
+      # 0.02, not 0.1. With the REFERENCE source there is no dither to reject,
+      # and the term is tanh(dq_des / eps): a 50 mm, 5 s probe peaks at only
+      # 0.024 rad/s on joint 1, so eps 0.1 delivered 29% of the level (0.25 of
+      # 0.85 N*m) while the joint needed 1.07 N*m to break away - measured
+      # 2026-09-05 as three or four stick-slip jumps per leg. The gravity
+      # compensation launch mode switches to the MEASURED source and pins eps
+      # back to 0.1 there, where the dither floor is what sets it.
+      friction_velocity_epsilon: 0.02
+      # Stribeck shaping: the level above is breakaway friction, sliding
+      # friction is lower, and a flat law over-compensates the difference as
+      # negative damping. Measured by hand at scale 0.7 with ratio 1: smooth to
+      # start, then the arm slid away under a harder push while every
+      # stationary check passed - a stationary check cannot see this, since
+      # tanh(0) is zero. Starting below 0.7 because that is where sliding began,
+      # which bounds sliding/breakaway from above. Both are runtime-settable.
+      friction_kinetic_ratio: 0.6
+      friction_stribeck_velocity: 0.15
+      # reference = sign(dq_des), pure feed-forward, cannot self-excite. Hand
+      # guiding overrides this to 'measured' because dq_des is zero there.
+      friction_velocity_source: reference
+      # Cartesian torque control sends zero MIT stiffness after RTZ but keeps
+      # `kd` as actuator-side joint damping. Keep one entry per physical joint
+      # so the 7-DoF configure contract is valid.
+      # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
+      # not a posture spring underneath a tau_ff law. Sized as the largest kp
+      # each joint can still damp to zeta = 0.7 through the drive at its
+      # WORST-case inertia, since kd is capped at 5 by the MIT packet:
+      # kp_i = (kd_i / 1.4)^2 / M_ii,p95, then clipped by the profile ceiling.
+      # Joints 1-4 are damping-limited, the wrist is ceiling-limited.
+      # Mapped through diag(J^T Kx J) this guarantees >= 86 N/m of Cartesian
+      # stiffness anywhere in the workspace - one kilogram sags 11 cm.
+      # Fixed rather than scheduled per pose: kp_slew_per_s is 10/s while the
+      # mapped stiffness moves 3.4x across the workspace on joint 1, so a
+      # scheduled gain would only ever chase its own reference.
+      kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      kd: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
       startup_posture: [0.0, -0.15, 0.0, 1.14, 0.0, 0.38, 0.0]
       startup_kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
-      startup_kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      startup_kd: [1.00, 1.00, 0.80, 0.80, 0.30, 0.25, 0.20]
       startup_duration: 15.0
       startup_tolerance: 0.05
-      torque_limit: [1.0, 1.0, 0.60, 0.60, 0.20, 0.20, 0.20]
-      kp_task: [20.0, 20.0, 20.0, 1.0, 1.0, 1.0]
-      kd_task: [4.0, 4.0, 4.0, 0.20, 0.20, 0.20]
-      max_task_wrench: [8.0, 8.0, 8.0, 1.0, 1.0, 1.0]
-      lambda: 0.05
-      max_delta_q: 0.00075
-      max_goal_translation: 0.05
-      max_goal_rotation: 0.35
-      max_absolute_radius: 1.20
-      max_cartesian_velocity: 0.03
-      max_angular_velocity: 0.20
+      # Manufacturer peak torque, same as the single-arm profile.
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # Both arms are the same mechanism, so the Cartesian tuning is symmetric
+      # with the left arm and the single-arm profile.
+      # EXPERIMENT: hybrid. Stiffness in tau_ff through the plain Jacobian
+      # transpose, damping in the drive. Each of the three laws tried before it
+      # failed a different way, and this avoids all three:
+      #   drive-side impedance - only diag(J^T Kx J) is representable, so the
+      #     force is not quite aimed at the target: 19 mm and 2-3 deg held, and
+      #     77 mm of drift over 18.5 hours.
+      #   Lambda weighting     - Lambda is not diagonal, so the wrench sits up
+      #     to 69 deg off the error; on a friction-dominated arm that creeps
+      #     along the force rather than accelerating, a 60 mm command drove it
+      #     26 mm the other way.
+      #   plain J^T with Dx    - kd_task 57 multiplied the +/-0.033 rad/s
+      #     velocity dither into ~0.94 N of force noise, against the 1-2 N the
+      #     arm produces at small error. Small-amplitude limit cycle.
+      # So: keep the full stiffness matrix (force always points at the target),
+      # and take damping from the drive, which uses the motor's own high-rate
+      # velocity estimate and costs no CAN bandwidth. kd_task is zero because it
+      # is the term that reads the noisy measured velocity.
+      #
+      # Starting at 40 N/m rather than the 86 that matched drive-side, because
+      # whether the drive damping alone is enough for a Cartesian stiffness is
+      # exactly what is unmeasured here. kp_task is runtime-settable; walk it up.
+      task_inertia_weighting: false
+      # Swept on hardware 2026-09-05 from the hanging posture, +x 50 mm / 5 s:
+      # 40, 60, 86 and 120 N/m all monotonic stick-slip, no reversal beyond the
+      # slip steps, joint 1 peak torque 1.5 -> 2.1 N*m. Out-leg travel 35% ->
+      # 65%, rest residual 32 -> 7 mm. Drive kd 5 gives x-direction zeta ~0.7
+      # at 120 in the wrist-dominated direction; do not raise further without
+      # re-checking damping.
+      kp_task: [120.0, 120.0, 120.0, 7.0, 7.0, 7.0]
+      kd_task: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      max_task_wrench: [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
+      # Measured on hardware 2026-09-04. Joints 1-6 are correct at 1.0: a global
+      # 1.5 visibly drives the arm upward, so they are not undercompensated.
+      # Joint 7 alone will not hold its own weight
+      # at scale 1.0 and falls continuously, while 1.5 holds it dead still
+      # (zero drift over 17 s, torque steady at 0.687 N*m against a modelled
+      # 0.458 N*m). The description therefore understates the first moment
+      # below joint 7 by half. This is a measured stopgap, not the fix: the
+      # right correction is the hand inertial in
+      # assets/robot/openarm_v1.0/config, which would also correct the mass
+      # matrix, the null-space projector and the inertia weighting rather than
+      # this one term. Whether joints 1-6 share the deficit is untested - their
+      # friction is large enough to hide it.
+      # Joint 7 was 1.5 while friction was uncompensated. Cancelling ~85% of
+      # that friction exposed the excess as the wrist lifting, and 1.25 is what
+      # held on hardware afterwards. The general lesson: friction masks gravity
+      # model error in both directions, so these two must be tuned together.
+      gravity_joint_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.25]
+
+      # Fix 1: only the model feed-forward (nle) is rate-limited by the profile
+      # tau_ff_slew (50/50/30/30/10/10/10 N*m/s here). The Cartesian PD,
+      # null-space and joint-limit torques are bounded by
+      # max_task_wrench/torque_limit instead: a rate limiter inside the closed
+      # loop adds phase lag with error amplitude and was a likely contributor
+      # to the kp_task=100 oscillation. Released/canceled references blend to
+      # the measured pose over release_duration rather than stepping.
+      release_duration: 1.0
+      # Fix 2: dq_des = J^+ v_des during an action, so the in-motor kd tracks
+      # the commanded motion instead of braking it (zero while idle).
+      task_velocity_reference_damping: 0.01
+      # Fix 3: dynamically consistent null-space posture (acceleration gains,
+      # Franka convention) plus a one-sided joint-limit spring inside
+      # joint_limit_margin of the profile window. Note the return-to-zero
+      # target sits 0.001 rad above joint 4's lower limit, so this spring
+      # applies a small elbow lift at that idle posture; set the joint 4 entry
+      # to 0.0 if that is unwanted.
+      use_nullspace_posture: true
+      kp_null: 5.0
+      kd_null: 0.5
+      joint_limit_margin: 0.05
+      joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
