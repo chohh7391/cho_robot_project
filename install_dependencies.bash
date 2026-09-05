@@ -3,13 +3,26 @@ set -euo pipefail
 
 ROS_DISTRO_NAME="${ROS_DISTRO:-humble}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_SRC="${1:-$(cd "${REPO_ROOT}/.." && pwd)}"
-if [[ $# -gt 0 ]]; then
+WORKSPACE_SRC="$(cd "${REPO_ROOT}/.." && pwd)"
+# A non-option first argument selects the workspace source directory.
+if [[ $# -gt 0 && "${1}" != -* ]]; then
+  WORKSPACE_SRC="${1}"
   shift
 fi
 ROSDEP_ARGS=("$@")
+SIMULATE_APT=0
+for rosdep_arg in "${ROSDEP_ARGS[@]}"; do
+  if [[ "${rosdep_arg}" == "--simulate" || "${rosdep_arg}" == "-s" ]]; then
+    SIMULATE_APT=1
+    break
+  fi
+done
 SKIP_KEYS=(
+  # Install this ABI-compatible pair explicitly below rather than through rosdep.
   libfranka
+  pinocchio
+  # The external OpenArm packages declare this absent source dependency.
+  openarm_description
 )
 EXCLUDED_SOURCE_PACKAGES=(
   "${REPO_ROOT}/extern/mujoco_vendor"
@@ -51,10 +64,21 @@ if [[ "${SKIP_ROSDEP_UPDATE:-0}" != "1" ]]; then
   rosdep update
 fi
 
+if [[ "${SIMULATE_APT}" == "1" ]]; then
+  apt-get --simulate install -y \
+    "ros-${ROS_DISTRO_NAME}-libfranka" \
+    "ros-${ROS_DISTRO_NAME}-pinocchio"
+else
+  sudo apt update
+  sudo apt install -y \
+    "ros-${ROS_DISTRO_NAME}-libfranka" \
+    "ros-${ROS_DISTRO_NAME}-pinocchio"
+fi
+
 rosdep install \
+  "${ROSDEP_ARGS[@]}" \
   --from-paths "${ROSDEP_PATHS[@]}" \
   --ignore-src \
   --rosdistro "${ROS_DISTRO_NAME}" \
-  --skip-keys "${SKIP_KEYS[@]}" \
-  -y \
-  "${ROSDEP_ARGS[@]}"
+  --skip-keys "${SKIP_KEYS[*]}" \
+  -y

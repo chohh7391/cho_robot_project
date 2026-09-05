@@ -153,8 +153,8 @@ The hardware wrapper rejects incompatible claim/switch combinations.
   handoff or deactivation.
 - The MuJoCo profile is prototype-only. It is not a production approval.
 - OpenArm real MIT bringup is commissioning-only and physically untested. Its
-  default launch does not create a hardware component, open CAN, or enable
-  motors; see [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md).
+  invocation starts the selected hardware component; see
+  [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md).
 
 ## FR5 MuJoCo quick start
 

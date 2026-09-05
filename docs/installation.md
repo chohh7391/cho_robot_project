@@ -18,17 +18,12 @@ cd ~/ros2_ws/src/cho_robot_project
 bash install_dependencies.bash
 ```
 
-The dependency script uses `rosdep` from the whole ROS workspace source directory, skips the `libfranka` rosdep key, and excludes a local `extern/mujoco_vendor` source package if present.
-
-This avoids installing the apt version of `libfranka` while allowing `mujoco_vendor` to resolve to the apt package.
-
-## libfranka
-
-```bash
-cd ~/Downloads
-wget https://github.com/frankarobotics/libfranka/releases/download/0.20.3/libfranka_0.20.3_jammy_amd64.deb
-sudo dpkg -i libfranka_0.20.3_jammy_amd64.deb
-```
+The dependency script updates and installs the ROS distribution's matching
+`libfranka` and Pinocchio packages together, then uses `rosdep` from the whole
+ROS workspace source directory. It skips their rosdep keys to keep that package
+selection centralized, and excludes a checked-out
+`extern/mujoco_vendor` source package, if present, so rosdep can install
+`ros-humble-mujoco-vendor` for the vendored `mujoco_ros2_control` packages.
 
 ## MuJoCo
 
@@ -64,9 +59,9 @@ modifying vendor code.
 Isaac Sim additionally needs the USD asset built once per variant — see
 `cho_description_openarm/usd/README.md`. The assets are generated and gitignored.
 
-> Real OpenArm MIT bringup is commissioning-only and physically untested. Its
-> default launch cannot open CAN or enable motors; the explicit three-flag
-> opt-in is documented in [OpenArm real bringup](openarm_real_bringup.md).
+> Real OpenArm MIT bringup is commissioning-only and physically untested.
+> Invoking it starts the selected hardware component; see the required
+> commissioning procedure in [OpenArm real bringup](openarm_real_bringup.md).
 
 ## Build
 
@@ -74,10 +69,11 @@ Isaac Sim additionally needs the USD asset built once per variant — see
 cd ~/ros2_ws
 
 # for simulation
-colcon build --symlink-install
+MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install
 
 # for real
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install
+MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
 After building:

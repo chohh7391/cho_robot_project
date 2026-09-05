@@ -76,7 +76,11 @@ to use its position-controller map.
 
 On activation the consumer itself enters SAFE from its latest measured position. The producer's
 first commit is `q_des=q_measured,dq_des=0,kp=safe_hold_stiffness,kd=safe_hold_damping,tau_ff=0`; it waits for the
-matching ack before ramping. Deactivation requires another safe generation and matching ack before
+matching ack before ramping. The consumer's own SAFE hold tuple is
+`q_des=q_measured,dq_des=0,kp=safe_hold_stiffness[i],kd=safe_hold_damping[i],tau_ff=last accepted tau_ff`:
+gains are per joint, and the feed-forward is retained because the MIT equation inside the motor has no
+gravity model, so a hold with `tau_ff=0` would let the arm fall at the moment it stops being commanded.
+A fresh session has no accepted command and therefore holds with `tau_ff=0`. Deactivation requires another safe generation and matching ack before
 release. Humble lifecycle callbacks cannot wait for a future hardware write safely, so shutdown is
 an explicit update-state controlled-stop handshake. The controller reports stop-ready only after
 equal per-arm safe acknowledgements and the hardware-owned pair stop-ready state; orchestration then
@@ -164,26 +168,33 @@ and right controllers remain separate seven-axis producers and may transition in
 ## Numeric safety profiles and evidence
 
 The authoritative machine-readable file is `config/mit_safety_profiles_v1.yaml`; the copy embedded
-in the wider contract is drift-tested against it. It contains three deliberately separate numeric
-profiles. There is no default and selection is mandatory. The default real profile remains
-non-driving; the only real profile that permits a commissioning transport is independently gated.
+in the wider contract is drift-tested against it. It contains four deliberately separate numeric
+profiles. There is no default and selection is mandatory. Real bringup selects a
+commissioning profile explicitly. The additional
+`real_return_to_zero_commissioning` profile is selected when `return_to_zero`
+(which defaults true) remains enabled; set
+`return_to_zero:=false` to opt out. It permits upstream gains for the controller-owned
+nominal-zero phase while the normal controller configuration remains derated.
+For task-space control, opting out bypasses joint-space startup entirely: the
+post-handshake measured TCP pose becomes the Cartesian direct-torque idle
+reference, with zero MIT joint gains.
 `cho_openarm_mit_core::load_safety_profile_*` rejects missing/unknown keys, wrong scalar types and
 enums, null required simulation values, backend mismatches and non-finite or misordered limits.
-An adapter must call this loader and validate the runtime gates **before opening a CAN socket**:
+An adapter must call this loader and validate the CAN interface **before opening a CAN socket**:
 
 - `mujoco_sim_safe` has status `prototype_experiment_allowed` only for the 1 kHz MuJoCo consumer;
   it is not a safety approval and cannot become a production default. Its position bounds and physical
   velocity/torque ceilings are copied from
   `cho_description_openarm/assets/robot/openarm_v1.0/config/arm/joint_limits.yaml`. The physical CAN
-  packet ranges independently agree in the pinned
-  `extern/openarm_can/include/openarm/damiao_motor/dm_motor_constants.hpp`: joints 1/2 use DM8009,
-  joints 3/4 DM4340 and joints 5/6/7 DM4310. The URDF's 40/27/7 N m limits are stricter than the
-  packet ranges 54/28/10 N m and therefore remain the final simulation limits.
+  torque magnitudes are the manufacturer peak ratings; the packet ranges are the pinned upstream
+  `extern/openarm_can/include/openarm/damiao_motor/dm_motor_constants.hpp` tMax values: joints 1/2
+  use DM8009, joints 3/4 DM4340, and joints 5/6/7 DM4310, giving
+  `[54,54,28,28,10,10,10] N m`. The URDF, MuJoCo and real MIT profiles use that
+  same tuple; no backend-specific lower torque envelope is imposed.
 - Its maximum position gains and damping are the OpenArm v1.0 values in
-  `assets/robot/openarm_v1.0/config/arm/control_gains.yaml`. Command velocity is capped at
-  `[2,2,1.5,1.5,2,2,2]` rad/s, `tau_ff` at 50% of the URDF effort limit, and gain/feed-forward/final
-  torque slew reaches its corresponding ceiling in no less than 0.2 s. These are conservative
-  **simulation experiment choices**, not manufacturer-rated safety values.
+  `assets/robot/openarm_v1.0/config/arm/control_gains.yaml`. Command velocity uses the canonical
+  upstream joint values, and the feed-forward/final torque packet range is the same vendor tMax
+  tuple above. Gain/feed-forward/final torque slew remains a simulation-only implementation detail.
 - A default 20-cycle lease refreshed every 10 cycles, a 100-cycle hardware cap, 100-cycle stale-state
   threshold and 100 ms controller-write watchdog are approved only for deterministic 1 kHz
   simulation fault injection. They are not evidence for CAN or motor watchdog timing.
@@ -193,10 +204,9 @@ An adapter must call this loader and validate the runtime gates **before opening
   supported-arm tests, CAN timing measurement, motor watchdog verification, physical E-stop and a
   recorded manual low-output approval before any real command path may enable motors.
 - `real_conservative_commissioning` is a separately named, 200 Hz, lower-output envelope. It is
-  selectable only when `open_can`, `operator_approval`, and `enable_motors` are all explicitly true
-  at runtime and must never become the default profile. It has not been physically validated in this
-  repository; the profile and three flags are transport gates, not a substitute for an E-stop,
-  verified motor identity/zeroing, or an operator commissioning record.
+  selected by real bringup with `return_to_zero:=false`. It has not been physically validated in
+  this repository; the profile is not a substitute for an E-stop, verified motor identity/zeroing,
+  or an operator commissioning record.
 
 Timing priority is hardware fault, controller-write watchdog, stale state, then lease. Lease and
 stale counters advance only on a successful consumer write cycle. All gain/feed-forward/final-torque
