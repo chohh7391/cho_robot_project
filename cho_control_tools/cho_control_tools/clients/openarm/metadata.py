@@ -26,7 +26,7 @@ _CONFIG = {
                   '/controller_action_server/joint_impedance_mit_controller'],
         'task': ['/openarm/controller_action_server/moveit_task',
                  '/controller_action_server/task_space_impedance_mit_controller'],
-        'gripper': [],
+        'gripper': ['/controller_action_server/gripper_controller'],
     }},
     'poses': {'home': _HOME, 'reach': _REACH},
     'motions': {'reach': {
@@ -84,7 +84,7 @@ def _side_config(profile):
                   f'/controller_action_server/{profile}_joint_impedance_mit_controller'],
         'task': [f'/openarm/{profile}/controller_action_server/moveit_task',
                  f'/controller_action_server/{profile}_task_space_impedance_mit_controller'],
-        'gripper': [],
+        'gripper': [f'/controller_action_server/{profile}_gripper_controller'],
     }
     config['motions']['reach'] = {
         selector: {'relative': False, 'position': position,

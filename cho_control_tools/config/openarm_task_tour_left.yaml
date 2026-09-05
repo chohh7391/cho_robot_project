@@ -1,0 +1,30 @@
+# Far-waypoint tour for the LEFT arm of the bimanual OpenArm torso, driven by
+# the task-space MIT impedance controller (ros2 run cho_control_tools
+# openarm_task_tour --arm left). Joint-defined, so every pose is the forward
+# kinematics of a posture inside the LEFT arm's joint window, which is not the
+# right arm's: the torso rolls each arm's joint 2 frame and shifts the left
+# arm's joint 1, so joint 1 runs [-3.49, 1.40] here against [-1.40, 3.49] on
+# the right, and joint 2 runs [-3.32, 0.17] against [-0.17, 3.32].
+#
+# These are the right-arm tour's postures mirrored through the torso's sagittal
+# plane. The mapping is a sign flip on every joint except the elbow:
+# (-1, -1, -1, +1, -1, -1, -1). Verified against the generated bimanual URDF -
+# each left TCP lands exactly on its right counterpart with y negated, to under
+# a micrometre - so the two tours cover mirror-image workspace, and a result
+# that differs between them is the arm, not the trajectory.
+- name: top_elbow_90
+  joints: [0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0]
+- name: side_out
+  joints: [-0.2, -0.8, 0.0, 0.9, 0.0, 0.0, 0.0]
+- name: low_side
+  joints: [-0.3, -0.6, 0.0, 0.4, 0.0, 0.0, 0.0]
+- name: forward_low
+  joints: [-0.6, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
+- name: forward_high
+  joints: [-0.8, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+- name: forward_mid_tilted_hand
+  joints: [-0.5, -0.2, 0.0, 1.2, 0.0, 0.6, 0.0]
+- name: top_elbow_90_again
+  joints: [0.0, 0.0, 0.0, 1.5708, 0.0, 0.0, 0.0]
+- name: hanging
+  joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

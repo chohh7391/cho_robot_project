@@ -17,12 +17,40 @@ reachable by construction and its orientation is consistent with the arm.
 """
 
 import math
+import os
 
 import yaml
 
-# Joint order the MIT controllers and the safety profile use.
+# Fallback for a caller with no installed description (unit tests). These are
+# the SINGLE-arm mount's limits; the bimanual torso's two arms do not share
+# them, which is what profile_joint_limits() exists to resolve.
 JOINT_LIMITS_LOWER = [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
 JOINT_LIMITS_UPPER = [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+
+DEFAULT_SAFETY_PROFILE = 'real_conservative_commissioning'
+
+
+def profile_joint_limits(arm, profile=DEFAULT_SAFETY_PROFILE, path=None):
+    """The joint window this arm is actually gated against, from the MIT profile.
+
+    The bimanual torso rolls each arm's joint 2 frame and shifts the left arm's
+    joint 1, so the two arms have different windows and the single-arm window
+    fits neither. Reading them from the safety profile keeps this tool and the
+    controller that will reject the goal quoting the same numbers.
+    """
+    if path is None:
+        from ament_index_python.packages import get_package_share_directory
+        path = os.path.join(
+            get_package_share_directory('cho_description_openarm'),
+            'config', 'mit_safety_profiles_v1.yaml')
+    with open(path) as handle:
+        limits = yaml.safe_load(handle)['profiles'][profile]['joint_limits']
+    prefix = '' if arm in ('single', '', None) else f'{arm}_'
+    lower = limits.get(f'{prefix}position_lower')
+    upper = limits.get(f'{prefix}position_upper')
+    if lower is None or upper is None:
+        raise ValueError(f"safety profile '{profile}' has no joint window for arm '{arm}'")
+    return [float(v) for v in lower], [float(v) for v in upper]
 
 
 def arm_names(arm):
@@ -59,9 +87,15 @@ def normalized(quaternion):
     return tuple(v / norm for v in quaternion)
 
 
-def load_waypoints(path):
-    """Read and validate a waypoint file. Returns a list of dicts with a `name` and
-    either `joints` (7 values inside the profile limits) or `position` + `orientation`."""
+def load_waypoints(path, limits=None):
+    """Read and validate a waypoint file.
+
+    Returns a list of dicts with a `name` and either `joints` (7 values inside
+    this arm's window) or `position` + `orientation`. `limits` is the
+    (lower, upper) pair from profile_joint_limits(); without it the single-arm
+    window is assumed, which is wrong for either arm of the torso.
+    """
+    lower_limits, upper_limits = limits if limits else (JOINT_LIMITS_LOWER, JOINT_LIMITS_UPPER)
     with open(path) as handle:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, list) or not raw:
@@ -75,7 +109,7 @@ def load_waypoints(path):
             joints = [float(v) for v in entry['joints']]
             if len(joints) != 7:
                 raise ValueError(f'{path}: waypoint {name} needs 7 joint values, got {len(joints)}')
-            for i, (q, lo, hi) in enumerate(zip(joints, JOINT_LIMITS_LOWER, JOINT_LIMITS_UPPER)):
+            for i, (q, lo, hi) in enumerate(zip(joints, lower_limits, upper_limits)):
                 if not lo <= q <= hi:
                     raise ValueError(
                         f'{path}: waypoint {name} joint {i + 1} = {q} is outside [{lo}, {hi}]')

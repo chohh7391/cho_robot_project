@@ -26,7 +26,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 from .goal import TaskGoalClient, displacement_mm, format_pose
-from .waypoints import load_waypoints, pose_error, resolve_waypoints
+from .waypoints import load_waypoints, pose_error, profile_joint_limits, resolve_waypoints
 
 
 class PinocchioForwardKinematics:
@@ -61,7 +61,8 @@ def latched_robot_description(node, seconds=5.0):
     holder = {}
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
-    subscription = node.create_subscription(String, '/robot_description', lambda m: holder.setdefault('xml', m.data), qos)
+    subscription = node.create_subscription(
+        String, '/robot_description', lambda m: holder.setdefault('xml', m.data), qos)
     end = time.time() + seconds
     while 'xml' not in holder and time.time() < end:
         rclpy.spin_once(node, timeout_sec=0.1)
@@ -92,7 +93,16 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     path = args.waypoints or default_waypoint_file(args.arm)
-    waypoints = load_waypoints(path)
+    # Gate the file against the window this arm is actually driven under. The
+    # torso's two arms do not share one, so a posture that is legal on the
+    # right can be past a stop on the left.
+    try:
+        limits = profile_joint_limits(args.arm)
+    except Exception as error:                      # noqa: BLE001 - reported, not swallowed
+        print(f'could not read the per-arm joint window ({error}); '
+              'falling back to the single-arm limits', file=sys.stderr)
+        limits = None
+    waypoints = load_waypoints(path, limits)
     last = len(waypoints) - 1 if args.last is None else args.last
     if not 0 <= args.first <= last < len(waypoints):
         print(f'--first/--last must select a range inside 0..{len(waypoints) - 1}', file=sys.stderr)

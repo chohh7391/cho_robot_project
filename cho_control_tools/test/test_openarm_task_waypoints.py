@@ -7,15 +7,57 @@ import pytest
 
 from cho_control_tools.openarm_task import waypoints as MODULE
 
-SAMPLE = os.path.join(os.path.dirname(__file__), '..', 'config', 'openarm_task_tour_right.yaml')
+CONFIG = os.path.join(os.path.dirname(__file__), '..', 'config')
+SAMPLE = os.path.join(CONFIG, 'openarm_task_tour_right.yaml')
+LEFT_SAMPLE = os.path.join(CONFIG, 'openarm_task_tour_left.yaml')
+PROFILE = os.path.join(
+    os.path.dirname(__file__), '..', '..', 'cho_description', 'cho_description_openarm',
+    'config', 'mit_safety_profiles_v1.yaml')
 
 
-def test_installed_right_arm_tour_is_joint_defined_and_inside_the_limits():
-    loaded = MODULE.load_waypoints(SAMPLE)
-    assert len(loaded) >= 4
-    assert all('joints' in w for w in loaded)
-    # The tour must end where the arm can be de-energised safely: hanging.
-    assert loaded[-1]['joints'] == [0.0] * 7
+def test_installed_arm_tours_are_joint_defined_and_inside_that_arm_window():
+    for arm, sample in (('right', SAMPLE), ('left', LEFT_SAMPLE)):
+        limits = MODULE.profile_joint_limits(arm, path=PROFILE)
+        loaded = MODULE.load_waypoints(sample, limits)
+        assert len(loaded) >= 4, arm
+        assert all('joints' in w for w in loaded), arm
+        # The tour must end where the arm can be de-energised safely: hanging.
+        assert loaded[-1]['joints'] == [0.0] * 7, arm
+
+
+def test_the_two_arms_do_not_share_a_joint_window():
+    left = MODULE.profile_joint_limits('left', path=PROFILE)
+    right = MODULE.profile_joint_limits('right', path=PROFILE)
+    single = MODULE.profile_joint_limits('single', path=PROFILE)
+    # The torso rolls each arm's joint 2 frame and shifts the left arm's joint
+    # 1, so those two differ while the wrist is common to every mount.
+    assert left[0][0] != right[0][0] and left[0][1] != right[0][1]
+    assert left[0][2:] == right[0][2:] == single[0][2:]
+    assert left[1][2:] == right[1][2:] == single[1][2:]
+    with pytest.raises(ValueError, match='no joint window'):
+        MODULE.profile_joint_limits('both', path=PROFILE)
+
+
+def test_each_arms_tour_is_rejected_against_the_other_arms_window():
+    # This is the failure the per-arm window exists to catch: the right tour's
+    # shoulder swing is past the left arm's stop and vice versa.
+    with pytest.raises(ValueError, match='outside'):
+        MODULE.load_waypoints(SAMPLE, MODULE.profile_joint_limits('left', path=PROFILE))
+    with pytest.raises(ValueError, match='outside'):
+        MODULE.load_waypoints(LEFT_SAMPLE, MODULE.profile_joint_limits('right', path=PROFILE))
+
+
+def test_the_left_tour_mirrors_the_right_one_joint_by_joint():
+    # Sign flip on every joint but the elbow. Verified against the generated
+    # bimanual URDF: each left TCP lands on its right counterpart with y
+    # negated, so a difference between the two runs is the arm, not the path.
+    mirror = (-1, -1, -1, 1, -1, -1, -1)
+    right = MODULE.load_waypoints(SAMPLE, MODULE.profile_joint_limits('right', path=PROFILE))
+    left = MODULE.load_waypoints(LEFT_SAMPLE, MODULE.profile_joint_limits('left', path=PROFILE))
+    assert [w['name'] for w in right] == [w['name'] for w in left]
+    for r, l in zip(right, left):
+        expected = [round(s * v, 4) for s, v in zip(mirror, r['joints'])]
+        assert [round(v, 4) for v in l['joints']] == expected, r['name']
 
 
 def test_joint_waypoint_outside_the_profile_window_is_rejected(tmp_path):
