@@ -13,25 +13,52 @@ def main():
 
     node.declare_parameter("task", "peg_insert")
     node.declare_parameter("robot_type", "franka")
+    # Arm profile. A bimanual robot prefixes its controller names per arm, so a
+    # task that hard-coded the single-arm name would look for an action server
+    # that does not exist on that build.
+    node.declare_parameter("arm", "single")
     node.declare_parameter("debug_tree", True)
     node.declare_parameter("print_tree", True)
+    # Probe geometry for parameterised tuning tasks. Declared here so a gain
+    # sweep never needs a source edit or a rebuild between runs; tasks that do
+    # not probe simply ignore them. An all-zero translation means "use the
+    # task's own default": ROS 2 cannot type an empty array parameter, and a
+    # zero-length probe would be meaningless anyway.
+    node.declare_parameter("probe_translation", [0.0, 0.0, 0.0])
+    node.declare_parameter("probe_duration", 0.0)
+    node.declare_parameter("probe_return", True)
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
     robot_type = node.get_parameter("robot_type").get_parameter_value().string_value
+    arm = node.get_parameter("arm").get_parameter_value().string_value
     debug_tree = node.get_parameter("debug_tree").get_parameter_value().bool_value
     print_tree = node.get_parameter("print_tree").get_parameter_value().bool_value
 
     node.get_logger().info(f"--- Running in {'SIMULATION' if use_sim_time else 'REAL'} mode ---")
-    node.get_logger().info(f"--- Robot type: {robot_type} ---")
+    node.get_logger().info(f"--- Robot type: {robot_type} (arm profile: {arm}) ---")
+
+    probe_translation = list(
+        node.get_parameter("probe_translation").get_parameter_value().double_array_value
+    )
+    probe_duration = node.get_parameter("probe_duration").get_parameter_value().double_value
+    probe_return = node.get_parameter("probe_return").get_parameter_value().bool_value
 
     try:
-        robot_config = load_robot_config(robot_type)
+        robot_config = load_robot_config(robot_type, arm)
     except ValueError as e:
         node.get_logger().error(str(e))
         node.destroy_node()
         rclpy.try_shutdown()
         return
+
+    # Only override what was actually supplied, so a task default stays in
+    # force when the operator does not set the parameter.
+    if any(value != 0.0 for value in probe_translation):
+        robot_config['probe_translation'] = probe_translation
+    if probe_duration > 0.0:
+        robot_config['probe_duration'] = probe_duration
+    robot_config['probe_return'] = probe_return
 
     try:
         root = build_task_tree(task, robot_config)

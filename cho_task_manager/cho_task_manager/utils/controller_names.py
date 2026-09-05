@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import List
 
+from cho_robot_config import available_profiles as registry_profiles
 from cho_robot_config import available_robot_types as registry_robot_types
 from cho_robot_config import load_robot_config as load_registry_config
 
@@ -73,7 +74,12 @@ def available_robot_types() -> List[str]:
     return registry_robot_types()
 
 
-def load_robot_config(robot_type: str) -> dict:
+def available_profiles(robot_type: str) -> List[str]:
+    """Arm profiles selectable for *robot_type* (e.g. single, left, right)."""
+    return registry_profiles(robot_type)
+
+
+def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
     """
     Load the task-manager controller view for *robot_type* from cho_robot_config.
 
@@ -84,11 +90,12 @@ def load_robot_config(robot_type: str) -> dict:
 
     Raises ValueError for unknown robot types.
     """
-    raw = load_registry_config(robot_type)
+    raw = load_registry_config(robot_type, profile)
     controllers = raw['controllers']
     compatibility = raw.get('compatibility', {}).get('task_manager', {})
     return {
         'robot_type': raw['robot_type'],
+        'profile': raw.get('profile', 'single'),
         'joint_space': compatibility.get('joint_space', controllers['direct_joint']),
         'task_space': compatibility.get('task_space', controllers['direct_task']),
         'gripper': compatibility.get('gripper', controllers['gripper']),
@@ -114,15 +121,16 @@ def _config_controller_names() -> List[str]:
     """All non-null controller names referenced by any robot config yaml."""
     names: List[str] = []
     for robot_type in available_robot_types():
-        try:
-            config = load_robot_config(robot_type)
-        except ValueError:
-            continue
-        for role, controller in config.items():
-            if role == 'robot_type' or controller is None:
+        for profile in available_profiles(robot_type):
+            try:
+                config = load_robot_config(robot_type, profile)
+            except ValueError:
                 continue
-            if controller not in names:
-                names.append(controller)
+            for role, controller in config.items():
+                if role in ('robot_type', 'profile') or controller is None:
+                    continue
+                if controller not in names:
+                    names.append(controller)
     return names
 
 

@@ -241,6 +241,20 @@ def blocked_home_joint_goals(config):
     return blocked
 
 
+def available_profiles(robot_type):
+    """Profiles selectable for *robot_type*, always including 'single'."""
+    path = _config_dir().resolve() / f'{robot_type}.yaml'
+    if not path.is_file():
+        raise ValueError(
+            f"Unknown robot_type '{robot_type}'. Valid options: {available_robot_types()}")
+    with path.open(encoding='utf-8') as stream:
+        document = yaml.safe_load(stream) or {}
+    profiles = document.get('profiles') or {}
+    if not isinstance(profiles, dict):
+        raise ValueError(f'{robot_type}: profiles must be a mapping')
+    return ['single'] + sorted(profiles)
+
+
 def load_robot_config(robot_type, profile=None):
     """Load a validated robot configuration by its stable robot_type key."""
     config_dir = _config_dir().resolve()

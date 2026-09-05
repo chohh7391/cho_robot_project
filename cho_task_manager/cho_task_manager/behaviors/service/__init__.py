@@ -2,3 +2,4 @@ from .list_controllers import ListControllersServiceBehavior
 from .switch_controller import SwitchControllerServiceBehavior
 from .vla_completion_waiter import VLACompletionWaiterBehavior
 from .tare_ft_sensor import TareFTSensorServiceBehavior
+from .mit_task_diagnostics import MitTaskDiagnosticsServiceBehavior

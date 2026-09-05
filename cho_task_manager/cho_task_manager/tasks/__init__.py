@@ -13,6 +13,7 @@ from cho_task_manager.tasks.franka import (
 )
 from cho_task_manager.tasks.openarm import (
     create_openarm_controller_check_torque_tree,
+    create_openarm_mit_task_tuning_tree,
 )
 from cho_task_manager.tasks.ur import (
     create_ur_pick_place_tree,
@@ -41,6 +42,7 @@ _TASK_REGISTRY = {
     },
     'openarm': {
         'controller_check_torque': create_openarm_controller_check_torque_tree,
+        'mit_task_tuning': create_openarm_mit_task_tuning_tree,
     },
 }
 
