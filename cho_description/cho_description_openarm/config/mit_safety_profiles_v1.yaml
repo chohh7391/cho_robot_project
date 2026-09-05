@@ -11,17 +11,32 @@ profiles:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      command_velocity: [2.0, 2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
+      # Keep the MIT command envelope identical to canonical OpenArm limits:
+      # direct task DLS has no second, custom motion-speed profile.
+      command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
+      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
+      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
+      # encoding range, not a mechanical rating. Treating the encoding range
+      # as a torque limit let every joint be commanded above its peak: the
+      # wrist by 43%, the shoulder by 35%.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains:
       kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
       kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+      # Homing is a slow point-to-point position servo, not impedance control,
+      # so it does not share the task ceilings' zeta = 0.7 dampability
+      # criterion - it only has to beat gravity and friction to reach nominal
+      # zero. These are upstream openarm_ros2's canonical return_to_zero gains,
+      # which the task ceilings reject outright on joints 2, 3, 4 and 7.
+      return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      return_to_zero_kd_max: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
       kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
       kd_slew_per_s: [13.75, 12.5, 10.0, 10.0, 3.5, 3.0, 2.5]
       safe_hold_stiffness: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
       safe_hold_damping: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
     torque:
-      tau_ff_magnitude: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+      tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
@@ -51,50 +66,167 @@ profiles:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      command_velocity: [0.25, 0.25, 0.20, 0.20, 0.30, 0.30, 0.30]
+      command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
+      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
+      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
+      # encoding range, not a mechanical rating. Treating the encoding range
+      # as a torque limit let every joint be commanded above its peak: the
+      # wrist by 43%, the shoulder by 35%.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
-    gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
-    torque: {tau_ff_magnitude: [2.0, 2.0, 1.35, 1.35, 0.35, 0.35, 0.35], tau_ff_slew_per_s: null, final_magnitude: [4.0, 4.0, 2.7, 2.7, 0.7, 0.7, 0.7], final_slew_per_s: null, ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew, slew_reference: last_successfully_submitted_command}
+    gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], return_to_zero_kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], return_to_zero_kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
+    torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew, slew_reference: last_successfully_submitted_command}
     timing: {priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease, lease_default_cycles: null, lease_cap_cycles: null, producer_refresh_cycles: null, controller_write_watchdog_ms: null, state_stale_cycles: null, counters_advance_on: successful_consumer_write_cycle, bimanual_send_skew_us: null, bimanual_send_skew_gate: measure_before_enforcement, skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us}
     safe_transition: {normal_policy: measured_position_hold_uses_same_gain_and_torque_slew, fault_exception: immediate_transport_disable_no_slew}
   # This is deliberately a commissioning-only operating envelope, not a
-  # production approval.  It may be selected only by the real bringup after
-  # three independent runtime acknowledgements: open_can, operator_approval,
-  # and enable_motors.  The real adapter repeats those gates before creating a
-  # vendor transport or issuing a motor-enable packet.
+  # production approval. It is selected by an explicit real bringup invocation;
+  # the adapter validates this profile before creating vendor transport.
   real_conservative_commissioning:
     status: commissioning_experiment_allowed
     backend: real
     hardware_enable_allowed: true
-    approval_gate: triple_runtime_opt_in_required
-    update_rate_hz: 200
+    approval_gate: real_bringup_invocation_required
+    update_rate_hz: 750
     joint_limits:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      command_velocity: [0.15, 0.15, 0.10, 0.10, 0.15, 0.15, 0.15]
+      command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
+      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
+      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
+      # encoding range, not a mechanical rating. Treating the encoding range
+      # as a torque limit let every joint be commanded above its peak: the
+      # wrist by 43%, the shoulder by 35%.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains:
-      kp_max: [5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0]
-      kd_max: [0.50, 0.50, 0.40, 0.40, 0.15, 0.15, 0.12]
+      # Sized so every joint can still reach zeta = 0.7 THROUGH THE DRIVE, which
+      # is what bounds these numbers - not torque authority. The MIT packet
+      # encodes kd on 0..5 (dm_motor_control.cpp:136), so drive-side damping has
+      # a hard ceiling, and zeta = kd / (2 sqrt(kp M)) turns that into a kp
+      # ceiling: kp_i <= (kd_max_i / 1.4)^2 / M_ii. M_ii is the median diagonal
+      # of crba() + rotor inertia over 5000 samples of the joint-limit box
+      # (0.143, 0.266, 0.221, 0.247, 0.014, 0.013, 0.015 kg m^2).
+      #
+      # The previous [5, 5, 5, 4, 1, 1, 1] was not a safety win, it was slow:
+      # zeta 0.95..2.96 and f_n under 1.4 Hz. Mapped through diag(J^T Kx J) at
+      # the 95th-percentile pose it capped Cartesian stiffness at 14.4 N/m, so
+      # one kilogram of payload sagged 68 cm. These allow ~130 N/m (7.6 cm),
+      # with joint 2 binding in both cases.
+      kp_max: [85.0, 45.0, 55.0, 50.0, 15.0, 10.0, 5.0]
+      # Damping only dissipates energy, so its ceiling is not a torque-authority
+      # increase. Joints 1-4 sit AT the packet cap of 5.0: there is no headroom
+      # left to add drive-side damping later, which is the price of the kp above.
+      # The wrist keeps the canonical OpenArm kd because torque, not damping,
+      # binds there first - 7 N*m saturates at 0.47 rad of error on joint 5.
+      kd_max: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
+      # Homing is a slow point-to-point position servo, not impedance control,
+      # so it does not share the task ceilings' zeta = 0.7 dampability
+      # criterion - it only has to beat gravity and friction to reach nominal
+      # zero. These are upstream openarm_ros2's canonical return_to_zero gains,
+      # which the task ceilings reject outright on joints 2, 3, 4 and 7.
+      return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      return_to_zero_kd_max: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
       kp_slew_per_s: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
-      kd_slew_per_s: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.24]
+      kd_slew_per_s: [13.75, 12.50, 10.00, 10.00, 3.50, 3.00, 2.50]
       safe_hold_stiffness: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
       safe_hold_damping: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
     torque:
-      tau_ff_magnitude: [1.0, 1.0, 0.60, 0.60, 0.20, 0.20, 0.20]
-      tau_ff_slew_per_s: [2.0, 2.0, 1.2, 1.2, 0.4, 0.4, 0.4]
-      final_magnitude: [2.0, 2.0, 1.20, 1.20, 0.40, 0.40, 0.40]
-      final_slew_per_s: [4.0, 4.0, 2.4, 2.4, 0.8, 0.8, 0.8]
+      tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # These bound the rate of change of a commanded torque, not its
+      # magnitude, which stays pinned to the motor peak torque above. The
+      # previous 1.2 N*m/s on joints 3/4 was below the rate at which this arm's
+      # own gravity term moves: joint 4 alone needs up to 4.2 N*m, so the
+      # model feed-forward could never catch up and the elbow simply sagged.
+      # A full-scale 28 N*m command still ramps over ~0.9 s at 30 N*m/s.
+      tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
+      final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
       ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
       slew_reference: last_successfully_submitted_command
     timing:
       priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
-      lease_default_cycles: 10
-      lease_cap_cycles: 20
-      producer_refresh_cycles: 5
+      # These are CYCLE counts, so they scale with update_rate_hz. The values
+      # below preserve the wall-clock timeouts the 200 Hz profile declared:
+      # lease 50 ms, cap 100 ms, producer refresh 25 ms, state stale 100 ms.
+      # Raising the rate without rescaling them would silently tighten every
+      # safety timeout by the same factor the rate went up.
+      lease_default_cycles: 38
+      lease_cap_cycles: 75
+      producer_refresh_cycles: 19
       controller_write_watchdog_ms: 100
-      state_stale_cycles: 20
+      state_stale_cycles: 75
+      counters_advance_on: successful_consumer_write_cycle
+      bimanual_send_skew_us: null
+      bimanual_send_skew_gate: measure_before_enforcement
+      skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us
+    safe_transition:
+      normal_policy: measured_position_hold_uses_same_gain_and_torque_slew
+      fault_exception: immediate_transport_disable_no_slew
+  # A deliberately narrow extension of the real commissioning envelope. It is
+  # selected by bringup_real_robot.launch.py when return_to_zero:=true. It permits upstream OpenArm's joint
+  # gains only during the controller-owned nominal-zero phase; the normal
+  # real controller YAML remains on its separate, derated gains afterwards.
+  # Torque magnitudes are the manufacturer peak ratings. Motion position/velocity limits match
+  # the canonical OpenArm profile; real bringup matches upstream's 200 steps at
+  # 10 ms per step (2 s total).
+  real_return_to_zero_commissioning:
+    status: commissioning_experiment_allowed
+    backend: real
+    hardware_enable_allowed: true
+    approval_gate: real_bringup_invocation_required
+    update_rate_hz: 750
+    joint_limits:
+      position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
+      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
+      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
+      # encoding range, not a mechanical rating. Treating the encoding range
+      # as a torque limit let every joint be commanded above its peak: the
+      # wrist by 43%, the shoulder by 35%.
+      physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    gains:
+      kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      kd_max: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
+      # Homing is a slow point-to-point position servo, not impedance control,
+      # so it does not share the task ceilings' zeta = 0.7 dampability
+      # criterion - it only has to beat gravity and friction to reach nominal
+      # zero. These are upstream openarm_ros2's canonical return_to_zero gains,
+      # which the task ceilings reject outright on joints 2, 3, 4 and 7.
+      return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+      return_to_zero_kd_max: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
+      kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
+      kd_slew_per_s: [13.75, 12.50, 10.00, 10.00, 3.50, 3.00, 2.50]
+      safe_hold_stiffness: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
+      safe_hold_damping: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+    torque:
+      tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # These bound the rate of change of a commanded torque, not its
+      # magnitude, which stays pinned to the motor peak torque above. The
+      # previous 1.2 N*m/s on joints 3/4 was below the rate at which this arm's
+      # own gravity term moves: joint 4 alone needs up to 4.2 N*m, so the
+      # model feed-forward could never catch up and the elbow simply sagged.
+      # A full-scale 28 N*m command still ramps over ~0.9 s at 30 N*m/s.
+      tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
+      final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+      ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      slew_reference: last_successfully_submitted_command
+    timing:
+      priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
+      # These are CYCLE counts, so they scale with update_rate_hz. The values
+      # below preserve the wall-clock timeouts the 200 Hz profile declared:
+      # lease 50 ms, cap 100 ms, producer refresh 25 ms, state stale 100 ms.
+      # Raising the rate without rescaling them would silently tighten every
+      # safety timeout by the same factor the rate went up.
+      lease_default_cycles: 38
+      lease_cap_cycles: 75
+      producer_refresh_cycles: 19
+      controller_write_watchdog_ms: 100
+      state_stale_cycles: 75
       counters_advance_on: successful_consumer_write_cycle
       bimanual_send_skew_us: null
       bimanual_send_skew_gate: measure_before_enforcement

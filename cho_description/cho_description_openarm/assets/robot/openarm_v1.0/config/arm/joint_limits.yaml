@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Effort is the manufacturer PEAK motor torque, not the MIT packet's tMax
+# encoding range from openarm_can's MOTOR_LIMIT_PARAMS ([54, 28, 10]). Those
+# are different quantities: tMax only says what the 12-bit torque field can
+# represent. Using it here let every joint be commanded above its motor peak.
+# DM8009 40 Nm, DM4340 27 Nm, DM4310 7 Nm.
 joint1:
   limit:
     lower: -1.396263

@@ -33,11 +33,9 @@ limitations under the License.
       mujoco_mit_prototype:=false
       mujoco_mit_headless:=false
       real_mit_hardware:=false
-      real_mit_safety_profile:=real_conservative_unapproved
+      real_mit_arm:=both_independent
+      real_mit_safety_profile:=real_conservative_commissioning
       mit_expected_update_rate_hz:=200
-      open_can:=false
-      enable_motors:=false
-      operator_approval:=false
       bimanual:=false
       arm_prefix:=''
       hand:=true
@@ -45,6 +43,7 @@ limitations under the License.
       left_can_interface:=can1
       right_can_interface:=can0
       can_fd:=true
+      mit_state_from_command_reply:=false
       ee_type:=parallel_link
       kp_scale:=0.0
       kd_scale:=1.0
@@ -82,6 +81,7 @@ limitations under the License.
           <param name="arm_prefix">${prefix}</param>
           <param name="can_interface">${can}</param>
           <param name="can_fd">${can_fd}</param>
+          <param name="mit_state_from_command_reply">${mit_state_from_command_reply}</param>
           <param name="hand">${hand}</param>
           <param name="ee_type">${ee_type}</param>
           <!--
@@ -119,17 +119,9 @@ limitations under the License.
     </xacro:macro>
 
     <!--
-      Real MIT transport contract.  All three permission values default to
-      false in the description as well as in the launch file: rendering a
-      real URDF or starting robot_state_publisher must never open a CAN socket
-      or enable a motor.  The adapter validates the conjunction of open_can
-      and operator_approval before constructing its vendor transport, and also
-      keeps motors disabled unless enable_motors is explicitly true.
-
-      The default safety profile is intentionally unapproved.  The launch
-      permits the separate commissioning profile only after all three runtime
-      acknowledgement flags are true; the adapter checks that profile again
-      before transport construction.
+      Real MIT transport contract. The launch selects an explicit real
+      commissioning profile; the adapter validates that profile and the CAN
+      interface before constructing its vendor transport.
     -->
     <xacro:macro name="openarm_mit_real_hw_params" params="side can">
       <plugin>cho_hardware_openarm_mit_real/OpenArmMitRealSystem</plugin>
@@ -138,10 +130,8 @@ limitations under the License.
       <param name="mit_expected_update_rate_hz">${mit_expected_update_rate_hz}</param>
       <param name="can_interface">${can}</param>
       <param name="can_fd">${can_fd}</param>
+          <param name="mit_state_from_command_reply">${mit_state_from_command_reply}</param>
       <param name="arm_side">${side}</param>
-      <param name="open_can">${open_can}</param>
-      <param name="enable_motors">${enable_motors}</param>
-      <param name="operator_approval">${operator_approval}</param>
     </xacro:macro>
 
     <xacro:macro name="configure_joint" params="joint_name initial_position:=0.0 gripper:=false">
@@ -156,7 +146,7 @@ limitations under the License.
             <xacro:if value="${gripper}"><command_interface name="position"/></xacro:if>
             <xacro:unless value="${gripper}"><command_interface name="position"/><command_interface name="velocity"/><command_interface name="stiffness"/><command_interface name="damping"/><command_interface name="effort"/></xacro:unless>
           </xacro:if>
-          <xacro:unless value="${hardware == 'mujoco' and mujoco_mit_prototype}">
+          <xacro:unless value="${(hardware == 'mujoco' and mujoco_mit_prototype) or (hardware == 'real' and real_mit_hardware)}">
           <!-- The gripper is position-driven in every simulator actuator set
                (its MJCF actuator is a position servo on the "split" tendon in
                all of actuators_{position,velocity,torque}.xml), so it does not
@@ -200,6 +190,20 @@ limitations under the License.
       <xacro:configure_joint joint_name="openarm_${prefix}joint5"/>
       <xacro:configure_joint joint_name="openarm_${prefix}joint6"/>
       <xacro:configure_joint joint_name="openarm_${prefix}joint7"/>
+    </xacro:macro>
+
+    <!-- A non-selected real bimanual arm exists for visualization only.  It
+         intentionally exports state interfaces and no command interfaces, so
+         GenericSystem keeps these URDF initial values frozen and no controller
+         can claim the visualization-only arm. -->
+    <xacro:macro name="one_arm_visualization_joints" params="prefix">
+      <joint name="openarm_${prefix}joint1"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint2"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint3"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint4"><state_interface name="position"><param name="initial_value">0.3</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint5"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint6"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
+      <joint name="openarm_${prefix}joint7"><state_interface name="position"><param name="initial_value">0.0</param></state_interface><state_interface name="velocity"/><state_interface name="effort"/></joint>
     </xacro:macro>
 
     <!-- Only finger_joint1 is actuated. finger_joint2 is a URDF <mimic> of it
@@ -297,34 +301,44 @@ limitations under the License.
          genuinely separate hardware here: each is its own OpenArmHW instance
          talking to its own socket. -->
     <xacro:if value="${hardware == 'real' and bimanual}">
+      <xacro:property name="left_real_mit_selected" value="${real_mit_arm == 'left' or real_mit_arm == 'both_independent'}"/>
+      <xacro:property name="right_real_mit_selected" value="${real_mit_arm == 'right' or real_mit_arm == 'both_independent'}"/>
       <ros2_control name="OpenArmLeftHardwareInterface" type="system">
         <hardware>
-          <xacro:if value="${real_mit_hardware}">
+          <xacro:if value="${real_mit_hardware and left_real_mit_selected}">
             <xacro:openarm_mit_real_hw_params side="left" can="${left_can_interface}"/>
+          </xacro:if>
+          <xacro:if value="${real_mit_hardware and not left_real_mit_selected}">
+            <plugin>mock_components/GenericSystem</plugin>
           </xacro:if>
           <xacro:unless value="${real_mit_hardware}">
             <xacro:openarm_hw_params prefix="left_" can="${left_can_interface}"/>
           </xacro:unless>
         </hardware>
-        <xacro:one_arm_joints prefix="left_"/>
+        <xacro:if value="${not real_mit_hardware or left_real_mit_selected}"><xacro:one_arm_joints prefix="left_"/></xacro:if>
+        <xacro:if value="${real_mit_hardware and not left_real_mit_selected}"><xacro:one_arm_visualization_joints prefix="left_"/></xacro:if>
         <xacro:one_hand_joints prefix="left_"/>
-        <xacro:if value="${real_mit_hardware}">
+        <xacro:if value="${real_mit_hardware and left_real_mit_selected}">
           <xacro:mit_arm_gpio resource="openarm_left_arm"/>
         </xacro:if>
       </ros2_control>
 
       <ros2_control name="OpenArmRightHardwareInterface" type="system">
         <hardware>
-          <xacro:if value="${real_mit_hardware}">
+          <xacro:if value="${real_mit_hardware and right_real_mit_selected}">
             <xacro:openarm_mit_real_hw_params side="right" can="${right_can_interface}"/>
+          </xacro:if>
+          <xacro:if value="${real_mit_hardware and not right_real_mit_selected}">
+            <plugin>mock_components/GenericSystem</plugin>
           </xacro:if>
           <xacro:unless value="${real_mit_hardware}">
             <xacro:openarm_hw_params prefix="right_" can="${right_can_interface}"/>
           </xacro:unless>
         </hardware>
-        <xacro:one_arm_joints prefix="right_"/>
+        <xacro:if value="${not real_mit_hardware or right_real_mit_selected}"><xacro:one_arm_joints prefix="right_"/></xacro:if>
+        <xacro:if value="${real_mit_hardware and not right_real_mit_selected}"><xacro:one_arm_visualization_joints prefix="right_"/></xacro:if>
         <xacro:one_hand_joints prefix="right_"/>
-        <xacro:if value="${real_mit_hardware}">
+        <xacro:if value="${real_mit_hardware and right_real_mit_selected}">
           <xacro:mit_arm_gpio resource="openarm_right_arm"/>
         </xacro:if>
       </ros2_control>

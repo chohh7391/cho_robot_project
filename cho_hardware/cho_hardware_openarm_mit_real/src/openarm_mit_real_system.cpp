@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <pluginlib/class_list_macros.hpp>
 #include <stdexcept>
+#include <thread>
 
 #include <openarm/can/socket/openarm.hpp>
 #include <openarm/damiao_motor/dm_motor_constants.hpp>
@@ -25,13 +27,23 @@ bool strict_bool(const ParameterMap & parameters, const char * name)
   if (found == parameters.end()) {
     return false;
   }
-  if (found->second == "true") {
+  // xacro evaluates boolean substitutions through Python, whose canonical
+  // textual form is `True`/`False`.  ros2_control stores hardware parameters
+  // as strings, so accept that spelling as well as the lower-case launch
+  // spelling, while continuing to reject ambiguous numeric values.
+  auto value = found->second;
+  std::transform(
+    value.begin(), value.end(), value.begin(),
+    [](const unsigned char character) {
+      return static_cast<char>(std::tolower(character));
+    });
+  if (value == "true") {
     return true;
   }
-  if (found->second == "false") {
+  if (value == "false") {
     return false;
   }
-  throw std::invalid_argument(std::string{name} + " must be exactly true or false");
+  throw std::invalid_argument(std::string{name} + " must be true or false");
 }
 
 template<typename ParameterMap>
@@ -47,21 +59,27 @@ std::string required(const ParameterMap & parameters, const char * name)
 class VendorCanTransport final : public MitTransport
 {
 public:
-  explicit VendorCanTransport(TransportConfig config) : config_(std::move(config)) {}
+  explicit VendorCanTransport(TransportConfig config)
+  : config_(std::move(config)) {}
 
   bool initialize() override
   {
     // OpenArm constructs CANSocket here, deliberately after all plugin gates.
-    arm_ = std::make_unique<openarm::can::socket::OpenArm>(config_.can_interface, config_.can_fd);
+    arm_ = std::make_unique<openarm::can::socket::OpenArm>(
+      config_.can_interface, config_.can_fd);
     arm_->init_arm_motors(
       std::vector<openarm::damiao_motor::MotorType>{
-        openarm::damiao_motor::MotorType::DM8009, openarm::damiao_motor::MotorType::DM8009,
-        openarm::damiao_motor::MotorType::DM4340, openarm::damiao_motor::MotorType::DM4340,
-        openarm::damiao_motor::MotorType::DM4310, openarm::damiao_motor::MotorType::DM4310,
+          openarm::damiao_motor::MotorType::DM8009,
+          openarm::damiao_motor::MotorType::DM8009,
+          openarm::damiao_motor::MotorType::DM4340,
+          openarm::damiao_motor::MotorType::DM4340,
+          openarm::damiao_motor::MotorType::DM4310,
+          openarm::damiao_motor::MotorType::DM4310,
         openarm::damiao_motor::MotorType::DM4310},
       std::vector<uint32_t>{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07},
       std::vector<uint32_t>{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17},
-      std::vector<openarm::damiao_motor::ControlMode>{openarm::damiao_motor::ControlMode::MIT});
+      std::vector<openarm::damiao_motor::ControlMode>{
+          openarm::damiao_motor::ControlMode::MIT});
     return true;
   }
 
@@ -72,6 +90,11 @@ public:
     }
     arm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
     arm_->enable_all();
+    // The upstream OpenArmHW leaves one CAN scheduling interval for the
+    // enable frames to take effect before it asks for the first state packet.
+    // Without this gap, some actuators are still red/disabled when the
+    // controller samples its activation seed.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     arm_->recv_all();
     return true;
   }
@@ -89,13 +112,20 @@ public:
   }
 
   bool read(
-    std::array<double, kArmDof> & position, std::array<double, kArmDof> & velocity,
+    std::array<double, kArmDof> & position,
+    std::array<double, kArmDof> & velocity,
     std::array<double, kArmDof> & effort) override
   {
     if (!arm_) {
       return false;
     }
-    arm_->refresh_all();
+    // Without the refresh, state is whatever the previous write's MIT command
+    // replies carried. Before that first write there is nothing pending, so
+    // the query still has to go out or the controller would seed from an
+    // all-zero state and command a jump to it.
+    if (!config_.state_from_command_reply || !command_written_) {
+      arm_->refresh_all();
+    }
     arm_->recv_all();
     const auto & motors = arm_->get_arm().get_motors();
     if (motors.size() != kArmDof) {
@@ -117,15 +147,21 @@ public:
     std::vector<openarm::damiao_motor::MITParam> parameters;
     parameters.reserve(kArmDof);
     for (const auto & tuple : command) {
-      parameters.push_back({tuple.stiffness, tuple.damping, tuple.position, tuple.velocity, tuple.effort});
+      parameters.push_back(
+        {tuple.stiffness, tuple.damping, tuple.position,
+          tuple.velocity, tuple.effort});
     }
     arm_->get_arm().mit_control_all(parameters);
+    // Each MIT command frame is answered with a state frame, so from here on
+    // read() has something to receive without asking for it.
+    command_written_ = true;
     return true;
   }
 
 private:
   TransportConfig config_;
   std::unique_ptr<openarm::can::socket::OpenArm> arm_;
+  bool command_written_{false};
 };
 
 TransportFactory default_factory()
@@ -138,16 +174,15 @@ TransportFactory default_factory()
 bool canonical_can_name(const std::string & name)
 {
   return !name.empty() && name.size() < IFNAMSIZ &&
-         std::all_of(name.begin(), name.end(), [](const unsigned char value) {
+         std::all_of(
+    name.begin(), name.end(), [](const unsigned char value) {
            return std::isalnum(value) || value == '_' || value == '-';
          });
 }
 }  // namespace
 
 OpenArmMitRealSystem::OpenArmMitRealSystem(TransportFactory factory)
-: factory_(factory ? std::move(factory) : default_factory())
-{
-}
+: factory_(factory ? std::move(factory) : default_factory()) {}
 
 OpenArmMitRealSystem::~OpenArmMitRealSystem()
 {
@@ -167,13 +202,14 @@ bool OpenArmMitRealSystem::parse_and_validate_static_config()
   if (arm_side_ != "" && arm_side_ != "left" && arm_side_ != "right") {
     return false;
   }
-  transport_config_.can_interface = required(info_.hardware_parameters, "can_interface");
+  transport_config_.can_interface =
+    required(info_.hardware_parameters, "can_interface");
   transport_config_.can_fd = strict_bool(info_.hardware_parameters, "can_fd");
-  profile_file_ = required(info_.hardware_parameters, "mit_safety_profile_file");
+  transport_config_.state_from_command_reply =
+    strict_bool(info_.hardware_parameters, "mit_state_from_command_reply");
+  profile_file_ =
+    required(info_.hardware_parameters, "mit_safety_profile_file");
   profile_name_ = required(info_.hardware_parameters, "mit_safety_profile");
-  open_can_ = strict_bool(info_.hardware_parameters, "open_can");
-  enable_motors_ = strict_bool(info_.hardware_parameters, "enable_motors");
-  operator_approval_ = strict_bool(info_.hardware_parameters, "operator_approval");
 
   if (info_.joints.size() != kArmDof) {
     return false;
@@ -200,14 +236,6 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_init(
   }
 }
 
-bool OpenArmMitRealSystem::pre_socket_gates_pass() const
-{
-  // Vendor OpenArm opens SocketCAN in its constructor, therefore even a
-  // disabled-bus inspection requires the same explicit triple acknowledgement
-  // as motor enable.  There is no passive connection path in this plugin.
-  return open_can_ && operator_approval_ && enable_motors_ && !profile_file_.empty() && !profile_name_.empty();
-}
-
 bool OpenArmMitRealSystem::validate_can_interface() const
 {
   return canonical_can_name(transport_config_.can_interface) &&
@@ -218,12 +246,12 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
   const rclcpp_lifecycle::State &)
 {
   configured_ = false;
-  if (!pre_socket_gates_pass() || !validate_can_interface()) {
+  if (!validate_can_interface()) {
     return hardware_interface::CallbackReturn::ERROR;
   }
   try {
-    // This is deliberately before the transport factory: an unapproved/missing
-    // real profile cannot even construct OpenArm (whose constructor opens CAN).
+    // This is deliberately before the transport factory: an invalid real
+    // profile cannot construct OpenArm (whose constructor opens CAN).
     safety_profile_ = cho_openarm_mit_core::load_safety_profile_file(
       profile_file_, profile_name_, cho_openarm_mit_core::SafetyBackend::REAL);
     const auto expected_rate = static_cast<std::size_t>(std::stoul(required(
@@ -240,12 +268,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
       *std::max_element(safety_profile_.final_torque.begin(), safety_profile_.final_torque.end()),
       safety_profile_.lease_cap};
     watchdog_ms_ = safety_profile_.watchdog_ms;
-    // ArmConsumer's shared safe-hold damping must be valid for every joint;
-    // choose the most conservative profile value rather than overdriving a
-    // small wrist actuator with another joint's damping limit.
+    // Per-joint safe-hold gains from the profile.  Collapsing them onto the
+    // smallest wrist value would leave the DM8009 shoulder and DM4340 elbow
+    // with a fraction of a N*m/rad while the hold has no gravity model.
     consumer_ = std::make_unique<cho_openarm_mit_core::ArmConsumer>(
-      limits_, *std::min_element(safety_profile_.safe_damping.begin(), safety_profile_.safe_damping.end()),
-      *std::min_element(safety_profile_.safe_stiffness.begin(), safety_profile_.safe_stiffness.end()));
+      limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness);
     auto candidate = factory_(transport_config_);
     if (!candidate || !candidate->initialize()) {
       return hardware_interface::CallbackReturn::ERROR;
@@ -308,30 +335,13 @@ bool OpenArmMitRealSystem::finite_state() const
 
 hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcpp_lifecycle::State &)
 {
-  if (!configured_ || !enable_motors_ || !transport_ || next_session_ > cho_openarm_mit_core::kMaxExactInteger) {
+  if (!configured_ || !transport_ || next_session_ > cho_openarm_mit_core::kMaxExactInteger) {
     return hardware_interface::CallbackReturn::ERROR;
   }
   try {
     std::array<double, kArmDof> position{}, velocity{}, effort{};
-    {
-      std::lock_guard<std::mutex> lock(transport_mutex_);
-      if (!transport_->read(position, velocity, effort)) {
-        return hardware_interface::CallbackReturn::ERROR;
-      }
-    }
-    for (std::size_t index = 0; index < kArmDof; ++index) {
-      state_[index] = {position[index], velocity[index], effort[index]};
-    }
-    if (!finite_state() || !consumer_->configure(next_session_++, position)) {
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    // MIT motors receive a bounded measured-position hold before an enable
-    // packet.  The acknowledgement is committed only if this preload send
-    // succeeds.  After enable, retransmit the same hold as confirmation.
-    if (!dispatch_safe_hold()) {
-      transition_to_safe(true);
-      return hardware_interface::CallbackReturn::ERROR;
-    }
+    // Follow the vendor OpenArmHW activation sequence: enable first, then use
+    // the first measured state to seed the protocol-owned SAFE hold.
     bool enabled = false;
     {
       std::lock_guard<std::mutex> lock(transport_mutex_);
@@ -341,12 +351,30 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
       transition_to_safe(true);
       return hardware_interface::CallbackReturn::ERROR;
     }
+    bool initial_read_ok = false;
+    {
+      std::lock_guard<std::mutex> lock(transport_mutex_);
+      initial_read_ok = transport_->read(position, velocity, effort);
+    }
+    if (!initial_read_ok) {
+      transition_to_safe(true);
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    for (std::size_t index = 0; index < kArmDof; ++index) {
+      state_[index] = {position[index], velocity[index], effort[index]};
+    }
+    if (!finite_state() || !consumer_->configure(next_session_++, position)) {
+      transition_to_safe(true);
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    // The first MIT tuple is the post-enable measured-position SAFE hold.
     if (!dispatch_safe_hold()) {
       transition_to_safe(true);
       return hardware_interface::CallbackReturn::ERROR;
     }
     active_.store(true);
     {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); last_write_ = std::chrono::steady_clock::now();}
+    watchdog_armed_.store(false);
     protocol_.fill(0.0);
     protocol_[0] = static_cast<double>(consumer_->session());
     protocol_[1] = static_cast<double>(consumer_->ack_generation());
@@ -361,7 +389,8 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
   }
 }
 
-hardware_interface::return_type OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
+hardware_interface::return_type
+OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
   if (!active_.load()) {
     return hardware_interface::return_type::ERROR;
@@ -391,7 +420,8 @@ hardware_interface::return_type OpenArmMitRealSystem::read(const rclcpp::Time &,
   }
 }
 
-bool OpenArmMitRealSystem::dispatch(const cho_openarm_mit_core::ArmCommand & command)
+bool OpenArmMitRealSystem::dispatch(
+  const cho_openarm_mit_core::ArmCommand & command)
 {
   std::lock_guard<std::mutex> lock(transport_mutex_);
   return transport_ && transport_->send(command.joints);
@@ -405,8 +435,10 @@ bool OpenArmMitRealSystem::dispatch_safe_hold(const bool force_new_generation)
   auto shadow = *consumer_;
   // Configure leaves the consumer SAFE but without a materialized hold.  A
   // later acknowledged SAFE state may be retransmitted unchanged.
-  if (force_new_generation || shadow.status() != cho_openarm_mit_core::MitStatus::SAFE ||
-      shadow.safe_ack_generation() == 0) {
+  if (force_new_generation ||
+    shadow.status() != cho_openarm_mit_core::MitStatus::SAFE ||
+    shadow.safe_ack_generation() == 0)
+  {
     if (shadow.status() != cho_openarm_mit_core::MitStatus::SAFE_TRANSITION) {
       shadow.request_safe_transition(true);
     }
@@ -422,9 +454,11 @@ bool OpenArmMitRealSystem::dispatch_safe_hold(const bool force_new_generation)
   return true;
 }
 
-bool OpenArmMitRealSystem::transition_to_safe(const bool transport_disable) noexcept
+bool OpenArmMitRealSystem::transition_to_safe(
+  const bool transport_disable) noexcept
 {
   active_.store(false);
+  watchdog_armed_.store(false);
   if (consumer_) {
     consumer_->inject_fault();
   }
@@ -439,19 +473,30 @@ bool OpenArmMitRealSystem::transition_to_safe(const bool transport_disable) noex
   return false;
 }
 
-hardware_interface::return_type OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
+hardware_interface::return_type
+OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
   if (!active_.load() || !consumer_) {
     return hardware_interface::return_type::ERROR;
   }
   const auto now = std::chrono::steady_clock::now();
   std::chrono::steady_clock::time_point previous_write;
-  {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); previous_write = last_write_;}
-  if (now - previous_write > std::chrono::milliseconds(watchdog_ms_)) {
+  bool watchdog_was_armed = false;
+  {
+    std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
+    watchdog_was_armed = watchdog_armed_.load();
+    previous_write = last_write_;
+    last_write_ = now;
+    // Publish the armed state only after the timestamp is initialized so the
+    // watchdog thread cannot observe a stale activation timestamp.
+    watchdog_armed_.store(true);
+  }
+  if (watchdog_was_armed &&
+    now - previous_write > std::chrono::milliseconds(watchdog_ms_))
+  {
     transition_to_safe(true);
     return hardware_interface::return_type::ERROR;
   }
-  {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); last_write_ = now;}
 
   try {
     if (!finite_state()) {
@@ -459,7 +504,8 @@ hardware_interface::return_type OpenArmMitRealSystem::write(const rclcpp::Time &
       return hardware_interface::return_type::ERROR;
     }
     if (protocol_[8] > static_cast<double>(consumer_->safe_generation())) {
-      const bool valid = cho_openarm_mit_core::is_exact_nonnegative_integer(protocol_[8]) &&
+      const bool valid =
+        cho_openarm_mit_core::is_exact_nonnegative_integer(protocol_[8]) &&
         protocol_[8] == static_cast<double>(consumer_->safe_generation() + 1);
       if (!valid || !dispatch_safe_hold(true)) {
         transition_to_safe(true);
@@ -468,8 +514,9 @@ hardware_interface::return_type OpenArmMitRealSystem::write(const rclcpp::Time &
     } else {
       cho_openarm_mit_core::ArmCommand command;
       for (std::size_t index = 0; index < kArmDof; ++index) {
-        command.joints[index] = {command_[index][0], command_[index][1], command_[index][2],
-          command_[index][3], command_[index][4]};
+        command.joints[index] = {command_[index][0], command_[index][1],
+          command_[index][2], command_[index][3],
+          command_[index][4]};
       }
       command.session_echo = protocol_[5];
       command.lease_cycles = protocol_[6];
@@ -477,24 +524,30 @@ hardware_interface::return_type OpenArmMitRealSystem::write(const rclcpp::Time &
       bool per_joint_limits_valid = true;
       for (std::size_t index = 0; index < kArmDof; ++index) {
         const auto & tuple = command.joints[index];
-        per_joint_limits_valid = per_joint_limits_valid &&
+        per_joint_limits_valid =
+          per_joint_limits_valid &&
           tuple.position >= safety_profile_.position_lower[index] &&
           tuple.position <= safety_profile_.position_upper[index] &&
-          std::abs(tuple.velocity) <= safety_profile_.command_velocity[index] &&
+          std::abs(tuple.velocity) <=
+          safety_profile_.command_velocity[index] &&
           tuple.stiffness <= safety_profile_.kp_max[index] &&
           tuple.damping <= safety_profile_.kd_max[index] &&
           std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
       }
       const auto status = consumer_->status();
       bool ok = false;
-      if ((status == cho_openarm_mit_core::MitStatus::SAFE || status == cho_openarm_mit_core::MitStatus::ACTIVE) &&
-          command.generation != static_cast<double>(consumer_->ack_generation())) {
+      if ((status == cho_openarm_mit_core::MitStatus::SAFE ||
+        status == cho_openarm_mit_core::MitStatus::ACTIVE) &&
+        command.generation !=
+        static_cast<double>(consumer_->ack_generation()))
+      {
         // Validate on a shadow consumer before *any* CAN transmission.  An
         // invalid session/generation/tuple must never put its target on the
         // bus, even transiently.
         auto shadow = *consumer_;
         if (per_joint_limits_valid && shadow.accept_and_write(command, true) &&
-            dispatch(shadow.submitted())) {
+          dispatch(shadow.submitted()))
+        {
           *consumer_ = shadow;
           ok = true;
         }
@@ -527,12 +580,19 @@ hardware_interface::return_type OpenArmMitRealSystem::write(const rclcpp::Time &
 
 void OpenArmMitRealSystem::watchdog_loop()
 {
-  const auto interval = std::chrono::milliseconds(std::max<std::size_t>(1, watchdog_ms_ / 4));
+  const auto interval =
+    std::chrono::milliseconds(std::max<std::size_t>(1, watchdog_ms_ / 4));
   while (!watchdog_stop_.load()) {
     std::this_thread::sleep_for(interval);
     std::chrono::steady_clock::time_point previous_write;
-    {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); previous_write = last_write_;}
-    if (active_.load() && std::chrono::steady_clock::now() - previous_write > std::chrono::milliseconds(watchdog_ms_)) {
+    {
+      std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
+      previous_write = last_write_;
+    }
+    if (active_.load() && watchdog_armed_.load() &&
+      std::chrono::steady_clock::now() - previous_write >
+      std::chrono::milliseconds(watchdog_ms_))
+    {
       transition_to_safe(true);
     }
   }
@@ -548,19 +608,22 @@ void OpenArmMitRealSystem::start_watchdog()
 void OpenArmMitRealSystem::stop_watchdog() noexcept
 {
   watchdog_stop_.store(true);
+  watchdog_armed_.store(false);
   if (watchdog_thread_.joinable()) {
     watchdog_thread_.join();
   }
 }
 
-hardware_interface::CallbackReturn OpenArmMitRealSystem::on_deactivate(const rclcpp_lifecycle::State &)
+hardware_interface::CallbackReturn
+OpenArmMitRealSystem::on_deactivate(const rclcpp_lifecycle::State &)
 {
   stop_watchdog();
   transition_to_safe(true);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
-hardware_interface::CallbackReturn OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
+hardware_interface::CallbackReturn
+OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
 {
   stop_watchdog();
   transition_to_safe(true);
@@ -574,4 +637,5 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_cleanup(const rclcpp
 }  // namespace cho_hardware_openarm_mit_real
 
 PLUGINLIB_EXPORT_CLASS(
-  cho_hardware_openarm_mit_real::OpenArmMitRealSystem, hardware_interface::SystemInterface)
+  cho_hardware_openarm_mit_real::OpenArmMitRealSystem,
+  hardware_interface::SystemInterface)

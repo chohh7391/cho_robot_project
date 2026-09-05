@@ -21,10 +21,19 @@ struct TransportConfig
 {
   std::string can_interface;
   bool can_fd{false};
+  // Drop the per-cycle 0xCC state query and take state from the reply the MIT
+  // command frame already produces. Measured on the bus: every motor answers
+  // twice per cycle, once to the refresh and once to the command, so the
+  // refresh is pure duplication - it is half of all CAN traffic. Removing it
+  // costs one cycle of state age (the reply arrives ~50us after the previous
+  // write, not before this read), which is why it is opt-in rather than the
+  // default: at 200 Hz that is 5 ms and not obviously worth the bandwidth,
+  // while at 750 Hz it is 1.3 ms and the bandwidth is what makes 750 Hz fit.
+  bool state_from_command_reply{false};
 };
 
 // The vendor object opens a SocketCAN descriptor in its constructor.  Keeping
-// it behind this interface makes the pre-open gates directly unit-testable.
+// it behind this interface makes configuration failure paths unit-testable.
 class MitTransport
 {
 public:
@@ -62,7 +71,6 @@ public:
 
 private:
   bool parse_and_validate_static_config();
-  bool pre_socket_gates_pass() const;
   bool validate_can_interface() const;
   bool finite_state() const;
   bool transition_to_safe(bool transport_disable) noexcept;
@@ -85,9 +93,6 @@ private:
   TransportConfig transport_config_;
   std::string profile_file_;
   std::string profile_name_;
-  bool open_can_{false};
-  bool enable_motors_{false};
-  bool operator_approval_{false};
   bool configured_{false};
   std::atomic<bool> active_{false};
   std::size_t watchdog_ms_{0};
@@ -96,6 +101,11 @@ private:
   mutable std::mutex transport_mutex_;
   mutable std::mutex watchdog_mutex_;
   std::atomic<bool> watchdog_stop_{true};
+  // Activation may legitimately block while another hardware component is
+  // configured (the vendor enable sequence alone waits 100 ms).  The write
+  // watchdog therefore starts measuring only after controller_manager has
+  // delivered this component's first write cycle.
+  std::atomic<bool> watchdog_armed_{false};
   std::thread watchdog_thread_;
 };
 }  // namespace cho_hardware_openarm_mit_real

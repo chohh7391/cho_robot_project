@@ -213,12 +213,15 @@ def test_real_mit_single_arm_is_exactly_seven_axis_with_full_protocol():
     assert block.find('hardware/plugin').text == (
         'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
     assert {joint.get('name') for joint in block.findall('joint')} == set(ARM_JOINTS)
-    assert block.find("hardware/param[@name='open_can']").text == 'False'
-    assert block.find("hardware/param[@name='enable_motors']").text == 'False'
-    assert block.find("hardware/param[@name='operator_approval']").text == 'False'
+    assert block.find("hardware/param[@name='open_can']") is None
+    assert block.find("hardware/param[@name='enable_motors']") is None
+    assert block.find("hardware/param[@name='operator_approval']") is None
     assert block.find("hardware/param[@name='arm_side']").text == 'single'
-    assert all({c.get('name') for c in joint.findall('command_interface')} ==
-               {'position', 'velocity', 'stiffness', 'damping', 'effort'}
+    # The real MIT adapter exposes one five-field tuple per joint.  A duplicate
+    # effort entry makes ResourceManager reject the entire component before the
+    # adapter has a chance to export its interfaces.
+    assert all([c.get('name') for c in joint.findall('command_interface')] ==
+               ['position', 'velocity', 'stiffness', 'damping', 'effort']
                for joint in block.findall('joint'))
     gpio = block.find("gpio[@name='openarm_arm']")
     assert gpio is not None
@@ -276,7 +279,40 @@ def test_bimanual_real_mit_has_one_seven_axis_component_and_gpio_per_side():
             'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
         assert {j.get('name') for j in block.findall('joint')} == {
             f'openarm_{side}_joint{i}' for i in range(1, 8)}
+        assert all([c.get('name') for c in joint.findall('command_interface')] ==
+                   ['position', 'velocity', 'stiffness', 'damping', 'effort']
+                   for joint in block.findall('joint'))
         assert block.find(f"gpio[@name='openarm_{side}_arm']") is not None
+
+
+@pytest.mark.parametrize('selected,inactive', [('right', 'left'), ('left', 'right')])
+def test_bimanual_real_single_selection_uses_state_only_visualization_sibling(
+        selected, inactive):
+    root = build(hardware='real', real_mit_hardware='true', bimanual='true',
+                 real_mit_arm=selected)
+    blocks = {block.get('name'): block for block in root.findall('ros2_control')}
+    selected_block = blocks[f'OpenArm{selected.title()}HardwareInterface']
+    inactive_block = blocks[f'OpenArm{inactive.title()}HardwareInterface']
+
+    assert selected_block.find('hardware/plugin').text == (
+        'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
+    assert inactive_block.find('hardware/plugin').text == 'mock_components/GenericSystem'
+    assert inactive_block.findall('gpio') == []
+    assert selected_block.find(f"gpio[@name='openarm_{selected}_arm']") is not None
+
+    inactive_joints = inactive_block.findall('joint')
+    assert [joint.get('name') for joint in inactive_joints] == [
+        f'openarm_{inactive}_joint{index}' for index in range(1, 8)]
+    assert all(joint.findall('command_interface') == [] for joint in inactive_joints)
+    assert all([state.get('name') for state in joint.findall('state_interface')] ==
+               ['position', 'velocity', 'effort'] for joint in inactive_joints)
+    initial = {
+        joint.get('name'): float(joint.find("state_interface[@name='position']/param").text)
+        for joint in inactive_joints
+    }
+    assert initial[f'openarm_{inactive}_joint4'] == pytest.approx(0.3)
+    assert all(value == pytest.approx(0.0) for name, value in initial.items()
+               if not name.endswith('joint4'))
 
 
 @pytest.mark.parametrize('hardware', ['mujoco', 'gazebo', 'mock'])

@@ -44,7 +44,7 @@ def test_runtime_gains_and_safe_seed_are_fail_closed():
         "dq_des": 0.0,
         "kp": "safe_hold_stiffness",
         "kd": "safe_hold_damping",
-        "tau_ff": 0.0,
+        "tau_ff": "last_accepted_tau_ff",
     }
 
 
@@ -100,6 +100,7 @@ def test_authoritative_safety_source_and_contract_projection_do_not_drift():
     assert CONTRACT["numeric_policy"]["authoritative_source"] == "mit_safety_profiles_v1.yaml"
     assert CONTRACT["numeric_policy"]["default_profile"] is None
     assert SAFETY["default_profile"] is None
+    assert set(_profiles()) == set(SAFETY["profiles"])
     for name, projected in _profiles().items():
         authoritative = SAFETY["profiles"][name]
         for key in ("status", "backend", "hardware_enable_allowed", "joint_limits", "gains"):
@@ -125,24 +126,87 @@ def test_authoritative_profile_does_not_drift_from_urdf_gains_limits_or_pinned_p
         match = re.search(r"\{12\.5,\s*[^,]+,\s*([0-9.]+)\},\s*//\s*" + motor + r"\b", constants)
         assert match, motor
         packet_torque[motor] = float(match.group(1))
-    assert all(urdf <= packet for urdf, packet in zip(
-        sim["joint_limits"]["physical_torque"],
-        [packet_torque["DM8009"]] * 2 + [packet_torque["DM4340"]] * 2 + [packet_torque["DM4310"]] * 3,
-    ))
+    encodable = (
+        [packet_torque["DM8009"]] * 2 +
+        [packet_torque["DM4340"]] * 2 +
+        [packet_torque["DM4310"]] * 3
+    )
+    # tMax is what the packet's 12-bit torque field can represent, not what the
+    # motor may be asked to produce. Requiring equality here is what let every
+    # joint be limited above its peak rating - the wrist by 43%. The real
+    # relation is one of containment: a torque limit must be encodable, and it
+    # must not exceed the manufacturer peak.
+    peak = [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    assert all(p <= e for p, e in zip(peak, encodable)), 'peak must be encodable'
+    for profile in SAFETY["profiles"].values():
+        limits = profile["joint_limits"]["physical_torque"]
+        assert limits == peak
+        assert all(v <= e for v, e in zip(limits, encodable))
+        assert profile["torque"]["tau_ff_magnitude"] == peak
+        assert profile["torque"]["final_magnitude"] == peak
 
 
-def test_limits_are_ordered_and_derated_commands_do_not_exceed_physical_limits():
+def test_limits_are_ordered_and_command_velocity_matches_upstream_limits():
     for profile in _profiles().values():
         limits = profile["joint_limits"]
         assert all(lo < hi for lo, hi in zip(limits["position_lower"], limits["position_upper"]))
-        assert all(0 < cmd <= physical for cmd, physical in zip(
-            limits["command_velocity"], limits["physical_velocity"]
-        ))
+        assert limits["command_velocity"] == limits["physical_velocity"]
         torque = profile["torque"]
         assert all(0 < ff <= final <= physical for ff, final, physical in zip(
             torque["tau_ff_magnitude"], torque["final_magnitude"], limits["physical_torque"]
         ))
         assert all(value >= 0 for name in ("kp_max", "kd_max") for value in profile["gains"][name])
+
+
+def test_homing_ceilings_are_separate_from_and_bounded_by_the_task_ceilings():
+    # The task ceilings come from what the drive can damp to zeta = 0.7; homing
+    # is a point-to-point position servo that only has to beat gravity, so it
+    # gets its own ceilings. Sharing them rejected upstream's canonical homing
+    # gains on joints 2, 3, 4 and 7 and blocked return_to_zero entirely.
+    #
+    # The bound is max_element, not per joint, because that is what the hardware
+    # enforces per tuple (openarm_mit_real_system fills ValidationLimits from
+    # max_element(kp_max)). A homing ceiling above it would be unenforceable
+    # there, so the loader rejects it and this pins the same relation.
+    for name, profile in _profiles().items():
+        gains = profile['gains']
+        homing_kp, homing_kd = gains['return_to_zero_kp_max'], gains['return_to_zero_kd_max']
+        assert len(homing_kp) == 7 and len(homing_kd) == 7, name
+        assert all(v >= 0 for v in homing_kp + homing_kd), name
+        assert max(homing_kp) <= max(gains['kp_max']), (
+            f"{name}: homing kp ceiling {max(homing_kp)} is beyond anything the "
+            f"hardware can enforce ({max(gains['kp_max'])})")
+        assert max(homing_kd) <= max(gains['kd_max']), name
+        # Still inside the MIT packet encoding range, like every other gain.
+        assert all(0 <= v <= 500.0 for v in homing_kp), name
+        assert all(0 <= v <= 5.0 for v in homing_kd), name
+
+
+def test_gain_ceilings_stay_inside_the_mit_packet_encoding_range():
+    # kp and kd ride 12-bit fields scaled over fixed spans, 0..500 and 0..5
+    # (dm_motor_control.cpp:135-136). The encoder clamps rather than wraps, so a
+    # profile asking for kd 8 would be silently served 5 - the arm would be
+    # under-damped exactly where its author believed it was damped hardest.
+    # real_conservative_commissioning now sits AT the kd cap on joints 1-4, so
+    # this bound is load-bearing rather than theoretical.
+    for name, profile in _profiles().items():
+        gains = profile["gains"]
+        assert all(0 <= v <= 500.0 for v in gains["kp_max"]), f"{name}: kp_max beyond packet range"
+        assert all(0 <= v <= 5.0 for v in gains["kd_max"]), f"{name}: kd_max beyond packet range"
+
+
+def test_commissioning_gains_are_dampable_by_the_drive_alone():
+    # The redesign moves Cartesian impedance out of 200 Hz tau_ff and into the
+    # drive's own current loop, so the drive has to supply the damping too.
+    # kd_max caps at 5, hence kp_max <= (kd_max / (2*zeta))^2 / M_ii. Anything
+    # above that cannot be damped through the protocol at all, only masked by
+    # friction. M_ii is the median crba() diagonal plus rotor inertia over the
+    # joint-limit box; keep it in sync with the profile comment.
+    inertia = [0.1431, 0.2658, 0.2207, 0.2473, 0.0140, 0.0133, 0.0152]
+    gains = _profiles()["real_conservative_commissioning"]["gains"]
+    for i, (kp, kd, m) in enumerate(zip(gains["kp_max"], gains["kd_max"], inertia)):
+        zeta = kd / (2.0 * (kp * m) ** 0.5)
+        assert zeta >= 0.65, f"joint {i + 1}: zeta {zeta:.2f} is not reachable through the drive"
 
 
 def test_sim_slew_lease_watchdog_and_safe_hold_are_bounded():

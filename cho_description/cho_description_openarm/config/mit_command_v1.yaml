@@ -70,24 +70,26 @@ numeric_policy:
       backend: mujoco
       hardware_enable_allowed: false
       update_rate_hz: 1000
-      # q bounds and physical velocity/effort ceilings come from the Cho v1.0
-      # URDF data.  The command velocity and tau_ff limits below are deliberate
-      # simulation deratings, not motor ratings.
+      # Position and command-velocity limits are the canonical OpenArm v1.0
+      # values. Torque limits remain an independent MIT safety boundary.
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-        command_velocity: [2.0, 2.0, 1.5, 1.5, 2.0, 2.0, 2.0]
+        command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        # Manufacturer PEAK torque, not the packet's tMax encoding range.
         physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       gains:
         kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
         kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+        return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        return_to_zero_kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
         kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
         kd_slew_per_s: [13.75, 12.5, 10.0, 10.0, 3.5, 3.0, 2.5]
         safe_hold_stiffness: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
         safe_hold_damping: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
       torque:
-        tau_ff_magnitude: [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
+        tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
@@ -105,25 +107,28 @@ numeric_policy:
       backend: real
       hardware_enable_allowed: false
       approval_gate: manual_low_output_commissioning_required
-      # These are deliberately low commissioning candidates.  They are not a
-      # claim about safe hardware operation and must never enable motors.
+      # This profile cannot enable motors. Position and velocity values mirror
+      # canonical OpenArm v1.0; torque/gain approvals remain separate.
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-        command_velocity: [0.25, 0.25, 0.20, 0.20, 0.30, 0.30, 0.30]
+        command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        # Manufacturer PEAK torque, not the packet's tMax encoding range.
         physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       gains:
         kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
         kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25]
+        return_to_zero_kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
+        return_to_zero_kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25]
         kp_slew_per_s: null
         kd_slew_per_s: null
         safe_hold_stiffness: null
         safe_hold_damping: null
       torque:
-        tau_ff_magnitude: [2.0, 2.0, 1.35, 1.35, 0.35, 0.35, 0.35]
+        tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         tau_ff_slew_per_s: null
-        final_magnitude: [4.0, 4.0, 2.7, 2.7, 0.7, 0.7, 0.7]
+        final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: null
         ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
       timing:
@@ -134,45 +139,89 @@ numeric_policy:
         state_stale_cycles: null
         bimanual_send_skew_us: null
         bimanual_send_skew_gate: measure_before_enforcement
-    # The only real profile that can be selected by the explicit triple
-    # runtime opt-in. This remains commissioning-only and has not been
+    # The real profile selected by a real bringup invocation. This remains
+    # commissioning-only and has not been
     # physically exercised in this repository.
     real_conservative_commissioning:
       status: commissioning_experiment_allowed
       backend: real
       hardware_enable_allowed: true
-      approval_gate: triple_runtime_opt_in_required
+      approval_gate: real_bringup_invocation_required
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-        command_velocity: [0.15, 0.15, 0.10, 0.10, 0.15, 0.15, 0.15]
+        command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        # Manufacturer PEAK torque, not the packet's tMax encoding range.
         physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       gains:
-        kp_max: [5.0, 5.0, 5.0, 4.0, 1.0, 1.0, 1.0]
-        kd_max: [0.50, 0.50, 0.40, 0.40, 0.15, 0.15, 0.12]
+        kp_max: [85.0, 45.0, 55.0, 50.0, 15.0, 10.0, 5.0]
+        kd_max: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
+        return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        return_to_zero_kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
         kp_slew_per_s: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0]
-        kd_slew_per_s: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.24]
+        kd_slew_per_s: [13.75, 12.50, 10.00, 10.00, 3.50, 3.00, 2.50]
         safe_hold_stiffness: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
         safe_hold_damping: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
       torque:
-        tau_ff_magnitude: [1.0, 1.0, 0.60, 0.60, 0.20, 0.20, 0.20]
-        tau_ff_slew_per_s: [2.0, 2.0, 1.2, 1.2, 0.4, 0.4, 0.4]
-        final_magnitude: [2.0, 2.0, 1.20, 1.20, 0.40, 0.40, 0.40]
-        final_slew_per_s: [4.0, 4.0, 2.4, 2.4, 0.8, 0.8, 0.8]
+        tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+        tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
+        final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+        final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
         ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
       timing:
-        lease_default_cycles: 10
-        lease_cap_cycles: 20
-        producer_refresh_cycles: 5
+        lease_default_cycles: 38
+        lease_cap_cycles: 75
+        producer_refresh_cycles: 19
         controller_write_watchdog_ms: 100
-        state_stale_cycles: 20
+        state_stale_cycles: 75
+        bimanual_send_skew_us: null
+        bimanual_send_skew_gate: measure_before_enforcement
+    real_return_to_zero_commissioning:
+      status: commissioning_experiment_allowed
+      backend: real
+      hardware_enable_allowed: true
+      approval_gate: real_bringup_invocation_required
+      update_rate_hz: 750
+      joint_limits:
+        position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
+        # Manufacturer PEAK torque, not the packet's tMax encoding range.
+        physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      gains:
+        kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        kd_max: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
+        return_to_zero_kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        return_to_zero_kd_max: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+        kp_slew_per_s: [350.0, 350.0, 350.0, 300.0, 50.0, 50.0, 50.0]
+        kd_slew_per_s: [13.75, 12.50, 10.00, 10.00, 3.50, 3.00, 2.50]
+        safe_hold_stiffness: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
+        safe_hold_damping: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
+      torque:
+        tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+        tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
+        final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+        final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+      timing:
+        lease_default_cycles: 38
+        lease_cap_cycles: 75
+        producer_refresh_cycles: 19
+        controller_write_watchdog_ms: 100
+        state_stale_cycles: 75
         bimanual_send_skew_us: null
         bimanual_send_skew_gate: measure_before_enforcement
 gripper_contract: separate_position_control
+# Hardware-owned SAFE hold tuple. kp/kd are the per-joint profile values.
+# tau_ff keeps the last accepted feed-forward because the MIT equation runs
+# inside the motor without a gravity model: zeroing it would drop the arm's
+# gravity compensation exactly when the controller stops commanding it. A new
+# session (no accepted command yet) therefore holds with tau_ff = 0.
 safe_seed:
   q_des: measured_position
   dq_des: 0.0
   kp: safe_hold_stiffness
   kd: safe_hold_damping
-  tau_ff: 0.0
+  tau_ff: last_accepted_tau_ff

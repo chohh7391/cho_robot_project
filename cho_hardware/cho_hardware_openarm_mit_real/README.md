@@ -28,13 +28,12 @@ The hardware block must specify all of these exact parameters:
 | --- | --- |
 | `arm_side` | `single`, `left`, or `right`; joints must be canonical and ordered |
 | `can_interface`, `can_fd` | Existing SocketCAN name and exact boolean |
-| `mit_safety_profile_file`, `mit_safety_profile` | Explicit profile; only `real_conservative_commissioning` can load |
+| `mit_safety_profile_file`, `mit_safety_profile` | Explicit commissioning profile; `real_conservative_commissioning` or `real_return_to_zero_commissioning` |
 | `mit_expected_update_rate_hz` | Must equal the selected profile (currently `200`) |
-| `open_can`, `operator_approval`, `enable_motors` | Each must be the exact string `true` before a vendor object/socket is constructed |
 
-No socket is opened by `on_init`. `on_configure` rejects missing, false, or
-malformed gates; unknown CAN interfaces; noncanonical joint mappings; and an
-unapproved or malformed safety profile before calling the vendor factory.
+No socket is opened by `on_init`. `on_configure` rejects unknown CAN
+interfaces, noncanonical joint mappings, and an unapproved or malformed safety
+profile before calling the vendor factory.
 `on_activate` enables motors only after a finite measured state and sends a
 measured-position safe hold. NaN/read/write faults and the 100 ms profile
 watchdog disable the vendor motors immediately. Never use this envelope until

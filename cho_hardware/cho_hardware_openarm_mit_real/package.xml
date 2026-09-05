@@ -2,7 +2,7 @@
 <package format="3">
   <name>cho_hardware_openarm_mit_real</name>
   <version>0.1.0</version>
-  <description>Explicitly gated, untested SocketCAN MIT backend for one OpenArm V10 arm.</description>
+  <description>Commissioning-only, untested SocketCAN MIT backend for one OpenArm V10 arm.</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

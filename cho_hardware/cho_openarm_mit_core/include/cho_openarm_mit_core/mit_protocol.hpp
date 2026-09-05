@@ -32,6 +32,13 @@ struct SafetyProfile
   std::array<double, kJointsPerArm> position_lower{}, position_upper{};
   std::array<double, kJointsPerArm> physical_velocity{}, command_velocity{}, physical_torque{};
   std::array<double, kJointsPerArm> kp_max{}, kd_max{}, kp_slew{}, kd_slew{}, safe_stiffness{}, safe_damping{};
+  // Ceilings for the return-to-zero phase, which is a slow point-to-point
+  // position servo and not impedance control. The task ceilings come from
+  // what the drive can damp to zeta = 0.7, a criterion homing does not
+  // share: it only has to beat gravity and friction to reach nominal zero.
+  // Validating the homing gains against the task ceilings rejected the
+  // canonical upstream homing set outright.
+  std::array<double, kJointsPerArm> return_to_zero_kp_max{}, return_to_zero_kd_max{};
   std::array<double, kJointsPerArm> tau_ff_max{}, tau_ff_slew{}, final_torque{}, final_slew{};
   std::size_t lease_default{0}, lease_cap{0}, refresh_cycles{0}, watchdog_ms{0}, stale_cycles{0};
 };
@@ -115,11 +122,18 @@ bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
 class ArmConsumer
 {
 public:
-  // The defaults preserve the existing simulation/test contract.  Real
-  // adapters must pass both values from their explicit safety profile.
+  // The scalar defaults preserve the existing simulation/test contract and
+  // apply one value to every joint.  Real adapters pass the per-joint arrays
+  // from their explicit safety profile: an MIT motor has no internal gravity
+  // model, so a SAFE hold that collapsed seven joints onto the smallest wrist
+  // gain could not hold the shoulder or elbow against gravity.
   explicit ArmConsumer(
     ValidationLimits limits, double safe_hold_damping = 1.0,
     double safe_hold_stiffness = 0.0);
+  ArmConsumer(
+    ValidationLimits limits,
+    const std::array<double, kJointsPerArm> & safe_hold_damping,
+    const std::array<double, kJointsPerArm> & safe_hold_stiffness);
   bool configure(std::uint64_t session, const std::array<double, kJointsPerArm> & measured);
   void cleanup();
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
@@ -148,8 +162,8 @@ private:
   std::array<double, kJointsPerArm> measured_{};
   ArmCommand submitted_{};
   std::uint64_t accepted_lease_cycles_{0};
-  double safe_hold_damping_{1.0};
-  double safe_hold_stiffness_{0.0};
+  std::array<double, kJointsPerArm> safe_hold_damping_{};
+  std::array<double, kJointsPerArm> safe_hold_stiffness_{};
 };
 
 class PairedConsumer

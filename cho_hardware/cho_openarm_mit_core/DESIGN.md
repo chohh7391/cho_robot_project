@@ -13,5 +13,5 @@ package rather than on MuJoCo or controller code.
 
 The default real profile is unapproved and is rejected before an adapter can
 open a transport. `real_conservative_commissioning` is a deliberately narrow,
-untested envelope; a real adapter must require `open_can`,
-`operator_approval`, and `enable_motors` before opening CAN or enabling a motor.
+untested envelope. A real adapter validates its explicit commissioning profile
+and CAN interface before opening CAN or enabling a motor.

@@ -31,6 +31,7 @@ TEST(SafetyProfile, ExplicitMujocoSelectionLoadsAndNoDefaultExists)
   const auto profile = load_safety_profile_file(
     OPENARM_SAFETY_PROFILE_SOURCE, "mujoco_sim_safe", SafetyBackend::MUJOCO);
   EXPECT_EQ(profile.update_rate_hz, 1000u);
+  EXPECT_EQ(profile.command_velocity, profile.physical_velocity);
   EXPECT_THROW(load_safety_profile_yaml(source(), "", SafetyBackend::MUJOCO), std::invalid_argument);
 }
 
@@ -43,10 +44,19 @@ TEST(SafetyProfile, RealUnapprovedRejectsAndCommissioningEnvelopeIsExplicit)
   EXPECT_THROW(load_safety_profile_yaml(one_status, "real_conservative_unapproved", SafetyBackend::REAL), std::invalid_argument);
   const auto commissioning = load_safety_profile_yaml(
     source(), "real_conservative_commissioning", SafetyBackend::REAL);
-  EXPECT_EQ(commissioning.update_rate_hz, 200u);
+  EXPECT_EQ(commissioning.update_rate_hz, 750u);
   EXPECT_EQ(commissioning.watchdog_ms, 100u);
+  EXPECT_EQ(commissioning.command_velocity, commissioning.physical_velocity);
+  const auto return_to_zero = load_safety_profile_yaml(
+    source(), "real_return_to_zero_commissioning", SafetyBackend::REAL);
+  EXPECT_EQ(return_to_zero.update_rate_hz, 750u);
+  EXPECT_EQ(return_to_zero.command_velocity, commissioning.command_velocity);
+  EXPECT_EQ(return_to_zero.final_torque, commissioning.final_torque);
+  EXPECT_EQ(return_to_zero.kp_max[0], 70.0);
+  EXPECT_EQ(return_to_zero.kp_max[3], 60.0);
+  EXPECT_EQ(return_to_zero.kd_max[0], 2.75);
   const auto wrong_gate = replace_once(
-    source(), "approval_gate: triple_runtime_opt_in_required", "approval_gate: manual_low_output_commissioning_required");
+    source(), "approval_gate: real_bringup_invocation_required", "approval_gate: manual_low_output_commissioning_required");
   EXPECT_THROW(load_safety_profile_yaml(
     wrong_gate, "real_conservative_commissioning", SafetyBackend::REAL), std::invalid_argument);
 }

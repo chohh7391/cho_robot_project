@@ -73,11 +73,13 @@ SafetyProfile load_safety_profile_yaml(
     throw std::invalid_argument("unsupported schema/version or non-null default profile");
   }
   const auto profiles = root["profiles"];
-  exact_keys(profiles, {"mujoco_sim_safe", "real_conservative_unapproved", "real_conservative_commissioning"}, "profiles");
+  exact_keys(profiles, {"mujoco_sim_safe", "real_conservative_unapproved",
+    "real_conservative_commissioning", "real_return_to_zero_commissioning"}, "profiles");
   const auto profile = profiles[profile_name];
   if (!profile) throw std::invalid_argument("unknown safety profile");
   const bool unapproved_real = profile_name == "real_conservative_unapproved";
-  const bool commissioning_real = profile_name == "real_conservative_commissioning";
+  const bool commissioning_real = profile_name == "real_conservative_commissioning" ||
+    profile_name == "real_return_to_zero_commissioning";
   const bool real = unapproved_real || commissioning_real;
   std::set<std::string> keys{"status", "backend", "hardware_enable_allowed", "update_rate_hz",
     "joint_limits", "gains", "torque", "timing", "safe_transition"};
@@ -98,7 +100,7 @@ SafetyProfile load_safety_profile_yaml(
     }
     if (!commissioning_real || !boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed") ||
         scalar(profile["status"], "status") != "commissioning_experiment_allowed" ||
-        scalar(profile["approval_gate"], "approval_gate") != "triple_runtime_opt_in_required") {
+        scalar(profile["approval_gate"], "approval_gate") != "real_bringup_invocation_required") {
       throw std::invalid_argument("real profile is not on the commissioning allowlist");
     }
   } else if (boolean(profile["hardware_enable_allowed"], "hardware_enable_allowed")) {
@@ -118,8 +120,10 @@ SafetyProfile load_safety_profile_yaml(
   out.command_velocity = vector7(limits["command_velocity"], "command_velocity");
   out.physical_torque = vector7(limits["physical_torque"], "physical_torque");
   const auto gains = profile["gains"];
-  exact_keys(gains, {"kp_max", "kd_max", "kp_slew_per_s", "kd_slew_per_s", "safe_hold_stiffness", "safe_hold_damping"}, "gains");
+  exact_keys(gains, {"kp_max", "kd_max", "return_to_zero_kp_max", "return_to_zero_kd_max", "kp_slew_per_s", "kd_slew_per_s", "safe_hold_stiffness", "safe_hold_damping"}, "gains");
   out.kp_max = vector7(gains["kp_max"], "kp_max"); out.kd_max = vector7(gains["kd_max"], "kd_max");
+  out.return_to_zero_kp_max = vector7(gains["return_to_zero_kp_max"], "return_to_zero_kp_max");
+  out.return_to_zero_kd_max = vector7(gains["return_to_zero_kd_max"], "return_to_zero_kd_max");
   out.kp_slew = vector7(gains["kp_slew_per_s"], "kp_slew_per_s");
   out.kd_slew = vector7(gains["kd_slew_per_s"], "kd_slew_per_s");
   out.safe_stiffness = vector7(gains["safe_hold_stiffness"], "safe_hold_stiffness");
@@ -157,7 +161,15 @@ SafetyProfile load_safety_profile_yaml(
     if (!(out.position_lower[i] < out.position_upper[i]) || out.command_velocity[i] <= 0.0 ||
         out.command_velocity[i] > out.physical_velocity[i] || out.tau_ff_max[i] <= 0.0 ||
         out.tau_ff_max[i] > out.final_torque[i] || out.final_torque[i] > out.physical_torque[i] ||
-        out.kp_max[i] < 0.0 || out.kd_max[i] < 0.0 || out.kp_slew[i] <= 0.0 ||
+        out.kp_max[i] < 0.0 || out.kd_max[i] < 0.0 ||
+        out.return_to_zero_kp_max[i] < 0.0 || out.return_to_zero_kd_max[i] < 0.0 ||
+        // The hardware validates a tuple against max_element(kp_max), so a
+        // homing ceiling above every task ceiling would be unenforceable there.
+        out.return_to_zero_kp_max[i] >
+          *std::max_element(out.kp_max.begin(), out.kp_max.end()) ||
+        out.return_to_zero_kd_max[i] >
+          *std::max_element(out.kd_max.begin(), out.kd_max.end()) ||
+        out.kp_slew[i] <= 0.0 ||
         out.kd_slew[i] <= 0.0 || out.safe_stiffness[i] < 0.0 || out.safe_stiffness[i] > out.kp_max[i] ||
         out.safe_damping[i] < 0.0 || out.safe_damping[i] > out.kd_max[i] ||
         out.tau_ff_slew[i] <= 0.0 || out.final_slew[i] <= 0.0) throw std::invalid_argument("invalid numeric safety ordering");
@@ -255,18 +267,38 @@ bool validate_tuple(const JointTuple & t, const ValidationLimits & l)
          t.damping <= l.max_damping && std::abs(t.effort) <= l.max_abs_effort;
 }
 
+namespace
+{
+std::array<double, kJointsPerArm> uniform(double value)
+{
+  std::array<double, kJointsPerArm> out{};
+  out.fill(value);
+  return out;
+}
+}  // namespace
+
 ArmConsumer::ArmConsumer(
   ValidationLimits limits, double safe_hold_damping, double safe_hold_stiffness)
+: ArmConsumer(limits, uniform(safe_hold_damping), uniform(safe_hold_stiffness)) {}
+
+ArmConsumer::ArmConsumer(
+  ValidationLimits limits,
+  const std::array<double, kJointsPerArm> & safe_hold_damping,
+  const std::array<double, kJointsPerArm> & safe_hold_stiffness)
 : limits_(limits), safe_hold_damping_(safe_hold_damping), safe_hold_stiffness_(safe_hold_stiffness)
 {
   const std::array<double, 5> numeric{limits.max_abs_position, limits.max_abs_velocity,
     limits.max_stiffness, limits.max_damping, limits.max_abs_effort};
   if (!std::all_of(numeric.begin(), numeric.end(), [](double x) {return std::isfinite(x) && x >= 0.0;}) ||
-      limits.max_lease_cycles == 0 || limits.max_lease_cycles > static_cast<std::uint64_t>(kMaxExactInteger) ||
-      !std::isfinite(safe_hold_damping_) || safe_hold_damping_ <= 0.0 ||
-      safe_hold_damping_ > limits.max_damping || !std::isfinite(safe_hold_stiffness_) ||
-      safe_hold_stiffness_ < 0.0 || safe_hold_stiffness_ > limits.max_stiffness) {
+      limits.max_lease_cycles == 0 || limits.max_lease_cycles > static_cast<std::uint64_t>(kMaxExactInteger)) {
     throw std::invalid_argument("invalid MIT prototype limits");
+  }
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    if (!std::isfinite(safe_hold_damping_[i]) || safe_hold_damping_[i] <= 0.0 ||
+        safe_hold_damping_[i] > limits.max_damping || !std::isfinite(safe_hold_stiffness_[i]) ||
+        safe_hold_stiffness_[i] < 0.0 || safe_hold_stiffness_[i] > limits.max_stiffness) {
+      throw std::invalid_argument("invalid MIT safe-hold gains");
+    }
   }
 }
 
@@ -278,6 +310,9 @@ bool ArmConsumer::configure(std::uint64_t session, const std::array<double, kJoi
   }
   session_ = session; measured_ = measured; ack_generation_ = 0; age_cycles_ = 0;
   safe_generation_ = 0; safe_ack_generation_ = 0; latched_ = false; permanent_latched_ = false; safe_recoverable_ = false; status_ = MitStatus::SAFE;
+  // A new session starts with no accepted command, so its first SAFE hold
+  // carries no retained feed-forward from an earlier session.
+  submitted_ = ArmCommand{};
   return true;
 }
 
@@ -341,8 +376,14 @@ bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
 {
   if (status_ != MitStatus::SAFE_TRANSITION || !transport_succeeded) return false;
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    // The MIT equation runs inside the motor with no gravity model, so a hold
+    // that zeroed tau_ff would drop the arm's gravity compensation at the
+    // moment it stops being commanded.  Retain the last accepted feed-forward
+    // (already bounded by validate_tuple) around the measured position; the
+    // per-joint safe gains then resist motion away from that pose.
     submitted_.joints[i] = {
-      measured_[i], 0.0, safe_hold_stiffness_, safe_hold_damping_, 0.0};
+      measured_[i], 0.0, safe_hold_stiffness_[i], safe_hold_damping_[i],
+      submitted_.joints[i].effort};
   }
   safe_ack_generation_ = safe_generation_;
   status_ = MitStatus::SAFE;

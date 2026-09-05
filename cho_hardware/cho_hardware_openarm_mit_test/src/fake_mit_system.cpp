@@ -30,6 +30,16 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
         number(info_, "max_stiffness"),    number(info_, "max_damping"),
         number(info_, "max_abs_effort"),   static_cast<uint64_t>(lease)};
     safe_hold_damping_ = number(info_, "safe_hold_damping");
+    double initial_position = 0.0;
+    if (const auto initial = info_.hardware_parameters.find("initial_position");
+      initial != info_.hardware_parameters.end()) {
+      initial_position = std::stod(initial->second);
+      if (!std::isfinite(initial_position) ||
+        std::abs(initial_position) > limits_.max_abs_position) {
+        throw std::invalid_argument("initial_position");
+      }
+    }
+    for (auto & joint_state : state_) joint_state[0] = initial_position;
     left_ = ArmConsumer(limits_, safe_hold_damping_);
     right_ = ArmConsumer(limits_, safe_hold_damping_);
     auto f = info_.hardware_parameters.find("fail_transport_generation");

@@ -43,14 +43,11 @@ limitations under the License.
   <xacro:arg name="mujoco_position_profile" default="standard"/>
   <xacro:arg name="mujoco_mit_prototype" default="false"/>
   <xacro:arg name="mujoco_mit_headless" default="false"/>
-  <!-- Real MIT transport is explicit and fail-closed.  These values are
-       forwarded only to the Cho real adapter; all defaults are non-driving. -->
+  <!-- Real MIT transport uses an explicit commissioning profile. -->
   <xacro:arg name="real_mit_hardware" default="false"/>
-  <xacro:arg name="real_mit_safety_profile" default="real_conservative_unapproved"/>
+  <xacro:arg name="real_mit_arm" default="both_independent"/>
+  <xacro:arg name="real_mit_safety_profile" default="real_conservative_commissioning"/>
   <xacro:arg name="mit_expected_update_rate_hz" default="200"/>
-  <xacro:arg name="open_can" default="false"/>
-  <xacro:arg name="enable_motors" default="false"/>
-  <xacro:arg name="operator_approval" default="false"/>
   <xacro:arg name="bimanual"      default="false"/>
   <xacro:arg name="arm_prefix"    default=""/>
   <xacro:arg name="hand"          default="true"/>
@@ -70,6 +67,7 @@ limitations under the License.
   <xacro:arg name="right_arm_base_xyz"  default="0.0 -0.031 0.698"/>
   <xacro:arg name="right_arm_base_rpy"  default="1.5708 0 0"/>
   <xacro:arg name="can_fd"        default="true"/>
+  <xacro:arg name="mit_state_from_command_reply" default="false"/>
   <xacro:arg name="kp_scale"      default="0.0"/>
   <xacro:arg name="kd_scale"      default="1.0"/>
   <xacro:arg name="fake_sensor_commands" default="false"/>
@@ -152,11 +150,9 @@ limitations under the License.
       mujoco_mit_prototype="$(arg mujoco_mit_prototype)"
       mujoco_mit_headless="$(arg mujoco_mit_headless)"
       real_mit_hardware="$(arg real_mit_hardware)"
+      real_mit_arm="$(arg real_mit_arm)"
       real_mit_safety_profile="$(arg real_mit_safety_profile)"
       mit_expected_update_rate_hz="$(arg mit_expected_update_rate_hz)"
-      open_can="$(arg open_can)"
-      enable_motors="$(arg enable_motors)"
-      operator_approval="$(arg operator_approval)"
       bimanual="$(arg bimanual)"
       arm_prefix="$(arg arm_prefix)"
       left_can_interface="$(arg left_can_interface)"
@@ -164,6 +160,7 @@ limitations under the License.
       hand="$(arg hand)"
       can_interface="$(arg can_interface)"
       can_fd="$(arg can_fd)"
+      mit_state_from_command_reply="$(arg mit_state_from_command_reply)"
       ee_type="parallel_link"
       kp_scale="$(arg kp_scale)"
       kd_scale="$(arg kd_scale)"
