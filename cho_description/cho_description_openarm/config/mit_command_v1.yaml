@@ -75,6 +75,13 @@ numeric_policy:
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        # Per-mount windows. The bimanual torso rolls each arm's joint 2 frame
+        # and shifts the left arm's joint 1, so neither torso arm is gated by
+        # the single-arm window above; joints 3-7 are common to every mount.
+        left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         # Manufacturer PEAK torque, not the packet's tMax encoding range.
@@ -112,6 +119,13 @@ numeric_policy:
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        # Per-mount windows. The bimanual torso rolls each arm's joint 2 frame
+        # and shifts the left arm's joint 1, so neither torso arm is gated by
+        # the single-arm window above; joints 3-7 are common to every mount.
+        left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         # Manufacturer PEAK torque, not the packet's tMax encoding range.
@@ -150,6 +164,13 @@ numeric_policy:
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        # Per-mount windows. The bimanual torso rolls each arm's joint 2 frame
+        # and shifts the left arm's joint 1, so neither torso arm is gated by
+        # the single-arm window above; joints 3-7 are common to every mount.
+        left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         # Manufacturer PEAK torque, not the packet's tMax encoding range.
@@ -186,6 +207,13 @@ numeric_policy:
       joint_limits:
         position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
         position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        # Per-mount windows. The bimanual torso rolls each arm's joint 2 frame
+        # and shifts the left arm's joint 1, so neither torso arm is gated by
+        # the single-arm window above; joints 3-7 are common to every mount.
+        left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+        right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+        right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
         physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
         # Manufacturer PEAK torque, not the packet's tMax encoding range.

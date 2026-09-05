@@ -10,6 +10,27 @@ profiles:
     joint_limits:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      # The three windows above are the SINGLE-arm mount. The bimanual torso
+      # is not the same joint convention: openarm_robot.xacro passes
+      # kinematics_offset only to the two torso arms, so their joint 2 frame is
+      # rolled by reflect * pi/2, and the left arm's joint 1 window is shifted
+      # by -2.094396 on top of its mirrored frame. Joints 3-7 are identical on
+      # every mount.
+      #
+      # One shared window was therefore wrong for both arms of the torso: it
+      # let the left arm be commanded 2.09 rad past its joint 1 stop and locked
+      # it out of 2.09 rad of real travel, and let either arm be commanded
+      # 1.57 rad past its joint 2 stop. Nothing else guards those stops - the
+      # MIT path never reads the URDF's own limits.
+      #
+      # Values are the generated bimanual URDF's limits rounded INWARD at the
+      # sixth decimal, so the gate is never wider than the description.
+      # cho_description_openarm's mit_contract_tests pins them to a freshly
+      # generated URDF.
+      left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       # Keep the MIT command envelope identical to canonical OpenArm limits:
       # direct task DLS has no second, custom motion-speed profile.
@@ -65,6 +86,12 @@ profiles:
     joint_limits:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      # Per-arm windows for the bimanual torso; see mujoco_sim_safe above for
+      # why the single-arm window does not apply to either torso arm.
+      left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
@@ -90,6 +117,12 @@ profiles:
     joint_limits:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      # Per-arm windows for the bimanual torso; see mujoco_sim_safe above for
+      # why the single-arm window does not apply to either torso arm.
+      left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
@@ -179,6 +212,12 @@ profiles:
     joint_limits:
       position_lower: [-1.396263, -1.745329, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
       position_upper: [3.490659, 1.745329, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      # Per-arm windows for the bimanual torso; see mujoco_sim_safe above for
+      # why the single-arm window does not apply to either torso arm.
+      left_position_lower: [-3.490659, -3.316125, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      left_position_upper: [1.396263, 0.174532, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
+      right_position_lower: [-1.396263, -0.174532, -1.570796, 0.0, -1.570796, -0.785398, -1.570796]
+      right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.

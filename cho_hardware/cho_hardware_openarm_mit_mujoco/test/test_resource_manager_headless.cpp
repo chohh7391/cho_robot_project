@@ -31,7 +31,7 @@ TEST(MitMujocoSystem, SingleResourceManagerExportsExactWrapperSurface)
   }
   const auto safety = cho_openarm_mit_core::load_safety_profile_file(
     OPENARM_SAFETY_PROFILE_SOURCE, "mujoco_sim_safe",
-    cho_openarm_mit_core::SafetyBackend::MUJOCO);
+    cho_openarm_mit_core::SafetyBackend::MUJOCO, "single");
   for (std::size_t joint = 0; joint < 7; ++joint) {
     const auto name = "openarm_joint" + std::to_string(joint + 1);
     const auto q = manager.claim_state_interface(name + "/position").get_value();

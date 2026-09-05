@@ -5,6 +5,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <utility>
 #include <fstream>
 #include <sstream>
 #include <yaml-cpp/yaml.h>
@@ -62,9 +63,14 @@ std::array<double, kJointsPerArm> vector7(const YAML::Node & node, const std::st
 }  // namespace
 
 SafetyProfile load_safety_profile_yaml(
-  const std::string & text, const std::string & profile_name, const SafetyBackend requested_backend)
+  const std::string & text, const std::string & profile_name, const SafetyBackend requested_backend,
+  const std::string & arm_side)
 {
   if (profile_name.empty()) throw std::invalid_argument("safety profile selection is required");
+  const std::string side = arm_side == "single" ? std::string{} : arm_side;
+  if (!side.empty() && side != "left" && side != "right") {
+    throw std::invalid_argument("arm side must be 'single', 'left' or 'right'");
+  }
   const auto root = YAML::Load(text);
   exact_keys(root, {"schema", "schema_version", "default_profile", "profiles"}, "root");
   if (scalar(root["schema"], "schema") != "cho.openarm.mit_safety_profiles" ||
@@ -112,10 +118,27 @@ SafetyProfile load_safety_profile_yaml(
   }
   SafetyProfile out; out.name = profile_name; out.backend = backend;
   out.update_rate_hz = positive_integer(profile["update_rate_hz"], "update_rate_hz");
+  out.arm_side = side;
   const auto limits = profile["joint_limits"];
-  exact_keys(limits, {"position_lower", "position_upper", "physical_velocity", "command_velocity", "physical_torque"}, "joint_limits");
-  out.position_lower = vector7(limits["position_lower"], "position_lower");
-  out.position_upper = vector7(limits["position_upper"], "position_upper");
+  exact_keys(limits, {"position_lower", "position_upper", "left_position_lower", "left_position_upper",
+    "right_position_lower", "right_position_upper", "physical_velocity", "command_velocity", "physical_torque"}, "joint_limits");
+  // Every mount's window is parsed and range-checked even though exactly one
+  // is selected, so a typo in the window this process is not driving still
+  // fails the load rather than waiting for that arm to be brought up.
+  const std::array<std::pair<std::string, std::string>, 3> windows{{
+    {"position_lower", "position_upper"},
+    {"left_position_lower", "left_position_upper"},
+    {"right_position_lower", "right_position_upper"}}};
+  for (const auto & window : windows) {
+    const auto lower = vector7(limits[window.first], window.first);
+    const auto upper = vector7(limits[window.second], window.second);
+    for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+      if (!(lower[i] < upper[i])) throw std::invalid_argument("invalid joint position window");
+    }
+  }
+  const std::string prefix = side.empty() ? std::string{} : side + "_";
+  out.position_lower = vector7(limits[prefix + "position_lower"], prefix + "position_lower");
+  out.position_upper = vector7(limits[prefix + "position_upper"], prefix + "position_upper");
   out.physical_velocity = vector7(limits["physical_velocity"], "physical_velocity");
   out.command_velocity = vector7(limits["command_velocity"], "command_velocity");
   out.physical_torque = vector7(limits["physical_torque"], "physical_torque");
@@ -181,12 +204,13 @@ SafetyProfile load_safety_profile_yaml(
 }
 
 SafetyProfile load_safety_profile_file(
-  const std::string & path, const std::string & profile_name, const SafetyBackend backend)
+  const std::string & path, const std::string & profile_name, const SafetyBackend backend,
+  const std::string & arm_side)
 {
   std::ifstream stream(path);
   if (!stream) throw std::invalid_argument("cannot open safety profile file");
   std::ostringstream text; text << stream.rdbuf();
-  return load_safety_profile_yaml(text.str(), profile_name, backend);
+  return load_safety_profile_yaml(text.str(), profile_name, backend, arm_side);
 }
 
 bool BimanualOwnership::acquire_direct(ArmSide side)
@@ -526,6 +550,11 @@ std::vector<std::string> joint_names(const std::string & side)
       "openarm_" + side + "_joint" + std::to_string(i));
   }
   return out;
+}
+
+std::string gripper_joint_name(const std::string & side)
+{
+  return side.empty() ? "openarm_finger_joint1" : "openarm_" + side + "_finger_joint1";
 }
 
 std::vector<std::string> complete_claims(const std::string & side)

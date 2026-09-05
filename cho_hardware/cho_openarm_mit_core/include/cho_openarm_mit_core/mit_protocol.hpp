@@ -29,6 +29,9 @@ struct SafetyProfile
   std::string name;
   SafetyBackend backend{SafetyBackend::MUJOCO};
   std::size_t update_rate_hz{0};
+  // Which mount the selected joint-position window belongs to: "" for the
+  // single-arm mount, "left" or "right" for the bimanual torso.
+  std::string arm_side;
   std::array<double, kJointsPerArm> position_lower{}, position_upper{};
   std::array<double, kJointsPerArm> physical_velocity{}, command_velocity{}, physical_torque{};
   std::array<double, kJointsPerArm> kp_max{}, kd_max{}, kp_slew{}, kd_slew{}, safe_stiffness{}, safe_damping{};
@@ -46,10 +49,19 @@ struct SafetyProfile
 // Strict, fail-closed loader. profile_name must be explicit. The only loadable
 // REAL profile is the commissioning envelope; callers must still impose their
 // own explicit runtime acknowledgements before opening a transport.
+//
+// `arm_side` selects which mount's joint-position window is loaded: "single"
+// (or "") for the one-arm mount, "left"/"right" for the bimanual torso, whose
+// joints 1 and 2 have different windows because the torso rolls each arm's
+// joint 2 frame and shifts the left arm's joint 1 window. It is required, not
+// defaulted: a caller that silently got the wrong mount's window would be
+// gating a real arm against another arm's limits.
 SafetyProfile load_safety_profile_yaml(
-  const std::string & yaml_text, const std::string & profile_name, SafetyBackend requested_backend);
+  const std::string & yaml_text, const std::string & profile_name, SafetyBackend requested_backend,
+  const std::string & arm_side);
 SafetyProfile load_safety_profile_file(
-  const std::string & path, const std::string & profile_name, SafetyBackend requested_backend);
+  const std::string & path, const std::string & profile_name, SafetyBackend requested_backend,
+  const std::string & arm_side);
 
 // Non-driving ownership model.  It deliberately does not switch controller_manager;
 // callers must complete the real switch before committing the returned ownership state.
@@ -212,6 +224,12 @@ private:
 
 std::vector<std::string> joint_names(const std::string & side);
 std::vector<std::string> complete_claims(const std::string & side);
+// The single actuated finger joint. It is deliberately not part of
+// joint_names(): the gripper sits outside the MIT arm contract entirely, so its
+// value must never enter an arm numeric vector, a lease generation or a SAFE
+// acknowledgement. This lives here only so the description, the real adapter
+// and the controller configuration cannot drift apart on the spelling.
+std::string gripper_joint_name(const std::string & side);
 bool exact_joint_order(const std::vector<std::string> & actual, bool both_arms);
 bool valid_bimanual_trajectory(const trajectory_msgs::msg::JointTrajectory & trajectory);
 bool canonicalize_bimanual_trajectory(

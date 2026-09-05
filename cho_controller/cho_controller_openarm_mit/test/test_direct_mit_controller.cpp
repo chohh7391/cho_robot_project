@@ -75,7 +75,7 @@ TEST(ControllerSafetyBackend, SelectedRealCommissioningProfileUsesRealBackend)
 {
   const auto profile = load_safety_profile_file(
     OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_commissioning",
-    safety_backend_from_parameter("real"));
+    safety_backend_from_parameter("real"), "single");
   EXPECT_EQ(profile.backend, SafetyBackend::REAL);
   EXPECT_EQ(profile.name, "real_conservative_commissioning");
   EXPECT_DOUBLE_EQ(profile.command_velocity.front(), 16.754666);
@@ -88,6 +88,6 @@ TEST(ControllerSafetyBackend, UnapprovedRealProfileRemainsRejected)
   EXPECT_THROW(
     load_safety_profile_file(
       OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_unapproved",
-      safety_backend_from_parameter("real")),
+      safety_backend_from_parameter("real"), "single"),
     std::invalid_argument);
 }

@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include "cho_hardware_openarm_mit_mujoco/mit_limiter.hpp"
 using namespace cho_hardware_openarm_mit_mujoco;
-namespace {auto profile(){return cho_openarm_mit_core::load_safety_profile_file(OPENARM_SAFETY_PROFILE_SOURCE,"mujoco_sim_safe",cho_openarm_mit_core::SafetyBackend::MUJOCO);}}
+namespace {auto profile(){return cho_openarm_mit_core::load_safety_profile_file(OPENARM_SAFETY_PROFILE_SOURCE,"mujoco_sim_safe",cho_openarm_mit_core::SafetyBackend::MUJOCO, "single");}}
 TEST(MitLimiter, RequiresExplicitProfileRate){auto p=profile();EXPECT_THROW(Limiter l(p,999),std::invalid_argument);Limiter l(p,1000);}
 TEST(MitLimiter, EquationAndPureTorque){auto p=profile();Limiter l(p,1000);std::array<double,N>q{},dq{};l.reset(q);std::array<Tuple,N>c{};for(auto&x:c)x={1,.5,2,3,4};ASSERT_TRUE(l.submit(c,1,5));auto t=l.update(q,dq,1);for(std::size_t i=0;i<N;++i){double target=std::max(p.position_lower[i],std::min(1.0,p.position_upper[i]));double expected=2*target+std::min(3.0,p.kd_max[i])*.5+std::min(4.0,p.tau_ff_max[i]);EXPECT_DOUBLE_EQ(t[i],expected);}for(auto&x:c)x={0,0,0,0,1};ASSERT_TRUE(l.submit(c,2,5));t=l.update(q,dq,1);for(auto x:t)EXPECT_DOUBLE_EQ(x,1);}
 TEST(MitLimiter, ClampSlewLeaseAndFaultSafe){Limiter l(profile(),1000);std::array<double,N>q{},dq{};l.reset(q);std::array<Tuple,N>c{};for(auto&x:c)x={99,99,99,99,99};ASSERT_TRUE(l.submit(c,1,2));auto t=l.update(q,dq,.001);for(auto x:t)EXPECT_LE(std::abs(x),.2);t=l.update(q,dq,.001);EXPECT_TRUE(l.safe());l.reset(q);ASSERT_TRUE(l.submit(c,1,5));l.fault();t=l.update(q,dq,.001);EXPECT_TRUE(l.safe());}

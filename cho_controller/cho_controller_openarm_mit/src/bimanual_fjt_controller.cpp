@@ -107,9 +107,19 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
   const auto profile_name=get_node()->get_parameter("safety_profile_name").as_string();
   if(profile_file.empty()||profile_name.empty())return CallbackReturn::ERROR;
   try {
-    safety_profile_=load_safety_profile_file(
-      profile_file, profile_name,
-      safety_backend_from_parameter(get_node()->get_parameter("safety_backend").as_string()));
+    const auto backend =
+      safety_backend_from_parameter(get_node()->get_parameter("safety_backend").as_string());
+    // The bimanual torso does not give its two arms the same joint window:
+    // the description rolls each arm's joint 2 frame and shifts the left arm's
+    // joint 1, so one shared window would let the left arm be commanded past a
+    // stop and lock it out of real travel. A paired controller therefore holds
+    // both windows and checks each half of the trajectory against its own.
+    safety_profile_ = load_safety_profile_file(
+      profile_file, profile_name, backend, paired_ ? "left" : side_);
+    if (paired_) {
+      right_safety_profile_ = load_safety_profile_file(
+        profile_file, profile_name, backend, "right");
+    }
   }
   catch(const std::exception&e){RCLCPP_ERROR(get_node()->get_logger(),"safety profile rejected: %s",e.what());return CallbackReturn::ERROR;}
   lease_cycles_ = static_cast<double>(safety_profile_.lease_default);
@@ -535,11 +545,12 @@ rclcpp_action::GoalResponse BimanualFollowJointTrajectoryController::goal(
   for (const auto & point : canonical.points) {
     for (std::size_t i = 0; i < dof(); ++i) {
       const std::size_t joint = i % kJointsPerArm;
+      const auto & window = window_for(i);
       if (!within_trajectory_position_limit(
-          point.positions[i], safety_profile_.position_lower[joint],
-          safety_profile_.position_upper[joint]) ||
+          point.positions[i], window.position_lower[joint],
+          window.position_upper[joint]) ||
         (!point.velocities.empty() &&
-        std::abs(point.velocities[i]) > safety_profile_.command_velocity[joint])) {
+        std::abs(point.velocities[i]) > window.command_velocity[joint])) {
         return rclcpp_action::GoalResponse::REJECT;
       }
     }
@@ -560,12 +571,13 @@ rclcpp_action::GoalResponse BimanualFollowJointTrajectoryController::goal(
     const bool hermite = (p == 0) ? !point.velocities.empty() :
       (previous_has_velocity && !point.velocities.empty());
     for (std::size_t i = 0; i < dof(); ++i) {
-      const double limit = safety_profile_.command_velocity[i % kJointsPerArm];
+      const auto & window = window_for(i);
+      const double limit = window.command_velocity[i % kJointsPerArm];
       if (!hermite) {
         const auto joint = i % kJointsPerArm;
         if (!within_trajectory_position_limit(
-            q0[i], safety_profile_.position_lower[joint],
-            safety_profile_.position_upper[joint])) {
+            q0[i], window.position_lower[joint],
+            window.position_upper[joint])) {
           return rclcpp_action::GoalResponse::REJECT;
         }
         if (std::abs(point.positions[i] - q0[i]) / dt > limit) {
@@ -583,8 +595,8 @@ rclcpp_action::GoalResponse BimanualFollowJointTrajectoryController::goal(
             const double value = position(s);
             const auto joint = i % kJointsPerArm;
             return within_trajectory_position_limit(
-              value, safety_profile_.position_lower[joint],
-              safety_profile_.position_upper[joint]);
+              value, window.position_lower[joint],
+              window.position_upper[joint]);
           };
         if (!within_position(0.0) || !within_position(1.0) ||
           std::abs(velocity(0.0)) > limit || std::abs(velocity(1.0)) > limit) {

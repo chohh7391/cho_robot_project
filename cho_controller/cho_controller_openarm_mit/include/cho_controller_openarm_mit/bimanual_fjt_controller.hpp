@@ -144,6 +144,14 @@ private:
   double current_goal_time_tolerance_{0.5};
   int max_handshake_cycles_{100};
   SafetyProfile safety_profile_{};
+  // Only meaningful when paired_: the torso's two arms have different joint 1
+  // and joint 2 windows, so the right half of a 14-axis trajectory cannot be
+  // checked against the left arm's limits.
+  SafetyProfile right_safety_profile_{};
+  const SafetyProfile & window_for(const std::size_t index) const
+  {
+    return (paired_ && index >= kJointsPerArm) ? right_safety_profile_ : safety_profile_;
+  }
   const bool paired_;
   std::string side_{"left"};
 };
