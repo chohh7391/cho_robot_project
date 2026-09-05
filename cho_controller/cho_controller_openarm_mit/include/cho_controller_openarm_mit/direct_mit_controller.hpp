@@ -24,9 +24,14 @@ namespace cho_controller_openarm_mit
 {
 using namespace cho_openarm_mit_core;
 
+// TRACKING_DAMPED_TORQUE is DAMPED_TORQUE with the MIT velocity field carrying
+// a joint velocity reference: the motor evaluates kd*(dq_des - dq), so the
+// actuator-side damping tracks the commanded motion instead of braking it.
+// Stiffness stays zero and q_des stays measured; no joint position loop runs.
 enum class DirectMitMode : std::uint8_t
 {
-  POSITION, VELOCITY, IMPEDANCE, DIRECT_TORQUE, DAMPED_TORQUE, COMPENSATED_TORQUE
+  POSITION, VELOCITY, IMPEDANCE, DIRECT_TORQUE, DAMPED_TORQUE, COMPENSATED_TORQUE,
+  TRACKING_DAMPED_TORQUE
 };
 
 struct DirectMitTarget
@@ -67,6 +72,7 @@ protected:
   // JointSpace action goals instead of the experimental raw topic.
   virtual bool uses_joint_space_action() const {return false;}
   virtual bool uses_raw_topic() const {return !uses_joint_space_action();}
+  virtual bool supports_return_to_zero() const {return uses_joint_space_action();}
 
 // Derived action adapters use this exact state machine rather than duplicating
 // the MIT session/ACK/SAFE protocol.  It is protected (not public) so a
@@ -88,6 +94,14 @@ protected:
   enum class State : std::uint8_t {INACTIVE, SEEDING, ACTIVE, STOPPING, SAFE_STOPPED, FAULT};
   bool request_safe();
   std::array<double, 7> measured() const;
+  void ramped_return_to_zero_gains(
+    const std::array<double, 7> & target_kp, const std::array<double, 7> & target_kd,
+    double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const;
+  double return_to_zero_gain_handoff_duration(
+    const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd) const;
+  void ramped_return_to_zero_handoff_gains(
+    const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd,
+    double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const;
   bool protocol_ok() const;
   void accept_command(const std_msgs::msg::Float64MultiArray::SharedPtr message);
   rclcpp_action::GoalResponse action_goal(
@@ -104,9 +118,44 @@ protected:
   CallbackReturn configure_action_mujoco_dynamics();
   void action_abort_current();
   std::string side_{"left"};
-  std::array<double, 7> kp_{}, kd_{}, torque_limit_{};
+  std::array<double, 7> kp_{}, torque_limit_{};
+  // Runtime-settable. Actuator-side damping is the effective lever against
+  // stick-slip because the motor evaluates kd*(dq_des - dq) internally, so it
+  // does not pay the CAN transport delay that caps how far the Cartesian
+  // kd_task can be pushed. Sweeping it should not cost a relaunch, which would
+  // re-home the arm between every point. Still bounded by the safety profile's
+  // kd_max, which is validated on every set.
+  std::array<std::atomic<double>, 7> kd_;
+  std::array<double, 7> current_kd() const;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr kd_callback_;
+  std::array<double, 7> profile_kp_max_{}, profile_kd_max_{};
+  // Separate ceilings for the return-to-zero phase. Homing is a slow
+  // point-to-point position servo, so it does not share the task ceilings'
+  // zeta = 0.7 dampability criterion, and validating it against them
+  // rejected the canonical upstream homing gains outright.
+  std::array<double, 7> profile_rtz_kp_max_{}, profile_rtz_kd_max_{};
+  std::array<double, 7> profile_kp_slew_{}, profile_kd_slew_{};
   std::array<double, 7> position_lower_{}, position_upper_{}, command_velocity_{};
-  std::array<double, 7> feedforward_limit_{};
+  std::array<double, 7> feedforward_limit_{}, feedforward_slew_{};
+  // A controller-owned startup phase. Direct MIT launch paths enable it by
+  // default; the controller-level false default remains fail-closed for other
+  // integration paths. Keeping it in the already-active producer prevents
+  // another controller from racing for these same 39 interfaces.
+  bool return_to_zero_{false};
+  double return_to_zero_duration_{0.0};
+  double return_to_zero_tolerance_{0.05};
+  bool return_to_zero_active_{false};
+  double return_to_zero_elapsed_{0.0};
+  bool return_to_zero_handoff_active_{false};
+  double return_to_zero_handoff_elapsed_{0.0};
+  double return_to_zero_handoff_duration_{0.0};
+  std::array<double, 7> return_to_zero_handoff_source_kp_{}, return_to_zero_handoff_source_kd_{};
+  std::array<double, 7> return_to_zero_start_{};
+  std::array<double, 7> return_to_zero_kp_{}, return_to_zero_kd_{};
+  // Joint 4 has a hard lower limit at 0.0. The nominal-zero target keeps a
+  // small positive margin instead of commanding precisely onto that stop.
+  const std::array<double, 7> return_to_zero_target_{{0.0, 0.0, 0.0, 0.001,
+                                                       0.0, 0.0, 0.0}};
   DirectMitTarget seed_{};
   realtime_tools::RealtimeBuffer<DirectMitTarget> target_buffer_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr subscription_;

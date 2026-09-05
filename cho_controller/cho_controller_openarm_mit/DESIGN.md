@@ -46,8 +46,60 @@ MuJoCo, Isaac, or other actuator connection.
 `TaskSpaceImpedanceMitController` is the direct single-arm Cartesian path. It claims the same 39
 MIT command interfaces and exposes `/controller_action_server/task_space_impedance_mit_controller`
 as `cho_interfaces/action/TaskSpace`; it is not MoveIt and has no raw tuple topic. Its primary
-term is `tau_ff = J^T(Kx*e + Dx*(v_des - J*dq)) + nle` with a world-aligned Pinocchio Jacobian.
-The bounded DLS `q_des/dq_des` is only an MIT-compatible posture reference.
+The impedance is evaluated **inside the drive** (`drive_side_impedance`, the default). The Cartesian
+error becomes a joint reference offset `q_des = q + J^+ (x_des ominus x)` (damped least squares,
+`task_velocity_reference_damping`), the MIT `kp`/`kd` fields carry fixed per-joint gains, and the
+motor closes `kp*(q_des - q) + kd*(dq_des - dq)` in its own current loop. `tau_ff` is left to the
+terms the drive cannot know about: `tau_ff = nle + tau_null + tau_limit`. `dq_des = J^+ v_des`,
+clamped to the profile command velocity, so the in-motor damping tracks the commanded motion instead
+of braking it; the null space sees `-kd*dq` because `J^+` has no null-space component, and its
+stiffness comes from `nullspace_posture` through `tau_ff` when enabled.
+
+The gains are FIXED, not scheduled from `diag(J^T Kx J)` per pose, and only that diagonal is
+representable at all. Two reasons, both structural. The profile slews `kp` at 10/s while the mapped
+stiffness moves 3.4x across the workspace on joint 1, so a scheduled gain would only chase its own
+reference; and the drive takes one scalar per joint, so routing the off-diagonal remainder through
+`tau_ff` would put a fraction of the stiffness back on the delayed path this design exists to leave.
+They are sized as the largest `kp` each joint can still damp to zeta = 0.7 at its worst-case inertia,
+because the MIT packet caps `kd` at 5 (`dm_motor_control.cpp:136`): `kp_i = (kd_i/1.4)^2 / M_ii,p95`,
+then clipped by the profile ceiling. On the real arm that is `[32, 30, 50, 49, 15, 10, 5]`, which
+guarantees at least 86 N/m of Cartesian stiffness anywhere in the workspace.
+
+`max_reference_offset` bounds `|q_des - q|` per joint and is **the only bound on the impedance
+torque**: `torque_limit` clamps the effort field alone, and the drive adds `kp*(q_des - q)`
+downstream of anything this controller can clamp. Unset, it derives as `0.5 * torque_limit / kp`, so
+tracking error can claim at most half the torque budget and gravity keeps the rest.
+
+`drive_side_impedance: false` restores the historical law, `tau_ff = J^T(Kx*e + Dx*(v_des - J*dq)) +
+tau_null + tau_limit + nle` with measured `q_des` and zero joint `kp`, which closes the Cartesian loop
+across a 200 Hz controller cycle plus CAN transport. It is kept as a fallback and is covered by
+`LegacyTauFfLawStillConfiguresWithZeroJointGains`. Note that MuJoCo does not distinguish the two: the
+simulator has no CAN transport and the measured difference between the laws there is under a
+millimetre of overshoot even at a 200 Hz controller rate, so the sim can confirm the drive-side law is
+functional and stable but cannot confirm that it removes the ringing seen on hardware.
+
+Only the model feed-forward `nle` is rate-limited by the profile `tau_ff_slew_per_s`, tracked from
+the value actually emitted so saturation cannot wind the tracker up. The Cartesian PD, null-space and
+joint-limit terms are bounded in magnitude by `max_task_wrench`, the profile `tau_ff_magnitude` and
+the controller `torque_limit`, never by a rate limiter: a rate limiter inside a closed loop adds
+phase lag proportional to error amplitude and is a limit-cycle source. Reference transitions are made
+smooth by shaping the reference instead. A canceled goal and an unreachable timed-out goal both
+release the Cartesian reference to the measured pose with a cubic blend over `release_duration`, and a
+new goal starts from whatever reference is currently commanded, so neither boundary steps the `Kx`
+error. Cancel therefore no longer requests SAFE and the action server stays available; only
+FK/dynamics/capacity failure requests SAFE.
+
+The 7-DoF arm under a 6-DoF task has a one-dimensional null space. With `use_nullspace_posture` the
+controller adds the dynamically consistent posture term
+`tau_null = (I - J^T Jbar^T) M (kp_null (q_ref - q) - kd_null dq)`, `Jbar^T = Lambda J M^-1`, using the
+same constrained seven-axis mass matrix and regularized `Lambda` as the optional inertia weighting.
+`q_ref` is `nullspace_posture` when given, otherwise the joint configuration latched when Cartesian
+control begins. A one-sided spring `joint_limit_stiffness` acts only inside `joint_limit_margin` of the
+profile position window, on measured `q`, because the profile window itself validates only `q_des`,
+which the Cartesian modes fill with measured position.
+
+After the return-to-zero handoff, idle retains the last commanded Cartesian reference and uses the
+same zero-velocity task impedance plus `nle`. A successful action keeps its terminal reference.
 
 For the MuJoCo prototype this controller first performs its own measured-state cubic startup ramp
 to the explicit non-singular `home 1` posture. The action server remains unavailable until the
@@ -55,7 +107,10 @@ profile-bounded joint impedance plus `nle` ramp has settled; an unsafe ramp rate
 or missed settle deadline requests SAFE and never releases TaskSpace goals. This is controller-local
 and does not alter the global MuJoCo initial state or named task motions.
 
-Relative goals are bounded at admission; absolute goals are checked again from their sampled start
-pose before a tuple is emitted. FK/dynamics/capacity failure aborts and requests SAFE. Cancellation
-also requests SAFE, so deactivate/reactivate is required before another action; this prevents a
-canceled compliant trajectory from silently resuming on a stale reference.
+Relative and absolute goals use the same Cartesian trajectory law without a
+separate workspace/displacement admission cap. FK/dynamics/capacity failure
+aborts and requests SAFE.
+
+The hardware SAFE hold that these requests reach keeps the per-joint profile safe-hold gains and the
+last accepted `tau_ff` (see `cho_openarm_mit_core::ArmConsumer::submit_safe_transition`), because an
+MIT motor has no gravity model of its own and a hold with `tau_ff = 0` would let the arm fall.

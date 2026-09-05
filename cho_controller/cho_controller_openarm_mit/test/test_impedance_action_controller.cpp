@@ -26,6 +26,14 @@ struct DirectMitControllerTestAccess
       result[i] = controller.action_last_feedforward_[i].load(std::memory_order_acquire);
     return result;
   }
+  static double stiffness(const DirectMitControllerBase & controller, const std::size_t joint)
+  {
+    return controller.command_interfaces_[5 * joint + 2].get_value();
+  }
+  static bool action_ready(const DirectMitControllerBase & controller)
+  {
+    return controller.action_ready_.load(std::memory_order_acquire);
+  }
 };
 }  // namespace cho_controller_openarm_mit
 
@@ -88,6 +96,7 @@ std::string multi_dof_action_model_urdf()
 class Fixture : public ::testing::Test
 {
 protected:
+  virtual bool return_to_zero_enabled() const {return false;}
   static void SetUpTestSuite() {if (!rclcpp::ok()) {int argc = 0; rclcpp::init(argc, nullptr);}}
   void SetUp() override
   {
@@ -109,6 +118,13 @@ protected:
     set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE);
     set("safety_profile_name", "mujoco_sim_safe");
     set("robot_description", urdf());
+    if (return_to_zero_enabled()) {
+      set("return_to_zero", true);
+      set("return_to_zero_duration", 0.30);
+      set("return_to_zero_tolerance", 0.05);
+      set("return_to_zero_kp", std::vector<double>{70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0});
+      set("return_to_zero_kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
+    }
     ASSERT_EQ(manager->configure_controller("joint_impedance_mit_controller"),
       controller_interface::return_type::OK);
     client_node = std::make_shared<rclcpp::Node>("mit_impedance_action_client");
@@ -173,6 +189,12 @@ protected:
   std::atomic<bool> running{false};
   std::thread worker;
 };
+
+class ReturnToZeroFixture : public Fixture
+{
+protected:
+  bool return_to_zero_enabled() const override {return true;}
+};
 }  // namespace
 
 TEST_F(Fixture, ExistingJointSpaceHomeReachCancelAndPreemptWorkflow)
@@ -232,6 +254,39 @@ TEST_F(Fixture, ActionImpedanceAddsNonzeroModelFeedforward)
   EXPECT_TRUE(std::any_of(tau.begin(), tau.end(), [](double value) {
     return std::abs(value) > 1e-4;
   }));
+}
+
+TEST_F(ReturnToZeroFixture, ActionRemainsGatedUntilHighGainsRampDownToNormal)
+{
+  auto client = rclcpp_action::create_client<Action>(
+    client_node, "/controller_action_server/joint_impedance_mit_controller");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
+  const auto send = [&](const Action::Goal & g) {
+    auto future = client->async_send_goal(g);
+    while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle();
+    return future.get();
+  };
+
+  // The initialization trajectory is still running: action admission is closed.
+  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+  EXPECT_FALSE(send(goal(0.01, 0.10)));
+  cycle(230);
+  const double high = cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0);
+  EXPECT_GT(high, 60.0);
+  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+
+  // After convergence, gain handoff is still gated and descends continuously.
+  cycle(60);
+  const double descending = cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0);
+  EXPECT_LT(descending, high);
+  EXPECT_GT(descending, 5.0);
+  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+  EXPECT_FALSE(send(goal(0.01, 0.10)));
+
+  cycle(250);
+  EXPECT_NEAR(cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0), 5.0, 1e-6);
+  EXPECT_TRUE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+  EXPECT_TRUE(send(goal(0.01, 0.10)));
 }
 
 TEST(ActionImpedanceConfiguration, RejectsDescriptionWithoutControllableModel)

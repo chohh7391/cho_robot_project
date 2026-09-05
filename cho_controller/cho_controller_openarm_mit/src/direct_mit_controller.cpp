@@ -7,6 +7,8 @@
 #include <functional>
 #include <sstream>
 #include <rclcpp/parameter_client.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <vector>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pluginlib/class_list_macros.hpp>
@@ -23,11 +25,13 @@ ArmCommand map_direct_mit_command(
     auto & j = out.joints[i];
     j.position = measured[i];
     if (mode == DirectMitMode::POSITION || mode == DirectMitMode::IMPEDANCE) j.position = target.position[i];
-    if (mode == DirectMitMode::VELOCITY || mode == DirectMitMode::IMPEDANCE) j.velocity = target.velocity[i];
+    if (mode == DirectMitMode::VELOCITY || mode == DirectMitMode::IMPEDANCE ||
+      mode == DirectMitMode::TRACKING_DAMPED_TORQUE) j.velocity = target.velocity[i];
     if (mode == DirectMitMode::POSITION || mode == DirectMitMode::IMPEDANCE) j.stiffness = kp[i];
     if (mode == DirectMitMode::POSITION || mode == DirectMitMode::VELOCITY ||
       mode == DirectMitMode::IMPEDANCE || mode == DirectMitMode::DAMPED_TORQUE ||
-      mode == DirectMitMode::COMPENSATED_TORQUE) j.damping = kd[i];
+      mode == DirectMitMode::COMPENSATED_TORQUE ||
+      mode == DirectMitMode::TRACKING_DAMPED_TORQUE) j.damping = kd[i];
     double tau = target.feedforward[i];
     if (mode == DirectMitMode::COMPENSATED_TORQUE) tau += target.compensation[i];
     const double limit = std::abs(torque_limit[i]);
@@ -66,6 +70,11 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_init()
   auto_declare<std::vector<double>>("torque_limit", std::vector<double>(7, 0));
   auto_declare<std::string>("safety_profile_file", ""); auto_declare<std::string>("safety_profile_name", "");
   auto_declare<std::string>("safety_backend", "mujoco");
+  auto_declare<bool>("return_to_zero", false);
+  auto_declare<double>("return_to_zero_duration", 0.0);
+  auto_declare<double>("return_to_zero_tolerance", 0.05);
+  auto_declare<std::vector<double>>("return_to_zero_kp", {});
+  auto_declare<std::vector<double>>("return_to_zero_kd", {});
   // controller_manager does not normally carry this parameter in simulation;
   // configure_action_mujoco_dynamics() obtains the canonical description from
   // robot_state_publisher in that case.
@@ -77,26 +86,98 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
 {
   side_ = get_node()->get_parameter("arm").as_string();
   if (side_ == "single") side_.clear();
-  if (!side_.empty() && side_ != "left" && side_ != "right") return CallbackReturn::ERROR;
+  if (!side_.empty() && side_ != "left" && side_ != "right") {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "parameter 'arm' must be 'single', 'left', or 'right' (got '%s')", side_.c_str());
+    return CallbackReturn::ERROR;
+  }
   const auto kp = get_node()->get_parameter("kp").as_double_array(), kd = get_node()->get_parameter("kd").as_double_array();
   const auto tl = get_node()->get_parameter("torque_limit").as_double_array();
-  if (kp.size() != 7 || kd.size() != 7 || tl.size() != 7) return CallbackReturn::ERROR;
-  for (std::size_t i=0;i<7;++i) {if(!std::isfinite(kp[i])||kp[i]<0||!std::isfinite(kd[i])||kd[i]<0||!std::isfinite(tl[i])||tl[i]<=0)return CallbackReturn::ERROR;kp_[i]=kp[i];kd_[i]=kd[i];torque_limit_[i]=tl[i];}
+  if (kp.size() != 7 || kd.size() != 7 || tl.size() != 7) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "MIT joint parameters require exactly 7 values: kp=%zu, kd=%zu, torque_limit=%zu",
+      kp.size(), kd.size(), tl.size());
+    return CallbackReturn::ERROR;
+  }
+  for (std::size_t i=0;i<7;++i) {
+    if(!std::isfinite(kp[i])||kp[i]<0||!std::isfinite(kd[i])||kd[i]<0||!std::isfinite(tl[i])||tl[i]<=0) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+        "invalid MIT joint %zu parameters: kp=%g and kd=%g must be finite/nonnegative; torque_limit=%g must be finite/positive",
+        i + 1, kp[i], kd[i], tl[i]);
+      return CallbackReturn::ERROR;
+    }
+    kp_[i]=kp[i];kd_[i].store(kd[i],std::memory_order_release);torque_limit_[i]=tl[i];
+  }
   try {
     const auto backend = safety_backend_from_parameter(
       get_node()->get_parameter("safety_backend").as_string());
     const auto p=load_safety_profile_file(get_node()->get_parameter("safety_profile_file").as_string(),get_node()->get_parameter("safety_profile_name").as_string(),backend);
     lease_=p.lease_default;max_wait_cycles_=p.stale_cycles;command_timeout_cycles_=std::max<std::size_t>(1,(p.watchdog_ms*p.update_rate_hz+999)/1000);
     for(std::size_t i=0;i<7;++i){
-      if(kp_[i]>p.kp_max[i]||kd_[i]>p.kd_max[i]||torque_limit_[i]>std::min(p.tau_ff_max[i],p.final_torque[i])){
+      if(kp_[i]>p.kp_max[i]||kd_[i].load()>p.kd_max[i]||torque_limit_[i]>std::min(p.tau_ff_max[i],p.final_torque[i])){
         RCLCPP_ERROR(get_node()->get_logger(),"joint %zu gains/torque limit exceed safety profile",i+1);return CallbackReturn::ERROR;
       }
       position_lower_[i]=p.position_lower[i];position_upper_[i]=p.position_upper[i];
       command_velocity_[i]=p.command_velocity[i];
       feedforward_limit_[i]=p.tau_ff_max[i];
+      feedforward_slew_[i]=p.tau_ff_slew[i];
+      profile_kp_max_[i]=p.kp_max[i]; profile_kd_max_[i]=p.kd_max[i];
+      profile_rtz_kp_max_[i]=p.return_to_zero_kp_max[i];
+      profile_rtz_kd_max_[i]=p.return_to_zero_kd_max[i];
+      profile_kp_slew_[i]=p.kp_slew[i]; profile_kd_slew_[i]=p.kd_slew[i];
     }
   }
   catch(const std::exception&e){RCLCPP_ERROR(get_node()->get_logger(),"safety profile rejected: %s",e.what());return CallbackReturn::ERROR;}
+  return_to_zero_ = get_node()->get_parameter("return_to_zero").as_bool();
+  return_to_zero_duration_ = get_node()->get_parameter("return_to_zero_duration").as_double();
+  return_to_zero_tolerance_ = get_node()->get_parameter("return_to_zero_tolerance").as_double();
+  if (return_to_zero_ && !supports_return_to_zero()) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "return_to_zero is supported only by the selected MIT action controllers");
+    return CallbackReturn::ERROR;
+  }
+  if (return_to_zero_ &&
+    (!std::isfinite(return_to_zero_duration_) || return_to_zero_duration_ <= 0.0 ||
+     !std::isfinite(return_to_zero_tolerance_) || return_to_zero_tolerance_ <= 0.0)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "return_to_zero duration/tolerance rejected");
+    return CallbackReturn::ERROR;
+  }
+  if (return_to_zero_ && uses_joint_space_action()) {
+    const auto return_kp = get_node()->get_parameter("return_to_zero_kp").as_double_array();
+    const auto return_kd = get_node()->get_parameter("return_to_zero_kd").as_double_array();
+    if (return_kp.size() != 7U || return_kd.size() != 7U) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+        "return_to_zero requires one explicit kp/kd value per joint");
+      return CallbackReturn::ERROR;
+    }
+    for (std::size_t i = 0; i < 7; ++i) {
+      if (!std::isfinite(return_kp[i]) || !std::isfinite(return_kd[i]) ||
+        return_kp[i] < 0.0 || return_kd[i] < 0.0 ||
+        return_kp[i] > profile_rtz_kp_max_[i] || return_kd[i] > profile_rtz_kd_max_[i]) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+          "return_to_zero gains exceed the selected controller/profile at joint %zu", i + 1);
+        return CallbackReturn::ERROR;
+      }
+      return_to_zero_kp_[i] = return_kp[i];
+      return_to_zero_kd_[i] = return_kd[i];
+      if (return_kp[i] > profile_kp_max_[i] || return_kd[i] > profile_kd_max_[i]) {
+        RCLCPP_WARN(get_node()->get_logger(),
+          "return_to_zero gains for joint %zu (kp=%g, kd=%g) exceed the hardware per-joint "
+          "ceiling (kp_max=%g, kd_max=%g); the ramp is clamped there, so homing is weaker "
+          "on this joint than the profile's return_to_zero ceiling suggests",
+          i + 1, return_kp[i], return_kd[i], profile_kp_max_[i], profile_kd_max_[i]);
+      }
+    }
+  }
+  if (return_to_zero_) {
+    for (std::size_t i = 0; i < 7; ++i) {
+      if (return_to_zero_target_[i] <= position_lower_[i] + 1e-4 ||
+        return_to_zero_target_[i] >= position_upper_[i] - 1e-4) {
+        RCLCPP_ERROR(get_node()->get_logger(), "nominal-zero target violates joint %zu limits", i + 1);
+        return CallbackReturn::ERROR;
+      }
+    }
+  }
   if (uses_joint_space_action()) {
     if (configure_action_mujoco_dynamics() != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
     // Keep the public Cho action namespace independent of controller_manager's
@@ -111,6 +192,32 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
   } else if (uses_raw_topic()) {
     subscription_=get_node()->create_subscription<std_msgs::msg::Float64MultiArray>("~/command",1,std::bind(&DirectMitControllerBase::accept_command,this,std::placeholders::_1));
   }
+  kd_callback_ = get_node()->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> & parameters) {
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = true;
+      for (const auto & parameter : parameters) {
+        if (parameter.get_name() != "kd") continue;
+        const auto values = parameter.as_double_array();
+        // The profile ceiling is the whole safety argument for letting this
+        // change at runtime, so it is enforced here rather than trusted.
+        bool ok = values.size() == 7;
+        for (std::size_t i = 0; ok && i < 7; ++i) {
+          ok = std::isfinite(values[i]) && values[i] >= 0.0 && values[i] <= profile_kd_max_[i];
+        }
+        if (!ok) {
+          result.successful = false;
+          result.reason = "kd needs 7 finite values within the safety profile's kd_max";
+          break;
+        }
+        for (std::size_t i = 0; i < 7; ++i) {
+          kd_[i].store(values[i], std::memory_order_release);
+        }
+        RCLCPP_INFO(get_node()->get_logger(), "kd set to [%g %g %g %g %g %g %g]",
+          values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
+      }
+      return result;
+    });
   stop_service_=get_node()->create_service<std_srvs::srv::Trigger>("~/request_safe_stop",[this](
     const std_srvs::srv::Trigger::Request::SharedPtr,
     std_srvs::srv::Trigger::Response::SharedPtr response){
@@ -241,6 +348,64 @@ void DirectMitControllerBase::accept_command(const std_msgs::msg::Float64MultiAr
 }
 
 std::array<double,7> DirectMitControllerBase::measured() const {std::array<double,7> q{};for(std::size_t i=0;i<7;++i)q[i]=state_interfaces_[2*i].get_value();return q;}
+std::array<double, 7> DirectMitControllerBase::current_kd() const
+{
+  std::array<double, 7> out{};
+  for (std::size_t i = 0; i < 7; ++i) out[i] = kd_[i].load(std::memory_order_acquire);
+  return out;
+}
+void DirectMitControllerBase::ramped_return_to_zero_gains(
+  const std::array<double, 7> & target_kp, const std::array<double, 7> & target_kd,
+  const double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const
+{
+  const double t = std::max(0.0, elapsed);
+  const auto base_kd = current_kd();
+  for (std::size_t i = 0; i < 7; ++i) {
+    kp[i] = std::clamp(target_kp[i], kp_[i] - profile_kp_slew_[i] * t,
+      kp_[i] + profile_kp_slew_[i] * t);
+    kd[i] = std::clamp(target_kd[i], base_kd[i] - profile_kd_slew_[i] * t,
+      base_kd[i] + profile_kd_slew_[i] * t);
+    // The return-to-zero ceilings (return_to_zero_kp_max) are what this
+    // controller validates the homing gains against, but the real hardware
+    // adapter validates every emitted tuple against the per-joint TASK
+    // ceilings (kp_max/kd_max) and drops the whole arm to SAFE on the first
+    // tuple above them. Measured on hardware 2026-09-05: with startup_kp 10 on
+    // joint 7 against kp_max 5 and a 2/s slew, the ramp crossed 5.0 exactly
+    // 2.5 s after activation, the tuple was rejected, and the controller
+    // latched FAULT. Homing therefore runs at min(homing gain, task ceiling):
+    // a weaker wrist servo, not a dead arm.
+    kp[i] = std::min(kp[i], profile_kp_max_[i]);
+    kd[i] = std::min(kd[i], profile_kd_max_[i]);
+  }
+}
+double DirectMitControllerBase::return_to_zero_gain_handoff_duration(
+  const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd) const
+{
+  double duration = 0.0;
+  const auto base_kd = current_kd();
+  for (std::size_t i = 0; i < 7; ++i) {
+    duration = std::max(duration, std::abs(source_kp[i] - kp_[i]) / profile_kp_slew_[i]);
+    duration = std::max(duration, std::abs(source_kd[i] - base_kd[i]) / profile_kd_slew_[i]);
+  }
+  return duration;
+}
+void DirectMitControllerBase::ramped_return_to_zero_handoff_gains(
+  const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd,
+  const double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const
+{
+  const double t = std::max(0.0, elapsed);
+  const auto base_kd = current_kd();
+  for (std::size_t i = 0; i < 7; ++i) {
+    const double kp_step = profile_kp_slew_[i] * t;
+    const double kd_step = profile_kd_slew_[i] * t;
+    kp[i] = source_kp[i] + std::clamp(kp_[i] - source_kp[i], -kp_step, kp_step);
+    kd[i] = source_kd[i] + std::clamp(base_kd[i] - source_kd[i], -kd_step, kd_step);
+    // Same hardware per-joint ceiling as ramped_return_to_zero_gains(); the
+    // source already respects it, this keeps the interpolation honest too.
+    kp[i] = std::min(kp[i], profile_kp_max_[i]);
+    kd[i] = std::min(kd[i], profile_kd_max_[i]);
+  }
+}
 bool DirectMitControllerBase::protocol_ok() const
 {
   for(std::size_t i=14;i<19;++i)if(!is_exact_nonnegative_integer(state_interfaces_[i].get_value()))return false;
@@ -260,7 +425,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_activate(const 
 {
   if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
-  session_=static_cast<std::uint64_t>(s);generation_=0;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_percent_.store(0.0);seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
+  session_=static_cast<std::uint64_t>(s);generation_=0;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
 }
 controller_interface::CallbackReturn DirectMitControllerBase::on_deactivate(const rclcpp_lifecycle::State &)
 {if(!safe_stopped_.load()){RCLCPP_ERROR(get_node()->get_logger(),"unsafe deactivate before SAFE ACK");return CallbackReturn::ERROR;}action_ready_.store(false);state_=State::INACTIVE;return CallbackReturn::SUCCESS;}
@@ -302,9 +467,72 @@ controller_interface::return_type DirectMitControllerBase::update(const rclcpp::
     }else if(++wait_cycles_>max_wait_cycles_){state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return controller_interface::return_type::ERROR;}return controller_interface::return_type::OK;}
   if(generation_&&state_interfaces_[15].get_value()!=double(generation_)){if(++wait_cycles_>max_wait_cycles_&&!request_safe())return controller_interface::return_type::ERROR;return controller_interface::return_type::OK;}
   wait_cycles_=0;
-  if(state_==State::SEEDING&&generation_){state_=State::ACTIVE;action_ready_.store(true,std::memory_order_release);command_age_cycles_=0;return controller_interface::return_type::OK;}
+  if(state_==State::SEEDING&&generation_){
+    state_=State::ACTIVE; command_age_cycles_=0;
+    if (return_to_zero_) {
+      return_to_zero_start_ = measured();
+      for (std::size_t i = 0; i < 7; ++i) {
+        const double peak = 1.5 * std::abs(
+          return_to_zero_target_[i] - return_to_zero_start_[i]) / return_to_zero_duration_;
+        if (!std::isfinite(return_to_zero_start_[i]) || !std::isfinite(peak) ||
+          peak > command_velocity_[i]) {
+          RCLCPP_ERROR(get_node()->get_logger(),
+            "return_to_zero would exceed the approved joint %zu velocity", i + 1);
+          if (!request_safe()) return controller_interface::return_type::ERROR;
+          return controller_interface::return_type::OK;
+        }
+      }
+      return_to_zero_active_ = true;
+      return_to_zero_elapsed_ = 0.0;
+    } else {
+      action_ready_.store(true,std::memory_order_release);
+    }
+    return controller_interface::return_type::OK;
+  }
   DirectMitTarget action_target;
-  if (uses_joint_space_action() && action_write_target(action_control_time_, action_target)) {
+  const bool return_motion_command = return_to_zero_active_;
+  if (return_to_zero_active_) {
+    if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) return_to_zero_elapsed_ += dt;
+    const double u = std::clamp(return_to_zero_elapsed_ / return_to_zero_duration_, 0.0, 1.0);
+    const double s = u * u * (3.0 - 2.0 * u);
+    const double ds = 6.0 * u * (1.0 - u) / return_to_zero_duration_;
+    action_hold_ = {};
+    for (std::size_t i = 0; i < 7; ++i) {
+      const double delta = return_to_zero_target_[i] - return_to_zero_start_[i];
+      action_hold_.position[i] = return_to_zero_start_[i] + s * delta;
+      action_hold_.velocity[i] = ds * delta;
+      action_reference_[i].store(action_hold_.position[i], std::memory_order_release);
+    }
+    if (u >= 1.0) {
+      const auto q = measured();
+      bool converged = true;
+      for (std::size_t i = 0; i < 7; ++i)
+        converged = converged && std::abs(q[i] - return_to_zero_target_[i]) <= return_to_zero_tolerance_;
+      if (converged) {
+        ramped_return_to_zero_gains(return_to_zero_kp_, return_to_zero_kd_,
+          return_to_zero_elapsed_, return_to_zero_handoff_source_kp_,
+          return_to_zero_handoff_source_kd_);
+        return_to_zero_active_ = false;
+        return_to_zero_handoff_active_ = true;
+        return_to_zero_handoff_elapsed_ = 0.0;
+        return_to_zero_handoff_duration_ = return_to_zero_gain_handoff_duration(
+          return_to_zero_handoff_source_kp_, return_to_zero_handoff_source_kd_);
+        action_hold_.position = q;
+        for (std::size_t i = 0; i < 7; ++i)
+          action_reference_[i].store(q[i], std::memory_order_release);
+      } else if (return_to_zero_elapsed_ > return_to_zero_duration_ + 2.0) {
+        RCLCPP_ERROR(get_node()->get_logger(), "return_to_zero did not converge; requesting SAFE");
+        if (!request_safe()) return controller_interface::return_type::ERROR;
+        return controller_interface::return_type::OK;
+      }
+    }
+  } else if (return_to_zero_handoff_active_) {
+    if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) return_to_zero_handoff_elapsed_ += dt;
+    if (return_to_zero_handoff_elapsed_ >= return_to_zero_handoff_duration_) {
+      return_to_zero_handoff_active_ = false;
+      action_ready_.store(true, std::memory_order_release);
+    }
+  } else if (uses_joint_space_action() && action_write_target(action_control_time_, action_target)) {
     // Action goals own the full MIT target internally; no raw topic refresh or
     // watchdog dependency exists on this path. action_hold_ is RT-owned and
     // retains the terminal q_des after the action reports success.
@@ -322,7 +550,16 @@ controller_interface::return_type DirectMitControllerBase::update(const rclcpp::
     state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);
     return controller_interface::return_type::ERROR;
   }
-  auto cmd=map_direct_mit_command(state_==State::SEEDING?DirectMitMode::POSITION:mode_,target,measured(),kp_,kd_,torque_limit_);
+  auto active_kp = kp_; auto active_kd = current_kd();
+  if (return_motion_command) {
+    ramped_return_to_zero_gains(
+      return_to_zero_kp_, return_to_zero_kd_, return_to_zero_elapsed_, active_kp, active_kd);
+  } else if (return_to_zero_handoff_active_) {
+    ramped_return_to_zero_handoff_gains(
+      return_to_zero_handoff_source_kp_, return_to_zero_handoff_source_kd_,
+      return_to_zero_handoff_elapsed_, active_kp, active_kd);
+  }
+  auto cmd=map_direct_mit_command(state_==State::SEEDING?DirectMitMode::POSITION:mode_,target,measured(),active_kp,active_kd,torque_limit_);
   ++generation_;for(std::size_t i=0;i<7;++i){const auto o=5*i;command_interfaces_[o].set_value(cmd.joints[i].position);command_interfaces_[o+1].set_value(cmd.joints[i].velocity);command_interfaces_[o+2].set_value(cmd.joints[i].stiffness);command_interfaces_[o+3].set_value(cmd.joints[i].damping);command_interfaces_[o+4].set_value(cmd.joints[i].effort);}command_interfaces_[35].set_value(session_);command_interfaces_[36].set_value(lease_);command_interfaces_[37].set_value(generation_);
   return controller_interface::return_type::OK;
 }

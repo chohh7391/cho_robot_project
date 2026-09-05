@@ -86,6 +86,13 @@ if(BUILD_TESTING)
   target_compile_definitions(test_impedance_action_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
+  ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
+  target_link_libraries(test_task_space_return_to_zero ${PROJECT_NAME})
+  ament_target_dependencies(test_task_space_return_to_zero
+    cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface rclcpp)
+  target_compile_definitions(test_task_space_return_to_zero PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+
   foreach(arm_side left right)
     ament_add_gtest(test_single_${arm_side}_controller_manager_action
       test/test_single_controller_manager_action.cpp)

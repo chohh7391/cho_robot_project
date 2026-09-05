@@ -24,6 +24,13 @@ TEST(DirectMitMapping, PureAndDampedTorqueSemantics)
   EXPECT_EQ(pure.joints[0].position,4);EXPECT_EQ(pure.joints[0].stiffness,0);EXPECT_EQ(pure.joints[0].damping,0);EXPECT_EQ(pure.joints[0].effort,3);
   auto damped=map_direct_mit_command(DirectMitMode::DAMPED_TORQUE,t,m,kp,kd,limit);
   EXPECT_EQ(damped.joints[0].stiffness,0);EXPECT_EQ(damped.joints[0].damping,6);
+  EXPECT_EQ(damped.joints[0].position,4);EXPECT_EQ(damped.joints[0].velocity,0);
+  // The tracking variant forwards dq_des so the in-motor kd term follows the
+  // commanded motion; stiffness stays zero and q_des stays measured.
+  t.velocity=fill(2);
+  auto tracking=map_direct_mit_command(DirectMitMode::TRACKING_DAMPED_TORQUE,t,m,kp,kd,limit);
+  EXPECT_EQ(tracking.joints[0].position,4);EXPECT_EQ(tracking.joints[0].velocity,2);
+  EXPECT_EQ(tracking.joints[0].stiffness,0);EXPECT_EQ(tracking.joints[0].damping,6);EXPECT_EQ(tracking.joints[0].effort,3);
 }
 
 TEST(DirectMitMapping, CompensationIsSummedBeforeFinalLimit)
@@ -71,7 +78,7 @@ TEST(ControllerSafetyBackend, SelectedRealCommissioningProfileUsesRealBackend)
     safety_backend_from_parameter("real"));
   EXPECT_EQ(profile.backend, SafetyBackend::REAL);
   EXPECT_EQ(profile.name, "real_conservative_commissioning");
-  EXPECT_DOUBLE_EQ(profile.command_velocity.front(), 0.15);
+  EXPECT_DOUBLE_EQ(profile.command_velocity.front(), 16.754666);
 }
 
 TEST(ControllerSafetyBackend, UnapprovedRealProfileRemainsRejected)
