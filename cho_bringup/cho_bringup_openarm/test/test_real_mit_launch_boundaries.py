@@ -55,10 +55,9 @@ def test_real_bimanual_selection_only_owns_disjoint_direct_arms():
 
 def test_real_bimanual_right_scope_never_starts_left_hardware_or_broadcaster():
     scope = launch_utils.resolve_real_mit_hardware_scope(True, 'right')
-    assert scope == {
-        'always_active_controllers': [
-            'joint_state_broadcaster', 'right_ee_state_broadcaster'],
-    }
+    assert scope['always_active_controllers'] == [
+        'joint_state_broadcaster', 'right_ee_state_broadcaster']
+    assert scope['optional_controllers'] == []
     source = REAL_LAUNCH.read_text()
     assert "' real_mit_arm:=', LaunchConfiguration('mit_arm')" in source
     assert 'hardware_components_initial_state.unconfigured' not in source
@@ -68,11 +67,9 @@ def test_real_bimanual_right_scope_never_starts_left_hardware_or_broadcaster():
 def test_real_bimanual_both_scope_keeps_both_hardware_components_available():
     scope = launch_utils.resolve_real_mit_hardware_scope(
         True, 'both_independent')
-    assert scope == {
-        'always_active_controllers': [
-            'joint_state_broadcaster', 'left_ee_state_broadcaster',
-            'right_ee_state_broadcaster'],
-    }
+    assert scope['always_active_controllers'] == [
+        'joint_state_broadcaster', 'left_ee_state_broadcaster', 'right_ee_state_broadcaster']
+    assert scope['optional_controllers'] == []
 
 
 @pytest.mark.parametrize('controller,arm', [
@@ -95,7 +92,21 @@ def test_real_configs_are_explicit_commissioning_profile_without_yaml_aliases():
     for config in (REAL_CONFIG, REAL_BIMANUAL_CONFIG):
         raw = config.read_text()
         assert '&' not in raw and '<<:' not in raw
-        assert 'finger' not in raw
+        # The finger may appear, but only as the gripper controller's own
+        # joint. It must never enter an arm controller's block: the gripper is
+        # outside the MIT arm contract, so its value in an arm vector would be
+        # a value inside a lease generation and a SAFE acknowledgement.
+        params = yaml.safe_load(raw)['/**']
+        for name, entry in params.items():
+            if name == 'controller_manager' or not isinstance(entry, dict):
+                continue
+            block = entry.get('ros__parameters', {})
+            if name.endswith('gripper_controller'):
+                assert 'finger' in block['gripper_joint']
+                continue
+            joints = block.get('joints', [])
+            assert not any('finger' in joint for joint in joints), name
+            assert 'finger' not in str(block.get('gripper_joint', '')), name
         params = yaml.safe_load(raw)['/**']
         manager = params['controller_manager']['ros__parameters']
         # The three declarations of the control rate have to agree: the
@@ -360,7 +371,17 @@ def test_description_exposes_the_real_mit_plugin_contract_without_runtime_gates(
     for retired in ('open_can', 'enable_motors', 'operator_approval'):
         assert f'name="{retired}"' not in source
     assert 'side="left"' in source and 'side="right"' in source and 'side="single"' in source
-    assert "not (hardware == 'real' and real_mit_hardware)" in source
+    # The real adapter drives the hand now, so the finger is emitted for it -
+    # but as an ordinary joint. A command interface of any MIT tuple field on
+    # the finger would let the gripper controller claim part of the arm
+    # contract, which the contract forbids.
+    assert 'name="hand"' in source
+    assert 'name="gripper_motor_open"' in source
+    assert '<command_interface name="max_effort"/>' in source
+    finger_block = source[source.index('<xacro:macro name="one_hand_joints"'):]
+    finger_block = finger_block[:finger_block.index('</xacro:macro>')]
+    for tuple_field in ('stiffness', 'damping'):
+        assert f'command_interface name="{tuple_field}"' not in finger_block
 
 
 def test_real_launch_always_starts_control_node_without_runtime_gates():
@@ -368,8 +389,62 @@ def test_real_launch_always_starts_control_node_without_runtime_gates():
     assert 'ros2_control_node' in source
     for retired in ('open_can', 'operator_approval', 'enable_motors', 'opt_in'):
         assert retired not in source
+    # Off by default: the motor id, the closed motor angle and the force scale
+    # are per-hand measurements nobody has taken on this robot yet.
     assert "'hand', default_value='false'" in source
-    assert 'hand:=true is unsupported by the current real MIT bringup' in source
+    assert 'hand:=true is unsupported by the current real MIT bringup' not in source
+    assert "LaunchConfiguration('hand').perform(context)" in source
+
+
+def test_real_gripper_controllers_follow_the_arm_selection():
+    # A non-selected bimanual arm is a state-only GenericSystem, finger
+    # included, so a gripper controller there would fail on a missing position
+    # command interface.
+    scope = launch_utils.resolve_real_mit_hardware_scope(True, 'right', hand=True)
+    assert scope['always_active_controllers'] == [
+        'joint_state_broadcaster', 'right_ee_state_broadcaster']
+    assert scope['optional_controllers'] == ['right_gripper_controller']
+    assert launch_utils.resolve_real_mit_hardware_scope(
+        True, 'right', hand=False)['optional_controllers'] == []
+    assert launch_utils.resolve_real_mit_hardware_scope(
+        True, 'both_independent', hand=True)['optional_controllers'] == [
+        'left_gripper_controller', 'right_gripper_controller']
+    assert launch_utils.resolve_real_mit_hardware_scope(
+        False, 'left', hand=True)['optional_controllers'] == ['gripper_controller']
+
+
+def test_a_gripper_that_cannot_load_never_blocks_the_arm_controller():
+    # Measured on hardware 2026-09-05: a gripper controller in the same spawner
+    # list as the arm exited the spawner on its own failure, and the arm
+    # controller was never spawned at all - motors energised in their SAFE hold
+    # with nothing commanding them. The gripper gets its own spawner, started
+    # only after the arm one has finished.
+    spawners = launch_utils.create_controller_spawners(
+        always_active=['joint_state_broadcaster', 'right_ee_state_broadcaster'],
+        switchable_controllers=['right_task_space_impedance_mit_controller'],
+        initial_active_controllers=['right_task_space_impedance_mit_controller'],
+        optional_controllers=['right_gripper_controller'])
+    # launch.Node keeps its arguments as substitutions; render them to text.
+    def controller_arguments(node):
+        rendered = []
+        for argument in getattr(node, '_Node__arguments', []) or []:
+            for piece in (argument if isinstance(argument, (list, tuple)) else [argument]):
+                rendered.append(str(getattr(piece, 'text', piece)))
+        return rendered
+
+    arm_spawner = spawners[-1]
+    arm_arguments = controller_arguments(arm_spawner)
+    assert 'right_task_space_impedance_mit_controller' in arm_arguments
+    # The gripper is not in the arm's list, so its failure cannot stop the arm.
+    assert 'right_gripper_controller' not in arm_arguments
+    # The follower spawners live inside the OnProcessExit handler; whichever
+    # private attribute holds them, the gripper must be in exactly one spawner
+    # and that spawner must not be the arm's.
+    handler = spawners[0]._RegisterEventHandler__event_handler
+    followers = next(
+        value for value in vars(handler).values()
+        if isinstance(value, list) and any(hasattr(item, '_Node__arguments') for item in value))
+    assert any('right_gripper_controller' in controller_arguments(node) for node in followers)
 
 
 def test_real_launch_loads_repo_owned_robot_model_rviz_config():

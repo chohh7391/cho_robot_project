@@ -111,7 +111,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
   try {
     const auto backend = safety_backend_from_parameter(
       get_node()->get_parameter("safety_backend").as_string());
-    const auto p=load_safety_profile_file(get_node()->get_parameter("safety_profile_file").as_string(),get_node()->get_parameter("safety_profile_name").as_string(),backend);
+    const auto p=load_safety_profile_file(get_node()->get_parameter("safety_profile_file").as_string(),get_node()->get_parameter("safety_profile_name").as_string(),backend,side_);
     lease_=p.lease_default;max_wait_cycles_=p.stale_cycles;command_timeout_cycles_=std::max<std::size_t>(1,(p.watchdog_ms*p.update_rate_hz+999)/1000);
     for(std::size_t i=0;i<7;++i){
       if(kp_[i]>p.kp_max[i]||kd_[i].load()>p.kd_max[i]||torque_limit_[i]>std::min(p.tau_ff_max[i],p.final_torque[i])){

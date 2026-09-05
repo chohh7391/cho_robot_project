@@ -80,7 +80,16 @@ def generate_launch_description():
                 'cycle of state age, 1.3 ms at 750 Hz.')),
         DeclareLaunchArgument(
             'hand', default_value='false', choices=['true', 'false'],
-            description='Reserved for a future real gripper adapter; the current real MIT arm is seven-axis only.'),
+            description=(
+                'Drive the parallel-link hand. The adapter then owns an eighth '
+                'Damiao motor on the same CAN socket, exports the finger as an '
+                'ordinary position + max_effort joint, and a robot-independent '
+                'gripper controller is spawned for it. The gripper stays outside '
+                'the MIT arm contract - no lease, generation or SAFE '
+                'acknowledgement carries its values - but a gripper fault safes '
+                'the same-bus arm. Defaults off: the motor id, the closed motor '
+                'angle and the force scale are per-hand measurements that have '
+                'not been taken on this robot yet.')),
         DeclareLaunchArgument(
             'return_to_zero', default_value='false', choices=['true', 'false'],
             description=(
@@ -161,11 +170,7 @@ def generate_launch_description():
             raise RuntimeError(
                 'xacro_file overrides are forbidden for real MIT bringup; the '
                 'canonical description owns the plugin and safety boundary.')
-        if launch_utils.as_bool(LaunchConfiguration('hand').perform(context)):
-            raise RuntimeError(
-                'hand:=true is unsupported by the current real MIT bringup: '
-                'OpenArmMitRealSystem owns exactly the seven arm motors and '
-                'does not export a gripper transport.')
+        hand = launch_utils.as_bool(LaunchConfiguration('hand').perform(context))
         bimanual = launch_utils.as_bool(LaunchConfiguration('bimanual').perform(context))
         selection = launch_utils.resolve_real_mit_selection(
             bimanual,
@@ -173,7 +178,7 @@ def generate_launch_description():
             LaunchConfiguration('mit_arm').perform(context),
             LaunchConfiguration('controllers_file').perform(context))
         hardware_scope = launch_utils.resolve_real_mit_hardware_scope(
-            bimanual, LaunchConfiguration('mit_arm').perform(context))
+            bimanual, LaunchConfiguration('mit_arm').perform(context), hand)
         return_to_zero = launch_utils.as_bool(
             LaunchConfiguration('return_to_zero').perform(context))
         gravity_compensation = launch_utils.as_bool(
@@ -305,6 +310,7 @@ def generate_launch_description():
                     })
         runtime_file = launch_utils.create_runtime_param_file(
             controller_names=(hardware_scope['always_active_controllers'] +
+                              hardware_scope['optional_controllers'] +
                               selection['controller_names']),
             bringup_type='real', control_mode='torque', ee_name='',
             controller_overrides=runtime_overrides)
@@ -317,6 +323,7 @@ def generate_launch_description():
             remappings=[('~/robot_description', '/robot_description')], on_exit=Shutdown())
         spawners = launch_utils.create_controller_spawners(
             always_active=hardware_scope['always_active_controllers'],
+            optional_controllers=hardware_scope['optional_controllers'],
             switchable_controllers=selection['controller_names'],
             initial_active_controllers=selection['controller_names'],
             use_sim_time={'use_sim_time': False}, timeout=60)

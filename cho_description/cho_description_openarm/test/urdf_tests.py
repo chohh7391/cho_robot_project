@@ -208,7 +208,10 @@ def test_hand_false_drops_the_gripper_entirely():
 
 
 def test_real_mit_single_arm_is_exactly_seven_axis_with_full_protocol():
-    root = build(hardware='real', real_mit_hardware='true')
+    # hand:=false is the real bringup's default: the gripper's motor id, closed
+    # angle and force scale are per-hand measurements, so the arm-only
+    # component stays the baseline this contract describes.
+    root = build(hardware='real', real_mit_hardware='true', hand='false')
     block = root.find('ros2_control')
     assert block.find('hardware/plugin').text == (
         'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
@@ -269,7 +272,7 @@ def test_bimanual_real_splits_by_can_bus():
 
 
 def test_bimanual_real_mit_has_one_seven_axis_component_and_gpio_per_side():
-    root = build(hardware='real', real_mit_hardware='true', bimanual='true')
+    root = build(hardware='real', real_mit_hardware='true', bimanual='true', hand='false')
     blocks = {block.get('name'): block for block in root.findall('ros2_control')}
     assert set(blocks) == {'OpenArmLeftHardwareInterface', 'OpenArmRightHardwareInterface'}
     for side, name in (('left', 'OpenArmLeftHardwareInterface'),
@@ -289,7 +292,7 @@ def test_bimanual_real_mit_has_one_seven_axis_component_and_gpio_per_side():
 def test_bimanual_real_single_selection_uses_state_only_visualization_sibling(
         selected, inactive):
     root = build(hardware='real', real_mit_hardware='true', bimanual='true',
-                 real_mit_arm=selected)
+                 real_mit_arm=selected, hand='false')
     blocks = {block.get('name'): block for block in root.findall('ros2_control')}
     selected_block = blocks[f'OpenArm{selected.title()}HardwareInterface']
     inactive_block = blocks[f'OpenArm{inactive.title()}HardwareInterface']
@@ -313,6 +316,47 @@ def test_bimanual_real_single_selection_uses_state_only_visualization_sibling(
     assert initial[f'openarm_{inactive}_joint4'] == pytest.approx(0.3)
     assert all(value == pytest.approx(0.0) for name, value in initial.items()
                if not name.endswith('joint4'))
+
+
+def test_real_mit_hand_adds_a_plain_finger_joint_outside_the_arm_contract():
+    root = build(hardware='real', real_mit_hardware='true', hand='true')
+    block = root.find('ros2_control')
+    joints = {joint.get('name'): joint for joint in block.findall('joint')}
+    assert set(joints) == set(ARM_JOINTS) | {'openarm_finger_joint1'}
+    finger = joints['openarm_finger_joint1']
+    # Position plus a force cap, and nothing from the MIT five-tuple: the
+    # gripper controller must not be able to claim a field that carries a lease
+    # generation or a SAFE acknowledgement.
+    assert [c.get('name') for c in finger.findall('command_interface')] == [
+        'position', 'max_effort']
+    assert [s.get('name') for s in finger.findall('state_interface')] == [
+        'position', 'velocity', 'effort']
+    # The arm joints are untouched by the hand.
+    for name in ARM_JOINTS:
+        assert [c.get('name') for c in joints[name].findall('command_interface')] == [
+            'position', 'velocity', 'stiffness', 'damping', 'effort']
+    assert block.find("hardware/param[@name='hand']").text.lower() == 'true'
+    for name in ('gripper_send_can_id', 'gripper_motor_open', 'gripper_max_force',
+                 'gripper_write_decimation'):
+        assert block.find(f"hardware/param[@name='{name}']") is not None
+
+
+@pytest.mark.parametrize('selected,inactive', [('right', 'left'), ('left', 'right')])
+def test_a_visualization_only_arm_gets_a_state_only_finger_too(selected, inactive):
+    # Its finger has no transport behind it either, so a command interface
+    # there would let a gripper controller be spawned onto nothing.
+    root = build(hardware='real', real_mit_hardware='true', bimanual='true',
+                 real_mit_arm=selected, hand='true')
+    blocks = {block.get('name'): block for block in root.findall('ros2_control')}
+    inactive_finger = next(
+        joint for joint in blocks[f'OpenArm{inactive.title()}HardwareInterface'].findall('joint')
+        if joint.get('name').endswith('finger_joint1'))
+    assert inactive_finger.findall('command_interface') == []
+    selected_finger = next(
+        joint for joint in blocks[f'OpenArm{selected.title()}HardwareInterface'].findall('joint')
+        if joint.get('name').endswith('finger_joint1'))
+    assert [c.get('name') for c in selected_finger.findall('command_interface')] == [
+        'position', 'max_effort']
 
 
 @pytest.mark.parametrize('hardware', ['mujoco', 'gazebo', 'mock'])

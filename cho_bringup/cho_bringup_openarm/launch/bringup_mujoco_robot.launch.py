@@ -108,6 +108,12 @@ def generate_launch_description():
                         'openarm_hand_tcp; ignored when bimanual, where each arm '
                         'sets its own ee_name in the controllers file.'),
         DeclareLaunchArgument(
+            'hand', default_value='true', choices=['true', 'false'],
+            description='Include the parallel-link hand and spawn a gripper controller for '
+                        'it. The controller is robot-independent and speaks metres of '
+                        'opening width, so the same Gripper action and ~/width_command '
+                        'topic drive it here and on hardware.'),
+        DeclareLaunchArgument(
             'use_rviz', default_value='false', description='Start RViz'),
     ]
 
@@ -121,6 +127,7 @@ def generate_launch_description():
                 ' mujoco_mit_prototype:=', LaunchConfiguration('mujoco_mit_prototype'),
                 ' mujoco_mit_headless:=', LaunchConfiguration('mujoco_mit_headless'),
                 ' bimanual:=', LaunchConfiguration('bimanual'),
+                ' hand:=', LaunchConfiguration('hand'),
             ]),
             value_type=str,
         )
@@ -180,7 +187,11 @@ def generate_launch_description():
         ee_name = (LaunchConfiguration('ee_name').perform(context)
                    or ('' if bimanual else 'openarm_hand_tcp'))
 
+        hand = launch_utils.as_bool(LaunchConfiguration('hand').perform(context))
         always_active = launch_utils.always_active_controllers(bimanual)
+        # Its own spawner, after the arm: a hand that fails to load must not be
+        # able to stop the arm controller from ever being spawned.
+        optional = launch_utils.gripper_controllers(bimanual) if hand else []
         mit_controller_names = (mit_selection['controller_names'] if mit_selection else [])
         switchable_controllers = (mit_controller_names if mit_prototype else
             launch_utils.get_switchable_controllers(
@@ -221,7 +232,7 @@ def generate_launch_description():
                         })
 
         runtime_param_file = launch_utils.create_runtime_param_file(
-            controller_names=always_active + switchable_controllers,
+            controller_names=always_active + optional + switchable_controllers,
             bringup_type=bringup_type,
             control_mode=mode,
             ee_name=ee_name,
@@ -235,6 +246,7 @@ def generate_launch_description():
 
         controller_spawners = launch_utils.create_controller_spawners(
             always_active=always_active,
+            optional_controllers=optional,
             switchable_controllers=switchable_controllers,
             initial_active_controllers=(mit_controller_names if mit_prototype else
                                         launch_utils.per_arm(ctrl_name, bimanual)),

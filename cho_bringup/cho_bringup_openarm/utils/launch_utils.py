@@ -200,16 +200,22 @@ def resolve_real_mit_selection(bimanual, controller_name, arm, controllers_file=
     }
 
 
-def resolve_real_mit_hardware_scope(bimanual, arm):
+def resolve_real_mit_hardware_scope(bimanual, arm, hand=False):
     """Limit real bimanual startup to the arm(s) selected for MIT control.
 
     A non-selected component is a state-only GenericSystem in the canonical
     description. It keeps the bimanual model visible without constructing a
     real transport, CAN socket, or motor command interface.
+
+    The gripper controller follows the same selection. A non-selected arm's
+    finger is state-only for the same reason its arm joints are, so spawning a
+    gripper controller there would fail on a missing position command
+    interface and take the whole spawner down with it.
     """
     if not as_bool(bimanual):
         return {
             'always_active_controllers': always_active_controllers(False),
+            'optional_controllers': gripper_controllers(False) if as_bool(hand) else [],
         }
     if arm not in ('left', 'right', 'both_independent'):
         raise RuntimeError(
@@ -220,6 +226,8 @@ def resolve_real_mit_hardware_scope(bimanual, arm):
         'always_active_controllers': (
             ['joint_state_broadcaster'] +
             [f'{side}_ee_state_broadcaster' for side in sides]),
+        'optional_controllers': (
+            [f'{side}_gripper_controller' for side in sides] if as_bool(hand) else []),
     }
 
 
@@ -252,8 +260,21 @@ def per_arm(base_name, bimanual=False):
     return [f'{prefix}{base_name}' for prefix in arm_prefixes(bimanual)]
 
 
+def gripper_controllers(bimanual=False):
+    """One robot-independent gripper controller instance per hand."""
+    return per_arm('gripper_controller', bimanual)
+
+
 def always_active_controllers(bimanual=False):
-    """joint_state_broadcaster covers the whole model; the EE broadcaster is per arm."""
+    """joint_state_broadcaster covers the whole model; the EE broadcaster is per arm.
+
+    The gripper is deliberately NOT here. One spawner loads its whole list in
+    order and dies on the first failure, so a gripper in this list takes the arm
+    controller down with it: measured on hardware 2026-09-05, a gripper
+    controller that could not be loaded left the motors energised in their SAFE
+    hold with no arm controller at all. Grippers go through
+    `optional_controllers`, spawned separately and last.
+    """
     return ['joint_state_broadcaster'] + per_arm('ee_state_broadcaster', bimanual)
 
 
@@ -361,11 +382,19 @@ def _make_spawner_node(controller_names, runtime_param_file=None, active=True,
 
 def create_controller_spawners(always_active, switchable_controllers,
                                initial_active_controllers, runtime_param_file=None,
-                               use_sim_time=None, timeout=None):
+                               use_sim_time=None, timeout=None,
+                               optional_controllers=()):
     """Spawn the always-active set plus the requested controllers, rest inactive.
 
     initial_active_controllers is a list because a bimanual build brings up one
     arm controller per arm; they claim disjoint interfaces, so both are active.
+
+    `optional_controllers` get a spawner of their own, started only after the
+    arm is up. A spawner loads its list in order and exits on the first
+    failure, so anything that shares a list with the arm controller can prevent
+    it from ever being spawned - which on real hardware means energised motors
+    with nothing commanding them. Peripherals whose absence should degrade
+    rather than disable the robot belong here.
     """
     switchable = unique_names(switchable_controllers)
     initial = [c for c in unique_names(initial_active_controllers) if c in switchable]
@@ -374,23 +403,30 @@ def create_controller_spawners(always_active, switchable_controllers,
     # controller activates.
     active_controllers = unique_names(list(always_active) + initial)
     inactive_controllers = [c for c in switchable if c not in initial]
+    optional = [c for c in unique_names(optional_controllers) if c not in active_controllers]
 
     active_spawner = _make_spawner_node(
         active_controllers, runtime_param_file, active=True,
         use_sim_time=use_sim_time, timeout=timeout)
 
-    if not inactive_controllers:
-        return [active_spawner]
+    followers = []
+    if optional:
+        followers.append(_make_spawner_node(
+            optional, runtime_param_file, active=True,
+            use_sim_time=use_sim_time, timeout=timeout))
+    if inactive_controllers:
+        followers.append(_make_spawner_node(
+            inactive_controllers, runtime_param_file, active=False,
+            use_sim_time=use_sim_time, timeout=timeout))
 
-    inactive_spawner = _make_spawner_node(
-        inactive_controllers, runtime_param_file, active=False,
-        use_sim_time=use_sim_time, timeout=timeout)
+    if not followers:
+        return [active_spawner]
 
     return [
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=active_spawner,
-                on_exit=[inactive_spawner],
+                on_exit=followers,
             )
         ),
         active_spawner,

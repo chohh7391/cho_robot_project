@@ -25,6 +25,15 @@
       right_task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
 
+      # Spawned only with hand:=true. It claims the finger's position and
+      # max_effort interfaces, which no arm controller touches, so it stays
+      # active across arm controller switches. The gripper is outside the MIT
+      # arm contract entirely - see docs/openarm_mit_contract_v1.md.
+      left_gripper_controller:
+        type: cho_controller_gripper/GripperController
+      right_gripper_controller:
+        type: cho_controller_gripper/GripperController
+
   joint_state_broadcaster:
     ros__parameters:
       joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3,
@@ -393,3 +402,77 @@
       kd_null: 0.5
       joint_limit_margin: 0.05
       joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
+
+  left_gripper_controller:
+    ros__parameters:
+      gripper_joint: openarm_left_finger_joint1
+      # The finger's own velocity comes back from the drive, so the width rate
+      # is measured rather than differenced.
+      use_velocity_state: true
+      use_effort_state: true
+      # Newtons at the finger. The adapter turns this into the drive's
+      # per-unit current cap, which is what makes the Gripper action's force
+      # field a real limit rather than advice.
+      force_command_interface: max_effort
+      # Both jaws move, so the object sees twice the 44 mm of finger travel.
+      joint_at_closed: 0.0
+      joint_at_open: 0.044
+      width_at_closed: 0.0
+      width_at_open: 0.088
+      # Deliberately slow for commissioning. The hand has not been driven on
+      # this robot yet, and a gripper that closes at 50 mm/s onto a finger is
+      # not something to discover at full speed.
+      default_speed: 0.02
+      max_speed: 0.08
+      # The URDF gives the finger joint a 9 N effort limit.
+      default_force: 4.0
+      max_force: 9.0
+      # A full 88 mm sweep at the commissioning speed of 20 mm/s takes 4.4 s,
+      # so the controller's 5 s default would abort a legitimate full open on
+      # the first slow cycle.
+      goal_timeout: 12.0
+      # A real hand does stop on objects, so an empty closure is worth
+      # reporting: it usually means the grasp missed.
+      report_grasp_failure: true
+      # Wider than in simulation: real position feedback carries encoder noise
+      # and the drive's own following error.
+      stall_width_error: 0.004
+      stall_width_speed: 0.003
+      stall_dwell: 0.2
+
+  right_gripper_controller:
+    ros__parameters:
+      gripper_joint: openarm_right_finger_joint1
+      # The finger's own velocity comes back from the drive, so the width rate
+      # is measured rather than differenced.
+      use_velocity_state: true
+      use_effort_state: true
+      # Newtons at the finger. The adapter turns this into the drive's
+      # per-unit current cap, which is what makes the Gripper action's force
+      # field a real limit rather than advice.
+      force_command_interface: max_effort
+      # Both jaws move, so the object sees twice the 44 mm of finger travel.
+      joint_at_closed: 0.0
+      joint_at_open: 0.044
+      width_at_closed: 0.0
+      width_at_open: 0.088
+      # Deliberately slow for commissioning. The hand has not been driven on
+      # this robot yet, and a gripper that closes at 50 mm/s onto a finger is
+      # not something to discover at full speed.
+      default_speed: 0.02
+      max_speed: 0.08
+      # The URDF gives the finger joint a 9 N effort limit.
+      default_force: 4.0
+      max_force: 9.0
+      # A full 88 mm sweep at the commissioning speed of 20 mm/s takes 4.4 s,
+      # so the controller's 5 s default would abort a legitimate full open on
+      # the first slow cycle.
+      goal_timeout: 12.0
+      # A real hand does stop on objects, so an empty closure is worth
+      # reporting: it usually means the grasp missed.
+      report_grasp_failure: true
+      # Wider than in simulation: real position feedback carries encoder noise
+      # and the drive's own following error.
+      stall_width_error: 0.004
+      stall_width_speed: 0.003
+      stall_dwell: 0.2

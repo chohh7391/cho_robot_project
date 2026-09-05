@@ -1380,7 +1380,7 @@ protected:
   {
     profile_ = cho_openarm_mit_core::load_safety_profile_file(
       OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_commissioning",
-      cho_openarm_mit_core::SafetyBackend::REAL);
+      cho_openarm_mit_core::SafetyBackend::REAL, "single");
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
     manager_ = std::make_shared<controller_manager::ControllerManager>(
       std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true), executor_,
