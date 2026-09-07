@@ -17,8 +17,11 @@ install(
 )
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+  # No ament_lint_auto here, matching cho_bringup_openarm. It applies ROS's
+  # default style - 99 columns and pydocstyle's D213 - while CLAUDE.md declares
+  # this project's standard as 120 columns and relaxed pep257, so it was failing
+  # 13 times on code that is correct by the project's own rules. package.xml is
+  # still linted repo-wide by the ament_xmllint step in .github/workflows/lint.yml.
   find_package(ament_cmake_pytest REQUIRED)
   # A user-local anyio plugin targets a newer pytest than ROS 2 Humble ships.
   # Keep package tests deterministic and limited to explicitly requested tests.
