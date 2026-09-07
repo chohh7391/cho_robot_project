@@ -10,9 +10,15 @@ if(BUILD_TESTING)
     test/test_moveit_action_bridge.py
     APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   )
+  ament_add_pytest_test(moveit_action_bridge_parameter_tests
+    test/test_moveit_action_bridge_parameters.py
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+    ENV ROS_DOMAIN_ID=223
+  )
   ament_add_pytest_test(static_scene_parameter_tests
     test/test_publish_static_scene_parameters.py
-    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ROS_DOMAIN_ID=223
+    APPEND_ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+    ENV ROS_DOMAIN_ID=223
   )
 endif()
 
