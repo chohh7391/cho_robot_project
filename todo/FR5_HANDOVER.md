@@ -41,7 +41,7 @@ vertical, mirroring UR. Support **all four bringups**: gazebo, mujoco, isaac, re
 Test in sim; the user tests real hardware and gives feedback.
 
 Vendor / asset sources on this machine:
-- `~/Downloads/frcobot_ros2/` — vendor ROS2 driver (`fairino_hardware_v3_9_9`,
+- `~/Downloads/frcobot_ros2/` — vendor ROS2 driver (`fairino_hardware_v3_8_0`,
   `fairino_msgs`, libfairino C++ SDK, `fairino_description`, moveit configs).
 - `~/Downloads/fr5_position_control_bundle/` — FR5 URDF + STL meshes +
   MuJoCo `fr5_p.xml` + DLS `kinematics/solvers.py` (reference only).
@@ -62,7 +62,7 @@ New packages (all build clean, `--symlink-install`):
   + `config/{mujoco,isaac,gz,real}/controllers.yaml` + `config/real/fr5.config.yaml`.
 
 Vendored (copied into `extern/`, patched — see §6):
-- `extern/fairino_hardware_v3_9_9/` (+ `CHO_PATCHES.md`) and `extern/fairino_msgs/`.
+- `extern/fairino_hardware_v3_8_0/` (+ `CHO_PATCHES.md`) and `extern/fairino_msgs/`.
 
 Added to existing packages:
 - `cho_robot_config/config/fr5.yaml`.
@@ -174,9 +174,22 @@ trajectory bug — see comment), `clamp_to_joint_limits`, `held_command_position
 
 ---
 
-## 6. Real-robot integration (vendor HW) — implemented, UNTESTED (needs hardware)
+## 6. Real-robot integration (vendor HW) — SDK connects; motion still UNTESTED
 
-`extern/fairino_hardware_v3_9_9` is the vendor `hardware_interface::SystemInterface`
+**Driver version must match the controller firmware.** Our FR5-V1-002 (V6.0)
+reports controller software `v3.8.0.1` (`GetSoftwareVersion` over XML-RPC on
+port 20003; servo `V3.7.73`). The originally vendored `fairino_hardware_v3_9_9`
+could never connect to it: libfairino 2.3.9 opens port 20005 in `RPC()`, a v3.8
+controller serves only up to 20004, so the connect is refused and the vendor
+code prints the misleading "check whether the port is occupied". The vendored
+driver is now tag `V3.0.0_RobotV3.8.0` (libfairino 2.1.7), which connects on
+20004/8080; `RPC()` returns 0 against this robot. The v3.9.9 tree was vendored
+first and is now **deleted** — it could not connect, and a second copy would
+export the same `fairino_hardware/FairinoHardwareInterface` pluginlib class
+twice. Re-vendor it from upstream if the controller is ever upgraded; the
+patches port across unchanged (see `CHO_PATCHES.md`).
+
+`extern/fairino_hardware_v3_8_0` is the vendor `hardware_interface::SystemInterface`
 (`fairino_hardware/FairinoHardwareInterface`, libfairino SDK). `write()` streams
 `ServoJ(...,cmdT=0.008,...)` at 125 Hz. Patches applied (all marked `// cho patch`,
 see `CHO_PATCHES.md`), in `src/fairino_hardware_interface.cpp`:
@@ -229,7 +242,7 @@ cho_description_fr5:<share>`. `physics_rate` (default 250) MUST equal
 | **Real**   | implemented + vendor patched, not run | needs the physical FR5 |
 
 Everything builds clean:
-`cbp fairino_msgs fairino_hardware_v3_9_9 cho_controller_fr5 cho_description_fr5 cho_bringup_fr5 cho_interfaces`
+`cbp fairino_msgs fairino_hardware_v3_8_0 cho_controller_fr5 cho_description_fr5 cho_bringup_fr5 cho_interfaces`
 (after the cho_interfaces clean-rebuild note in §3).
 
 ---

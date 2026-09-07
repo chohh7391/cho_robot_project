@@ -13,10 +13,12 @@
 - **정정**: 앞서 "벤더엔 ros2_control HW 인터페이스가 없다"고 했으나 **틀렸다**(GitHub README 요약만 신뢰한 결과).
   로컬 `~/Downloads/frcobot_ros2/`를 직접 확인한 결과, **진짜 `hardware_interface::SystemInterface`가 존재**한다:
   - 클래스 `fairino_hardware::FairinoHardwareInterface`, 플러그인 `fairino_hardware/FairinoHardwareInterface`
-    (`fairino_hardware_v3_9_9/fairino_hardware.xml`, `PLUGINLIB_EXPORT_CLASS ...`).
+    (`fairino_hardware_v3_8_0/fairino_hardware.xml`, `PLUGINLIB_EXPORT_CLASS ...`).
   - **`libfairino`(FR 공식 C++ SDK)** 기반: `#include "libfairino/include/robot.h"`, `FRRobot`.
   - `write()`가 매 사이클 **`ServoJ(cmd, ext, 0,0, 0.008, 0,0)`** 스트리밍(rad→deg). `read()`는 `GetActualJointPosDegree`(deg→rad).
-  - 버전: **최신 `fairino_hardware_v3_9_9`** 사용(최고 넘버; `master`도 velocity 미배선 동일). 펌웨어는
+  - 버전: **`fairino_hardware_v3_8_0`**(upstream 태그 `V3.0.0_RobotV3.8.0`, libfairino 2.1.7).
+    최고 넘버가 아니라 **컨트롤러 펌웨어에 맞춘 것**이다. v3_9_9의 libfairino 2.3.9는 `RPC()`에서
+    포트 20005로 접속하는데 v3.8 컨트롤러는 20004까지만 열어 연결이 거부된다. 펌웨어는
     사용자가 로봇에서 업데이트해 맞춤 → 버전 매칭 비이슈.
 - **그래서 옵션 A는 "직접 작성"이 아니라 "벤더 인터페이스 재사용/확장"으로 바뀐다.** 새 엔지니어링이 대폭 줄어든다.
 - MoveIt2 config들의 `*.ros2_control.xacro`(예: `fairino5_v6_moveit2_config/config/fairino5_v6_robot.ros2_control.xacro`)는
@@ -50,14 +52,15 @@
 | `cho_description/cho_description_fr5` | URDF/xacro, `fr5.ros2_control.xacro`(mock/mujoco/**fairino** 스위칭), 메시, MuJoCo xml, config | `cho_description_ur/` + 벤더 `fairino_description` |
 | `cho_controller/cho_controller_fr5` | ns `cho_controller::fr5` base/joint_space_position/task_space_ik + 액션서버 + `cho_controller_fr5.xml` | `cho_controller_ur/` (거의 그대로) |
 | `cho_bringup/cho_bringup_fr5` | `bringup_{real,mujoco,gz,isaac}_robot.launch.py`, `config/{real,mujoco}/controllers.yaml`, `config/real/fr5.config.yaml` | `cho_bringup_ur/` |
-| `extern/frcobot_ros2` (서브모듈, 포크) | 벤더 HW(`fairino_hardware_v3_9_9` +libfairino.so 동봉) + `fairino_msgs`; **필요한 것만 빌드**(COLCON_IGNORE) | `.gitmodules`에 추가 |
+| `extern/frcobot_ros2` (서브모듈, 포크) | 벤더 HW(`fairino_hardware_v3_8_0` +libfairino.so 동봉) + `fairino_msgs`; **필요한 것만 빌드**(COLCON_IGNORE) | `.gitmodules`에 추가 |
 | `cho_robot_config/config/fr5.yaml` | 컨트롤러 역할 single-source-of-truth | `cho_robot_config/config/ur5e.yaml` |
 
 ---
 
 ## 3. 핵심: 벤더 HW 인터페이스 ↔ cho 컨트롤러 호환 (옵션 A의 실제 작업)
 
-벤더 `FairinoHardwareInterface`(v3_9_9 기준) 분석:
+벤더 `FairinoHardwareInterface` 분석(원 분석은 upstream v3_9_9 기준이나, 여기서 쓰는 API 시그니처가
+`v3_8_0`/libfairino 2.1.7과 동일해 그대로 적용된다):
 - export_command: `position`만. export_state: **`position`만** (velocity/effort는 소스에 주석처리/예약).
 - `on_activate`: `FRRobot` 생성 → `RPC(ip)` → 200ms 대기 → 현재각 읽어 command 초기화(급발진 방지). 실패 시 ERROR.
 - `on_deactivate`: `StopMotion()` + `CloseRPC()`.
@@ -96,7 +99,7 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 ### 3.2 그 외 실기 통합 항목
 - **IP 파라미터화 (확정: cho 관례 = YAML→launch→xacro param)**: `fr5.config.yaml`의 `robot_ip` → launch arg →
   xacro `<param name="robot_ip">${robot_ip}</param>` → **포크에서 `on_init`이 `info_.hardware_parameters["robot_ip"]`를
-  읽어 `_controller_ip`에 대입**(v3_9_9는 `#define` 하드코딩이라 미수정 시 IP 무시됨). UR `robot_ip` 흐름과 동일.
+  읽어 `_controller_ip`에 대입**(업스트림은 `#define` 하드코딩이라 미수정 시 IP 무시됨). UR `robot_ip` 흐름과 동일.
 - **update_rate = 125**: `write()`의 ServoJ cmdT가 8ms 고정 → controller_manager `update_rate`도 125로 맞춰
   스트림 주기와 일치. (불일치 시 궤적 시간/서보 버퍼 어긋남.)
 - **libfairino 빌드**: `fairino_hardware`가 `libfairino`에 링크 → 해당 .so/헤더 배포 확인(colcon 빌드 경로).
@@ -106,7 +109,7 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 ## 4. 단계별 계획 (체크박스)
 
 ### Phase 0 — 스캐폴딩 & description
-- [ ] `extern/frcobot_ros2` 서브모듈(포크) 등록(`.gitmodules`) → `fairino_hardware_v3_9_9` + `fairino_msgs`만 빌드
+- [ ] `extern/frcobot_ros2` 서브모듈(포크) 등록(`.gitmodules`) → `fairino_hardware_v3_8_0` + `fairino_msgs`만 빌드
       (나머지 `COLCON_IGNORE`, §8.A). `libfairino` 링크 성공까지. (로봇 펌웨어는 사용자가 최신으로 업데이트.)
 - [ ] `cho_description_fr5`, `cho_controller_fr5`, `cho_bringup_fr5`를 UR에서 복제·리네임
       (`_ur`→`_fr5`, ns `ur`→`fr5`, 기본 조인트명 `j1..j6`, 플러그인 등록명, package.xml/CMake).
@@ -144,7 +147,9 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 - **URDF↔실기 프레임**: FK 대조를 Phase 0 게이트로(번들 리뷰 7번).
 - **update_rate ≠ ServoJ cmdT(8ms)**: 궤적 시간/서보 버퍼 어긋남 → 125Hz로 정렬.
 - **안전 한계 위치**: 벤더 write는 클램프 안 함 → cho 컨트롤러가 속도/Δq 한계 책임.
-- **버전 정합**: 최신 `v3_9_9` 사용, 로봇 펌웨어도 최신으로 업데이트(사용자) → 정합 확보.
+- **버전 정합**: 드라이버를 **컨트롤러 펌웨어에 맞춘다**(최고 넘버가 아니다). 실측 펌웨어
+  v3.8.0.1 → `v3_8_0`(libfairino 2.1.7). v3_9_9의 libfairino 2.3.9는 포트 20005로 접속해
+  연결 자체가 거부된다.
 - **IP 하드코딩**: 실기 전 반드시 처리(§3.2).
 
 ## 6. 검증 지표
@@ -156,29 +161,31 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 - [x] **`ee_name` = `wrist3_link`**.
 - [x] **IP = cho 관례**(YAML→launch→xacro param) + 포크에서 `on_init`이 `hardware_parameters["robot_ip"]` 읽도록 패치.
 - [x] **벤더 관리 = `frcobot_ros2` 서브모듈(포크) + 필요한 것만 빌드**(COLCON_IGNORE). 패치는 포크에 반영.
-- [x] **버전 = 최신 v3_9_9** (사용자가 로봇 펌웨어 최신 업데이트).
+- [x] **버전 = `v3_8_0`** (upstream 태그 `V3.0.0_RobotV3.8.0`, libfairino 2.1.7) — 로봇 실측 펌웨어
+      v3.8.0.1에 맞춘 것. 원래 결정이던 v3_9_9는 연결 불가로 **2026-09-07에 트리째 삭제**했다
+      (동일 pluginlib 클래스를 중복 export하므로 남겨둘 이유도 없다).
 - [x] **문서 = `todo/FR5_TODO.md` 유지**.
 
 ---
 
 ## 8. 파일 수준 체크리스트 (Phase 0–2, 확정 결정 반영)
 
-> 전제: `ee_name=wrist3_link`, HW=`fairino_hardware_v3_9_9`(**frcobot_ros2 서브모듈, 필요한 것만 빌드·패치**),
+> 전제: `ee_name=wrist3_link`, HW=`fairino_hardware_v3_8_0`(**필요한 것만 빌드·패치**),
 > IP=cho 관례, A2-velocity, 조인트 `j1..j6`. description은 **번들 `fr5.urdf`/메시 기반**(j1..j6 + wrist3_link 일치;
 > 벤더 `fairino_description/urdf/fairino5_v6.urdf`는 치수 교차확인용).
 
 ### 8.A frcobot_ros2 서브모듈 + 필요한 것만 빌드
-> `fairino_hardware` **폴더는 버전노드**(무관). 진짜 HW는 `fairino_hardware_v3_9_9`. repo 내부 의존은
-> `v3_9_9 → fairino_msgs` 하나(나머지 rclcpp/hardware_interface/pluginlib/rclcpp_lifecycle/std_msgs는 rosdep).
-> libfairino.so는 v3_9_9에 동봉.
+> `fairino_hardware` **폴더는 버전노드**(무관). 진짜 HW는 `fairino_hardware_v3_8_0`. repo 내부 의존은
+> `v3_8_0 → fairino_msgs` 하나(나머지 rclcpp/hardware_interface/pluginlib/rclcpp_lifecycle/std_msgs는 rosdep).
+> libfairino.so는 v3_8_0에 동봉.
 - [ ] A2-velocity + IP 패치 트래킹 위해 `FAIR-INNOVATION/frcobot_ros2` **포크** → `.gitmodules`에
       `extern/frcobot_ros2`(포크 URL) 추가.
-- [ ] **빌드 대상 축소**: `fairino_hardware_v3_9_9` + `fairino_msgs`만 빌드. 나머지 `fairino_hardware_v3_9_*`·
+- [ ] **빌드 대상 축소**: `fairino_hardware_v3_8_0` + `fairino_msgs`만 빌드. 나머지 벤더 버전·
       moveit config 폴더에 **`COLCON_IGNORE`** — 여러 버전이 동일 라이브러리명 `fairino_hardware`를 중복 export하면
       충돌하므로 필수. (`fairino_description`은 교차확인용, 빌드 제외.)
 - [ ] `libfairino` .so/헤더(동봉) colcon 링크 성공 확인.
 
-### 8.B 벤더 HW 패치 (서브모듈 포크 내부) — `fairino_hardware_v3_9_9/src/fairino_hardware_interface.cpp`
+### 8.B 벤더 HW 패치 — `extern/fairino_hardware_v3_8_0/src/fairino_hardware_interface.cpp`
 - [ ] `on_init`: state 검사 `size()!=1` → **`!=2`** + `state_interfaces[1].name==HW_IF_VELOCITY` 확인.
 - [ ] `on_init`: `if (info_.hardware_parameters.count("robot_ip")) _controller_ip = info_.hardware_parameters.at("robot_ip");`
 - [ ] `export_state_interfaces`: velocity export 추가(주석 해제 시 **`_jnt_velocity_state.at(i)`→`[i]`**; 권장은
@@ -223,6 +230,6 @@ FR5 position 제어엔 불필요하므로 토크 제어기 도입 시에만 착�
 - [ ] `tasks/__init__.py` 디스패치에 fr5 등록(필요 시), fr5 트리(선택).
 
 ### 8.G 빌드 & 검증 순서
-- [ ] `cbp fairino_msgs fairino_hardware_v3_9_9 cho_description_fr5 cho_controller_fr5 cho_bringup_fr5` 클린.
+- [ ] `cbp fairino_msgs fairino_hardware_v3_8_0 cho_description_fr5 cho_controller_fr5 cho_bringup_fr5` 클린.
 - [ ] Phase 0 게이트: **FK 검증**(cho URDF FK ↔ `GetActualTCPPose`/`GetForwardKin`).
 - [ ] Phase 1: mock/mujoco 스모크(스위칭·활성화·소진폭 추적). → Phase 3: 실기 점진(§4).
