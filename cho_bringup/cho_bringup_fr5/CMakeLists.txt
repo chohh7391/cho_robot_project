@@ -8,9 +8,24 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# launch_utils is shared by the real bringups. It goes to lib/ (not share/) and
+# is loaded by absolute path, matching cho_bringup_franka and _openarm.
+install(
+  DIRECTORY utils/
+  DESTINATION lib/${PROJECT_NAME}/utils
+  FILES_MATCHING PATTERN "*.py"
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+  find_package(ament_cmake_pytest REQUIRED)
+  # A user-local anyio plugin targets a newer pytest than ROS 2 Humble ships.
+  # Keep package tests deterministic and limited to explicitly requested tests.
+  set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} 1)
+  ament_add_pytest_test(test_gripper_selection
+    test/test_gripper_selection.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
 endif()
 
 ament_package()

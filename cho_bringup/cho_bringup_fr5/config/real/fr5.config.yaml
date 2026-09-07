@@ -5,4 +5,59 @@ fr5:
   tool: 0
   user: 0
   ee_name: wrist3_link
+  # none | ag95. The gripper hangs off the robot controller's RS485 end-effector
+  # bus rather than off ros2_control, so it is only commandable on this build.
+  gripper: ag95
+  # RS485 gripper registration, mirroring the teach pendant's own fields.
+  #
+  # These are only WRITTEN when apply_config is true, and it defaults to false.
+  # The pendant's registration is what the controller runs on, so rewriting the
+  # end-bus device table on every activation buys nothing, and the readback is
+  # no use as confirmation either: GetGripperConfig reported 0/3/0/0 on one run
+  # and 1/3/0/0 on the next with nothing written in between. What actually fixed
+  # MoveGripper's error 73 was ActGripper, which the driver always calls.
+  # Register the gripper from the pendant; turn apply_config on only to
+  # (re)apply the values below deliberately.
+  #   company     1-Robotiq 2-HITBOT(慧灵) 3-TIANJI(天机) 4-DAHUAN(大寰) 5-ZHIXING(知行)
+  #   device      per company; DAHUAN lists only 0-PGI-140, the profile the
+  #               AG-95 is driven with
+  #   softversion documented as unused by the SDK; the pendant shows D1.0
+  #   bus         end-effector port the gripper is plugged into
+  #   index       gripper number that ActGripper/MoveGripper address
+  gripper_config:
+    apply_config: false
+    company: 4
+    device: 0
+    softversion: 0
+    bus: 1
+    index: 1
+    # Percent of the gripper's own range. MoveGripper takes both alongside every
+    # target, so they are fixed here rather than per goal; low for commissioning.
+    speed_percent: 30
+    force_percent: 30
+    # Which end of the stroke each percentage means. Verify this the only way
+    # that holds up: run `grasp 1` / `grasp 0` from the action client and watch
+    # the jaws. Do NOT verify it from the stroke percentage logged at activation
+    # - activation moves the jaws itself and re-references the stroke, so that
+    # reading contradicts the working values. Getting this backwards inverts
+    # both the commands and the width reported on /gripper_controller/state and
+    # /joint_states. Swap the two for a gripper wired the other way.
+    percent_at_closed: 0
+    percent_at_open: 100
+    # Open the jaws once on hardware activation. FALSE by default, and not for
+    # want of trying: activating this gripper moves the jaws on its own - a
+    # closed one came back open and an open one came back closed, so the reset
+    # appears to drive to the opposite end and re-reference the stroke there -
+    # and the percentage it reports right afterwards cannot be squared with what
+    # the jaws are doing. Commanding an open on top of that gave a gripper that
+    # CLOSED at bringup. To start from a known opening, send a Gripper action
+    # after bringup instead; that path is verified:
+    #   ros2 run cho_control_tools fr5_action_client   ->  grasp 0
+    open_on_activate: false
+    # Whether a gripper that will not come up should take the whole bringup with
+    # it. False by default, because a refused hardware activation makes
+    # ros2_control_node throw and abort - one 485 hiccup on an accessory would
+    # otherwise kill the arm. When it is false and the gripper fails, the arm
+    # runs normally, gripper commands are suppressed, and the log says why.
+    required: false
   controller_name: joint_space_position_controller

@@ -1,18 +1,24 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 from cho_robot_config import load_moveit_metadata
 
 
-def generate_launch_description():
+def move_group_node(context):
     metadata = load_moveit_metadata('fr5', 'cho_moveit_fr5')
-    use_sim_time = LaunchConfiguration('use_sim_time')
+    # MoveItConfigsBuilder expands the xacro eagerly and only takes plain
+    # strings, so the gripper has to be resolved here rather than handed in as
+    # a LaunchConfiguration.
+    gripper = LaunchConfiguration('gripper').perform(context)
     moveit_config = (
         MoveItConfigsBuilder('fr5', package_name=metadata['config_package'])
-        .robot_description(mappings={'hardware': 'mock'})
-        .robot_description_semantic(file_path='config/fr5.srdf')
+        .robot_description(mappings={'hardware': 'mock', 'gripper': gripper})
+        # The SRDF is a xacro too: the gripper's disable_collisions pair only
+        # applies when the description actually has the gripper.
+        .robot_description_semantic(file_path='config/fr5.srdf',
+                                    mappings={'gripper': gripper})
         .robot_description_kinematics(file_path='config/kinematics.yaml')
         .joint_limits(file_path='config/joint_limits.yaml')
         .trajectory_execution(file_path='config/moveit_controllers.yaml')
@@ -26,23 +32,35 @@ def generate_launch_description():
         .to_moveit_configs()
     )
 
-    move_group = Node(
+    return [Node(
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
         parameters=[
             moveit_config.to_dict(),
             {
-                'use_sim_time': use_sim_time,
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'publish_robot_description': True,
                 'publish_robot_description_semantic': True,
                 'allow_trajectory_execution': True,
                 'moveit_manage_controllers': False,
             },
         ],
-    )
+    )]
 
+
+def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        move_group,
+        DeclareLaunchArgument(
+            'gripper',
+            default_value='none',
+            description=(
+                'none | ag95. Must match the gripper the bringup expanded the '
+                'description with: otherwise move_group models a different robot '
+                'than the controllers drive and rejects gripper_finger_joint out '
+                'of /joint_states.'
+            ),
+        ),
+        OpaqueFunction(function=move_group_node),
     ])

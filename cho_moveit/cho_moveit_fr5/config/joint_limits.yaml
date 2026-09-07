@@ -1,34 +1,57 @@
+# Velocity here is HALF the FR5 datasheet maximum, deliberately.
+#
+# These were the datasheet maxima (3.15 rad/s for j1-j3, 3.2 for j4-j6), which
+# left the real ceiling depending on whoever remembered to pass a scaling
+# factor: at the configured 0.25 that is still 0.79 rad/s, and the robot
+# answered a MoveIt execution with `ServoJ refused, code 14`
+# (ERR_EXECUTION_FAILED). joint_trajectory_controller has no per-cycle clamp of
+# its own, so this file is where the MoveIt path gets bounded - not the scaling
+# factor, which is a per-request convenience and not a safety limit.
+#
+# Halving the datasheet figures is the commissioning ceiling chosen for this
+# cell: 0.394 rad/s (22.6 deg/s) at the configured 0.25 scaling, about half the
+# 0.79 rad/s that was refused. An intermediate step of 0.625 - matching
+# task_space_ik_controller's own `max_delta_q: 0.005` rad per 8 ms cycle - was
+# tried and is too slow to work with.
+#
+# Note the two paths no longer agree: the IK controller still caps ITSELF at
+# 0.625 rad/s through max_delta_q regardless of this file, so MoveIt/JTC is now
+# the looser of the two. That is intentional, not an oversight.
+#
+# These are chosen numbers, not measurements. The driver now prints the step and
+# the implied rad/s that ServoJ actually refused, so set this from that log
+# rather than by guessing.
 default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
 
 joint_limits:
   j1:
     has_velocity_limits: true
-    max_velocity: 3.15
+    max_velocity: 1.575
     has_acceleration_limits: true
     max_acceleration: 0.7
   j2:
     has_velocity_limits: true
-    max_velocity: 3.15
+    max_velocity: 1.575
     has_acceleration_limits: true
     max_acceleration: 0.7
   j3:
     has_velocity_limits: true
-    max_velocity: 3.15
+    max_velocity: 1.575
     has_acceleration_limits: true
     max_acceleration: 0.7
   j4:
     has_velocity_limits: true
-    max_velocity: 3.2
+    max_velocity: 1.6
     has_acceleration_limits: true
     max_acceleration: 0.7
   j5:
     has_velocity_limits: true
-    max_velocity: 3.2
+    max_velocity: 1.6
     has_acceleration_limits: true
     max_acceleration: 0.7
   j6:
     has_velocity_limits: true
-    max_velocity: 3.2
+    max_velocity: 1.6
     has_acceleration_limits: true
     max_acceleration: 0.7

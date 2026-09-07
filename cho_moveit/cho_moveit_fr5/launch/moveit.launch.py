@@ -17,13 +17,13 @@ from launch_ros.substitutions import FindPackageShare
 from cho_robot_config import load_moveit_metadata
 
 
-def _rviz_include(package_share, use_sim_time, condition=None):
+def _rviz_include(package_share, use_sim_time, gripper, condition=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([package_share, 'launch', 'moveit_rviz.launch.py'])
         ),
         condition=condition,
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper}.items(),
     )
 
 
@@ -32,6 +32,10 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_rviz = LaunchConfiguration('launch_rviz')
     publish_static_scene = LaunchConfiguration('publish_static_scene')
+    # Handed to move_group and RViz so their model matches the one the bringup
+    # gave the controllers. A mismatch shows up as move_group rejecting
+    # gripper_finger_joint out of /joint_states.
+    gripper = LaunchConfiguration('gripper')
     package_share = FindPackageShare(metadata['config_package'])
 
     def validate_timeouts(context):
@@ -70,7 +74,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([package_share, 'launch', 'move_group.launch.py'])
         ),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper}.items(),
     )
     static_scene = Node(
         package='cho_moveit_common',
@@ -119,10 +123,17 @@ def generate_launch_description():
             'world_frame': metadata['base_frame'],
             'joint_names': metadata['joint_names'],
             'trajectory_controller': metadata['trajectory_controller'],
+            # Plumbed explicitly: the bridge declares its own defaults, so
+            # without this the execution scaling in cho_robot_config/fr5.yaml
+            # was never actually in control of anything.
+            'max_velocity_scaling_factor': ParameterValue(
+                LaunchConfiguration('max_velocity_scaling_factor'), value_type=float),
+            'max_acceleration_scaling_factor': ParameterValue(
+                LaunchConfiguration('max_acceleration_scaling_factor'), value_type=float),
         }],
     )
 
-    gated_rviz = _rviz_include(package_share, use_sim_time)
+    gated_rviz = _rviz_include(package_share, use_sim_time, gripper)
 
     def after_gate(event, context):
         if event.returncode != 0:
@@ -142,6 +153,7 @@ def generate_launch_description():
     direct_rviz = _rviz_include(
         package_share,
         use_sim_time,
+        gripper,
         condition=IfCondition(PythonExpression([
             "'", launch_rviz, "'.lower() in ('true', '1', 'yes') and '",
             publish_static_scene, "'.lower() not in ('true', '1', 'yes')",
@@ -152,6 +164,14 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('publish_static_scene', default_value='true'),
+        DeclareLaunchArgument(
+            'gripper',
+            default_value='none',
+            description=(
+                'none | ag95. Must match the gripper the robot bringup expanded '
+                'the description with; only the real FR5 has one.'
+            ),
+        ),
         DeclareLaunchArgument('floor_frame', default_value='world'),
         DeclareLaunchArgument('floor_size', default_value='4.0,4.0,0.10'),
         DeclareLaunchArgument('floor_position', default_value='0.0,0.0,-0.05'),
@@ -159,6 +179,20 @@ def generate_launch_description():
         DeclareLaunchArgument('scene_ready_timeout', default_value='210.0'),
         DeclareLaunchArgument('controller_ready_timeout', default_value='90.0'),
         DeclareLaunchArgument('switch_response_timeout', default_value='15.0'),
+        DeclareLaunchArgument(
+            'max_velocity_scaling_factor',
+            default_value=str(metadata['max_velocity_scaling_factor']),
+            description=(
+                'Fraction of joint_limits.yaml velocity the bridge executes at. '
+                'Defaults to moveit.execution in cho_robot_config. Lower it for a '
+                'first run on real hardware.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'max_acceleration_scaling_factor',
+            default_value=str(metadata['max_acceleration_scaling_factor']),
+            description='As above, for acceleration.',
+        ),
         DeclareLaunchArgument(
             'activate_controller_after_scene',
             default_value=metadata['trajectory_controller']),

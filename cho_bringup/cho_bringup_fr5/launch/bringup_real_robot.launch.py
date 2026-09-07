@@ -14,6 +14,12 @@ Safety: start with joint_state_broadcaster only to confirm state read-back,
 then bring up joint_trajectory_controller / the cho controller at low speed.
 The cho controllers own the velocity / delta-q limits (the vendor write() does
 not clamp), and on_deactivate calls the vendor StopMotion().
+
+The arm commands no motion at startup: the hardware latches its measured pose
+into the command on activation. The gripper is the exception - with
+`open_on_activate` set in fr5.config.yaml the hardware opens the jaws once as it
+activates, so a run starts from a known opening. Clear the jaws before
+launching, or set it false to activate in place.
 """
 
 import os
@@ -35,11 +41,43 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+import importlib.util
+
+package_share = get_package_share_directory('cho_bringup_fr5')
+# launch_utils is installed under lib/, not as an importable python package, so
+# it is loaded by path the same way cho_bringup_franka and _openarm do it.
+_launch_utils_path = os.path.abspath(
+    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_fr5', 'utils', 'launch_utils.py')
+)
+_spec = importlib.util.spec_from_file_location('fr5_launch_utils', _launch_utils_path)
+launch_utils = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(launch_utils)
+
+
 SWITCHABLE_CONTROLLERS = [
     'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
+
+# Keys accepted under `fr5.gripper_config` in the config file, with the values
+# used when the file omits them. They are forwarded to the hardware component as
+# xacro params so it can call SetGripperConfig/ActGripper itself; the defaults
+# describe the DAHUAN gripper registered as PGI-140 on end-effector port 1.
+GRIPPER_CONFIG_DEFAULTS = {
+    'company': 4,
+    'device': 0,
+    'softversion': 0,
+    'bus': 1,
+    'index': 1,
+    'speed_percent': 30,
+    'force_percent': 30,
+    'percent_at_closed': 0,
+    'percent_at_open': 100,
+    'open_on_activate': False,
+    'apply_config': False,
+    'required': False,
+}
 
 
 def create_runtime_controller_params(ee_name, bringup_type):
@@ -96,6 +134,30 @@ def setup_control_environment(context):
 
     robot_ip = LaunchConfiguration('robot_ip').perform(context) or str(fr5_cfg.get('robot_ip', '192.168.58.2'))
     ee_name = LaunchConfiguration('ee_name').perform(context) or str(fr5_cfg.get('ee_name', 'wrist3_link'))
+    gripper = launch_utils.resolve_gripper(
+        LaunchConfiguration('gripper').perform(context),
+        LaunchConfiguration('load_gripper').perform(context),
+        fr5_cfg.get('gripper'))
+
+    # RS485 gripper registration, forwarded into the description so the hardware
+    # component can register and activate the gripper itself. Same YAML -> launch
+    # -> xacro param route robot_ip takes. See fr5.config.yaml for the encoding.
+    gripper_cfg = fr5_cfg.get('gripper_config') or {}
+
+    def as_xacro(value):
+        # xacro mappings are strings; str(True) would give "True", which reads
+        # as neither of the spellings a xacro:if test expects.
+        return str(value).lower() if isinstance(value, bool) else str(value)
+
+    gripper_mappings = {
+        f'gripper_{key}': as_xacro(gripper_cfg.get(key, default))
+        for key, default in GRIPPER_CONFIG_DEFAULTS.items()
+    }
+    unknown = set(gripper_cfg) - set(GRIPPER_CONFIG_DEFAULTS)
+    if unknown:
+        raise RuntimeError(
+            f"Unknown gripper_config keys in {config_path}: {sorted(unknown)}. "
+            f"Valid keys: {sorted(GRIPPER_CONFIG_DEFAULTS)}")
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
         if controller_name == 'moveit':
@@ -114,7 +176,8 @@ def setup_control_environment(context):
     robot_description = {
         'robot_description': xacro.process_file(
             urdf_path,
-            mappings={'hardware': 'fairino', 'robot_ip': robot_ip},
+            mappings={'hardware': 'fairino', 'robot_ip': robot_ip,
+                      'gripper': gripper, **gripper_mappings},
         ).toxml()
     }
 
@@ -138,12 +201,19 @@ def setup_control_environment(context):
         parameters=[robot_description],
     )
 
+    # The gripper claims only its own joint, so it never contends with an arm
+    # controller and comes up active alongside whichever one was selected, the
+    # way cho_bringup_franka spawns its own. The hardware's on_activate seeds
+    # the command from the measured stroke, so this commands no motion.
+    active_controllers = ['joint_state_broadcaster', controller_name]
+    if gripper != 'none':
+        active_controllers.append('gripper_controller')
+
     active_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
-            'joint_state_broadcaster',
-            controller_name,
+            *active_controllers,
             '-p', runtime_param_file,
             '--controller-manager', '/controller_manager',
             '--controller-manager-timeout', cm_timeout,
@@ -210,6 +280,24 @@ def generate_launch_description():
             'ee_name',
             default_value='',
             description='End-effector frame; falls back to config_file if empty.',
+        ),
+        DeclareLaunchArgument(
+            'gripper',
+            default_value='',
+            description=(
+                'End-effector gripper by name: none | ag95. Falls back to config_file. '
+                'ag95 makes the hardware register and activate the gripper from '
+                'the gripper_config block in config_file.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'load_gripper',
+            default_value='config',
+            description=(
+                'Boolean spelling of the same choice, as cho_bringup_franka uses: '
+                'true loads the AG-95, false loads none, config (the default) defers '
+                'to config_file. Contradicting gripper:= is a launch error.'
+            ),
         ),
         DeclareLaunchArgument('bringup_type', default_value='real'),
         DeclareLaunchArgument(

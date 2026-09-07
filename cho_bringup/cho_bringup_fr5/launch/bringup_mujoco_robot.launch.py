@@ -23,6 +23,18 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
+import importlib.util
+
+package_share = get_package_share_directory('cho_bringup_fr5')
+# Same by-path load the real bringups use: launch_utils lives in lib/.
+_launch_utils_path = os.path.abspath(
+    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_fr5', 'utils', 'launch_utils.py')
+)
+_spec = importlib.util.spec_from_file_location('fr5_launch_utils', _launch_utils_path)
+launch_utils = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(launch_utils)
+
+
 SWITCHABLE_CONTROLLERS = [
     'joint_trajectory_controller',
     'joint_space_position_controller',
@@ -76,6 +88,12 @@ def setup_control_environment(context):
     use_sim_time = LaunchConfiguration('use_sim_time')
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
     mujoco_initial_keyframe = LaunchConfiguration('mujoco_initial_keyframe').perform(context)
+    # No connection config file in simulation, so the fallback is 'none': the
+    # simulated gripper is opt-in and existing MuJoCo runs are unchanged.
+    gripper = launch_utils.resolve_gripper(
+        LaunchConfiguration('gripper').perform(context),
+        LaunchConfiguration('load_gripper').perform(context),
+        'none')
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
         if controller_name == 'moveit':
@@ -98,6 +116,7 @@ def setup_control_environment(context):
         urdf_path,
         mappings={
             'hardware': 'mujoco',
+            'gripper': gripper,
             'mujoco_initial_keyframe': mujoco_initial_keyframe,
         },
     ).toxml()
@@ -128,12 +147,21 @@ def setup_control_environment(context):
         remappings=[('~/robot_description', '/robot_description')],
     )
 
+    # The gripper claims only its own joint, so it never contends with an arm
+    # controller and comes up active alongside whichever one was selected -
+    # matching the real bringup. Its on_activate seeds from the measured stroke,
+    # so activating it commands no motion. Built before the spawner consumes it:
+    # `*active_controllers` is unpacked when the Node is constructed, so
+    # appending afterwards would silently do nothing.
+    active_controllers = ['joint_state_broadcaster', controller_name]
+    if gripper != 'none':
+        active_controllers.append('gripper_controller')
+
     active_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=[
-            'joint_state_broadcaster',
-            controller_name,
+            *active_controllers,
             '-p',
             runtime_param_file,
             '--controller-manager',
@@ -240,6 +268,27 @@ def generate_launch_description():
                 'controllers.yaml',
             ),
             description='Controller YAML file loaded by mujoco_ros2_control',
+        ),
+        DeclareLaunchArgument(
+            'gripper',
+            default_value='',
+            description=(
+                'End-effector gripper by name: none | ag95. Simulation defaults to '
+                'none. ag95 binds the kinematic slide joint in xml/fr5.xml - it has '
+                'no geom, so it moves but cannot grasp.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'load_gripper',
+            default_value='config',
+            description=(
+                'Boolean spelling of the same choice, as cho_bringup_franka uses. '
+                'config (the default) means none here: simulation has no connection '
+                'config file to defer to, and the simulated gripper is opt-in. It '
+                'defers rather than saying false so that bringup_mujoco_moveit can '
+                'pass a resolved gripper:= without contradicting it. Contradicting '
+                'gripper:= explicitly is a launch error.'
+            ),
         ),
         DeclareLaunchArgument(
             'controller_manager_timeout',
