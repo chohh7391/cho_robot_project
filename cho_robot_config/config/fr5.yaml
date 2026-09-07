@@ -35,8 +35,39 @@ poses:
       reason: zero pose places the FR5 wrist at the floor and is diagnostic-only
       max_joint_distance: 0.01
 motions:
+  # Absolute world-frame poses for wrist3_link, not deltas.
+  #
+  # These were relative, and relative meant something other than it read: the
+  # MoveIt bridge rotates the offset into the CURRENT TOOL frame before adding
+  # it, so `reach 0` = [0, 0, +0.10] was "+10 cm along tool z", which at home1
+  # points straight DOWN. It also let repeated `reach N` accumulate an offset,
+  # the same reason openarm/franka/ur5e already use fixed endpoints.
+  #
+  # Orientation is home1's: tool z along -world z (jaws facing the table),
+  # tool x along +world y. Positions are home1's EE
+  # [-0.123206132, -0.102101755, 0.731834257] offset 10 cm along one world axis.
+  #
+  # -x and -y rather than +x and +y on purpose: +x/+y move the wrist TOWARD the
+  # j1 axis and into the shoulder singularity (condition number 111.3 and 37.5),
+  # while -x/-y move away from it (11.8 and 12.3, better even than home1's 21.1).
+  #
+  # All four verified with Pinocchio: IK residual < 1e-9, inside the URDF joint
+  # limits with >= 0.53 rad of margin, EE 0.63 m or higher (the
+  # task_space_ik_controller floor guard sits at 0.15 m).
   reach:
-    '0': {relative: true, position: [0.0, 0.0, 0.10], orientation: [0.0, 0.0, 0.0, 1.0]}
-    '1': {relative: true, position: [0.0, 0.0, -0.10], orientation: [0.0, 0.0, 0.0, 1.0]}
-    '2': {relative: true, position: [0.10, 0.0, 0.0], orientation: [0.0, 0.0, 0.0, 1.0]}
-    '3': {relative: true, position: [0.0, 0.10, 0.0], orientation: [0.0, 0.0, 0.0, 1.0]}
+    '0':   # +z, 10 cm up
+      relative: false
+      position: [-0.123206132, -0.102101755, 0.831834257]
+      orientation: [0.707106781186548, 0.707106781186548, 0.0, 0.0]
+    '1':   # -z, 10 cm down
+      relative: false
+      position: [-0.123206132, -0.102101755, 0.631834257]
+      orientation: [0.707106781186548, 0.707106781186548, 0.0, 0.0]
+    '2':   # -x, 10 cm away from the j1 axis
+      relative: false
+      position: [-0.223206132, -0.102101755, 0.731834257]
+      orientation: [0.707106781186548, 0.707106781186548, 0.0, 0.0]
+    '3':   # -y, 10 cm away from the j1 axis
+      relative: false
+      position: [-0.123206132, -0.202101755, 0.731834257]
+      orientation: [0.707106781186548, 0.707106781186548, 0.0, 0.0]

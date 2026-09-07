@@ -29,11 +29,17 @@ _CONFIG = {
             'max_joint_distance': 0.01,
         }},
     },
+    # Absolute world-frame wrist3_link poses; see cho_robot_config/config/fr5.yaml
+    # for why these are fixed endpoints and why -x/-y rather than +x/+y.
     'motions': {'reach': {
-        '0': {'relative': True, 'position': [0.0, 0.0, 0.10], 'orientation': [0.0, 0.0, 0.0, 1.0]},
-        '1': {'relative': True, 'position': [0.0, 0.0, -0.10], 'orientation': [0.0, 0.0, 0.0, 1.0]},
-        '2': {'relative': True, 'position': [0.10, 0.0, 0.0], 'orientation': [0.0, 0.0, 0.0, 1.0]},
-        '3': {'relative': True, 'position': [0.0, 0.10, 0.0], 'orientation': [0.0, 0.0, 0.0, 1.0]},
+        '0': {'relative': False, 'position': [-0.123206132, -0.102101755, 0.831834257],
+              'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+        '1': {'relative': False, 'position': [-0.123206132, -0.102101755, 0.631834257],
+              'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+        '2': {'relative': False, 'position': [-0.223206132, -0.102101755, 0.731834257],
+              'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+        '3': {'relative': False, 'position': [-0.123206132, -0.202101755, 0.731834257],
+              'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
     }},
 }
 

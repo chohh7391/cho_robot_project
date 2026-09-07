@@ -58,15 +58,20 @@ ABSOLUTE_REACH = {
           'orientation': [1.0, 0.0, 0.0, 0.0]},
 }
 
-RELATIVE_REACH = {
-    '0': {'relative': True, 'position': [0.0, 0.0, 0.1],
-          'orientation': [0.0, 0.0, 0.0, 1.0]},
-    '1': {'relative': True, 'position': [0.0, 0.0, -0.1],
-          'orientation': [0.0, 0.0, 0.0, 1.0]},
-    '2': {'relative': True, 'position': [0.1, 0.0, 0.0],
-          'orientation': [0.0, 0.0, 0.0, 1.0]},
-    '3': {'relative': True, 'position': [0.0, 0.1, 0.0],
-          'orientation': [0.0, 0.0, 0.0, 1.0]},
+# FR5 world-frame endpoints, 10 cm from the home1 EE along one world axis each,
+# all at home1's tool-down orientation.  Absolute for the same reason openarm's
+# are: a relative reach is composed in the tool frame (so [0, 0, +0.1] meant
+# "down" at home1) and repeated commands accumulate an offset.  -x/-y rather
+# than +x/+y keeps the wrist away from the j1-axis shoulder singularity.
+FR5_ABSOLUTE_REACH = {
+    '0': {'relative': False, 'position': [-0.123206132, -0.102101755, 0.831834257],
+          'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+    '1': {'relative': False, 'position': [-0.123206132, -0.102101755, 0.631834257],
+          'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+    '2': {'relative': False, 'position': [-0.223206132, -0.102101755, 0.731834257],
+          'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
+    '3': {'relative': False, 'position': [-0.123206132, -0.202101755, 0.731834257],
+          'orientation': [0.707106781186548, 0.707106781186548, 0.0, 0.0]},
 }
 
 # OpenArm direct task-space impedance starts at home 1 before accepting a
@@ -125,11 +130,26 @@ def test_unannotated_home_poses_default_to_enabled(robot_type):
 
 
 @pytest.mark.parametrize('robot_type,expected', [
-    ('fr5', RELATIVE_REACH), ('openarm', OPENARM_ABSOLUTE_REACH),
+    ('fr5', FR5_ABSOLUTE_REACH), ('openarm', OPENARM_ABSOLUTE_REACH),
     ('franka', ABSOLUTE_REACH), ('ur5e', ABSOLUTE_REACH),
 ])
 def test_all_reach_commands_preserve_action_client_values(robot_type, expected):
     assert load_robot_config(robot_type)['motions']['reach'] == expected
+
+
+def test_fr5_reach_targets_are_fixed_absolute_world_poses():
+    reach = load_robot_config('fr5')['motions']['reach']
+    assert all(not target['relative'] for target in reach.values())
+    # Fixed endpoints, not reusable deltas: every one names a real workspace
+    # point, so issuing the same reach twice cannot walk the arm across the cell.
+    assert all(any(abs(value) > 0.2 for value in target['position'])
+               for target in reach.values())
+    # One shared tool-down orientation (tool z along -world z), so a reach only
+    # ever translates.  Normalised, or the schema would have rejected it.
+    orientations = {tuple(target['orientation']) for target in reach.values()}
+    assert orientations == {(0.707106781186548, 0.707106781186548, 0.0, 0.0)}
+    # Each target clears the task_space_ik_controller floor guard at 0.15 m.
+    assert all(target['position'][2] > 0.15 for target in reach.values())
 
 
 def test_openarm_reach_targets_are_fixed_absolute_world_poses():
