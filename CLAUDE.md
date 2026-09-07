@@ -167,8 +167,15 @@ Use FastDDS discovery server on PC2 and set `ROS_DISCOVERY_SERVER=<PC2_IP>:11811
 ## Build Alias
 we set alias related to build below.
 you can use this alias when you need to build some packages or entire packages.
-alias cbr='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install'
-alias cbp='MAKEFLAGS="-j4" colcon build --parallel-workers 4 --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select'
+alias cbr='MAKEFLAGS="-j2 -l2" colcon build --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install'
+alias cbp='MAKEFLAGS="-j2 -l2" colcon build --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select'
+
+Do not raise these limits. This machine has 6 GB of RAM, and 4 workers at
+`-j4` puts up to 16 concurrent `g++` processes on the Cho controller
+packages, which exhausts memory and locks the machine up hard enough to
+need a reboot. The `-l2` load limit matters as much as the job count.
+Prefer scoping the package set (`--packages-select`, `--packages-above`)
+to keep a wide rebuild short instead of adding parallelism.
 ---
 
 @./.conventions/project.md
