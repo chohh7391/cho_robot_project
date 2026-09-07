@@ -6,14 +6,15 @@ from copy import deepcopy
 _CONFIG = {
     'robot_type': 'fr5',
     'supports_task': True,
-    'controllers': {'moveit_trajectory': 'joint_trajectory_controller'},
+    'controllers': {'moveit_trajectory': 'joint_trajectory_controller',
+                    'gripper': 'gripper_controller'},
     'moveit': {},
     'actions': {'preferences': {
         'joint': ['/fr5/controller_action_server/moveit_joint',
                   '/controller_action_server/joint_space_position_controller'],
         'task': ['/fr5/controller_action_server/moveit_task',
                  '/controller_action_server/task_space_ik_controller'],
-        'gripper': [],
+        'gripper': ['/controller_action_server/gripper_controller'],
     }},
     'poses': {
         'home': {

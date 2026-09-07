@@ -35,7 +35,37 @@
     </joint>
   </xacro:macro>
 
-  <xacro:macro name="fr5_ros2_control" params="name prefix hardware robot_ip initial_positions mujoco_initial_keyframe:=''">
+  <!--
+    On the real robot the AG-95 hangs off the controller's RS485 bus rather than
+    off ros2_control, and FairinoHardwareInterface maps this joint on to the
+    SDK's MoveGripper()/stroke-percentage feedback. There it is position only:
+    the controller reports a stroke percentage and no finger velocity.
+
+    MuJoCo drives the matching slide joint in xml/fr5.xml instead, and does
+    integrate a velocity, so the simulated build asks for that state too. The
+    other backends have no gripper joint at all - Gazebo and Isaac would need
+    the same modelling done in their own scenes first.
+  -->
+  <xacro:macro name="fr5_gripper_joint" params="joint_name with_velocity:=^|false">
+    <joint name="${joint_name}">
+      <command_interface name="position">
+        <param name="min">0.0</param>
+        <param name="max">0.0475</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <xacro:if value="${with_velocity}">
+        <state_interface name="velocity"/>
+      </xacro:if>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="fr5_ros2_control" params="name prefix hardware robot_ip initial_positions gripper:='none' gripper_company:='4' gripper_device:='0'
+                      gripper_softversion:='0' gripper_bus:='1' gripper_index:='1'
+                      gripper_speed_percent:='30' gripper_force_percent:='30'
+                      gripper_percent_at_closed:='0' gripper_percent_at_open:='100'
+                      gripper_open_on_activate:='false' gripper_apply_config:='false'
+                      gripper_required:='false'
+                      mujoco_initial_keyframe:=''">
     <ros2_control name="${name}" type="system">
       <hardware>
         <xacro:if value="${hardware == 'mujoco'}">
@@ -61,10 +91,50 @@
           <param name="calculate_dynamics">true</param>
         </xacro:if>
         <xacro:if value="${hardware == 'fairino'}">
-          <!-- Real FR5 over libfairino. The fork reads robot_ip from this
-               hardware parameter (the upstream v3_9_9 hardcodes it). -->
+          <!-- Real FR5 over libfairino. The vendored driver is patched to read
+               robot_ip from this hardware parameter (upstream hardcodes it). -->
           <plugin>fairino_hardware/FairinoHardwareInterface</plugin>
           <param name="robot_ip">${robot_ip}</param>
+          <xacro:if value="${gripper == 'ag95'}">
+            <!-- Naming this joint is what switches the hardware's gripper
+                 support on. Everything else comes from fr5.config.yaml, which
+                 the driver replays with SetGripperConfig and ActGripper on
+                 activation. gripper_joint_at_open is the exception: it must
+                 equal the prismatic limit fr5_macro.xacro declares, so it is a
+                 property of the description rather than of the connection. -->
+            <param name="gripper_joint">${prefix}gripper_finger_joint</param>
+            <param name="gripper_joint_at_open">0.0475</param>
+            <param name="gripper_company">${gripper_company}</param>
+            <param name="gripper_device">${gripper_device}</param>
+            <param name="gripper_softversion">${gripper_softversion}</param>
+            <param name="gripper_bus">${gripper_bus}</param>
+            <param name="gripper_index">${gripper_index}</param>
+            <param name="gripper_speed_percent">${gripper_speed_percent}</param>
+            <param name="gripper_force_percent">${gripper_force_percent}</param>
+            <param name="gripper_percent_at_closed">${gripper_percent_at_closed}</param>
+            <param name="gripper_percent_at_open">${gripper_percent_at_open}</param>
+            <!-- Spelled out rather than interpolated: xacro evaluates ${...} as a
+                 Python expression, so a boolean would land in the URDF as
+                 "True"/"False" instead of the canonical lowercase. -->
+            <xacro:if value="${gripper_open_on_activate}">
+              <param name="gripper_open_on_activate">true</param>
+            </xacro:if>
+            <xacro:unless value="${gripper_open_on_activate}">
+              <param name="gripper_open_on_activate">false</param>
+            </xacro:unless>
+            <xacro:if value="${gripper_apply_config}">
+              <param name="gripper_apply_config">true</param>
+            </xacro:if>
+            <xacro:unless value="${gripper_apply_config}">
+              <param name="gripper_apply_config">false</param>
+            </xacro:unless>
+            <xacro:if value="${gripper_required}">
+              <param name="gripper_required">true</param>
+            </xacro:if>
+            <xacro:unless value="${gripper_required}">
+              <param name="gripper_required">false</param>
+            </xacro:unless>
+          </xacro:if>
         </xacro:if>
       </hardware>
 
@@ -74,6 +144,10 @@
       <xacro:fr5_joint joint_name="${prefix}j4" init="${initial_positions['j4']}" hardware="${hardware}"/>
       <xacro:fr5_joint joint_name="${prefix}j5" init="${initial_positions['j5']}" hardware="${hardware}"/>
       <xacro:fr5_joint joint_name="${prefix}j6" init="${initial_positions['j6']}" hardware="${hardware}"/>
+      <xacro:if value="${gripper == 'ag95' and hardware in ('fairino', 'mujoco')}">
+        <xacro:fr5_gripper_joint joint_name="${prefix}gripper_finger_joint"
+                                 with_velocity="${hardware == 'mujoco'}"/>
+      </xacro:if>
     </ros2_control>
   </xacro:macro>
 </robot>

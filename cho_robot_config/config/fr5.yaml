@@ -10,7 +10,7 @@ controllers:
   direct_joint: joint_space_position_controller
   direct_task: task_space_ik_controller
   moveit_trajectory: joint_trajectory_controller
-  gripper: null
+  gripper: gripper_controller
   vla: null
 moveit:
   config_package: cho_moveit_fr5
@@ -22,7 +22,7 @@ actions:
   preferences:
     joint: [/fr5/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller]
     task: [/fr5/controller_action_server/moveit_task, /controller_action_server/task_space_ik_controller]
-    gripper: []
+    gripper: [/controller_action_server/gripper_controller]
 poses:
   home:
     '0': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

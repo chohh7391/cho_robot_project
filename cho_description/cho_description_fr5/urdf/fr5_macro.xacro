@@ -249,4 +249,137 @@
     </joint>
 
   </xacro:macro>
+
+  <!--
+    DH Robotics AG-95 parallel gripper, bolted straight to the tool flange.
+    `parent` is tool_tcp, which IS the flange face: the wrist3_link collision
+    mesh runs to z = +0.099, so the 100 mm tool_tcp offset is the length of the
+    wrist, not a TCP hanging in free space.
+
+    The gripper reaches 200.8 mm past that face and is 168 mm across, and until
+    it was modelled MoveIt planned as though that volume were empty - which is
+    what drove the gripper into the arm. Geometry now comes from the vendored
+    upstream meshes; see the macro below and meshes/ag95/README.md.
+
+    Both jaws move symmetrically, so one finger travels half the stroke. The
+    single finger joint stands for that half; cho_controller_gripper maps it back
+    to the full opening through width_at_open.
+  -->
+  <xacro:macro name="fr5_ag95_gripper" params="prefix parent yaw:=0">
+    <!--
+      One link carries the whole gripper: three collision elements on
+      gripper_base_link rather than a link per part, because every extra link is
+      another row in MoveIt's collision matrix and another SRDF pair to reason
+      about, for no gain when the parts do not move independently.
+
+      The two meshes are the AG-95 parts that are RIGID with respect to the
+      flange, taken unmodified from the vendored upstream model (millimetres,
+      hence the scale) and placed at the origin, which is where upstream's own
+      base and body transforms compose to. The box covers the jaws: their swept
+      volume over the entire 0-to-closed stroke, measured off the same meshes
+      (see meshes/ag95/README.md). Conservative on purpose - a fixed box that
+      encloses every jaw position can refuse a plan the real gripper would have
+      cleared, but it can never pass one the real gripper would have hit.
+
+      `yaw` is the rotation about the flange axis, and 0 is confirmed correct for
+      this cell rather than assumed: the operator's own fr5_ag95 URDF mounts the
+      gripper on a `tool0` whose net transform from wrist3_link is
+      xyz (0, 0, 0.1) with an IDENTITY rotation - the same frame as tool_tcp
+      here - and places the two jaw knuckles at x = -0.016 and +0.016 in it, so
+      the jaws separate along x, which is the finger axis below. Keep the
+      parameter anyway: bolting the gripper on a quarter turn round would
+      otherwise silently rotate a 168 x 51 mm box by 90 degrees.
+
+      Mass is the upstream figure, independently corroborated by the operator's
+      own URDF at 0.83416 kg, and is carried for completeness only: the FR5 is
+      position-controlled and the robot controller does its own gravity
+      compensation, so the payload that matters is the one set on the teach
+      pendant, not this number.
+
+      On gripper length the two available models disagree - the operator's URDF
+      puts its grasp frame at z = 170 mm and the vendored upstream one at
+      190 mm - which is exactly why the jaw box is sized from the swept mesh
+      envelope (200.8 mm) rather than from either grasp frame: it encloses both.
+    -->
+    <link name="${prefix}gripper_base_link">
+      <inertial>
+        <origin xyz="0 0 0.0655" rpy="0 0 0"/>
+        <mass value="0.8347"/>
+        <inertia ixx="0.0025" ixy="0.0" ixz="0.0" iyy="0.0025" iyz="0.0" izz="0.0008"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://cho_description_fr5/meshes/ag95/visual/base_link.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="fr5_ag95_plate">
+          <color rgba="0.79216 0.81961 0.93333 1"/>
+        </material>
+      </visual>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://cho_description_fr5/meshes/ag95/visual/gripper_body.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="fr5_ag95_body">
+          <color rgba="0.15 0.15 0.15 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://cho_description_fr5/meshes/ag95/collision/base_link.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://cho_description_fr5/meshes/ag95/collision/gripper_body.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+      <!-- The jaw envelope is drawn as well as checked, translucent so it reads
+           as a swept volume rather than as fingers. Seeing exactly what the
+           planner collides against beats seeing prettier geometry that does
+           not match it. -->
+      <visual>
+        <origin xyz="0 0 0.1456" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.1682 0.0508 0.1104"/>
+        </geometry>
+        <material name="fr5_ag95_jaw_envelope">
+          <color rgba="0.9 0.6 0.2 0.25"/>
+        </material>
+      </visual>
+      <collision>
+        <!-- Jaw sweep: x 168.2, y 50.8, z 90.4 to 200.8 mm from the flange. -->
+        <origin xyz="0 0 0.1456" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.1682 0.0508 0.1104"/>
+        </geometry>
+      </collision>
+    </link>
+    <joint name="${prefix}flange_to_gripper" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}gripper_base_link"/>
+      <origin xyz="0 0 0" rpy="0 0 ${yaw}"/>
+    </joint>
+
+    <!-- The commanded finger. Geometry-free: the jaws are already covered by the
+         box above, and giving this link its own body would double-count them.
+         Axis x, matching the direction the upstream linkage actually drives the
+         jaws. Both jaws move, so this one joint stands for half the stroke. -->
+    <link name="${prefix}gripper_finger_link"/>
+    <joint name="${prefix}gripper_finger_joint" type="prismatic">
+      <parent link="${prefix}gripper_base_link"/>
+      <child link="${prefix}gripper_finger_link"/>
+      <origin xyz="0 0 0.1456" rpy="0 0 0"/>
+      <axis xyz="1 0 0"/>
+      <!-- Half of the 95 mm stroke: 0 closed, 0.0475 fully open. -->
+      <limit lower="0.0" upper="0.0475" effort="100.0" velocity="0.15"/>
+    </joint>
+  </xacro:macro>
 </robot>

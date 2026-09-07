@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<robot name="fr5">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr5">
+  <!-- Processed with xacro (MoveItConfigsBuilder loads the SRDF through
+       load_xacro), so the gripper pairs below appear only when the description
+       was expanded with the gripper. Pass the same value the bringup resolved. -->
+  <xacro:arg name="gripper" default="none"/>
   <!-- Keep the planning group aligned with the links used by the cho FR5 controllers. -->
   <group name="fr5_arm">
     <chain base_link="base_link" tip_link="wrist3_link"/>
@@ -34,4 +38,19 @@
   <disable_collisions link1="wrist1_link" link2="wrist2_link" reason="Adjacent"/>
   <disable_collisions link1="wrist1_link" link2="wrist3_link" reason="Never"/>
   <disable_collisions link1="wrist2_link" link2="wrist3_link" reason="Adjacent"/>
+
+  <xacro:if value="${'$(arg gripper)' == 'ag95'}">
+    <!-- The AG-95 bolts to the flange, so its mounting plate necessarily
+         overlaps the end of the wrist: measured off the vendored meshes, the
+         gripper collision starts 3.5 mm behind the flange face at
+         wrist3_link z = +0.0965 while the wrist mesh runs to +0.0990 - a 2.5 mm
+         overlap that never goes away. Without this pair disabled MoveIt reports
+         every state as in collision and nothing plans at all.
+
+         Only this pair. The gripper reaching wrist2_link or further back is a
+         real collision at extreme wrist angles and must stay checked, so it is
+         deliberately NOT listed. gripper_finger_link carries no geometry and
+         needs no entry. -->
+    <disable_collisions link1="gripper_base_link" link2="wrist3_link" reason="Adjacent"/>
+  </xacro:if>
 </robot>

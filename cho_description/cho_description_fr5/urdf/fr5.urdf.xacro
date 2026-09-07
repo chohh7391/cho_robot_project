@@ -16,6 +16,25 @@
   <xacro:arg name="initial_positions_file"
              default="$(find cho_description_fr5)/config/initial_positions.yaml"/>
   <xacro:arg name="mujoco_initial_keyframe" default=""/>
+  <!-- none | ag95. The AG-95 is driven by the robot controller over RS485, so
+       it is only commandable on the real (fairino) build. -->
+  <xacro:arg name="gripper" default="none"/>
+  <!-- RS485 gripper registration, forwarded to the hardware component so it can
+       call SetGripperConfig/ActGripper. The real bringup fills these from
+       cho_bringup_fr5/config/real/fr5.config.yaml; the defaults describe the
+       DAHUAN gripper registered as PGI-140 on end-effector port 1. -->
+  <xacro:arg name="gripper_company" default="4"/>
+  <xacro:arg name="gripper_device" default="0"/>
+  <xacro:arg name="gripper_softversion" default="0"/>
+  <xacro:arg name="gripper_bus" default="1"/>
+  <xacro:arg name="gripper_index" default="1"/>
+  <xacro:arg name="gripper_speed_percent" default="30"/>
+  <xacro:arg name="gripper_force_percent" default="30"/>
+  <xacro:arg name="gripper_percent_at_closed" default="0"/>
+  <xacro:arg name="gripper_percent_at_open" default="100"/>
+  <xacro:arg name="gripper_open_on_activate" default="false"/>
+  <xacro:arg name="gripper_apply_config" default="false"/>
+  <xacro:arg name="gripper_required" default="false"/>
 
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
   <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)}"/>
@@ -29,12 +48,29 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:fr5_robot>
 
+  <xacro:if value="${'$(arg gripper)' == 'ag95'}">
+    <xacro:fr5_ag95_gripper prefix="$(arg prefix)" parent="$(arg prefix)tool_tcp"/>
+  </xacro:if>
+
   <xacro:fr5_ros2_control
     name="fr5_system"
     prefix="$(arg prefix)"
     hardware="$(arg hardware)"
     robot_ip="$(arg robot_ip)"
     initial_positions="${initial_positions}"
+    gripper="$(arg gripper)"
+    gripper_company="$(arg gripper_company)"
+    gripper_device="$(arg gripper_device)"
+    gripper_softversion="$(arg gripper_softversion)"
+    gripper_bus="$(arg gripper_bus)"
+    gripper_index="$(arg gripper_index)"
+    gripper_speed_percent="$(arg gripper_speed_percent)"
+    gripper_force_percent="$(arg gripper_force_percent)"
+    gripper_percent_at_closed="$(arg gripper_percent_at_closed)"
+    gripper_percent_at_open="$(arg gripper_percent_at_open)"
+    gripper_open_on_activate="$(arg gripper_open_on_activate)"
+    gripper_apply_config="$(arg gripper_apply_config)"
+    gripper_required="$(arg gripper_required)"
     mujoco_initial_keyframe="$(arg mujoco_initial_keyframe)"/>
 
   <!-- Gazebo (Ignition) ros2_control system plugin. -->

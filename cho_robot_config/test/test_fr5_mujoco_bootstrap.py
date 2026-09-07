@@ -81,14 +81,24 @@ def test_fr5_home1_keyframe_matches_registry_joint_order_and_limits():
 
     model_root = ET.parse(DESCRIPTION / 'xml' / 'fr5.xml').getroot()
     joints = model_root.findall('.//worldbody//joint')
-    assert [joint.attrib['name'] for joint in joints] == expected_joints
+    names = [joint.attrib['name'] for joint in joints]
+    # The arm joints come first, in registry order, then the AG-95 finger. MJCF
+    # has no conditionals, so the finger is always in the model and simply goes
+    # unbound when the description is expanded without the gripper. Asserting the
+    # tail exactly still catches a reordering or a joint nobody meant to add.
+    arm = len(expected_joints)
+    assert names[:arm] == expected_joints
+    assert names[arm:] == ['gripper_finger_joint']
 
     keyframe = model_root.find("./keyframe/key[@name='home1']")
     assert keyframe is not None
     qpos = [float(value) for value in keyframe.attrib['qpos'].split()]
     ctrl = [float(value) for value in keyframe.attrib['ctrl'].split()]
-    assert qpos == pytest.approx(expected_home, abs=1e-9)
-    assert ctrl == pytest.approx(expected_home, abs=1e-9)
+    assert qpos[:arm] == pytest.approx(expected_home, abs=1e-9)
+    assert ctrl[:arm] == pytest.approx(expected_home, abs=1e-9)
+    # Keyframes are sized by nq and nu, so the finger rides along: closed.
+    assert qpos[arm:] == [0.0]
+    assert ctrl[arm:] == [0.0]
 
     assert len(qpos) == len(joints)
     for value, joint in zip(qpos, joints):
@@ -126,14 +136,20 @@ def test_fr5_ready_pose_is_consistent_across_registry_description_srdf_and_isaac
     assert registry['poses']['home']['0'] == [0.0] * 6
 
     model_root = ET.parse(DESCRIPTION / 'xml' / 'fr5.xml').getroot()
+    # Every keyframe carries one value per MJCF joint, and the AG-95 finger is
+    # always the last of those, closed. Compare the arm prefix against the ready
+    # pose and pin the finger value rather than loosening the comparison.
     for key_name in ('home', 'home1'):
         key = model_root.find(f"./keyframe/key[@name='{key_name}']")
         assert key is not None
-        assert [float(value) for value in key.attrib['qpos'].split()] == pytest.approx(
-            expected, abs=1e-9)
+        qpos = [float(value) for value in key.attrib['qpos'].split()]
+        assert qpos[:len(joints)] == pytest.approx(expected, abs=1e-9)
+        assert qpos[len(joints):] == [0.0]
     zero = model_root.find("./keyframe/key[@name='zero']")
     assert zero is not None
-    assert [float(value) for value in zero.attrib['qpos'].split()] == [0.0] * 6
+    zero_qpos = [float(value) for value in zero.attrib['qpos'].split()]
+    assert zero_qpos[:len(joints)] == [0.0] * len(joints)
+    assert zero_qpos[len(joints):] == [0.0]
 
 
 def test_fr5_ready_pose_fk_floor_clearance_and_conditioning(tmp_path):

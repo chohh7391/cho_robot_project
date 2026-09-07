@@ -20,6 +20,50 @@ controller_manager:
     task_space_ik_controller:
       type: cho_controller_fr5/TaskSpaceIKController
 
+    # Only loaded when the description is expanded with gripper:=ag95; without
+    # that the gripper joint does not exist and the spawner is skipped.
+    gripper_controller:
+      type: cho_controller_gripper/GripperController
+
+gripper_controller:
+  ros__parameters:
+    gripper_joint: gripper_finger_joint
+    # The robot controller reports one stroke percentage over its 485 bus: no
+    # finger velocity and no finger effort, so both derived states are off. The
+    # width rate is differenced from position instead.
+    use_velocity_state: false
+    use_effort_state: false
+    # Both jaws move, so the object sees twice the 47.5 mm of finger travel.
+    joint_at_closed: 0.0
+    joint_at_open: 0.0475
+    width_at_closed: 0.0
+    width_at_open: 0.095
+    # The robot controller runs one MoveGripper per target at its own speed and
+    # force, so hand it the final width instead of a ramp. Interpolating turns a
+    # single open into ~100 device commands, each preempting the last, and the
+    # jaws crawl across the stroke.
+    command_is_setpoint: true
+    # With the target commanded outright the stall detector's lag condition is
+    # true from the first cycle, so give the 485 bus and the jaws time to start
+    # moving before a lack of motion is allowed to mean anything.
+    stall_grace: 0.5
+    # Stroke feedback is an integer percent (~0.95 mm of width), so the
+    # differenced rate reads zero for a few cycles at a time even mid-stroke.
+    # A longer dwell keeps that quantisation from looking like a stall.
+    stall_dwell: 0.3
+    # Speed and force reach the gripper as the fixed percentages configured in
+    # fr5.config.yaml, not per goal: MoveGripper takes them alongside the target
+    # and the hardware does not re-plumb them per command. With
+    # command_is_setpoint the speeds below no longer pace anything either - they
+    # only keep goal validation honest about the gripper's real range.
+    default_speed: 0.05
+    max_speed: 0.15
+    default_force: 45.0
+    max_force: 160.0
+    # No effort feedback, so a missed grasp cannot be detected from state here.
+    # Report motion completion and let the caller check ~/state.
+    report_grasp_failure: false
+
 joint_trajectory_controller:
   ros__parameters:
     joints:
