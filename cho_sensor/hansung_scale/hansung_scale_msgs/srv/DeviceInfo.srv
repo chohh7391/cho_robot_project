@@ -1,0 +1,19 @@
+# Same role as realsense2_camera_msgs/srv/DeviceInfo: ask the running driver
+# what it is actually talking to, instead of inferring it from parameters.
+---
+string device_name
+# Serial number the USB-RS232 adapter reports; empty for adapters with none.
+string serial_number
+# Device path currently open, for example /dev/ttyUSB0.
+string physical_port
+# Stable /dev/serial/by-id symlink for that port; empty when there is none.
+string port_id
+# USB VID:PID of the adapter, for example 0403:6001.
+string usb_type_descriptor
+# Line settings in use, for example 2400 8N1.
+string serial_settings
+bool connected
+# Frames per second measured over the diagnostics window.
+float64 frame_rate
+uint64 frames_received
+uint64 parse_errors

@@ -110,6 +110,13 @@ cho_robot_config/
 cho_control_tools/
   cho_control_tools/         # Interactive clients, VLA tools, and bag plotters
 
+cho_sensor/                  # Sensor stacks; grouping directory, not a package
+  bota_ft_sensor/            # Bota FT config/launch/urdf over extern/bota_driver_ros2
+  hansung_scale/             # Hansung HS-AA RS232 scale driver + its msgs.
+                             # SELF-CONTAINED: no cho_* dependencies, meant to be
+                             # usable as a standalone module. Do not entangle it
+                             # with cho_interfaces or the robot verticals.
+
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)
   mujoco_ros2_control/       # MuJoCo hardware interface (do not edit)

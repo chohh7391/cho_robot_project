@@ -1,0 +1,90 @@
+# Defaults for the HS-AA scale driver.
+#
+# Keyed with the `/**` wildcard rather than `scale_node:` so the file still
+# applies when the node is launched under a different name or namespace
+# (`ros2 launch hansung_scale_driver scale.launch.py scale_name:=weigh_station`).
+/**:
+  ros__parameters:
+    # ---- device selection -------------------------------------------------
+    # `port` is only consulted when none of serial_no / usb_port_id /
+    # device_type is set. Prefer one of those: ttyUSB indices renumber
+    # whenever USB enumeration order changes.
+    #
+    #   ros2 run hansung_scale_driver scale_sniffer --ros-args -p list_ports:=true
+    #
+    # prints the serial number and USB location of everything connected.
+    port: /dev/ttyUSB0
+    serial_no: ''
+    usb_port_id: ''
+    device_type: ''
+
+    # Seconds on_configure waits for a matching port. Negative means fail
+    # immediately, which is what you want on a bench and not what you want on
+    # a robot that powers the adapter up alongside the computer.
+    wait_for_device_timeout: -1.0
+    # Seconds the reader keeps retrying after the link drops, e.g. a yanked
+    # USB cable. Negative restores the old behaviour of stopping on the first
+    # read error.
+    reconnect_timeout: 6.0
+    initial_reset: false
+
+    # ---- line settings ----------------------------------------------------
+    # Confirmed by sniffing the actual HS-AA unit: 2400 baud, 8N1, continuous
+    # ASCII output like "WTST+   0.00   g\r\n" (no request command needed).
+    baudrate: 2400
+    bytesize: 8
+    parity: 'NONE'      # NONE, EVEN, ODD, MARK, SPACE
+    stopbits: 1.0
+    timeout: 1.0
+
+    # ---- protocol ---------------------------------------------------------
+    line_ending: '\r\n'
+    # Fallback numeric extractor, used only for lines that do not match the
+    # WT<status><sign><value><unit> frame (see hansung_scale_driver/protocol.py).
+    value_regex: '[-+]?\d+\.?\d*'
+    frame_id: 'scale_link'
+
+    # ---- poll mode --------------------------------------------------------
+    # Unused for the HS-AA, which streams unprompted; kept for a
+    # request/response indicator wired up later. In poll mode keep `timeout`
+    # below `poll_interval`: the poll runs on the executor thread and blocks
+    # it while waiting for the reply.
+    poll_mode: false
+    poll_command: ''
+    poll_interval: 0.5
+
+    # ---- commands ---------------------------------------------------------
+    # Raw bytes sent by ~/tare and ~/zero, once known. Not confirmed for the
+    # HS-AA yet — use ~/send_command to hunt for them:
+    #
+    #   ros2 service call /scale_node/send_command hansung_scale_msgs/srv/SendCommand \
+    #     "{command: 'hex:54', response_timeout: 1.0}"
+    tare_command: ''
+    zero_command: ''
+    command_response_timeout: 0.0
+
+    # ---- topics -----------------------------------------------------------
+    enable_weight_stamped: true
+    enable_weight: true
+    enable_stable: true
+    enable_unit: true
+    enable_raw: true
+    # SYSTEM_DEFAULT, DEFAULT, SENSOR_DATA, SERVICES_DEFAULT, PARAMETERS,
+    # PARAMETER_EVENTS. SENSOR_DATA (best effort, small queue) suits a
+    # consumer that only wants the newest weight.
+    weight_qos: 'SYSTEM_DEFAULT'
+    raw_qos: 'SYSTEM_DEFAULT'
+
+    # ---- diagnostics ------------------------------------------------------
+    # Seconds between /diagnostics updates; 0 disables them.
+    # expected_frame_rate is what the staleness check is scaled from. 5.0 is
+    # measured on the real HS-AA: frames arrive every 192-209 ms, so 5.000 Hz
+    # (at 2400 baud a 20-byte frame is 83 ms of wire time, ~42% utilisation).
+    # In poll mode set this to 1 / poll_interval instead.
+    diagnostics_period: 1.0
+    expected_frame_rate: 5.0
+
+    # ---- lifecycle --------------------------------------------------------
+    # Auto-configure + auto-activate on launch instead of waiting for
+    # `ros2 lifecycle set scale_node configure/activate`.
+    autostart: true

@@ -1,0 +1,19 @@
+# Send raw bytes to the indicator and optionally capture what comes back.
+#
+# The HS-AA tare/zero command bytes are not documented anywhere we could find,
+# so this is the protocol-discovery tool: try a candidate byte, see whether the
+# stream reacts. Same role as the hardware-monitor command service in
+# realsense-ros.
+
+# Escaped text such as T then CR LF, or raw hex such as hex:05 for ENQ.
+string command
+# Seconds to collect a reply. 0.0 sends and returns immediately, which is the
+# right choice on a continuously streaming indicator like the HS-AA.
+float64 response_timeout
+---
+bool success
+string message
+# Reply decoded as printable ASCII; non-printable bytes become a period.
+string response
+# Reply as space-separated hex, for example 57 54 53 54.
+string response_hex

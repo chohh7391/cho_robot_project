@@ -14,6 +14,8 @@ defaults:
     shell: bash
 
 # Only the packages that build from binary (apt) dependencies alone are covered.
+# hansung_scale_msgs / hansung_scale_driver qualify: rosidl, rclpy and
+# python3-serial are all rosdep keys, so the scale stack builds and tests here.
 # cho_controller_franka, bota_ft_sensor and every cho_bringup_* package need the
 # extern/ submodules (franka_ros2 + libfranka, mujoco_ros2_control,
 # Universal_Robots_ROS2_Driver, bota_driver_ros2) built from source; there are no
@@ -33,6 +35,8 @@ env:
     cho_robot_config
     cho_control_tools
     cho_task_manager
+    hansung_scale_msgs
+    hansung_scale_driver
   # cho_description_franka / cho_description_fr5 / cho_description_ur are forks
   # of upstream descriptions and carry their upstream lint debt, so they are
   # built (the xacro/URDF must still parse) but not linted.
@@ -49,6 +53,8 @@ env:
     cho_robot_config
     cho_control_tools
     cho_task_manager
+    hansung_scale_msgs
+    hansung_scale_driver
 
 jobs:
   build-and-test:
@@ -102,7 +108,9 @@ jobs:
             src/cho_robot_project/cho_description/cho_description_openarm \
             src/cho_robot_project/cho_robot_config \
             src/cho_robot_project/cho_control_tools \
-            src/cho_robot_project/cho_task_manager
+            src/cho_robot_project/cho_task_manager \
+            src/cho_robot_project/cho_sensor/hansung_scale/hansung_scale_msgs \
+            src/cho_robot_project/cho_sensor/hansung_scale/hansung_scale_driver
 
       - name: Build
         shell: bash
