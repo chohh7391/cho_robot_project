@@ -54,7 +54,15 @@ class MoveItActionBridge(Node):
         self.declare_parameter('world_frame', 'world')
         self.declare_parameter('joint_names', ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'])
         self.declare_parameter('trajectory_controller', 'joint_trajectory_controller')
-        self.declare_parameter('trajectory_controllers', Parameter.Type.STRING_ARRAY)
+        trajectory_controllers = self.declare_parameter(
+            'trajectory_controllers', Parameter.Type.STRING_ARRAY)
+        # A typed declaration without an override remains NOT_SET in Humble;
+        # get_parameter(...).value then raises ParameterUninitializedException.
+        # Only the OpenArm launch passes the plural override, so every other
+        # robot's bridge needs the array explicitly initialized here.
+        if trajectory_controllers.type_ == Parameter.Type.NOT_SET:
+            self.set_parameters([Parameter(
+                'trajectory_controllers', Parameter.Type.STRING_ARRAY, [])])
         self.declare_parameter('supports_task', True)
         self.declare_parameter('max_velocity_scaling_factor', 0.25)
         self.declare_parameter('max_acceleration_scaling_factor', 0.25)

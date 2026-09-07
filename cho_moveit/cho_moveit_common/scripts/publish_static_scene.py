@@ -113,7 +113,13 @@ class StaticSceneGate(Node):
         while rclpy.ok() and time.monotonic() < deadline:
             states = self._controller_states(client, 2.0)
             required = list(activate) + list(deactivate)
-            if states is not None and all(name in states for name in required):
+            # Being listed is not enough: a spawner publishes a controller as
+            # 'unconfigured' before configuring it, and a STRICT switch that
+            # names an unconfigured controller aborts the whole switch.
+            if (states is not None
+                    and all(name in states for name in required)
+                    and all(states.get(name) in ('inactive', 'active')
+                            for name in activate)):
                 return states
             time.sleep(0.5)
         return None
