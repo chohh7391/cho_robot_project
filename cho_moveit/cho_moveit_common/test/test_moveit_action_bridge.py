@@ -45,6 +45,9 @@ class ChoHandle:
     def canceled(self):
         self.terminal = 'canceled'
 
+    def succeed(self):
+        self.terminal = 'succeeded'
+
     def abort(self):
         self.terminal = 'aborted'
 
@@ -130,9 +133,10 @@ def test_cancel_requested_before_movegroup_accept_is_forwarded(monkeypatch):
         send_goal_async=lambda _goal: Future(move_handle, first_pending=True))
     bridge._move_goal = lambda _constraints, _duration: object()
     called = []
-    bridge._cancel_downstream = lambda *_args: called.append(True) or False
+    bridge._cancel_downstream = lambda *_args: (called.append(True), (False, 'canceled'))[1]
     handle = ChoHandle(cancel_requested=True)
-    assert not bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    succeeded, reason = bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    assert not succeeded and reason
     assert called == [True]
 
 
@@ -146,9 +150,10 @@ def test_cancel_while_running_is_forwarded(monkeypatch):
         send_goal_async=lambda _goal: Future(move_handle))
     bridge._move_goal = lambda _constraints, _duration: object()
     called = []
-    bridge._cancel_downstream = lambda *_args: called.append(True) or False
+    bridge._cancel_downstream = lambda *_args: (called.append(True), (False, 'canceled'))[1]
     handle = ChoHandle(cancel_requested=True)
-    assert not bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    succeeded, reason = bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    assert not succeeded and reason
     assert called == [True]
 
 
@@ -161,7 +166,8 @@ def test_result_future_exception_latches_fault(monkeypatch):
         send_goal_async=lambda _goal: Future(move_handle))
     bridge._move_goal = lambda _constraints, _duration: object()
     handle = ChoHandle(cancel_requested=False)
-    assert not bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    succeeded, reason = bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    assert not succeeded and reason
     bridge._release_goal()
     assert handle.terminal == 'aborted'
     assert bridge._faulted and bridge._goal_reserved
@@ -176,7 +182,8 @@ def test_none_result_latches_fault(monkeypatch):
         send_goal_async=lambda _goal: Future(move_handle))
     bridge._move_goal = lambda _constraints, _duration: object()
     handle = ChoHandle(cancel_requested=False)
-    assert not bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    succeeded, reason = bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    assert not succeeded and reason
     bridge._release_goal()
     assert bridge._faulted and bridge._goal_reserved
 
@@ -198,7 +205,8 @@ def test_confirmed_cancel_allows_reservation_release(monkeypatch):
         response, MODULE.GoalStatus.STATUS_CANCELED)
     bridge = bare_bridge()
     handle = ChoHandle()
-    assert not bridge._cancel_downstream(handle, move_handle, result_future)
+    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
+    assert not succeeded and reason
     bridge._release_goal()
     assert handle.terminal == 'canceled'
     assert not bridge._faulted
@@ -212,7 +220,8 @@ def test_cancel_reject_latches_fault_and_retains_reservation(monkeypatch):
         response, MODULE.GoalStatus.STATUS_ABORTED)
     bridge = bare_bridge()
     handle = ChoHandle()
-    assert not bridge._cancel_downstream(handle, move_handle, result_future)
+    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
+    assert not succeeded and reason
     bridge._release_goal()
     assert handle.terminal == 'aborted'
     assert bridge._faulted and bridge._goal_reserved
@@ -226,7 +235,8 @@ def test_cancel_timeout_latches_fault_and_retains_reservation(monkeypatch):
     move_handle = SimpleNamespace(cancel_goal_async=lambda: pending)
     bridge = bare_bridge()
     handle = ChoHandle()
-    assert not bridge._cancel_downstream(handle, move_handle, Future(None))
+    succeeded, reason = bridge._cancel_downstream(handle, move_handle, Future(None))
+    assert not succeeded and reason
     bridge._release_goal()
     assert bridge._faulted and bridge._goal_reserved
 
@@ -240,6 +250,59 @@ def test_non_canceled_terminal_latches_fault_and_retains_reservation(monkeypatch
         response, MODULE.GoalStatus.STATUS_ABORTED)
     bridge = bare_bridge()
     handle = ChoHandle()
-    assert not bridge._cancel_downstream(handle, move_handle, result_future)
+    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
+    assert not succeeded and reason
     bridge._release_goal()
     assert bridge._faulted and bridge._goal_reserved
+
+
+def test_moveit_failure_reason_names_the_error_code(monkeypatch):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    wrapped = SimpleNamespace(
+        status=MODULE.GoalStatus.STATUS_ABORTED,
+        result=SimpleNamespace(error_code=SimpleNamespace(
+            val=MODULE.MoveItErrorCodes.NO_IK_SOLUTION)))
+    move_handle = SimpleNamespace(
+        accepted=True, get_result_async=lambda: Future(wrapped))
+    bridge = bare_bridge()
+    bridge._move_client = SimpleNamespace(
+        send_goal_async=lambda _goal: Future(move_handle))
+    bridge._move_goal = lambda _constraints, _duration: object()
+    handle = ChoHandle(cancel_requested=False)
+    succeeded, reason = bridge._run_move_group(handle, object(), 5.0, SimpleNamespace)
+    assert not succeeded
+    assert 'NO_IK_SOLUTION(-31)' in reason
+    assert handle.terminal == 'aborted'
+
+
+def test_successful_run_reports_no_reason(monkeypatch):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    wrapped = SimpleNamespace(
+        status=MODULE.GoalStatus.STATUS_SUCCEEDED,
+        result=SimpleNamespace(error_code=SimpleNamespace(
+            val=MODULE.MoveItErrorCodes.SUCCESS)))
+    move_handle = SimpleNamespace(
+        accepted=True, get_result_async=lambda: Future(wrapped))
+    bridge = bare_bridge()
+    bridge._move_client = SimpleNamespace(
+        send_goal_async=lambda _goal: Future(move_handle))
+    bridge._move_goal = lambda _constraints, _duration: object()
+    handle = ChoHandle(cancel_requested=False)
+    assert bridge._run_move_group(
+        handle, object(), 5.0, SimpleNamespace) == (True, '')
+
+
+def test_task_failure_reports_the_resolved_world_target():
+    bridge = bare_bridge()
+    bridge._world_frame = 'world'
+    bridge._ee_link = 'wrist3_link'
+    request = SimpleNamespace(
+        relative=False,
+        target_pose=MODULE.Pose(),
+        duration=5.0)
+    request.target_pose.position.x = -0.0153
+    request.target_pose.position.y = 0.0040
+    request.target_pose.position.z = 0.7249
+    request.target_pose.orientation.w = 1.0
+    summary = bridge._target_summary(bridge._task_constraints(request))
+    assert 'x=-0.0153' in summary and 'y=+0.0040' in summary and 'z=+0.7249' in summary

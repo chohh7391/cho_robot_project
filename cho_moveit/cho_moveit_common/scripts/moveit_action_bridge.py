@@ -299,6 +299,14 @@ class MoveItActionBridge(Node):
         return tuple(value / norm for value in values)
 
     @staticmethod
+    def _error_name(code):
+        """Name the MoveIt error code so a failure reason reads without a lookup."""
+        for name, value in vars(MoveItErrorCodes).items():
+            if name.isupper() and isinstance(value, int) and value == code:
+                return f'{name}({code})'
+        return str(code)
+
+    @staticmethod
     def _compose_quaternion(left, right):
         lx, ly, lz, lw = MoveItActionBridge._normalize_quaternion(left)
         rx, ry, rz, rw = MoveItActionBridge._normalize_quaternion(right)
@@ -377,6 +385,7 @@ class MoveItActionBridge(Node):
         return goal
 
     def _run_move_group(self, cho_handle, constraints, duration, feedback_type):
+        """Return (succeeded, reason); reason is '' only on success."""
         feedback = feedback_type()
         feedback.percent_complete = 0.0
         cho_handle.publish_feedback(feedback)
@@ -384,9 +393,10 @@ class MoveItActionBridge(Node):
             send_future = self._move_client.send_goal_async(
                 self._move_goal(constraints, duration))
         except Exception as error:  # noqa: BLE001 - transport state is unknown
-            self._latch_fault(f'MoveGroup send_goal transport failed: {error}')
+            reason = f'MoveGroup send_goal transport failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         cancel_requested_before_accept = False
         send_wait_warning_at = time.monotonic() + 10.0
         while rclpy.ok() and not send_future.done():
@@ -399,28 +409,32 @@ class MoveItActionBridge(Node):
                 send_wait_warning_at = time.monotonic() + 10.0
             time.sleep(0.02)
         if not send_future.done():
-            self._latch_fault('ROS shutdown while MoveGroup goal acceptance was pending')
+            reason = 'ROS shutdown while MoveGroup goal acceptance was pending'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         try:
             move_handle = send_future.result()
         except Exception as error:  # noqa: BLE001 - late acceptance is possible
-            self._latch_fault(f'MoveGroup send_goal result failed: {error}')
+            reason = f'MoveGroup send_goal result failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         if move_handle is None or not move_handle.accepted:
             if cancel_requested_before_accept:
                 cho_handle.canceled()
-                return False
-            self.get_logger().error('MoveGroup rejected translated goal')
+                return False, 'canceled before MoveGroup accepted the goal'
+            reason = 'MoveGroup rejected translated goal'
+            self.get_logger().error(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         try:
             result_future = move_handle.get_result_async()
         except Exception as error:  # noqa: BLE001 - accepted goal may be moving
-            self._latch_fault(f'MoveGroup get_result transport failed: {error}')
+            reason = f'MoveGroup get_result transport failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         if cancel_requested_before_accept:
             return self._cancel_downstream(cho_handle, move_handle, result_future)
         while rclpy.ok() and not result_future.done():
@@ -428,80 +442,103 @@ class MoveItActionBridge(Node):
                 return self._cancel_downstream(cho_handle, move_handle, result_future)
             time.sleep(0.02)
         if not result_future.done():
-            self._latch_fault('ROS shutdown while accepted MoveGroup goal was active')
+            reason = 'ROS shutdown while accepted MoveGroup goal was active'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         try:
             wrapped = result_future.result()
         except Exception as error:  # noqa: BLE001 - terminal state is unknown
-            self._latch_fault(f'MoveGroup result future failed: {error}')
+            reason = f'MoveGroup result future failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         if wrapped is None or wrapped.result is None:
-            self._latch_fault('MoveGroup returned no result; motion state is unknown')
+            reason = 'MoveGroup returned no result; motion state is unknown'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         error = wrapped.result.error_code.val
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED
                 or error != MoveItErrorCodes.SUCCESS):
-            self.get_logger().error(
-                f'MoveIt plan/execute failed: action_status={wrapped.status}, error_code={error}')
+            reason = (f'MoveIt plan/execute failed: action_status={wrapped.status}, '
+                      f'error_code={self._error_name(error)}')
+            self.get_logger().error(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         feedback.percent_complete = 100.0
         cho_handle.publish_feedback(feedback)
         cho_handle.succeed()
-        return True
+        return True, ''
 
     def _cancel_downstream(self, cho_handle, move_handle, result_future):
         try:
             cancel_future = move_handle.cancel_goal_async()
         except Exception as error:  # noqa: BLE001 - motion state is unknown
-            self._latch_fault(f'MoveGroup cancel transport failed: {error}')
+            reason = f'MoveGroup cancel transport failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         deadline = time.monotonic() + 5.0
         while rclpy.ok() and not cancel_future.done() and time.monotonic() < deadline:
             time.sleep(0.02)
         if not cancel_future.done():
-            self._latch_fault('MoveGroup cancel response timed out; motion state is unknown')
+            reason = 'MoveGroup cancel response timed out; motion state is unknown'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         try:
             response = cancel_future.result()
         except Exception as error:  # noqa: BLE001 - motion state is unknown
-            self._latch_fault(f'MoveGroup cancel result failed: {error}')
+            reason = f'MoveGroup cancel result failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         if (response is None or response.return_code != CancelGoal.Response.ERROR_NONE
                 or not response.goals_canceling):
             code = response.return_code if response is not None else 'no response'
-            self._latch_fault(
-                f'MoveGroup cancel rejected (return_code={code}); motion state is unknown')
+            reason = (f'MoveGroup cancel rejected (return_code={code}); '
+                      'motion state is unknown')
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         deadline = time.monotonic() + 10.0
         while rclpy.ok() and not result_future.done() and time.monotonic() < deadline:
             time.sleep(0.02)
         if not result_future.done():
-            self._latch_fault(
-                'MoveGroup did not reach a terminal state after cancel; motion state is unknown')
+            reason = ('MoveGroup did not reach a terminal state after cancel; '
+                      'motion state is unknown')
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         try:
             wrapped = result_future.result()
         except Exception as error:  # noqa: BLE001 - terminal state is unknown
-            self._latch_fault(f'MoveGroup post-cancel result failed: {error}')
+            reason = f'MoveGroup post-cancel result failed: {error}'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         if wrapped is None or wrapped.status != GoalStatus.STATUS_CANCELED:
             status = wrapped.status if wrapped is not None else 'no result'
-            self._latch_fault(
-                f'MoveGroup terminal status after cancel was not CANCELED ({status})')
+            reason = f'MoveGroup terminal status after cancel was not CANCELED ({status})'
+            self._latch_fault(reason)
             cho_handle.abort()
-            return False
+            return False, reason
         cho_handle.canceled()
-        return False
+        return False, 'goal canceled'
+
+    @staticmethod
+    def _target_summary(constraints):
+        """Describe the resolved world-frame target a task goal was planned to.
+
+        A relative goal is composed against live TF, so the pose the operator
+        typed is not the pose MoveIt refused. Reporting the resolved target is
+        what makes an unreachable `reach` diagnosable from the client alone.
+        """
+        region = constraints.position_constraints[0].constraint_region
+        pose = region.primitive_poses[0]
+        return (f'resolved target x={pose.position.x:+.4f} y={pose.position.y:+.4f} '
+                f'z={pose.position.z:+.4f}')
 
     def _execute_joint(self, goal_handle):
         result = JointSpace.Result()
@@ -509,18 +546,20 @@ class MoveItActionBridge(Node):
             positions = list(goal_handle.request.target_joints.position)
             if len(positions) != len(self._joint_names) or not all(
                     math.isfinite(value) for value in positions):
-                self.get_logger().error(
+                result.message = (
                     f'Joint goal must contain {len(self._joint_names)} finite positions')
+                self.get_logger().error(result.message)
                 goal_handle.abort()
                 return result
             blocked = self._blocked_joint_goal(positions)
             if blocked is not None:
-                self.get_logger().error(
+                result.message = (
                     f"Joint goal rejected: home {blocked['selector']} is disabled for "
                     f"{self._robot_type}: {blocked['reason']}")
+                self.get_logger().error(result.message)
                 goal_handle.abort()
                 return result
-            result.is_completed = self._run_move_group(
+            result.is_completed, result.message = self._run_move_group(
                 goal_handle, self._joint_constraints(positions),
                 goal_handle.request.duration, JointSpace.Feedback)
             return result
@@ -533,11 +572,14 @@ class MoveItActionBridge(Node):
             try:
                 constraints = self._task_constraints(goal_handle.request)
             except (ValueError, TransformException) as error:
-                self.get_logger().error(f'Task goal conversion failed: {error}')
+                result.message = f'Task goal conversion failed: {error}'
+                self.get_logger().error(result.message)
                 goal_handle.abort()
                 return result
-            result.is_completed = self._run_move_group(
+            result.is_completed, result.message = self._run_move_group(
                 goal_handle, constraints, goal_handle.request.duration, TaskSpace.Feedback)
+            if not result.is_completed:
+                result.message = f'{result.message}; {self._target_summary(constraints)}'
             return result
         finally:
             self._release_goal()

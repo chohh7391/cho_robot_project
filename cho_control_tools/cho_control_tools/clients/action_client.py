@@ -482,9 +482,9 @@ class ControlSuiteShell(cmd.Cmd):
         goal.target_joints.position = home[selector]
 
         if self._send_goal_and_wait(self.joint_space_action_client, goal):
-            print("action succeed")
+            self._report_outcome(True)
         else:
-            print("action failed")
+            self._report_outcome(False)
 
     def do_reach(self, arg):
         """Move task-space end-effector to a generic test pose.
@@ -506,9 +506,9 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_joints = JointState()
             goal.target_joints.position = joint_reach[selector]
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
-                print('action succeed')
+                self._report_outcome(True)
             else:
-                print('action failed')
+                self._report_outcome(False)
             return
         if not self.robot_config.get('supports_task', True):
             joint_reach = self.robot_config['poses'].get('reach', {})
@@ -524,9 +524,9 @@ class ControlSuiteShell(cmd.Cmd):
             goal.target_joints = JointState()
             goal.target_joints.position = joint_reach[selector]
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
-                print('action succeed')
+                self._report_outcome(True)
             else:
-                print('action failed')
+                self._report_outcome(False)
             return
         if self.task_space_action_client is None:
             print("No task-space action server is selected. Run `servers` or `use_task <controller>`.")
@@ -550,9 +550,9 @@ class ControlSuiteShell(cmd.Cmd):
          goal.target_pose.orientation.w) = motion['orientation']
 
         if self._send_goal_and_wait(self.task_space_action_client, goal):
-            print("action succeed")
+            self._report_outcome(True)
         else:
-            print("action failed")
+            self._report_outcome(False)
 
     def do_grasp(self, arg):
         """Gripper open / close.
@@ -594,9 +594,9 @@ class ControlSuiteShell(cmd.Cmd):
         print("Close" if goal.grasp else "Open")
 
         if self._send_goal_and_wait(self.gripper_action_client, goal):
-            print("action succeed")
+            self._report_outcome(True)
         else:
-            print("action failed")
+            self._report_outcome(False)
 
 
     def do_quit(self, arg):
@@ -618,6 +618,7 @@ class ControlSuiteShell(cmd.Cmd):
         # Side-band diagnostic state for robot-specific front ends.  The
         # established boolean return contract remains unchanged.
         self._last_goal_rejected = False
+        self._last_result_message = ''
         send_goal_future = client.send_goal_async(goal_msg)
 
         # Callbacks run on the background spinner thread, so just wait for the future.
@@ -635,9 +636,20 @@ class ControlSuiteShell(cmd.Cmd):
         while rclpy.ok() and not get_result_future.done():
             time.sleep(0.1)
 
-        result_status = get_result_future.result().status
+        wrapped = get_result_future.result()
+        # Gripper results carry no message field; absent or empty is fine and
+        # simply leaves the outcome line as it has always read.
+        self._last_result_message = getattr(wrapped.result, 'message', '') or ''
 
-        return result_status == GoalStatus.STATUS_SUCCEEDED
+        return wrapped.status == GoalStatus.STATUS_SUCCEEDED
+
+    def _report_outcome(self, succeeded: bool) -> None:
+        """Print the goal outcome, naming the reason the server reported."""
+        if succeeded:
+            print('action succeed')
+            return
+        reason = getattr(self, '_last_result_message', '')
+        print(f'action failed: {reason}' if reason else 'action failed')
 
 
 def main(argv=None):

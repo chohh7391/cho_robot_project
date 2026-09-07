@@ -237,3 +237,38 @@ def test_openarm_mit_selected_home_and_reach_keep_joint_space_goal_contract():
         assert len(goal.target_joints.position) == 7
     assert list(sent[0][1].target_joints.position) == shell.robot_config['poses']['home']['1']
     assert list(sent[1][1].target_joints.position) == shell.robot_config['poses']['reach']['1']
+
+
+def test_server_failure_reason_reaches_the_operator(capsys):
+    shell = bare_shell('fr5')
+    shell.robot_config = MODULE.load_robot_config('fr5', 'single')
+    shell.task_space_action_client = object()
+    shell.joint_space_action_client = object()
+
+    def send(client, goal):
+        del client, goal
+        shell._last_result_message = (
+            'MoveIt plan/execute failed: action_status=6, '
+            'error_code=NO_IK_SOLUTION(-31); resolved target x=-0.0153')
+        return False
+
+    shell._send_goal_and_wait = send
+    shell.do_reach('3')
+
+    out = capsys.readouterr().out
+    assert 'action failed: MoveIt plan/execute failed' in out
+    assert 'NO_IK_SOLUTION(-31)' in out
+    assert 'x=-0.0153' in out
+
+
+def test_failure_without_a_reason_keeps_the_plain_line(capsys):
+    shell = bare_shell('fr5')
+    shell.robot_config = MODULE.load_robot_config('fr5', 'single')
+    shell.task_space_action_client = object()
+    shell.joint_space_action_client = object()
+    shell._last_result_message = ''
+    shell._send_goal_and_wait = lambda client, goal: False
+
+    shell.do_reach('3')
+
+    assert capsys.readouterr().out.strip().endswith('action failed')

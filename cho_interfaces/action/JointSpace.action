@@ -4,6 +4,9 @@ float32 duration
 ---
 # Define the result
 bool is_completed
+# Empty on success. On failure this carries the reason the goal did not
+# complete, so operator clients can print it instead of a bare failure.
+string message
 ---
 # Define a feedback message
 float32 percent_complete
