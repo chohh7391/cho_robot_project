@@ -133,6 +133,19 @@ private:
   double default_epsilon_outer_{0.010};
   double position_tolerance_{0.002};
   double goal_timeout_{5.0};
+  // Some grippers execute one point-to-point move at their own speed and force
+  // instead of tracking a position stream: the FR 485 grippers, where a single
+  // MoveGripper() carries the target and the device paces itself. Ramping the
+  // command toward such a target chops one grasp into a stream of commands that
+  // each preempt the last, and the fingers stutter their way across the stroke.
+  // A servo'd finger joint needs the opposite - the ramp is its only speed
+  // limit - so this stays off unless the hardware says otherwise.
+  bool command_is_setpoint_{false};
+  // How long after a target change stall detection stays disarmed. Setpoint
+  // mode needs it: the commanded width leads the fingers by design, so the
+  // detector's lag condition holds from the first cycle and would call a stall
+  // before the hardware has even begun to move.
+  double stall_grace_{0.0};
   // A grasp that closes onto nothing is a failure the caller usually wants to
   // hear about, but the simulated hands in this workspace have no contact model
   // worth trusting, so the bringups that use them turn this off.
@@ -159,6 +172,8 @@ private:
   double active_epsilon_outer_{0.0};
   bool active_grasp_{false};
   double goal_elapsed_{0.0};
+  // Seconds since the active target last changed; gates stall_grace_.
+  double target_age_{0.0};
   std::uint64_t goal_id_{0}, last_started_goal_id_{0};
   bool grasped_{false};
   double last_measured_width_{0.0};

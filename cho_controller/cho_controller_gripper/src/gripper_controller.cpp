@@ -94,6 +94,8 @@ CallbackReturn GripperController::on_init()
     auto_declare<double>("stall_width_error", 0.003);
     auto_declare<double>("stall_width_speed", 0.002);
     auto_declare<double>("stall_dwell", 0.15);
+    auto_declare<bool>("command_is_setpoint", false);
+    auto_declare<double>("stall_grace", 0.0);
     auto_declare<bool>("report_grasp_failure", false);
     auto_declare<double>("state_publish_rate", 50.0);
   } catch (const std::exception & error) {
@@ -135,6 +137,12 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State &)
   position_tolerance_ = node->get_parameter("position_tolerance").as_double();
   goal_timeout_ = node->get_parameter("goal_timeout").as_double();
   report_grasp_failure_ = node->get_parameter("report_grasp_failure").as_bool();
+  command_is_setpoint_ = node->get_parameter("command_is_setpoint").as_bool();
+  stall_grace_ = node->get_parameter("stall_grace").as_double();
+  if (stall_grace_ < 0.0) {
+    RCLCPP_ERROR(node->get_logger(), "stall_grace=%g must not be negative", stall_grace_);
+    return CallbackReturn::ERROR;
+  }
   if (!(max_speed_ > 0.0) || !(default_speed_ > 0.0) || default_speed_ > max_speed_) {
     RCLCPP_ERROR(node->get_logger(),
       "default_speed=%g must be positive and within max_speed=%g", default_speed_, max_speed_);
@@ -245,6 +253,7 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State &)
   active_epsilon_inner_ = default_epsilon_inner_;
   active_epsilon_outer_ = default_epsilon_outer_;
   active_grasp_ = false;
+  target_age_ = 0.0;
   goal_id_ = 0;
   last_started_goal_id_ = goal_buffer_.readFromNonRT()->id;
   public_goal_id_.store(0);
@@ -380,8 +389,11 @@ controller_interface::return_type GripperController::update(
     goal_id_ = 0;
     public_goal_id_.store(0);
     // Hold where the fingers are rather than snapping to the old target: a
-    // canceled grasp must not keep squeezing.
-    active_target_width_ = commanded_width_;
+    // canceled grasp must not keep squeezing. In setpoint mode the commanded
+    // width IS the old target, so the fingers' own position is the only honest
+    // answer to "where are they".
+    active_target_width_ = command_is_setpoint_ ? width : commanded_width_;
+    target_age_ = 0.0;
   }
 
   // A continuous width command outranks the action. It arrives from a stream
@@ -400,6 +412,7 @@ controller_interface::return_type GripperController::update(
     active_speed_ = default_speed_;
     active_force_ = default_force_;
     stall_.reset();
+    target_age_ = 0.0;
     grasped_ = false;
   }
 
@@ -418,16 +431,24 @@ controller_interface::return_type GripperController::update(
     active_epsilon_inner_ = incoming.epsilon_inner;
     active_epsilon_outer_ = incoming.epsilon_outer;
     goal_elapsed_ = 0.0;
+    target_age_ = 0.0;
     grasped_ = false;
     stall_.reset();
   }
 
-  // Advance the commanded width at the goal speed. The step is what bounds how
-  // fast the fingers may close; the hardware position loop underneath has no
-  // idea what a safe closing speed is.
-  const double step = active_speed_ * dt;
-  const double error = active_target_width_ - commanded_width_;
-  commanded_width_ += std::clamp(error, -step, step);
+  // Advance the commanded width toward the target. Normally the step is what
+  // bounds how fast the fingers may close - a servo'd finger's position loop
+  // underneath has no idea what a safe closing speed is. A gripper that paces
+  // its own point-to-point motion needs the target outright instead: ramping
+  // into one of those issues a fresh device command every deadband crossing,
+  // each preempting the last, and the stroke comes out as a stutter.
+  if (command_is_setpoint_) {
+    commanded_width_ = active_target_width_;
+  } else {
+    const double step = active_speed_ * dt;
+    const double error = active_target_width_ - commanded_width_;
+    commanded_width_ += std::clamp(error, -step, step);
+  }
   commanded_width_ = mapping_.clamp_width(commanded_width_);
 
   command_interfaces_[position_command_index_].set_value(mapping_.to_joint(commanded_width_));
@@ -435,7 +456,15 @@ controller_interface::return_type GripperController::update(
     command_interfaces_[force_command_index_].set_value(active_force_);
   }
 
-  const bool stalled = stall_.update(commanded_width_, width, measured_speed_, dt);
+  // Hold the detector off until the hardware has had stall_grace_ to react;
+  // keep it reset meanwhile so the dwell counter starts from zero when armed.
+  bool stalled = false;
+  if (target_age_ >= stall_grace_) {
+    stalled = stall_.update(commanded_width_, width, measured_speed_, dt);
+  } else {
+    stall_.reset();
+  }
+  target_age_ += dt;
   feedback_width_.store(width, std::memory_order_release);
 
   if (goal_id_) {
@@ -465,7 +494,8 @@ controller_interface::return_type GripperController::update(
       finish(goal_id_, Terminal::ABORTED);
       goal_id_ = 0;
       public_goal_id_.store(0);
-      active_target_width_ = commanded_width_;
+      active_target_width_ = command_is_setpoint_ ? width : commanded_width_;
+      target_age_ = 0.0;
     }
   }
 

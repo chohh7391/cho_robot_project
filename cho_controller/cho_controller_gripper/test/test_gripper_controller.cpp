@@ -86,7 +86,11 @@ using Access = cho_controller_gripper::GripperControllerTestAccess;
 // A prismatic finger on mock hardware, which mirrors the position command into
 // the position state. `with_force` adds the second command interface the
 // force-limited hardware path uses.
-std::string urdf(const bool with_force = false)
+// `frozen` stops GenericSystem mirroring the command into the state, which is
+// the only way to stand in for hardware that has not moved yet; `initial_joint`
+// parks the finger somewhere other than fully closed.
+std::string urdf(
+  const bool with_force = false, const bool frozen = false, const double initial_joint = 0.0)
 {
   std::ostringstream out;
   out << "<robot name='gripper_test'><link name='base'/><link name='finger'/>"
@@ -94,13 +98,18 @@ std::string urdf(const bool with_force = false)
       << "<child link='finger'/><axis xyz='1 0 0'/>"
       << "<limit lower='0' upper='0.044' effort='9' velocity='20'/></joint>"
       << "<ros2_control name='fake' type='system'>"
-      << "<hardware><plugin>mock_components/GenericSystem</plugin></hardware>"
+      << "<hardware><plugin>mock_components/GenericSystem</plugin>";
+  if (frozen) {
+    out << "<param name='disable_commands'>true</param>";
+  }
+  out << "</hardware>"
       << "<joint name='test_finger_joint1'>"
       << "<command_interface name='position'/>";
   if (with_force) {
     out << "<command_interface name='effort'/>";
   }
-  out << "<state_interface name='position'><param name='initial_value'>0.0</param>"
+  out << "<state_interface name='position'><param name='initial_value'>" << initial_joint
+      << "</param>"
       << "</state_interface><state_interface name='velocity'/>"
       << "<state_interface name='effort'/></joint></ros2_control></robot>";
   return out.str();
@@ -113,11 +122,14 @@ protected:
 
   // Not SetUp(): several tests need different parameters before configure, so
   // each one calls this explicitly.
-  void build(const bool with_force = false, const bool bad_mapping = false)
+  void build(
+    const bool with_force = false, const bool bad_mapping = false,
+    const bool frozen = false, const double initial_joint = 0.0)
   {
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
     manager_ = std::make_shared<controller_manager::ControllerManager>(
-      std::make_unique<hardware_interface::ResourceManager>(urdf(with_force), true, true),
+      std::make_unique<hardware_interface::ResourceManager>(
+        urdf(with_force, frozen, initial_joint), true, true),
       executor_, "controller_manager", "/gripper_test");
     controller_ = std::make_shared<GripperController>();
     ASSERT_TRUE(manager_->add_controller(
@@ -142,6 +154,15 @@ protected:
       set("force_command_interface", std::string("effort"));
       set("default_force", 12.0);
     }
+  }
+
+  // Override a parameter between build() and configure(), for the tests that
+  // need a controller mode the shared defaults do not cover.
+  template<typename T>
+  void set_param(const std::string & name, const T & value)
+  {
+    ASSERT_TRUE(controller_->get_node()->set_parameter(
+        rclcpp::Parameter(name, value)).successful);
   }
 
   bool configure()
@@ -363,5 +384,43 @@ TEST_F(Fixture, AWidthBeyondThePhysicalOpeningIsClampedRatherThanCommanded)
   cycle(2000);
   EXPECT_NEAR(Access::measured_width(*controller_), 0.088, 1e-3);
   EXPECT_LE(Access::position_command(*controller_), 0.044 + 1e-9);
+}
+
+TEST_F(Fixture, SetpointModeCommandsTheTargetOutrightInsteadOfRampingToIt)
+{
+  build();
+  set_param("command_is_setpoint", true);
+  ASSERT_TRUE(configure());
+  activate();
+  const auto id = Access::stage_goal(*controller_, /*grasp=*/false, /*width=*/0.0, /*speed=*/0.05);
+  ASSERT_NE(id, 0U);
+  // A single update is all a self-pacing device may be given. The ramp this
+  // replaces would still be 87.95 of the 88 mm short after one 1 ms cycle,
+  // which on the real gripper became a fresh device command per deadband
+  // crossing and a stroke that crawled.
+  cycle(1);
+  EXPECT_DOUBLE_EQ(Access::commanded_width(*controller_), 0.088);
+  EXPECT_DOUBLE_EQ(Access::position_command(*controller_), 0.044);
+}
+
+TEST_F(Fixture, StallGraceHoldsOffTheDetectorUntilTheHardwareHasHadTimeToMove)
+{
+  // Fingers parked open on hardware that never follows the command. With the
+  // target commanded outright the detector's lag condition holds from the first
+  // cycle, so only the grace window stops it calling a stall before the device
+  // could possibly have started.
+  build(/*with_force=*/false, /*bad_mapping=*/false, /*frozen=*/true, /*initial_joint=*/0.044);
+  set_param("command_is_setpoint", true);
+  set_param("stall_grace", 0.2);
+  set_param("stall_dwell", 0.05);
+  ASSERT_TRUE(configure());
+  activate();
+  ASSERT_DOUBLE_EQ(Access::measured_width(*controller_), 0.088);
+  const auto id = Access::stage_goal(*controller_, /*grasp=*/true, /*width=*/0.0, /*speed=*/0.05);
+  ASSERT_NE(id, 0U);
+  cycle(150);  // 0.15 s, inside the grace: nothing may have ended the goal yet
+  EXPECT_EQ(Access::active_goal(*controller_), id);
+  cycle(120);  // past grace + dwell, so the stall is allowed to land
+  EXPECT_EQ(Access::active_goal(*controller_), 0U);
 }
 }  // namespace
