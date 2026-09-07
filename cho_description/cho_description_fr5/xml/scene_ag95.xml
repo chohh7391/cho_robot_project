@@ -1,0 +1,7 @@
+<mujoco model="fr5 scene">
+  <!-- FR5 with the AG-95 attached. Selected by fr5.ros2_control.xacro when the
+       description is expanded with gripper:=ag95, so the tool is in the
+       simulation exactly when it is in the robot model. -->
+  <include file="fr5_ag95.xml"/>
+  <include file="scene_common.xml"/>
+</mujoco>

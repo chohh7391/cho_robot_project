@@ -4,7 +4,8 @@
     ros2_control block for the FR5, with the hardware backend selected by the
     `hardware` argument:
 
-      mujoco  - mujoco_ros2_control/MujocoSystemInterface (xml/scene.xml)
+      mujoco  - mujoco_ros2_control/MujocoSystemInterface
+                (xml/scene.xml, or xml/scene_ag95.xml with the gripper)
       isaac   - topic_based_ros2_control/TopicBasedSystem (Isaac Sim bridge)
       gazebo  - gz_ros2_control/GazeboSimSystem
       mock    - mock_components/GenericSystem (lifecycle / switching smoke tests)
@@ -41,7 +42,7 @@
     SDK's MoveGripper()/stroke-percentage feedback. There it is position only:
     the controller reports a stroke percentage and no finger velocity.
 
-    MuJoCo drives the matching slide joint in xml/fr5.xml instead, and does
+    MuJoCo drives the matching slide joint in xml/fr5_ag95.xml instead, and does
     integrate a velocity, so the simulated build asks for that state too. The
     other backends have no gripper joint at all - Gazebo and Isaac would need
     the same modelling done in their own scenes first.
@@ -70,7 +71,14 @@
       <hardware>
         <xacro:if value="${hardware == 'mujoco'}">
           <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
-          <param name="mujoco_model">$(find cho_description_fr5)/xml/scene.xml</param>
+          <!-- Two scenes, because MJCF has no conditionals and the gripper is a
+               body nested inside wrist3_link, which cannot be spliced in from an
+               including file. Selecting the file here is what keeps the tool out
+               of the simulation when the description was expanded without it -
+               otherwise the viewer draws a gripper the robot model does not have.
+               The two differ only in the tool; cho_robot_config's guard test
+               compares their arm joints, limits and actuator gains. -->
+          <param name="mujoco_model">$(find cho_description_fr5)/xml/${'scene_ag95.xml' if gripper == 'ag95' else 'scene.xml'}</param>
           <xacro:if value="${bool(mujoco_initial_keyframe)}">
             <param name="initial_keyframe">${mujoco_initial_keyframe}</param>
           </xacro:if>

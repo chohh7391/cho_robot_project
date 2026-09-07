@@ -137,7 +137,9 @@ trajectory bug — see comment), `clamp_to_joint_limits`, `held_command_position
 
 ## 5. Gotchas already hit and solved (don't re-discover these)
 
-- **MuJoCo model tuning** (`cho_description_fr5/xml/fr5.xml`): the raw bundle `fr5_p.xml`
+- **MuJoCo model tuning** (`cho_description_fr5/xml/fr5.xml`, and its copy
+  `fr5_ag95.xml` - MJCF has no conditionals, so the AG-95 variant is a second
+  file kept in step by a `cho_robot_config` guard test): the raw bundle `fr5_p.xml`
   oscillated/jammed. Fixes: joint `armature=0.1`+`damping`, actuator `kv` + higher `kp`
   (3000/1000), **removed the joints' `actuatorfrcrange`** (it capped servo force so the
   arm saturated at ~0.19 rad and ran away), and **all geoms `contype/conaffinity=0`**

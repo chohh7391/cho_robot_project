@@ -5,7 +5,8 @@
 
 Mirrors the UR MuJoCo bringup: robot_state_publisher plus the
 mujoco_ros2_control build of ros2_control_node (fr5.urdf.xacro expanded with
-hardware:=mujoco, whose ros2_control block points MuJoCo at xml/scene.xml),
+hardware:=mujoco, whose ros2_control block points MuJoCo at xml/scene.xml, or
+xml/scene_ag95.xml when the gripper is selected),
 then the spawners once the node is up.
 """
 
@@ -273,9 +274,11 @@ def generate_launch_description():
             'gripper',
             default_value='',
             description=(
-                'End-effector gripper by name: none | ag95. Simulation defaults to '
-                'none. ag95 binds the kinematic slide joint in xml/fr5.xml - it has '
-                'no geom, so it moves but cannot grasp.'
+                'End-effector gripper by name: none | ag95. Simulation defaults '
+                'to none. ag95 switches the MuJoCo model to xml/scene_ag95.xml, '
+                'which carries the tool as a kinematic slide joint with visual '
+                'geometry: it moves and is visible, but every geom in that model '
+                'is visual-only, so it cannot grasp anything.'
             ),
         ),
         DeclareLaunchArgument(

@@ -1,9 +1,6 @@
 <mujoco model="fairino5_v6_robot">
-  <!-- FR5 arm alone. fr5_ag95.xml is this file plus the AG-95; the two are
-       kept in step by test_fr5_mujoco_bootstrap.py, which compares the arm
-       joints, limits and actuator gains of both scenes. MJCF has no
-       conditionals and a nested body cannot be included from outside, so a
-       second file is the only way to make the tool optional. -->
+  <!-- FR5 arm plus the AG-95. Keep the arm identical to fr5.xml; the guard
+       test in cho_robot_config compares both scenes joint by joint. -->
   <compiler angle="radian" meshdir="assets"/>
 
   <option integrator="implicitfast"/>
@@ -30,6 +27,13 @@
     <mesh name="wrist1_link" file="wrist1_link.STL"/>
     <mesh name="wrist2_link" file="wrist2_link.STL"/>
     <mesh name="wrist3_link" file="wrist3_link.STL"/>
+    <!-- The vendored AG-95 parts, reached out of meshdir because they live with
+         the URDF's meshes rather than being duplicated here. Millimetre STLs,
+         unlike the arm's, so they carry a scale. -->
+    <mesh name="ag95_base_link" file="../../meshes/ag95/visual/base_link.stl"
+          scale="0.001 0.001 0.001"/>
+    <mesh name="ag95_gripper_body" file="../../meshes/ag95/visual/gripper_body.stl"
+          scale="0.001 0.001 0.001"/>
   </asset>
 
   <worldbody>
@@ -59,6 +63,39 @@
                 <joint name="j6" pos="0 0 0" axis="0 0 1" range="-3.0543 3.0543"/>
                 <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist3_link"/>
                 <site name="attachment_site" pos="0 0 0.1"/>
+                <!-- AG-95 finger, KINEMATIC ONLY. One slide joint at the tool
+                     point, mirroring the URDF's gripper_finger_joint: axis along
+                     tool y, 0 closed to 0.0475 fully open (half of the 95 mm
+                     stroke, because both jaws move). The axis matches the URDF,
+                     which follows the direction the real AG-95 linkage drives
+                     the jaws. It carries no geom, so it cannot grasp anything - it exists so the same
+                     cho_interfaces/Gripper action that drives the real 485
+                     gripper moves something here. Add finger geoms with real
+                     AG-95 dimensions before expecting contact.
+
+                     The joint is always present: MJCF has no conditionals, and
+                     an unbound extra joint costs nothing (mujoco_ros2_control
+                     looks up the joints ros2_control declares, not the reverse).
+                     Its own armature/damping override the model default, which
+                     is tuned for the heavy rotary links and would make a 50 g
+                     finger unusably sluggish. -->
+                <body name="gripper_base_link" pos="0 0 0.1">
+                  <inertial pos="0 0 0.0655" mass="0.8347" diaginertia="0.0025 0.0025 0.0008"/>
+                  <!-- Visual only, like every geom in this model. The two meshes
+                       are the AG-95 parts rigid to the flange; the translucent
+                       box is the jaws' swept volume, drawn deliberately as an
+                       envelope rather than as fingers because that is exactly
+                       what it is - and it is the same volume MoveIt checks. -->
+                  <geom type="mesh" mesh="ag95_base_link" rgba="0.79 0.82 0.93 1"/>
+                  <geom type="mesh" mesh="ag95_gripper_body" rgba="0.15 0.15 0.15 1"/>
+                  <geom type="box" pos="0 0 0.1456" size="0.0841 0.0254 0.0552"
+                        rgba="0.9 0.6 0.2 0.25"/>
+                  <body name="gripper_finger_link" pos="0 0 0.1456">
+                    <inertial pos="0 0 0" mass="0.05" diaginertia="1e-5 1e-5 1e-5"/>
+                    <joint name="gripper_finger_joint" type="slide" pos="0 0 0"
+                           axis="1 0 0" range="0 0.0475" armature="0.001" damping="0.5"/>
+                  </body>
+                </body>
               </body>
             </body>
           </body>
@@ -78,18 +115,24 @@
     <position name="j4" joint="j4" kp="1000" kv="100"/>
     <position name="j5" joint="j5" kp="1000" kv="100"/>
     <position name="j6" joint="j6" kp="1000" kv="100"/>
+    <!-- 50 g plus 1 g of armature: kp 1000 keeps the gravity sag when the slide
+         axis happens to be vertical near 0.5 mm, well inside the gripper
+         controller's 2 mm position tolerance, and kv 15 is about critical. -->
+    <position name="gripper_finger_joint" joint="gripper_finger_joint" kp="1000" kv="15"/>
   </actuator>
 
   <keyframe>
+    <!-- The trailing value is gripper_finger_joint: keyframes are sized by nq
+         and nu, so adding the finger means every key carries it. 0 is closed. -->
     <key name="zero"
-         qpos="0 0 0 0 0 0"
-         ctrl="0 0 0 0 0 0"/>
+         qpos="0 0 0 0 0 0 0"
+         ctrl="0 0 0 0 0 0 0"/>
     <!-- Canonical planning-safe, non-singular simulation ready pose. -->
     <key name="home"
-         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"
-         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"/>
+         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"
+         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"/>
     <key name="home1"
-         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"
-         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0"/>
+         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"
+         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"/>
   </keyframe>
 </mujoco>
