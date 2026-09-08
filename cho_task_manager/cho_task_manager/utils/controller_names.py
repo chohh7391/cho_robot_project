@@ -288,5 +288,13 @@ def valid_controller_action_names() -> List[str]:
     return names
 
 
-def vla_completion_service_name():
-    return f'{controller_action_name(ControllerNames.VLA)}/notify_completion'
+def vla_completion_service_name(controller=None):
+    """Completion service a VLA controller calls when its goal ends.
+
+    The controller derives this from its OWN action name, so the two must agree.
+    They differ per robot now that OpenArm has one: Franka's is `vla_controller`
+    and OpenArm MIT's is `vla_mit_controller`. Pass the name from
+    `load_robot_config(...)['vla']` for a robot-aware tree; the default keeps the
+    historical Franka name for callers that have no robot config.
+    """
+    return f'{controller_action_name(controller or ControllerNames.VLA)}/notify_completion'
