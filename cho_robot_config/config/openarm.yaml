@@ -54,6 +54,17 @@ motions:
   # The former values were end-effector-frame relative offsets.  Encoding
   # their FK-resolved endpoints here makes `reach N` idempotent: repeating a
   # command returns to this same world target instead of accumulating motion.
+  #
+  # One consumer overrides this on purpose.  Direct MIT task control starts
+  # from the nominal-zero posture, not from `home 1`, so these `home 1`-derived
+  # absolute targets can be unreachable there.  When the operator client
+  # (cho_control_tools/clients/operator_client.py) has selected a
+  # `*task_space_impedance_mit_controller` endpoint it replaces selectors 0-2
+  # with bounded relative TCP probes and selector 3 with an absolute
+  # nominal-zero forward-bend pose, and says so on startup.  On that one path
+  # repeating `reach 0`-`reach 2` DOES accumulate displacement.  Every other
+  # consumer - MoveIt, non-MIT task endpoints, the joint-space fallback - uses
+  # the absolute, idempotent targets below.
   reach:
     '0': {relative: false, position: [0.446841389, -0.286500255, 0.414628896], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
     '1': {relative: false, position: [0.275148419, -0.186149069, 0.393389049], orientation: [0.358992547, 0.563936817, 0.028220362, 0.743171063]}
@@ -71,6 +82,14 @@ profiles:
       direct_task: left_task_space_impedance_mit_controller
       gripper: left_gripper_controller
       moveit_trajectory: left_joint_trajectory_controller
+    # Per-arm instance of the legacy effort controller. Without this the profile
+    # inherited the single-arm `joint_space_impedance_controller` from the
+    # top-level compatibility block, and `launch_utils.per_arm()` prefixes every
+    # controller on a bimanual build - so the task trees selected a name that
+    # does not exist there and their switch could never activate anything.
+    compatibility:
+      task_manager:
+        joint_space: left_joint_space_impedance_controller
     moveit:
       planning_group: left_arm
       controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]
@@ -83,6 +102,8 @@ profiles:
     # World-frame, idempotent task targets resolved from this arm's MIT
     # startup posture. They deliberately differ from the single-arm targets:
     # both arms hang from the bimanual torso at different world transforms.
+    # The direct-MIT operator-client substitution described above applies to
+    # this profile too, with its own per-arm forward-bend pose.
     motions:
       reach:
         '0': {relative: false, position: [0.360994904, 0.389823628, 0.466489710], orientation: [0.743171722, -0.028219326, 0.563936869, -0.358991182]}
@@ -100,6 +121,10 @@ profiles:
       direct_task: right_task_space_impedance_mit_controller
       gripper: right_gripper_controller
       moveit_trajectory: right_joint_trajectory_controller
+    # Per-arm instance of the legacy effort controller; see the left profile.
+    compatibility:
+      task_manager:
+        joint_space: right_joint_space_impedance_controller
     moveit:
       planning_group: right_arm
       controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]

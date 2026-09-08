@@ -280,9 +280,16 @@ def load_robot_config(robot_type, profile=None):
         if forbidden:
             raise ValueError(
                 f'{robot_type}: profile overlay may not replace {sorted(forbidden)}')
-        for section in ('model', 'controllers', 'moveit', 'actions', 'poses', 'motions'):
+        # 'actions' and 'compatibility' are REPLACED, not merged: both are
+        # nested, so a shallow update would keep the top-level sub-mappings and
+        # a profile could not fully own them. That matters for 'compatibility'
+        # in particular -- its controller names are per-arm instances on a
+        # bimanual build, and inheriting the single-arm name pointed the task
+        # trees at a controller that does not exist there.
+        for section in ('model', 'controllers', 'moveit', 'actions', 'poses',
+                        'motions', 'compatibility'):
             if section in overlay:
-                if section == 'actions':
+                if section in ('actions', 'compatibility'):
                     config[section] = deepcopy(overlay[section])
                 else:
                     config[section].update(deepcopy(overlay[section]))

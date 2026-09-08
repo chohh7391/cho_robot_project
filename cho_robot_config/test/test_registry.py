@@ -278,3 +278,36 @@ def test_environment_override_has_an_independent_cache_key(tmp_path, monkeypatch
     (second / 'fr5.yaml').write_text(yaml.safe_dump(document))
     monkeypatch.setenv('CHO_ROBOT_CONFIG_DIR', str(second))
     assert load_robot_config('fr5')['poses']['home']['0'][0] == 0.25
+
+
+@pytest.mark.parametrize('profile', ['left', 'right'])
+def test_bimanual_profile_owns_its_compatibility_controller(profile):
+    """A per-arm profile must not inherit the single-arm compatibility name.
+
+    `compatibility.task_manager.joint_space` names the legacy effort controller
+    the task trees still select. Every controller on a bimanual build carries a
+    per-arm prefix (`launch_utils.per_arm()`), so inheriting the top-level
+    single-arm name pointed the trees at a controller that does not exist there
+    and their switch could never activate anything.
+    """
+    single = load_robot_config('openarm', 'single')
+    scoped = load_robot_config('openarm', profile)
+
+    inherited = single['compatibility']['task_manager']['joint_space']
+    resolved = scoped['compatibility']['task_manager']['joint_space']
+
+    assert resolved != inherited
+    assert resolved == f'{profile}_{inherited}'
+
+
+def test_profile_compatibility_is_replaced_not_merged():
+    """The overlay replaces `compatibility` outright, so a profile fully owns it.
+
+    A shallow update would keep the top-level `task_manager` sub-mapping and
+    leave the single-arm names in place under it.
+    """
+    scoped = load_robot_config('openarm', 'left')
+    task_manager = scoped['compatibility']['task_manager']
+
+    assert set(task_manager) == {'joint_space'}
+    assert all(name.startswith('left_') for name in task_manager.values())

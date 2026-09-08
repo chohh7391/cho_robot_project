@@ -30,11 +30,14 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
     # 1. Home (joint space)
     init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
     init_seq.add_children([
+        # Every switch here is exclusive (the default), so the deactivate list
+        # is derived, not given: pass robot_config so it is derived from the
+        # UR registry entry instead of the Franka controller names.
         SwitchControllerServiceBehavior(
             name="Switch_To_UR_Joint",
             activate=[joint_controller],
-            deactivate=[task_controller],
             strict=False,
+            robot_config=robot_config,
         ),
         JointSpaceActionBehavior(
             name="UR_Go_Home",
@@ -50,8 +53,8 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
         SwitchControllerServiceBehavior(
             name="Switch_To_UR_Task_IK",
             activate=[task_controller],
-            deactivate=[joint_controller],
             strict=False,
+            robot_config=robot_config,
         )
     )
     for name, position in UR5E_WAYPOINTS:
@@ -71,8 +74,8 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
         SwitchControllerServiceBehavior(
             name="Switch_To_UR_Joint_Final",
             activate=[joint_controller],
-            deactivate=[task_controller],
             strict=False,
+            robot_config=robot_config,
         ),
         JointSpaceActionBehavior(
             name="UR_Go_Home_Final",

@@ -44,11 +44,12 @@ class ControllerNames(str, Enum):
         return self.value
 
 
-# Arm controllers that all claim the same effort (torque) command interfaces:
-# at most one may be active at a time. A switch that activates one of these must
-# deactivate every other one, regardless of which was running before, so that
-# re-runs after a failure (memory Sequence + OneShot re-tick) don't leave a
-# conflicting controller active and fail the STRICT switch.
+# The historical Franka-only exclusive set. Every name here is a Franka
+# controller: mutually exclusive on Franka, but meaningless for OpenArm or UR,
+# which have their own (MIT / trajectory / left_ + right_ prefixed) controllers.
+# Do NOT treat this as a general list -- call exclusive_arm_controllers() with a
+# robot config instead. It stays as the no-config default so a call site that
+# has no robot config keeps its exact previous behaviour.
 # GRIPPER uses a separate interface, so it is intentionally excluded.
 EXCLUSIVE_ARM_CONTROLLERS = [
     ControllerNames.JOINT_IMPEDANCE,
@@ -111,6 +112,89 @@ def controller_name_value(controller):
     if isinstance(controller, ControllerNames):
         return controller.value
     return str(controller)
+
+
+# Registry controller roles whose controllers claim the arm's own command
+# interfaces. 'gripper' is deliberately absent: it claims the finger interfaces,
+# so it must stay active across an arm-controller switch.
+_EXCLUSIVE_CONTROLLER_ROLES = ('hold', 'direct_joint', 'direct_task',
+                               'moveit_trajectory', 'vla')
+
+# Prefix of a direct per-controller action server. The registry's action
+# preferences also list robot-scoped MoveIt endpoints
+# (/<robot>/controller_action_server/moveit_joint), which are not controllers;
+# they do not carry this prefix, so matching on it selects exactly the
+# controller-backed endpoints.
+_DIRECT_ACTION_PREFIX = f'{ACTION_SERVER_NAMESPACE}/'
+
+
+def exclusive_arm_controllers(robot_config=None) -> List[str]:
+    """
+    Arm controllers that must be deactivated when one of them is activated.
+
+    They all claim the same arm command interfaces, so at most one may be
+    active at a time. A switch that activates one must deactivate every other
+    one, regardless of which was running before, so that re-runs after a
+    failure (memory Sequence + OneShot re-tick) don't leave a conflicting
+    controller active.
+
+    ``robot_config`` is the dict returned by :func:`load_robot_config`. Without
+    it the historical Franka-only names are returned, so a call site that has
+    no robot config keeps its exact previous behaviour. With it the names come
+    from the canonical cho_robot_config registry - the arm controller roles plus
+    the direct controller action endpoints of the loaded profile, which is what
+    makes a bimanual (``left_`` / ``right_`` prefixed) profile come out right.
+    The gripper is never included: it claims a separate interface.
+    """
+    names = []
+
+    def add(controller):
+        if controller is None:
+            return
+        value = controller_name_value(controller)
+        if value and value not in names:
+            names.append(value)
+
+    if robot_config is None:
+        for controller in EXCLUSIVE_ARM_CONTROLLERS:
+            add(controller)
+        return names
+
+    robot_type = robot_config.get('robot_type')
+    profile = robot_config.get('profile', 'single')
+
+    # The compatibility view a tree already holds: it carries the
+    # compatibility.task_manager overrides, which the raw roles do not.
+    for role in ('joint_space', 'task_space', 'vla'):
+        add(robot_config.get(role))
+
+    try:
+        registry = load_registry_config(robot_type, profile)
+    except (ValueError, KeyError):
+        registry = None
+    if registry is not None:
+        controllers = registry.get('controllers', {})
+        for role in _EXCLUSIVE_CONTROLLER_ROLES:
+            add(controllers.get(role))
+        preferences = registry.get('actions', {}).get('preferences', {})
+        # Not 'gripper': those endpoints are backed by the gripper controller.
+        for space in ('joint', 'task'):
+            for action_name in preferences.get(space, []):
+                if action_name.startswith(_DIRECT_ACTION_PREFIX):
+                    add(action_name[len(_DIRECT_ACTION_PREFIX):])
+
+    if robot_type == 'franka':
+        # The Franka trees also drive controllers that are not registry roles
+        # (joint/task impedance, operational space, gravity compensation).
+        # Dropping them would regress the idempotency this set exists for.
+        for controller in EXCLUSIVE_ARM_CONTROLLERS:
+            add(controller)
+
+    gripper = robot_config.get('gripper')
+    if gripper is not None:
+        gripper = controller_name_value(gripper)
+        names = [name for name in names if name != gripper]
+    return names
 
 
 def controller_action_name(controller):

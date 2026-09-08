@@ -39,6 +39,10 @@ def create_openarm_controller_check_torque_tree(robot_config):
         SwitchControllerServiceBehavior(
             name=f'Switch_{controller}',
             activate=[controller],
+            # Without this the exclusive set is the Franka one, which contains
+            # no OpenArm controller at all: nothing that actually holds this
+            # arm's command interfaces would be deactivated.
+            robot_config=robot_config,
         ),
         ListControllersServiceBehavior(
             name='Broadcasters_Active',
