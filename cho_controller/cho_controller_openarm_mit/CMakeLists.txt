@@ -10,6 +10,7 @@ find_package(cho_openarm_mit_core REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_interfaces REQUIRED)
+find_package(cho_vla_core REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -25,12 +26,13 @@ add_library(${PROJECT_NAME} SHARED
   src/bimanual_fjt_controller.cpp
   src/single_arm_fjt_controller.cpp
   src/direct_mit_controller.cpp
-  src/task_space_impedance_mit_controller.cpp)
+  src/task_space_impedance_mit_controller.cpp
+  src/vla_mit_controller.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(${PROJECT_NAME}
-  cho_openarm_mit_core controller_interface control_msgs cho_interfaces hardware_interface
+  cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
   std_srvs trajectory_msgs)
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
@@ -86,6 +88,14 @@ if(BUILD_TESTING)
   target_compile_definitions(test_impedance_action_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
+  ament_add_gtest(test_vla_mit_controller test/test_vla_mit_controller.cpp)
+  target_link_libraries(test_vla_mit_controller ${PROJECT_NAME})
+  ament_target_dependencies(test_vla_mit_controller
+    cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
+    rclcpp rclcpp_action cho_interfaces std_srvs)
+  target_compile_definitions(test_vla_mit_controller PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+
   ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
   target_link_libraries(test_task_space_return_to_zero ${PROJECT_NAME})
   ament_target_dependencies(test_task_space_return_to_zero
@@ -107,7 +117,7 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_dependencies(
-  cho_openarm_mit_core controller_interface control_msgs cho_interfaces hardware_interface
+  cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
   std_srvs trajectory_msgs)
 ament_export_include_directories(include)

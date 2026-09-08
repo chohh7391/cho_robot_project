@@ -7,6 +7,7 @@
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>cho_openarm_mit_core</depend>
+  <depend>cho_vla_core</depend>
   <depend>controller_interface</depend>
   <depend>control_msgs</depend>
   <depend>cho_interfaces</depend>

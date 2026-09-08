@@ -18,6 +18,11 @@
       task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
 
+      # Same producer as above with the reference coming from VLA action chunks
+      # instead of a TaskSpace goal. Both action spaces are impedance.
+      vla_mit_controller:
+        type: cho_controller_openarm_mit/VlaMitController
+
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so
       # it stays active alongside whichever arm controller is switched in.
@@ -111,6 +116,95 @@
       kd_null: 1.0
       joint_limit_margin: 0.05
       joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
+
+  # VLA reference source over the same drive-side impedance producer. The gains,
+  # startup ramp and null-space terms mirror task_space_impedance_mit_controller
+  # deliberately: this controller changes only where the reference comes from, so
+  # a difference in the law would confound comparing a VLA rollout against a
+  # TaskSpace goal on the same arm.
+  vla_mit_controller:
+    ros__parameters:
+      arm: single
+      safety_profile_name: mujoco_sim_safe
+      safety_profile_file: ''
+      ee_frame: openarm_hand_tcp
+      drive_side_impedance: true
+      kp: [13.0, 10.0, 32.0, 30.0, 10.0, 10.0, 10.0]
+      kd: [2.75, 2.50, 2.00, 2.00, 0.70, 0.60, 0.50]
+      startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
+      startup_kp: [35.0, 35.0, 30.0, 25.0, 5.0, 5.0, 5.0]
+      startup_kd: [1.75, 1.5, 1.25, 1.25, 0.5, 0.45, 0.4]
+      startup_duration: 5.0
+      startup_tolerance: 0.05
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # Inert under drive_side_impedance (the drive closes the loop with its own
+      # kp), but on_configure validates it as 6 POSITIVE values regardless: it is
+      # the wrench bound of the legacy tau_ff law and of the equivalent-wrench
+      # diagnostic. Mirrors task_space_impedance_mit_controller so the diagnostic
+      # readout means the same thing on both controllers.
+      max_task_wrench: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
+      release_duration: 1.0
+      task_velocity_reference_damping: 0.01
+      use_nullspace_posture: true
+      kp_null: 10.0
+      kd_null: 1.0
+      joint_limit_margin: 0.05
+      joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
+
+      # REQUIRED on this controller, unlike the TaskSpace one which derives a
+      # default. It is the only bound on the impedance torque, because the drive
+      # adds kp*(q_des - q) downstream of torque_limit, and the input driving it
+      # is untrusted policy output.
+      #
+      # 0.15 rad (8.6 deg) uniformly, chosen as min(0.25 * torque_limit / kp,
+      # 0.15): the torque bound alone would allow 1.5 rad on joint 2, which is
+      # not an impedance offset but a lunge. At 0.15 the worst-case impedance
+      # torque is kp * 0.15 = [1.95 1.5 4.8 4.5 1.5 1.5 1.5] N*m, 5-18% of each
+      # motor's peak, leaving the rest of the budget to gravity.
+      max_reference_offset: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
+
+      # 'arrival' places each chunk at the instant it lands. Switch to
+      # 'observation' only once the bridge echoes the stamp of the joint state it
+      # built its observation from -- a bridge wall clock is a different time
+      # domain and would put every waypoint in the wrong epoch.
+      chunk_time_source: arrival
+      chunk_topic: /vla/action/ee_pose
+      # 3x a 15 Hz inference period. A dead policy is caught in 200 ms; a normal
+      # gap is not.
+      stream_timeout_sec: 0.2
+      # Hold that long, then abort the goal. The hold releases the reference to
+      # the measured pose over release_duration; it never requests SAFE, which
+      # would drop the arm into a fixed-gain hold mid-task.
+      hold_timeout_sec: 5.0
+      # Cubic blend into a newly spliced chunk, so a chunk that disagrees with
+      # the one it replaces does not step the reference.
+      # A gap shorter than hold_timeout_sec must not end the rollout: with this
+      # off, kHold only leaves via abort, so two consecutive dropped chunks in a
+      # 15 Hz BEST_EFFORT stream would kill the goal. Found in MuJoCo, not in the
+      # unit tests, which asserted the latching behaviour as designed.
+      resume_on_stream_recovery: true
+      chunk_blend_duration: 0.1
+      # 1.0 = latest chunk wins on overlapping slots. Flow-matching policies are
+      # multimodal, so averaging two chunks lands between modes where neither is
+      # valid; lower this only for ACT-style checkpoints.
+      chunk_aggregate_weight: 1.0
+      # 1.0 disables the input low-pass. Observation-time splicing removes the
+      # boundary lurch this used to mask; raise it (toward 0.2) only for a policy
+      # whose raw output is visibly noisy.
+      chunk_ema_factor: 1.0
+      # The stream watchdog is the real liveness mechanism; a wall-clock goal
+      # budget cannot distinguish a long task from a dead policy.
+      goal_timeout_sec: 0.0
+      telemetry_period_sec: 0.1
+      # Reference-side rate bounds. Joint bounds default to the safety profile's
+      # command velocity when unset, which is the authority.
+      max_task_lin_vel: 0.25
+      max_task_ang_vel: 1.5
+      max_task_lin_acc: 1.0
+      max_joint_ref_acc: [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0]
+      # This producer owns no finger interface. The hand is driven by
+      # cho_controller_gripper, which stays active alongside it.
+      enable_gripper: false
 
   gripper_controller:
     ros__parameters:

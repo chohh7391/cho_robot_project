@@ -316,3 +316,69 @@ def test_bimanual_yaml_exposes_exact_single_arm_plugins_without_pair_controller(
     assert '&' not in serialized
     assert '*mit_' not in serialized
     assert '<<:' not in serialized
+
+
+# ---------------------------------------------------------------------------
+# VLA controller wiring
+# ---------------------------------------------------------------------------
+
+def _controllers_mit(name):
+    import os
+    import yaml
+    path = os.path.join(os.path.dirname(__file__), '..', 'config', name)
+    with open(path, encoding='utf-8') as handle:
+        return yaml.safe_load(handle)['/**']
+
+
+def test_vla_mit_controller_is_registered_and_selectable():
+    root = _controllers_mit('mujoco/controllers_mit.yaml')
+    assert root['controller_manager']['ros__parameters']['vla_mit_controller']['type'] == \
+        'cho_controller_openarm_mit/VlaMitController'
+    assert 'vla_mit_controller' in launch_utils.MIT_DIRECT_CONTROLLERS
+    # It derives from the task-space producer, so it runs the same acknowledged
+    # return-to-zero ramp before its action server becomes available.
+    assert 'vla_mit_controller' in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
+
+
+def test_vla_mit_controller_is_not_offered_on_real_hardware():
+    # The real bringup only offers controllers commissioned on hardware. The real
+    # config carries the block so its parameters can be reviewed, but selecting
+    # it is a separate decision after MuJoCo validation.
+    assert 'vla_mit_controller' not in launch_utils.REAL_MIT_DIRECT_CONTROLLERS
+    root = _controllers_mit('real/controllers_mit.yaml')
+    assert 'vla_mit_controller' in root
+
+
+@pytest.mark.parametrize('config', ['mujoco/controllers_mit.yaml', 'real/controllers_mit.yaml'])
+def test_vla_config_blocks_satisfy_the_controllers_configure_time_requirements(config):
+    """Guard the parameters VlaMitController::on_configure refuses to start without.
+
+    Every one of these was found by the controller rejecting the block, not by
+    reading the code: max_task_wrench is inert under drive_side_impedance yet
+    still validated as six positive values, and the VLA path additionally makes
+    max_reference_offset and stream_timeout_sec mandatory where the TaskSpace
+    controller derives or disables them.
+    """
+    params = _controllers_mit(config)['vla_mit_controller']['ros__parameters']
+
+    wrench = params['max_task_wrench']
+    assert len(wrench) == 6 and all(v > 0.0 for v in wrench)
+
+    # The only bound on kp*(q_des - q), which the drive applies downstream of
+    # torque_limit. Required explicitly here rather than derived.
+    offset = params['max_reference_offset']
+    assert len(offset) == 7 and all(v > 0.0 for v in offset)
+    # And it must actually bound the impedance torque below the motor peak.
+    for kp, limit, bound in zip(params['kp'], params['torque_limit'], offset):
+        assert kp * bound < limit
+
+    # Without a stream watchdog a dead policy holds a mid-motion reference
+    # forever with the drive's full stiffness behind it.
+    assert params['stream_timeout_sec'] > 0.0
+    assert params['hold_timeout_sec'] > 0.0
+
+    # A bridge clock is a different time domain until it echoes the controller's
+    # own stamp, so the default must stay 'arrival'.
+    assert params['chunk_time_source'] == 'arrival'
+    # The real MIT adapter has no finger transport.
+    assert params['enable_gripper'] is False

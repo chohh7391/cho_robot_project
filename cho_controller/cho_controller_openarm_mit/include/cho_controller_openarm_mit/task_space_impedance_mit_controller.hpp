@@ -20,7 +20,16 @@ namespace cho_controller_openarm_mit
 // Cartesian single-arm MIT impedance action controller.  It deliberately
 // remains a direct-controller vertical: MoveIt/FJT owns only paired 14-axis
 // planning.  The base class supplies the one-arm 39-interface MIT protocol.
-class TaskSpaceImpedanceMitController final : public DirectMitControllerBase
+//
+// Not `final`: VlaMitController derives from it to reuse this exact producer --
+// the 39-interface claim, the session/ACK/lease/SAFE protocol, the startup ramp,
+// the drive-side impedance law, the null-space posture, the joint-limit spring
+// and the reference-offset bound -- and replaces only where q_des/dq_des come
+// from. That is the same relationship JointImpedanceMitActionController has to
+// the raw joint producer (see direct_mit_controller.hpp): "differs only in where
+// q_des/dq_des originate". Members are protected rather than private for that
+// reason, and the two extension points are the virtuals below.
+class TaskSpaceImpedanceMitController : public DirectMitControllerBase
 {
 public:
   TaskSpaceImpedanceMitController() : DirectMitControllerBase(DirectMitMode::IMPEDANCE) {}
@@ -29,10 +38,14 @@ public:
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
   controller_interface::return_type update(const rclcpp::Time &, const rclcpp::Duration &) override;
 
-private:
+protected:
   friend struct TaskSpaceImpedanceMitControllerTestAccess;
   bool uses_raw_topic() const override {return false;}
   bool supports_return_to_zero() const override {return true;}
+  // Whether on_configure creates the cho_interfaces/TaskSpace action server and
+  // its diagnostics service. A derived controller that owns a different goal API
+  // turns this off, so two servers can never both drive the same 39 interfaces.
+  virtual bool uses_task_space_action() const {return true;}
   using Action = cho_interfaces::action::TaskSpace;
   using GoalHandle = rclcpp_action::ServerGoalHandle<Action>;
   using Vector6 = Eigen::Matrix<double, 6, 1>;
@@ -55,7 +68,12 @@ private:
   void non_rt_tick();
   void finish(std::uint64_t id, Terminal terminal);
   void abort_active();
-  bool write_task_target(double control_time, double dt, DirectMitTarget & target);
+  // The single reference source for Cartesian control. update() calls it once
+  // per ACTIVE cycle that is not a startup ramp, and everything downstream (the
+  // MIT tuple mapping, gain ramping, position clamping, the protocol write) is
+  // shared. Overriding this is how a derived controller changes where the
+  // reference comes from without touching the drive-side law or the protocol.
+  virtual bool write_task_target(double control_time, double dt, DirectMitTarget & target);
   bool write_cartesian_torque_target(
     const pinocchio::SE3 & desired,
     const Vector6 & desired_twist,

@@ -503,6 +503,10 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
     }
   }
   if (!configure_task_model()) return CallbackReturn::ERROR;
+  // A derived controller with its own goal API skips only the server, timer and
+  // diagnostics service; everything after this block (notably the dead-parameter
+  // warning, which applies to any law running drive-side impedance) still runs.
+  if (uses_task_space_action()) {
   const auto action_name = std::string("/controller_action_server/") + get_node()->get_name();
   task_server_ = rclcpp_action::create_server<Action>(get_node(), action_name,
     std::bind(&TaskSpaceImpedanceMitController::goal_callback, this, std::placeholders::_1, std::placeholders::_2),
@@ -523,6 +527,7 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
       for (std::size_t i = 0; i < 7; ++i) {if (i) out << ','; out << task_q_reference_observed_[i].load();}
       out << "]"; response->success = true; response->message = out.str();
     });
+  }
   // Dead-parameter warning, last so it is the final thing configure says.
   //
   // Both shipped configs enable drive_side_impedance AND carry populated

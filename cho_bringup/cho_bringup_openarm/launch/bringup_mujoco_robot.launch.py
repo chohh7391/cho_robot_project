@@ -69,6 +69,7 @@ def generate_launch_description():
             choices=['joint_position_mit_controller',
                      'joint_impedance_mit_controller',
                      'task_space_impedance_mit_controller',
+                     'vla_mit_controller',
                      'single_arm_follow_joint_trajectory_mit_controller',
                      'bimanual_follow_joint_trajectory_mit_controller'],
             description='MIT producer for the opt-in prototype. The single-arm FJT '

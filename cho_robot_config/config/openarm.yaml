@@ -23,7 +23,10 @@ controllers:
   # bringup with hand:=true. The real MIT adapter has no finger transport yet,
   # so a real bringup exposes no gripper action.
   gripper: gripper_controller
-  vla: null
+  # cho_controller_openarm_mit/VlaMitController. Selected only on the MuJoCo MIT
+  # prototype path (mit_controller_name:=vla_mit_controller); the real bringup
+  # does not offer it yet, and the non-MIT bringups have no VLA controller at all.
+  vla: vla_mit_controller
 compatibility:
   # The behavior-tree task manager still selects the legacy effort controller.
   task_manager:
@@ -41,6 +44,7 @@ actions:
     joint: [/openarm/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller, /controller_action_server/joint_impedance_mit_controller]
     task: [/openarm/controller_action_server/moveit_task, /controller_action_server/task_space_impedance_mit_controller]
     gripper: [/controller_action_server/gripper_controller]
+    vla: [/controller_action_server/vla_mit_controller]
 poses:
   home:
     '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]

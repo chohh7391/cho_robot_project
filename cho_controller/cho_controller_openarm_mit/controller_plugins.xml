@@ -18,6 +18,11 @@
   <class name="cho_controller_openarm_mit/TaskSpaceImpedanceMitController" type="cho_controller_openarm_mit::TaskSpaceImpedanceMitController" base_class_type="controller_interface::ControllerInterface">
     <description>Single-arm Cartesian impedance with cho_interfaces/TaskSpace action and MIT tuple output.</description>
   </class>
+  <class name="cho_controller_openarm_mit/VlaMitController"
+         type="cho_controller_openarm_mit::VlaMitController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>VLA action-chunk reference source over the single-arm MIT drive-side impedance producer. Both joint and task action spaces are impedance.</description>
+  </class>
   <class name="cho_controller_openarm_mit/DirectTorqueMitController" type="cho_controller_openarm_mit::DirectTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>
   <class name="cho_controller_openarm_mit/DampedTorqueMitController" type="cho_controller_openarm_mit::DampedTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>
   <class name="cho_controller_openarm_mit/CompensatedTorqueMitController" type="cho_controller_openarm_mit::CompensatedTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>

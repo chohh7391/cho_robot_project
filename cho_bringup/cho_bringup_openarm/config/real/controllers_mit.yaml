@@ -19,6 +19,11 @@
       task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
 
+      # Same producer as above with the reference coming from VLA action chunks
+      # instead of a TaskSpace goal. Both action spaces are impedance.
+      vla_mit_controller:
+        type: cho_controller_openarm_mit/VlaMitController
+
       # Spawned only with hand:=true. It claims the finger's position and
       # max_effort interfaces, which no arm controller touches, so it stays
       # active across arm controller switches. The gripper is outside the MIT
@@ -210,6 +215,73 @@
       # at that posture and contribute exactly zero. Revisit joint 4 once the
       # idle hold is characterized on hardware.
       joint_limit_stiffness: [5.0, 5.0, 5.0, 0.0, 2.0, 2.0, 2.0]
+
+  # VLA reference source over the same drive-side impedance producer; see the
+  # mujoco config for the rationale behind each VLA key. Gains, friction and
+  # gravity terms mirror task_space_impedance_mit_controller so a VLA rollout and
+  # a TaskSpace goal are comparable on the same arm.
+  #
+  # NOT selectable from the real bringup yet: launch_utils keeps
+  # REAL_MIT_DIRECT_CONTROLLERS to the two commissioned controllers, so this
+  # block exists to be reviewed and to be ready, not to be run. Commission it in
+  # MuJoCo first.
+  vla_mit_controller:
+    ros__parameters:
+      arm: single
+      safety_backend: real
+      safety_profile_name: real_conservative_commissioning
+      safety_profile_file: ''
+      ee_frame: openarm_hand_tcp
+      drive_side_impedance: true
+      kp: [32.0, 30.0, 50.0, 49.0, 15.0, 10.0, 5.0]
+      kd: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
+      startup_kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
+      startup_kd: [1.00, 1.00, 0.80, 0.80, 0.30, 0.25, 0.20]
+      torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+      # Inert under drive_side_impedance (the drive closes the loop with its own
+      # kp), but on_configure validates it as 6 POSITIVE values regardless: it is
+      # the wrench bound of the legacy tau_ff law and of the equivalent-wrench
+      # diagnostic. Mirrors task_space_impedance_mit_controller so the diagnostic
+      # readout means the same thing on both controllers.
+      max_task_wrench: [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
+      release_duration: 1.0
+      task_velocity_reference_damping: 0.01
+      use_nullspace_posture: true
+      kp_null: 5.0
+      kd_null: 0.5
+      joint_limit_margin: 0.05
+      joint_limit_stiffness: [5.0, 5.0, 5.0, 0.0, 2.0, 2.0, 2.0]
+
+      # min(0.25 * torque_limit / kp, 0.15), as in the sim config. The real kp is
+      # far stiffer, so the torque bound binds on every joint except the wrist:
+      # kp * offset = [2.5 2.5 3.4 3.4 1.1 0.75 0.375] N*m. Deliberately tighter
+      # than the derived default (0.5 * torque_limit / kp), which would allow
+      # 0.625 rad on joint 1 driven by untrusted policy output.
+      max_reference_offset: [0.078, 0.083, 0.068, 0.069, 0.075, 0.15, 0.15]
+
+      chunk_time_source: arrival
+      chunk_topic: /vla/action/ee_pose
+      stream_timeout_sec: 0.2
+      hold_timeout_sec: 3.0
+      # A gap shorter than hold_timeout_sec must not end the rollout: with this
+      # off, kHold only leaves via abort, so two consecutive dropped chunks in a
+      # 15 Hz BEST_EFFORT stream would kill the goal. Found in MuJoCo, not in the
+      # unit tests, which asserted the latching behaviour as designed.
+      resume_on_stream_recovery: true
+      chunk_blend_duration: 0.2
+      chunk_aggregate_weight: 1.0
+      chunk_ema_factor: 1.0
+      goal_timeout_sec: 0.0
+      telemetry_period_sec: 0.1
+      # Half the sim values: this is a commissioning envelope, not a performance
+      # target, and the reference limiter is the only thing bounding how fast a
+      # policy may ask the arm to move.
+      max_task_lin_vel: 0.10
+      max_task_ang_vel: 0.5
+      max_task_lin_acc: 0.4
+      max_joint_ref_acc: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      # The real MIT adapter has no finger transport.
+      enable_gripper: false
 
   gripper_controller:
     ros__parameters:

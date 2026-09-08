@@ -64,9 +64,15 @@ MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_position_mit_controller',
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
+    'vla_mit_controller',
 })
 MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
 MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
+# vla_mit_controller is deliberately absent: the real bringup only offers
+# controllers that have been commissioned on hardware, and a policy-driven
+# reference has not been. config/real/controllers_mit.yaml carries its block so
+# the parameters can be reviewed, but selecting it here is a separate decision
+# after MuJoCo validation.
 REAL_MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
@@ -77,6 +83,9 @@ REAL_MIT_DIRECT_CONTROLLERS = frozenset({
 RETURN_TO_ZERO_MIT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
+    # Derives from the task-space producer, so it runs the same acknowledged
+    # return-to-zero ramp before its action server becomes available.
+    'vla_mit_controller',
 })
 
 
