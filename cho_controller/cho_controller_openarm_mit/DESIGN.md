@@ -70,6 +70,16 @@ torque**: `torque_limit` clamps the effort field alone, and the drive adds `kp*(
 downstream of anything this controller can clamp. Unset, it derives as `0.5 * torque_limit / kp`, so
 tracking error can claim at most half the torque budget and gravity keeps the rest.
 
+`kp_task`, `kd_task` and `max_task_wrench` apply **only when `drive_side_impedance: false`**. They are
+the `Kx`, `Dx` and wrench bound of the legacy law below; under the default drive-side law they never
+reach the commanded torque, and `kp_task`/`kd_task` survive there only inside the diagnostic that
+back-computes an equivalent wrench so `peak_wrench` keeps one meaning across both laws. Both shipped
+configs enable `drive_side_impedance` and still carry populated `kp_task`/`kd_task`, so `on_configure`
+emits a warning naming the three inert keys rather than failing, and a runtime `kp_task`/`kd_task` set
+is **rejected** while the mode is on: an accepted set that does nothing is invisible, a rejected one is
+not. The Cartesian stiffness in that mode is the per-joint drive `kp` (only `diag(J^T Kx J)` is
+representable per joint), bounded by `max_reference_offset`.
+
 `drive_side_impedance: false` restores the historical law, `tau_ff = J^T(Kx*e + Dx*(v_des - J*dq)) +
 tau_null + tau_limit + nle` with measured `q_des` and zero joint `kp`, which closes the Cartesian loop
 across a 200 Hz controller cycle plus CAN transport. It is kept as a fallback and is covered by
@@ -93,6 +103,13 @@ The 7-DoF arm under a 6-DoF task has a one-dimensional null space. With `use_nul
 controller adds the dynamically consistent posture term
 `tau_null = (I - J^T Jbar^T) M (kp_null (q_ref - q) - kd_null dq)`, `Jbar^T = Lambda J M^-1`, using the
 same constrained seven-axis mass matrix and regularized `Lambda` as the optional inertia weighting.
+That `M` comes from `crba()` on the `robot_description` model, so it is link inertia only unless
+`rotor_inertia` (7 values, kg m^2, default empty) is set: URDF cannot express a rotor, and the Damiao
+rotors are large here — 0.16 kg m^2 on joints 3 and 4, roughly fifteen times the link inertia. It
+enters `Model::armature` and therefore the mass matrix alone; `nonLinearEffects()` and hence `tau_ff`
+are unchanged, while `Lambda`, the null-space projector and `tau_null` all move, the posture torque by
+more than an order of magnitude on joints 3 and 4. No config sets it, and `kp_null`/`kd_null` must be
+re-checked before one does.
 `q_ref` is `nullspace_posture` when given, otherwise the joint configuration latched when Cartesian
 control begins. A one-sided spring `joint_limit_stiffness` acts only inside `joint_limit_margin` of the
 profile position window, on measured `q`, because the profile window itself validates only `q_des`,

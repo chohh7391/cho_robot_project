@@ -161,10 +161,18 @@ private:
     std::array<double, 7> & nle);
   static bool finite_pose(const Action::Goal & goal);
 
-  // kp_task/kd_task are runtime-settable so a gain sweep costs one parameter
-  // set instead of a relaunch, which would re-home the arm between every
-  // point. wrench_limit_ deliberately stays configure-time: it is the last
-  // bound on how hard the arm can push and must not be raisable mid-session.
+  // All three apply ONLY under drive_side_impedance == false. In the default
+  // drive-side mode the Cartesian error rides q_des and the drive's own kp
+  // closes the loop, so these are read only by the legacy branch of
+  // write_cartesian_torque_target() and by the equivalent-wrench diagnostic;
+  // on_configure warns about that and the parameter callback rejects a runtime
+  // kp_task/kd_task set outright.
+  //
+  // In the legacy mode kp_task/kd_task are runtime-settable so a gain sweep
+  // costs one parameter set instead of a relaunch, which would re-home the arm
+  // between every point. wrench_limit_ deliberately stays configure-time: it is
+  // the last bound on how hard the arm can push and must not be raisable
+  // mid-session.
   std::array<std::atomic<double>, 6> kp_task_, kd_task_;
   std::array<double, 6> wrench_limit_{};
   // Where the impedance is evaluated.  True puts it in the MIT drive: the

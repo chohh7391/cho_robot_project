@@ -384,6 +384,26 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
           gravity_scale_.store(value, std::memory_order_release);
           RCLCPP_INFO(get_node()->get_logger(), "gravity_scale set to %g", value);
         } else if (parameter.get_name() == "kp_task" || parameter.get_name() == "kd_task") {
+          if (drive_side_impedance_) {
+            // Reject rather than accept-and-ignore. Under drive-side impedance
+            // write_cartesian_torque_target() puts the Cartesian error on q_des
+            // and the drive's own kp closes the loop; kp_task/kd_task are read
+            // only by the legacy branch and by the diagnostic that back-computes
+            // an equivalent wrench. Storing the value would succeed, publish,
+            // and change nothing - which is exactly the failure that costs an
+            // operator a whole tuning session to notice. A rejected set is
+            // visible immediately.
+            result.successful = false;
+            result.reason = parameter.get_name() +
+              " is inert while drive_side_impedance is true: the Cartesian error is applied as a "
+              "joint reference offset (q_des) and the drive closes the impedance in its own "
+              "current loop, so this parameter never reaches the commanded torque. The effective "
+              "knobs in this mode are the per-joint kp - which IS the Cartesian stiffness, only "
+              "diag(J^T Kx J) being representable per joint - and max_reference_offset, which "
+              "bounds it. Reconfigure with drive_side_impedance: false to use the "
+              "J^T (Kx e + Dx (v_des - J dq)) law that kp_task/kd_task drive.";
+            break;
+          }
           const bool is_kp = parameter.get_name() == "kp_task";
           const auto values = parameter.as_double_array();
           if (!valid_task_gain(values, is_kp ? 500.0 : 200.0)) {
@@ -420,7 +440,11 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
     "null-space posture %s (kp_null=%g, kd_null=%g, reference %s); joint-limit spring margin %g rad; "
     "release blend %g s; gravity_scale %g; only the model feed-forward is rate-limited",
     task_inertia_weighting_ ? "Lambda-weighted operational space" : "plain Jacobian transpose",
-    task_inertia_weighting_ ? "acceleration gains 1/s^2 and 1/s" : "N/m and N*s/m (runtime-settable)",
+    // Only honest to call them runtime-settable in the mode that reads them:
+    // under drive_side_impedance the parameter callback rejects the set.
+    drive_side_impedance_ ? "INERT under drive_side_impedance: true" :
+    (task_inertia_weighting_ ? "acceleration gains 1/s^2 and 1/s (runtime-settable)" :
+    "N/m and N*s/m (runtime-settable)"),
     task_velocity_reference_damping_,
     use_nullspace_posture_ ? "enabled" : "disabled", kp_null_, kd_null_,
     nullspace_posture_explicit_ ? "explicit" : "latched at Cartesian entry",
@@ -499,6 +523,34 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
       for (std::size_t i = 0; i < 7; ++i) {if (i) out << ','; out << task_q_reference_observed_[i].load();}
       out << "]"; response->success = true; response->message = out.str();
     });
+  // Dead-parameter warning, last so it is the final thing configure says.
+  //
+  // Both shipped configs enable drive_side_impedance AND carry populated
+  // kp_task/kd_task (the real YAML keeps a long staged tuning history for
+  // kp_task), so this cannot be an error without making them fail to configure.
+  // It is a warning that names the inert keys explicitly, because the failure
+  // mode is silence: an operator sweeps kp_task, sees the arm not respond, and
+  // concludes the arm is stiff rather than that the knob is disconnected.
+  if (drive_side_impedance_) {
+    const auto nonzero = [](const std::vector<double> & v) {
+        return std::any_of(v.begin(), v.end(), [](double x) {return x != 0.0;});
+      };
+    if (nonzero(kp) || nonzero(kd)) {
+      RCLCPP_WARN(get_node()->get_logger(),
+        "kp_task, kd_task and max_task_wrench have NO EFFECT on the commanded torque while "
+        "drive_side_impedance is true: the Cartesian error is applied as a joint reference offset "
+        "(q_des = q + J^+ e) and the drive closes the impedance with its own gains, so these three "
+        "are read only by the drive_side_impedance: false law (kp_task/kd_task additionally feed "
+        "the diagnostic equivalent-wrench readout). What sets the Cartesian stiffness in this mode "
+        "is the per-joint kp = [%g %g %g %g %g %g %g], of which only diag(J^T Kx J) is "
+        "representable per joint, bounded by max_reference_offset = "
+        "[%g %g %g %g %g %g %g] rad. Tune those, or set drive_side_impedance: false.",
+        kp_[0], kp_[1], kp_[2], kp_[3], kp_[4], kp_[5], kp_[6],
+        reference_offset_limit_[0], reference_offset_limit_[1], reference_offset_limit_[2],
+        reference_offset_limit_[3], reference_offset_limit_[4], reference_offset_limit_[5],
+        reference_offset_limit_[6]);
+    }
+  }
   return CallbackReturn::SUCCESS;
 }
 

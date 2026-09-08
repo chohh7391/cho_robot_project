@@ -1,7 +1,10 @@
 #include <atomic>
 #include <chrono>
 #include <sstream>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <controller_manager/controller_manager.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
@@ -9,6 +12,7 @@
 #include <hardware_interface/resource_manager.hpp>
 
 #include <cho_openarm_mit_core/mit_protocol.hpp>
+#include <pinocchio/algorithm/crba.hpp>
 
 #include "cho_controller_openarm_mit/task_space_impedance_mit_controller.hpp"
 
@@ -63,6 +67,27 @@ struct TaskSpaceImpedanceMitControllerTestAccess
   static bool drive_side_impedance(const TaskSpaceImpedanceMitController & controller)
   {
     return controller.drive_side_impedance_;
+  }
+  static double kp_task(const TaskSpaceImpedanceMitController & controller,
+    const std::size_t axis)
+  {
+    return controller.kp_task_[axis].load(std::memory_order_acquire);
+  }
+  // The rotor inertia the model actually carries, read at the joint's own
+  // Pinocchio velocity index rather than at 0..6: the description also holds
+  // the two finger joints, so the arm's indices are not the leading ones.
+  static double model_armature(const TaskSpaceImpedanceMitController & controller,
+    const std::size_t joint)
+  {
+    return controller.action_model_->armature(controller.action_v_indices_[joint]);
+  }
+  static double model_mass_diagonal(TaskSpaceImpedanceMitController & controller,
+    const std::size_t joint)
+  {
+    pinocchio::crba(
+      *controller.action_model_, *controller.action_model_data_, controller.action_model_q_);
+    return controller.action_model_data_->M(
+      controller.action_v_indices_[joint], controller.action_v_indices_[joint]);
   }
   static void friction(
     const TaskSpaceImpedanceMitController & controller,
@@ -417,16 +442,35 @@ protected:
     set("startup_duration", 0.30); set("startup_tolerance", 0.05); set("return_to_zero", true); set("return_to_zero_duration", 0.30); set("return_to_zero_tolerance", 0.05);
     set("release_duration", 0.3);
     ASSERT_EQ(manager_->configure_controller("task_space_impedance_mit_controller"), controller_interface::return_type::OK);
-    running_ = true; worker_ = std::thread([this] {while (running_) {const auto now = manager_->now(); const auto period = rclcpp::Duration::from_seconds(0.001); manager_->read(now, period); manager_->update(now, period); manager_->write(now, period); std::this_thread::sleep_for(std::chrono::milliseconds(1));}});
+    running_ = true; worker_ = std::thread([this] {while (running_) {const auto now = manager_->now(); const auto period = rclcpp::Duration::from_seconds(0.001); manager_->read(now, period); manager_->update(now, period); manager_->write(now, period); update_count_.fetch_add(1, std::memory_order_release); std::this_thread::sleep_for(std::chrono::milliseconds(1));}});
     ASSERT_EQ(manager_->switch_controller({"task_space_impedance_mit_controller"}, {}, controller_manager_msgs::srv::SwitchController::Request::STRICT), controller_interface::return_type::OK);
   }
   void TearDown() override {running_ = false; if (worker_.joinable()) worker_.join();}
   void stop_control_loop() {running_ = false; if (worker_.joinable()) worker_.join();}
-  void cycle(int count) {for (int i = 0; i < count; ++i) {executor_->spin_some(); std::this_thread::sleep_for(std::chrono::milliseconds(1));}}
+  // `count` CONTROL CYCLES, not `count` milliseconds. The startup ramp, the
+  // gain handoff, the release blend and the goal deadlines waited on here all
+  // advance once per update(), which the worker thread drives independently of
+  // this thread, so a millisecond sleep only approximates a control cycle and
+  // the ratio moves with machine load. Bounded, and degrading to the old sleep
+  // once stop_control_loop() has joined the worker, so a stall shows up as the
+  // caller's failed assertion rather than as a hung test.
+  void cycle(int count) {
+    if (count <= 0) return;
+    if (!running_) {for (int i = 0; i < count; ++i) {executor_->spin_some(); std::this_thread::sleep_for(std::chrono::milliseconds(1));} return;}
+    const auto target = update_count_.load(std::memory_order_acquire) + static_cast<unsigned long long>(count);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000 + 20 * count);
+    while (update_count_.load(std::memory_order_acquire) < target) {
+      executor_->spin_some();
+      if (std::chrono::steady_clock::now() > deadline) return;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::shared_ptr<controller_manager::ControllerManager> manager_;
   std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceMitController> controller_;
   std::atomic<bool> running_{false}; std::thread worker_;
+  // Completed control cycles, published by the worker thread for cycle().
+  std::atomic<unsigned long long> update_count_{0};
 };
 
 TEST_F(Fixture, EmittedJointReferenceIsClampedIntoTheProfilePositionWindow)
@@ -612,6 +656,183 @@ TEST_F(ConfigureFixture, DriveSideImpedanceRefusesGainsItCannotPushAgainst)
     controller_interface::return_type::OK);
 }
 
+TEST_F(ConfigureFixture, RotorInertiaIsOptInValidatedAndLandsOnTheModelMassMatrix)
+{
+  // URDF cannot express rotor inertia, so without this the controller's M(q) is
+  // link inertia only - while the real YAML's kp was sized from crba() + rotor.
+  // Default-off, so every shipped config keeps the model it has today.
+  int instance = 0;
+  const auto configure = [&](const std::vector<double> & rotor_inertia, bool declare) {
+      auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
+      auto manager = std::make_shared<controller_manager::ControllerManager>(
+        std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true), executor,
+        "rotor_controller_manager_" + std::to_string(instance),
+        "/task_zero_rotor_test_" + std::to_string(instance));
+      ++instance;
+      auto controller =
+        std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+      const auto name = "rotor_regression_" + std::to_string(instance);
+      EXPECT_TRUE(manager->add_controller(
+        controller, name, "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+      const auto set = [&](const char * key, const auto & value) {
+          EXPECT_TRUE(controller->get_node()->set_parameter(
+            rclcpp::Parameter(key, value)).successful) << key;
+        };
+      set("arm", "right");
+      set("safety_backend", "real");
+      set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE);
+      set("safety_profile_name", "real_conservative_commissioning");
+      set("robot_description", bimanual_model_urdf());
+      set("ee_frame", "openarm_right_hand_tcp");
+      set("kp", std::vector<double>{32.0, 30.0, 50.0, 49.0, 10.0, 10.0, 5.0});
+      set("kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
+      set("torque_limit", std::vector<double>{40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0});
+      set("max_task_wrench", std::vector<double>{8.0, 8.0, 8.0, 1.0, 1.0, 1.0});
+      set("return_to_zero", false);
+      if (declare) set("rotor_inertia", rotor_inertia);
+      const auto status = manager->configure_controller(name);
+      return std::make_pair(status, controller);
+    };
+
+  // Default: no parameter, so the model is exactly what the URDF built.
+  {
+    const auto [status, controller] = configure({}, false);
+    ASSERT_EQ(status, controller_interface::return_type::OK);
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      EXPECT_DOUBLE_EQ(
+        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_armature(
+          *controller, joint), 0.0) << "joint " << joint + 1;
+    }
+  }
+  // The Isaac profile's Damiao values. On joints 3 and 4 the DM4340's
+  // 0.16 kg m^2 is the dominant term, which is the whole point.
+  const std::vector<double> damiao{0.0081, 0.0081, 0.1600, 0.1600, 0.0100, 0.0100, 0.0100};
+  {
+    auto [status, controller] = configure(damiao, true);
+    ASSERT_EQ(status, controller_interface::return_type::OK);
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      EXPECT_DOUBLE_EQ(
+        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_armature(
+          *controller, joint), damiao[joint]) << "joint " << joint + 1;
+    }
+    // The Data must have been rebuilt, or crba would keep reporting the
+    // rotor-free mass matrix while the Model claims otherwise.
+    EXPECT_GT(
+      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_mass_diagonal(
+        *controller, 2), damiao[2]);
+  }
+  // Wrong count and a negative entry are both configure failures: a partially
+  // applied armature would be a silently wrong mass matrix.
+  EXPECT_NE(
+    configure(std::vector<double>(6, 0.01), true).first, controller_interface::return_type::OK);
+  EXPECT_NE(
+    configure({0.0081, 0.0081, 0.16, 0.16, 0.01, 0.01, -0.01}, true).first,
+    controller_interface::return_type::OK);
+}
+
+TEST_F(ConfigureFixture, RuntimeCartesianGainSetIsRejectedWhileTheDriveOwnsTheImpedance)
+{
+  // kp_task/kd_task reach the commanded torque only through the
+  // drive_side_impedance: false branch. Accepting a runtime set under the
+  // default law would publish a new value, change nothing, and let an operator
+  // sweep a disconnected knob for a whole session without a single symptom.
+  // The rejection is the only part of that an operator can actually see.
+  auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
+  auto manager = std::make_shared<controller_manager::ControllerManager>(
+    std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
+    executor, "inert_gain_controller_manager", "/task_zero_inert_gain_test");
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  ASSERT_TRUE(manager->add_controller(
+    controller, "inert_gain_regression",
+    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+  const auto set = [&](const char * name, const auto & value) {
+      ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
+    };
+  set("arm", "right");
+  set("safety_backend", "real");
+  set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE);
+  set("safety_profile_name", "real_conservative_commissioning");
+  set("robot_description", bimanual_model_urdf());
+  set("ee_frame", "openarm_right_hand_tcp");
+  set("kp", std::vector<double>{32.0, 30.0, 50.0, 49.0, 10.0, 10.0, 5.0});
+  set("kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
+  set("torque_limit", std::vector<double>{40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0});
+  // Exactly the shape the real YAML ships: drive-side impedance on, and a
+  // populated kp_task left behind by the pre-redesign tuning history. That must
+  // still configure - hence a warning rather than an error - but must not be
+  // settable at runtime.
+  set("kp_task", std::vector<double>{50.0, 50.0, 50.0, 5.0, 5.0, 5.0});
+  set("kd_task", std::vector<double>{6.32, 6.32, 6.32, 0.45, 0.45, 0.45});
+  set("max_task_wrench", std::vector<double>{8.0, 8.0, 8.0, 1.0, 1.0, 1.0});
+  set("return_to_zero", false);
+  ASSERT_EQ(
+    manager->configure_controller("inert_gain_regression"),
+    controller_interface::return_type::OK);
+  ASSERT_TRUE(
+    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::drive_side_impedance(
+      *controller));
+
+  for (const char * name : {"kp_task", "kd_task"}) {
+    const auto result = controller->get_node()->set_parameter(
+      rclcpp::Parameter(name, std::vector<double>{10.0, 10.0, 10.0, 1.0, 1.0, 1.0}));
+    EXPECT_FALSE(result.successful) << name;
+    // The reason has to point at the knobs that DO work, or the operator learns
+    // only that the parameter is refused and not what to reach for instead.
+    EXPECT_NE(result.reason.find("inert"), std::string::npos) << name << ": " << result.reason;
+    EXPECT_NE(result.reason.find("max_reference_offset"), std::string::npos)
+      << name << ": " << result.reason;
+  }
+  // A rejected set must not have partially landed.
+  EXPECT_DOUBLE_EQ(
+    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::kp_task(*controller, 0),
+    50.0);
+}
+
+TEST_F(ConfigureFixture, RuntimeCartesianGainSetStillWorksUnderTheLegacyLaw)
+{
+  // The mirror of the test above: the reject is conditional on the mode, not a
+  // blanket freeze. A gain sweep is exactly why kp_task is runtime-settable,
+  // and under drive_side_impedance: false it is the live Kx.
+  auto executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
+  auto manager = std::make_shared<controller_manager::ControllerManager>(
+    std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
+    executor, "legacy_gain_controller_manager", "/task_zero_legacy_gain_test");
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  ASSERT_TRUE(manager->add_controller(
+    controller, "legacy_gain_regression",
+    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+  const auto set = [&](const char * name, const auto & value) {
+      ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
+    };
+  set("arm", "right");
+  set("safety_backend", "real");
+  set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE);
+  set("safety_profile_name", "real_conservative_commissioning");
+  set("robot_description", bimanual_model_urdf());
+  set("ee_frame", "openarm_right_hand_tcp");
+  set("drive_side_impedance", false);
+  set("kp", std::vector<double>(7, 0.0));
+  set("kd", std::vector<double>{1.0, 1.0, 0.8, 0.8, 0.3, 0.25, 0.2});
+  set("torque_limit", std::vector<double>{40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0});
+  set("kp_task", std::vector<double>{20.0, 20.0, 20.0, 2.0, 2.0, 2.0});
+  set("kd_task", std::vector<double>{10.0, 10.0, 10.0, 0.6, 0.6, 0.6});
+  set("max_task_wrench", std::vector<double>{10.0, 10.0, 10.0, 1.5, 1.5, 1.5});
+  set("return_to_zero", false);
+  ASSERT_EQ(
+    manager->configure_controller("legacy_gain_regression"),
+    controller_interface::return_type::OK);
+  ASSERT_FALSE(
+    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::drive_side_impedance(
+      *controller));
+
+  const auto result = controller->get_node()->set_parameter(
+    rclcpp::Parameter("kp_task", std::vector<double>{30.0, 30.0, 30.0, 3.0, 3.0, 3.0}));
+  EXPECT_TRUE(result.successful) << result.reason;
+  EXPECT_DOUBLE_EQ(
+    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::kp_task(*controller, 0),
+    30.0);
+}
+
 class OptOutFixture : public ::testing::Test
 {
 protected:
@@ -665,6 +886,7 @@ protected:
         manager_->read(now, period);
         manager_->update(now, period);
         manager_->write(now, period);
+        update_count_.fetch_add(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     });
@@ -681,10 +903,30 @@ protected:
     if (worker_.joinable()) worker_.join();
   }
 
+  // `count` CONTROL CYCLES, not `count` milliseconds; see the same helper on the
+  // fixture above for why. Bounded, degrading to a plain sleep when the worker
+  // is not running.
   void cycle(int count)
   {
-    for (int i = 0; i < count; ++i) {
+    if (count <= 0) {
+      return;
+    }
+    if (!running_) {
+      for (int i = 0; i < count; ++i) {
+        executor_->spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      return;
+    }
+    const auto target = update_count_.load(std::memory_order_acquire) +
+      static_cast<unsigned long long>(count);
+    const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(1000 + 20 * count);
+    while (update_count_.load(std::memory_order_acquire) < target) {
       executor_->spin_some();
+      if (std::chrono::steady_clock::now() > deadline) {
+        return;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
@@ -694,6 +936,8 @@ protected:
   std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceMitController> controller_;
   std::atomic<bool> running_{false};
   std::thread worker_;
+  // Completed control cycles, published by the worker thread for cycle().
+  std::atomic<unsigned long long> update_count_{0};
 };
 
 TEST_F(OptOutFixture, SkipsJointStartupAndHoldsCurrentCartesianPoseWithDriveSideStiffness)
