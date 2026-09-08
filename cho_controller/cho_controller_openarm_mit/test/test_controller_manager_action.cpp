@@ -116,6 +116,9 @@ protected:
         manager->read(now, dt);
         manager->update(now, dt);
         manager->write(now, dt);
+        // Published so cycle() can wait on control cycles rather than on
+        // wall-clock milliseconds; see cycle().
+        update_count.fetch_add(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     });
@@ -161,9 +164,49 @@ protected:
     client_node.reset();
     executor.reset();
   }
+  // Advance `count` CONTROL CYCLES, not `count` milliseconds.
+  //
+  // Everything these tests wait on - gain ramps, lease refresh and its stale
+  // threshold, trajectory progress, the SAFE handshake - advances once per
+  // controller_manager update(), and update() is called by the control thread
+  // above, which runs independently of this thread. Sleeping count milliseconds
+  // here coupled the two only loosely, and the ratio of updates to sleeps moves
+  // with machine load, so a checkpoint written as cycle(n) did not reliably mean
+  // n control cycles. That is not a hypothetical: a gain-ramp assertion in
+  // test_impedance_action_controller.cpp sat at 290 accumulated cycles while the
+  // move it waited on needs 300 updates, so it passed only while the control
+  // thread out-paced this one and failed under the load of several test packages
+  // running in parallel.
+  //
+  // Waiting on the control thread's own update counter makes every cycle(n) in
+  // this file mean what its call sites already assumed. The executor is still
+  // spun while waiting, so client futures and action callbacks still resolve.
+  // The wait is bounded at roughly twenty times the nominal duration: if the
+  // control thread is not running at all, cycle() degrades to the sleep it used
+  // to be rather than hanging, and the caller's own assertion is what reports
+  // the problem.
   void cycle(int count = 1) {
-    for (int i = 0; i < count; ++i) {
+    if (count <= 0) {
+      return;
+    }
+    if (!running.load()) {
+      // No control loop yet (cycle() is also called before start_control()).
+      for (int i = 0; i < count; ++i) {
+        executor->spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      return;
+    }
+    const auto target =
+        update_count.load(std::memory_order_acquire) +
+        static_cast<unsigned long long>(count);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(1000 + 20 * count);
+    while (update_count.load(std::memory_order_acquire) < target) {
       executor->spin_some();
+      if (std::chrono::steady_clock::now() > deadline) {
+        return;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
@@ -174,6 +217,8 @@ protected:
       controller;
   rclcpp::Node::SharedPtr client_node;
   std::atomic<bool> running{false};
+  // Completed control cycles, published by the control thread for cycle().
+  std::atomic<unsigned long long> update_count{0};
   std::thread control_thread;
   Action::Goal make_goal(double target, int duration_ms = 1) {
     Action::Goal goal;
@@ -390,7 +435,18 @@ TEST_F(Fixture, OneKilohertzLeaseRefreshPublishesFeedbackAndToleranceAborts) {
   // Keep the trajectory in its path phase long enough that at least one
   // measured sample necessarily observes a nonzero tracking error.
   cycle(5);
-  auto strict = make_goal(0.5, 500);
+  // 0.15 rad on every joint, not 0.5: this goal must be ACCEPTED so that the
+  // 1e-9 path tolerance below is what aborts it. Since the per-mount joint
+  // windows were introduced, 0.5 is outside the LEFT arm's joint 2 window
+  // ([-3.316125, 0.174532] -- the torso rolls that frame, so it is not the
+  // single-arm [-1.745329, 1.745329]) and the goal is correctly rejected at
+  // admission, which made this assertion fail for a reason the test is not
+  // about. make_goal() writes one target to all fourteen joints, so the usable
+  // range is the intersection of both mounts' windows over all seven joints:
+  // [0.0, 0.174532], with joint 4's lower stop and left joint 2's upper stop
+  // binding. Every other make_goal() call in this file already sits inside it
+  // (0.0, 0.05, 0.1). The move stays far larger than a 1e-9 tolerance.
+  auto strict = make_goal(0.15, 500);
   control_msgs::msg::JointTolerance tolerance;
   tolerance.name = strict.trajectory.joint_names.front();
   tolerance.position = 1e-9;

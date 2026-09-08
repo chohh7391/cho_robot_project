@@ -135,6 +135,7 @@ protected:
         const auto now = manager->now();
         const auto period = rclcpp::Duration::from_seconds(0.001);
         manager->read(now, period); manager->update(now, period); manager->write(now, period);
+        update_count.fetch_add(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     });
@@ -154,10 +155,34 @@ protected:
     if (worker.joinable()) worker.join();
     if (executor && client_node) executor->remove_node(client_node);
   }
+  // Advance `count` CONTROL CYCLES, not `count` milliseconds. The gain ramps
+  // and trajectory timings these tests wait on advance once per update(), which
+  // the worker thread above drives independently of this thread, so a
+  // millisecond sleep only approximates a control cycle and the ratio between
+  // them moves with machine load. Bounded at roughly twenty times the nominal
+  // duration, degrading to the old sleep if the worker is not running, so a
+  // stalled loop fails the caller's assertion rather than hanging the test.
   void cycle(int count = 1)
   {
-    for (int i = 0; i < count; ++i) {
+    if (count <= 0) {
+      return;
+    }
+    if (!running.load()) {
+      for (int i = 0; i < count; ++i) {
+        executor->spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      return;
+    }
+    const auto target = update_count.load(std::memory_order_acquire) +
+      static_cast<unsigned long long>(count);
+    const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(1000 + 20 * count);
+    while (update_count.load(std::memory_order_acquire) < target) {
       executor->spin_some();
+      if (std::chrono::steady_clock::now() > deadline) {
+        return;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
@@ -187,6 +212,8 @@ protected:
   std::shared_ptr<cho_controller_openarm_mit::JointImpedanceMitActionController> controller;
   rclcpp::Node::SharedPtr client_node;
   std::atomic<bool> running{false};
+  // Completed control cycles, published by the worker thread for cycle().
+  std::atomic<unsigned long long> update_count{0};
   std::thread worker;
 };
 
@@ -267,25 +294,71 @@ TEST_F(ReturnToZeroFixture, ActionRemainsGatedUntilHighGainsRampDownToNormal)
     return future.get();
   };
 
+  using Access = cho_controller_openarm_mit::DirectMitControllerTestAccess;
+  const auto stiffness = [&] {return Access::stiffness(*controller, 0);};
+  const auto ready = [&] {return Access::action_ready(*controller);};
+
+  // Joint 1's homing gain (the fixture's return_to_zero_kp[0]; mujoco_sim_safe's
+  // kp_max is also 70, so the ramp lands on it rather than being clipped short)
+  // and its task gain (the fixture's kp[0]).
+  constexpr double kHomingKp = 70.0;
+  constexpr double kTaskKp = 5.0;
+
+  // Every wait below polls for the state it is waiting on instead of spending a
+  // fixed cycle() budget.
+  //
+  // cycle() now counts control cycles rather than milliseconds, so a fixed
+  // budget would no longer drift with machine load. The polling is kept anyway,
+  // for two reasons. It does not encode how long a phase takes, so it survives a
+  // change to return_to_zero_duration or to the profile's kp_slew_per_s; and the
+  // fixed budgets this replaced were wrong on their own terms, not just
+  // load-sensitive - the second checkpoint sat at 290 accumulated cycles while
+  // the homing move alone needs return_to_zero_duration / period = 300 updates,
+  // so it could only ever observe a descending gain when the worker thread
+  // out-paced this one. That is what failed under the load of six test packages
+  // in parallel, reading 70 vs 70.
+  const auto wait_for = [&](auto && predicate, const int budget) {
+    for (int i = 0; i < budget && !predicate(); ++i) cycle();
+    return predicate();
+  };
+
   // The initialization trajectory is still running: action admission is closed.
-  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
-  EXPECT_FALSE(send(goal(0.01, 0.10)));
-  cycle(230);
-  const double high = cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0);
-  EXPECT_GT(high, 60.0);
-  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
-
-  // After convergence, gain handoff is still gated and descends continuously.
-  cycle(60);
-  const double descending = cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0);
-  EXPECT_LT(descending, high);
-  EXPECT_GT(descending, 5.0);
-  EXPECT_FALSE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+  EXPECT_FALSE(ready());
   EXPECT_FALSE(send(goal(0.01, 0.10)));
 
-  cycle(250);
-  EXPECT_NEAR(cho_controller_openarm_mit::DirectMitControllerTestAccess::stiffness(*controller, 0), 5.0, 1e-6);
-  EXPECT_TRUE(cho_controller_openarm_mit::DirectMitControllerTestAccess::action_ready(*controller));
+  // kp first ramps UP from the task gain to the homing gain, then holds there
+  // for the rest of the move.
+  ASSERT_TRUE(wait_for([&] {return stiffness() > kHomingKp - 0.1;}, 3000));
+  const double high = stiffness();
+  EXPECT_NEAR(high, kHomingKp, 1e-6);
+  EXPECT_FALSE(ready());
+  EXPECT_FALSE(send(goal(0.01, 0.10)));
+
+  // The move then converges and the handoff ramps kp back down to the task gain,
+  // and only then does admission open. Checking every sample is a stronger
+  // statement than the single mid-ramp reading this replaces: the gain must never
+  // rise again, admission must stay shut for as long as any part of the homing
+  // gain is still applied, and the descent has to be a ramp rather than a step.
+  double previous = high;
+  bool saw_ramp = false;
+  bool opened = false;
+  for (int i = 0; i < 5000 && !opened; ++i) {
+    const double kp = stiffness();
+    EXPECT_LE(kp, previous + 1e-9) << "kp rose again during the handoff";
+    previous = kp;
+    opened = ready();
+    if (opened) {
+      break;
+    }
+    EXPECT_GT(kp, kTaskKp - 1e-6) << "kp fell below the task gain while still gated";
+    if (kp < high - 1e-9) {
+      saw_ramp = true;
+    }
+    cycle();
+  }
+  ASSERT_TRUE(opened) << "action admission never opened after the gain handoff";
+  EXPECT_TRUE(saw_ramp) << "kp stepped from the homing gain to the task gain";
+  EXPECT_NEAR(stiffness(), kTaskKp, 1e-6);
   EXPECT_TRUE(send(goal(0.01, 0.10)));
 }
 

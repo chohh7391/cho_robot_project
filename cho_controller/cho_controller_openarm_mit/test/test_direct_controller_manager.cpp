@@ -93,6 +93,7 @@ public:
         const auto now = manager->now();
         const auto dt = rclcpp::Duration::from_seconds(.001);
         manager->read(now, dt); manager->update(now, dt); manager->write(now, dt);
+        update_count.fetch_add(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     });
@@ -103,7 +104,26 @@ public:
     if (thread.joinable()) thread.join();
     executor->remove_node(node);
   }
-  void cycle(int n = 1) {for (int i = 0; i < n; ++i) {executor->spin_some(); std::this_thread::sleep_for(std::chrono::milliseconds(1));}}
+  // Advance n CONTROL CYCLES, not n milliseconds: the lease/stale counters and
+  // SAFE handshakes these tests wait on advance once per update(), which the
+  // thread above drives independently of this one, so a millisecond sleep only
+  // approximates a control cycle and the ratio moves with machine load. Bounded
+  // so a stopped control loop degrades to the old sleep instead of hanging.
+  void cycle(int n = 1)
+  {
+    if (n <= 0) return;
+    if (!running) {
+      for (int i = 0; i < n; ++i) {executor->spin_some(); std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+      return;
+    }
+    const auto target = update_count.load(std::memory_order_acquire) + static_cast<unsigned long long>(n);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000 + 20 * n);
+    while (update_count.load(std::memory_order_acquire) < target) {
+      executor->spin_some();
+      if (std::chrono::steady_clock::now() > deadline) return;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
   void add(const std::string & name, const std::string & type, const std::string & side,
     double kp = 5.0, double kd = 0.4, double torque = 3.0)
   {
@@ -165,6 +185,8 @@ public:
   rclcpp::Node::SharedPtr node;
   std::map<std::string, std::shared_ptr<cho_controller_openarm_mit::DirectMitControllerBase>> controllers;
   std::atomic<bool> running{false};
+  // Completed control cycles, published by the control thread for cycle().
+  std::atomic<unsigned long long> update_count{0};
   std::thread thread;
 };
 
