@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cho_vla_core</name>
+  <version>0.1.0</version>
+  <description>
+    Robot-independent VLA action-chunk pipeline: validation, time-indexed buffering
+    and splicing, reference sampling, reference limiting, and stream watchdog.
+    Deliberately free of ROS: no rclcpp, no message types. Hosts convert their
+    transport into the PODs in types.hpp.
+  </description>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend>
+  <depend>pinocchio</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
