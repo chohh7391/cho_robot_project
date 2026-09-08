@@ -12,8 +12,15 @@
 | `extern/isaac_ros_common` | [NVIDIA-ISAAC-ROS/isaac_ros_common](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common) | `release-3.2`, `fcf4d9e` (shallow) | Apache-2.0 |
 | `extern/nvblox_msgs_src/nvblox_msgs` | [NVIDIA-ISAAC-ROS/isaac_ros_nvblox](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox) | `release-3.2` (sparse checkout, 이 패키지만) | Apache-2.0 |
 
-아직 **git submodule로 등록하지 않았다.** 기존 `extern/`은 서브모듈 방식이고 `.gitmodules`는
-추적 파일이므로, 등록은 별도 결정으로 남긴다. 지금은 untracked 체크아웃이다.
+앞의 셋은 **git submodule로 등록돼 있다**(기존 `extern/` 관례와 동일). 최상위
+`git clone --recursive` 가 함께 받아오고, 아니면
+`git submodule update --init extern/curobo extern/isaac_ros_cumotion extern/isaac_ros_common`.
+
+`nvblox_msgs` 만 예외로 서브모듈이 아니다. `cumotion_planner.py` 가 무조건 import 하는데,
+`isaac_ros_nvblox` 전체 트리는 패키지 10개와 자체 nested submodule 을 들고 오고 그중
+`nvblox_ros` 는 이 프로젝트가 쓰지 않는 nvblox CUDA 라이브러리를 요구한다. 서브모듈로는
+"이 패키지 하나만" 을 표현할 수 없어 sparse checkout 으로 두고 `.gitignore` 에 넣었다.
+절차는 `docs/installation.md`.
 
 ## 라이선스 — 진행 전제
 
@@ -148,18 +155,20 @@ FR5 설정으로 실제 계획까지 확인했다 (`MotionGen` 생성 5.1 s + wa
 
 ## 미해결 — `COLCON_IGNORE` 가 추적되지 않는다
 
-위 §colcon 경계에서 벤더 체크아웃 **안에** `COLCON_IGNORE` 24개를 넣었다. 그 파일들은 각
-서브레포 안에 있고 이 저장소는 벤더 트리를 커밋하지 않으므로(`.gitignore`), **추적되지 않는다.**
+위 §colcon 경계에서 벤더 체크아웃 **안에** `COLCON_IGNORE` 24개를 넣었다. 서브모듈로
+등록해도 이 사정은 그대로다 — 서브모듈은 상류의 커밋 SHA 만 기록하므로, 그 안에 우리가 만든
+파일은 상류를 수정하지 않는 한 담기지 않는다. 즉 **추적되지 않는다.**
 
-결과: 이 저장소를 새로 클론하고 위 레시피대로 벤더 소스만 받은 사람은 `COLCON_IGNORE` 가
-없는 상태가 되고, `cbr`(전체 빌드)이 `curobo_core` 에서 실패한다 — 시스템 python 에 torch 가
-없고 `curobo/` 서브모듈이 비어 있기 때문이다.
+결과: 새로 클론한 사람은 `COLCON_IGNORE` 가 없는 상태가 되고, `cbr`(전체 빌드)이
+`curobo_core` 에서 실패한다 — 시스템 python 에 torch 가 없고 `curobo/` 서브모듈이 비어 있기
+때문이다. `docs/installation.md` §2 가 이 생성 단계를 명시하고 있으므로 절차를 따르면
+막히지 않지만, 잊으면 그대로 실패한다.
 
 **설계 실수다.** 경계는 이 저장소가 소유하는 방식이어야 한다. 후속으로 둘 중 하나:
 
 1. `tools/build_curobo_vendor.sh` — OpenArm 의 `tools/build_openarm_vendor.sh` 와 같은
    allowlist 빌드 스크립트. 벤더 트리를 수정하지 않고 `--packages-select` 로 경계를 강제한다.
-   `extern/README.md` 정책과도 맞는다.
-2. 위 레시피에 `COLCON_IGNORE` 생성 단계를 명시해 사람이 실행하게 한다. 싸지만 잊기 쉽다.
+   `extern/README.md` 정책과도 맞고, `COLCON_IGNORE` 를 아예 없앨 수 있다.
+2. `docs/installation.md` §2 에 생성 단계를 명시한다 — **현재 상태**. 싸지만 잊기 쉽다.
 
 1번이 맞다. 그때 이 절과 §colcon 경계를 함께 정리한다.

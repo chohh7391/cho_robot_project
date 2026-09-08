@@ -13,11 +13,8 @@ log/
 cho_description/*/usd/*
 !cho_description/*/usd/README.md
 
-# cuRobo / cuMotion vendor checkouts (todo/CUROBO_MOVEIT_TODO.md, extern/VENDORED_CUROBO.md).
-# Not submodules yet, and extern/curobo is a 375 MB tree that also holds the
-# editable install's compiled .so files. Obtain them with the recipe in
-# extern/VENDORED_CUROBO.md rather than committing them here.
-/extern/curobo/
-/extern/isaac_ros_cumotion/
-/extern/isaac_ros_common/
+# nvblox_msgs is a sparse checkout, not a submodule: the full isaac_ros_nvblox
+# tree carries ten packages plus its own nested submodules, and nvblox_ros needs
+# the nvblox CUDA library that nothing here uses. Only nvblox_msgs is wanted, and
+# a submodule cannot express that. See docs/installation.md.
 /extern/nvblox_msgs_src/

@@ -75,6 +75,174 @@ Isaac Sim additionally needs the USD asset built once per variant — see
 > Invoking it starts the selected hardware component; see the required
 > commissioning procedure in [OpenArm real bringup](openarm_real_bringup.md).
 
+## cuRobo / cuMotion GPU planning (optional)
+
+Only needed to pass `cumotion:=true` to an FR5 MoveIt entry point (see
+`cho_moveit/README.md`). Nothing else in this repository uses it, and with the
+flag off the stack behaves as if none of this were installed. Skip this whole
+section otherwise.
+
+> cuRobo v0.7.x is under the NVIDIA License with a **non-commercial** use
+> limitation -- research or evaluation only. The Humble path is pinned to it
+> because `isaac_ros_cumotion` release-3.2 imports the v1 API. Details, the
+> pinned SHA and four install traps are in `extern/VENDORED_CUROBO.md`.
+
+Prerequisites: an NVIDIA GPU, and a CUDA toolkit whose version matches the
+PyTorch wheel below. This machine has 12.8 installed alongside a newer default;
+`CUDA_HOME` is set explicitly further down for exactly that reason.
+
+### 1. Vendor sources
+
+Three of them are submodules, so the `git clone --recursive` at the top of this
+guide already fetched them. If you cloned without `--recursive`:
+
+```bash
+cd ~/ros2_ws/src/cho_robot_project
+git submodule update --init extern/curobo extern/isaac_ros_cumotion extern/isaac_ros_common
+```
+
+| Submodule | Pinned at |
+|---|---|
+| `extern/curobo` | tag `v0.7.8` (`d64c4b00…`) -- the last cuRobo v1 release |
+| `extern/isaac_ros_cumotion` | `release-3.2` -- the last branch that supports Humble |
+| `extern/isaac_ros_common` | `release-3.2` |
+
+`nvblox_msgs` is the exception: it is **not** a submodule. `cumotion_planner.py`
+imports it unconditionally, but the full `isaac_ros_nvblox` tree carries ten
+packages plus its own nested submodules, and `nvblox_ros` needs the nvblox CUDA
+library that nothing here uses. A submodule cannot express "this one package",
+so take a sparse checkout:
+
+```bash
+cd ~/ros2_ws/src/cho_robot_project/extern
+mkdir -p nvblox_msgs_src && cd nvblox_msgs_src
+git init -q .
+git remote add origin https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox.git
+git config core.sparseCheckout true
+echo "nvblox_msgs/*" > .git/info/sparse-checkout
+git fetch -q --depth 1 origin release-3.2 && git checkout -q FETCH_HEAD
+```
+
+### 2. colcon boundary -- do not skip this
+
+Those checkouts carry 19 packages this project does not use, and one of them,
+`curobo_core`, **fails** a plain workspace build: it wants torch in the system
+interpreter and its own `curobo/` submodule is empty. `extern/curobo` is worse --
+it has no `package.xml`, so colcon identifies it by `setup.py` and tries to build
+the pip tree.
+
+The boundary is enforced at discovery, and because the vendor trees are
+gitignored these markers are not tracked. Create them:
+
+```bash
+cd ~/ros2_ws/src/cho_robot_project/extern
+NOTE="Excluded: not used by this project. See docs/installation.md."
+
+# The pip source tree is not a colcon package at all.
+echo "$NOTE" > curobo/COLCON_IGNORE
+
+# isaac_ros_common: none of it is built. Its own isaac_ros_common package
+# hard-requires NVIDIA VPI; cho_moveit_curobo_deps supplies the two
+# version-stamping resources the cuMotion packages actually need instead.
+for d in isaac_ros_common/*/; do
+  [ -f "$d/package.xml" ] && echo "$NOTE" > "$d/COLCON_IGNORE"
+done
+
+# isaac_ros_cumotion: keep five packages, exclude the rest.
+KEEP="isaac_ros_cumotion isaac_ros_cumotion_interfaces \
+      isaac_ros_cumotion_python_utils isaac_ros_cumotion_robot_description \
+      isaac_ros_cumotion_moveit"
+for d in isaac_ros_cumotion/*/; do
+  p=$(basename "$d")
+  [ -f "$d/package.xml" ] || continue
+  case " $KEEP " in *" $p "*) continue;; esac
+  echo "$NOTE" > "$d/COLCON_IGNORE"
+done
+```
+
+Verify -- exactly six packages should appear:
+
+```bash
+colcon list --base-paths . | awk '{print $1}' | grep -E 'isaac|curobo|nvblox'
+```
+
+```
+isaac_ros_cumotion
+isaac_ros_cumotion_interfaces
+isaac_ros_cumotion_moveit
+isaac_ros_cumotion_python_utils
+isaac_ros_cumotion_robot_description
+nvblox_msgs
+```
+
+### 3. Python environment
+
+cuRobo runs inside the ROS node, so it needs an interpreter that can import both
+it and `rclpy`. **Python 3.10 is mandatory**: Humble's rclpy ships
+`_rclpy_pybind11.cpython-310-*.so`, which 3.11 and 3.12 cannot load. rclpy comes
+from `/opt/ros/humble` on `PYTHONPATH`, not from the venv.
+
+```bash
+python3.10 -m venv ~/ros2_ws/.venv-curobo
+# Ubuntu 22.04 seeds setuptools 59, which predates PEP 660 and refuses the
+# editable install below.
+~/ros2_ws/.venv-curobo/bin/pip install -U pip wheel "setuptools>=70,<81" setuptools_scm
+~/ros2_ws/.venv-curobo/bin/pip install torch==2.7.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+```
+
+```bash
+cd ~/ros2_ws/src/cho_robot_project/extern/curobo
+# The toolkit must match the wheel's CUDA (12.8), not whatever /usr/local/cuda
+# points at. Pin the architecture rather than relying on GPU autodetection.
+export CUDA_HOME=/usr/local/cuda-12.8
+export PATH="$CUDA_HOME/bin:$PATH"
+export TORCH_CUDA_ARCH_LIST="12.0"    # sm_120 / RTX 50-series; set yours
+export MAX_JOBS=4
+~/ros2_ws/.venv-curobo/bin/pip install -e . --no-build-isolation
+
+# cuRobo 0.7.8 declares no upper bounds, and current warp-lang removed the
+# wp.torch accessor it uses. Pin the combination that works.
+~/ros2_ws/.venv-curobo/bin/pip install "warp-lang==1.10.0" "trimesh==4.9.0"
+```
+
+Check that the kernels were built for your GPU and that they load:
+
+```bash
+for so in src/curobo/curobolib/*.so; do
+  $CUDA_HOME/bin/cuobjdump -lelf "$so" | grep -oE 'sm_[0-9]+' | sort -u
+done
+~/ros2_ws/.venv-curobo/bin/python -c \
+  "import curobo, torch; print(curobo.__version__, torch.cuda.get_device_name(0))"
+```
+
+### 4. Build order
+
+`cho_moveit_curobo_deps` must be built **and sourced** before the cuMotion
+packages: colcon runs `setup.py` during package identification, and
+`isaac_ros_cumotion_python_utils` looks up an `isaac_ros_common` resource at
+import time. One invocation cannot satisfy that.
+
+```bash
+cd ~/ros2_ws
+MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install \
+  --packages-select cho_moveit_curobo_deps nvblox_msgs
+source install/setup.bash
+MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install \
+  --packages-select isaac_ros_cumotion_interfaces isaac_ros_cumotion_python_utils \
+                    isaac_ros_cumotion_robot_description isaac_ros_cumotion \
+                    isaac_ros_cumotion_moveit
+```
+
+After that the normal build below covers everything, and
+
+```bash
+ros2 launch cho_bringup_fr5 bringup_gz_moveit.launch.py cumotion:=true
+```
+
+should log `Planning pipelines: joint=ompl, task=isaac_ros_cumotion` followed by
+`cuMotion is ready for planning queries!`.
+
 ## Build
 
 ```bash
