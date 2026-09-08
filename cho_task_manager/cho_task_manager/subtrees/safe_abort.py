@@ -53,12 +53,32 @@ def safe_abort_subtree(robot_config, control_mode=None, name='Safe_Abort'):
     return seq
 
 
+def watched_mission(mission, monitor, name='Mission_Under_Watch'):
+    """Run *mission* alongside *monitor*, so a trip preempts the motion.
+
+    ``SuccessOnSelected([mission])`` puts the success condition on the mission
+    alone -- the monitor is a watchdog and never succeeds. Either child failing
+    fails the Parallel, and that is what makes this a Parallel rather than a
+    decorator: py_trees then invalidates the sibling branch, so the running
+    action leaf gets terminate(INVALID) and BaseActionBehavior cancels its goal
+    there. Without the cancel the motion would run to completion while the tree
+    had already moved on.
+    """
+    return py_trees.composites.Parallel(
+        name=name,
+        policy=py_trees.common.ParallelPolicy.SuccessOnSelected(children=[mission]),
+        # Monitor first, so a trip is seen on the tick it happens.
+        children=[monitor, mission],
+    )
+
+
 def guarded_mission(
     mission,
     robot_config=None,
     control_mode=None,
     name='OneShot_Root',
     abort=True,
+    monitor=None,
 ):
     """Wrap *mission* in the standard root: safe abort on failure, then OneShot.
 
@@ -66,11 +86,19 @@ def guarded_mission(
     that has no hold controller to switch to (the OpenArm MIT prototype spawns
     only the selected MIT controller and owns its own SAFE stop).
 
+    ``monitor`` adds a watchdog branch beside the mission (see
+    :func:`watched_mission`). A trip fails the mission branch, which the abort
+    then handles like any other failure -- so the arm ends up held, not just
+    stopped.
+
     The abort branch is wrapped so that the root still reports FAILURE:
     ``FailureIsSuccess`` makes the abort best-effort, and ``Inverter`` turns its
     result back into FAILURE. Without the ``Inverter`` a successful abort would
     be reported to the operator as a successful mission.
     """
+    if monitor is not None:
+        mission = watched_mission(mission, monitor)
+
     root_child = mission
     if abort:
         guard = py_trees.composites.Selector(

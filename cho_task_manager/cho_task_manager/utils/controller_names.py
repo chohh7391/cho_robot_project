@@ -225,6 +225,24 @@ def resolve_control_mode(robot_config, default=None) -> str:
     return mode
 
 
+def arm_model(robot_config) -> dict:
+    """Return this profile's joint names and end-effector frame.
+
+    A behaviour that reasons about the arm itself rather than its controllers -
+    joint limits, a Jacobian - needs these, and reading them from the registry
+    keeps a bimanual profile's per-arm joint names and TCP correct.
+    """
+    registry = load_registry_config(
+        robot_config['robot_type'], robot_config.get('profile', 'single'))
+    model = registry['model']
+    return {
+        'joints': list(model['joints']),
+        'ee_link': model['ee_link'],
+        'arm_base_link': model['arm_base_link'],
+        'base_frame': model['base_frame'],
+    }
+
+
 def hold_controllers(robot_config, control_mode) -> List[str]:
     """Controllers that hold this robot's arm in *control_mode*.
 

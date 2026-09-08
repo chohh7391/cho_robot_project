@@ -93,6 +93,97 @@ A target that is unset or the wrong message type fails that one behaviour with a
 log line naming the blackboard path; it does not raise out of the tick. No shipped
 task uses these yet — the trees here all have fixed waypoints.
 
+## Watching the arm while a mission runs
+
+`guarded_mission(..., monitor=...)` adds a watchdog branch beside the mission:
+
+```
+OneShot
+└── Selector                        Mission_Or_Safe_Abort
+    ├── Parallel                    Mission_Under_Watch
+    │   ├── SafetyMonitorBehavior   RUNNING while healthy, FAILURE when tripped
+    │   └── mission
+    └── Inverter(FailureIsSuccess)  Safe_Abort
+```
+
+A trip fails the Parallel, which invalidates the mission branch — py_trees calls
+`terminate(INVALID)` on the running action leaf, and `BaseActionBehavior` cancels
+its goal there, so the motion actually stops. That is why this is a `Parallel`
+and not a decorator: a decorator returning FAILURE would leave the goal running
+on the server. The abort branch then holds the arm, so a trip ends held rather
+than merely stopped.
+
+**These guards are supervisory, not a safety layer.** They tick with the tree, at
+100 ms. They catch a mission heading somewhere wrong; they cannot catch anything
+that develops inside a control cycle. That is still `clip_torque()` /
+`clip_position()` and their `allFinite()` guards at 1 kHz.
+
+### The guards
+
+| argument | trips when | notes |
+| --- | --- | --- |
+| `max_force_n` | ‖F‖ exceeds it | magnitude, so no frame transform is needed |
+| `max_torque_nm` | ‖τ‖ exceeds it | same |
+| `joint_limit_margin_rad` | any monitored joint is closer than this to a URDF limit | joints come from the registry profile |
+| `min_manipulability` | √det(J Jᵀ) drops below it | Yoshikawa's index |
+| `min_singular_value` | σ_min(J) drops below it | same Jacobian, easier to reason about |
+
+Every guard is off unless its threshold is given, and a monitor with no guard
+enabled is refused rather than silently watching nothing. Staleness counts as a
+trip: a sensor that dies mid-mission fails the monitor instead of freezing it at
+its last good sample.
+
+**It is √det(J Jᵀ), not det(J).** `det(J)` does not exist for the 7-DOF arms
+here — J is 6×7. The two agree up to sign when J is square, so this is the same
+number on a UR5e or an FR5 and the defined one on an FR3 or an OpenArm. Both
+indices are computed from the `LOCAL_WORLD_ALIGNED` Jacobian; they are invariant
+against `LOCAL` (the two differ by a block-diagonal rotation) but **not** against
+`WORLD`, whose translation coupling changes the singular values.
+
+### Picking thresholds
+
+They are commissioning values — they depend on the robot, the payload and the
+task, so nothing here has a default. Set `report_period_sec` and read the numbers
+off a known-good run. Measured on the FR3 description at the poses the shipped
+trees already use:
+
+| configuration | √det(J Jᵀ) | σ_min(J) | nearest limit |
+| --- | --- | --- | --- |
+| `pick_place` home | 0.0751 | 0.221 | 0.695 rad (`fr3_joint4`) |
+| `controller_check` pose B | 0.0802 | 0.221 | 0.721 rad |
+| forge default | 0.0803 | 0.138 | 0.948 rad |
+| elbow near straight | 0.0035 | 0.044 | 0.000 rad |
+
+So on this arm `min_manipulability=0.01` sits about 7× below every working pose
+and about 3× above the near-singular one. `min_singular_value=0.08` separates the
+same two cases with a narrower margin, because σ_min varies less between them.
+`joint_limit_margin_rad=0.10` is far from every working pose. Reproduce the table
+for another robot before reusing these.
+
+### Enabling it
+
+```python
+from cho_task_manager.behaviors.topic import SafetyMonitorBehavior
+
+return guarded_mission(
+    mission_sequence, robot_config, CONTROL_MODE,
+    monitor=SafetyMonitorBehavior(
+        name='Safety', robot_config=robot_config,
+        max_force_n=60.0, max_torque_nm=8.0,
+        joint_limit_margin_rad=0.10,
+        min_manipulability=0.01, min_singular_value=0.08,
+        report_period_sec=2.0),
+)
+```
+
+Inputs: `/joint_states`, `/robot_description` (latched, needed for the limits and
+the model) and `/bota_ft_sensor/wrench`. Subscriptions are BEST_EFFORT so they
+match reliable and best-effort publishers alike — the publishers here disagree,
+and a monitor that receives nothing is worse than none.
+
+No shipped task enables it yet: the thresholds above are measured from the
+description, not from a run on the hardware with its actual payload.
+
 ## Franka tasks
 
 | task | what it does | required bringup |

@@ -20,6 +20,11 @@
   <depend>std_srvs</depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-pandas</exec_depend>
+  <!-- SafetyMonitorBehavior's Jacobian guards only. Imported lazily, so a tree
+       that enables no kinematic guard never loads it; the rosdep key is in
+       install_dependencies.bash SKIP_KEYS because libfranka and Pinocchio are
+       pinned together as an ABI pair. -->
+  <exec_depend>pinocchio</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

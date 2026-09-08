@@ -206,6 +206,20 @@ unwritten key, and `getattr(board, key, None)` does **not** absorb it — that
 KeyError escapes `update()` and takes the node down. Use
 `utils/blackboard.read_if_set()`.
 
+`guarded_mission(..., monitor=...)` adds a watchdog branch beside the mission via
+`subtrees/watched_mission()`: `Parallel(SuccessOnSelected([mission]))` with
+`behaviors/topic/safety_monitor.py`'s `SafetyMonitorBehavior`. It must be a
+Parallel, not a decorator — py_trees invalidates the sibling branch on a trip, so
+the running action leaf gets `terminate(INVALID)` and `BaseActionBehavior` cancels
+its goal there; a decorator returning FAILURE would leave the goal running. The
+guards are FT wrench magnitude, joint-limit proximity, and two Jacobian indices —
+`sqrt(det(J Jᵀ))` (Yoshikawa; **not** `det(J)`, which does not exist for the 7-DOF
+arms) and `sigma_min(J)`, both from the `LOCAL_WORLD_ALIGNED` Jacobian, never
+`WORLD`. Every guard is off unless its threshold is given, staleness counts as a
+trip, and thresholds are commissioning values: `report_period_sec` logs the
+measured numbers to set them from. These are supervisory at the 100 ms tick rate,
+not a replacement for the 1 kHz `clip_torque()` / `clip_position()` guards.
+
 Which controller can hold the arm is `control_mode`-dependent — the description
 exports one command interface per joint, so the position hold is not loaded in a
 torque bringup. `cho_robot_config` carries `controllers.hold_by_control_mode` per
