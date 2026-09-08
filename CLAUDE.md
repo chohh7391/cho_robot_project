@@ -141,14 +141,34 @@ and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replac
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 
-**Controllers that advance their own trajectory clock** (`joint_space_position`,
-`joint_space_velocity`, `task_space_velocity`) must take the per-cycle period from
-`nominal_period(period)`, never from `1 / get_update_rate()`. `get_update_rate()`
-returns 0 whenever a controller inherits the controller_manager's rate, which is
-every controller here — no config sets a per-controller `update_rate`. The old
-`: 0.001` fallback was silently correct only at a 1 kHz controller_manager (MuJoCo);
-at Isaac's 250 Hz it stretched every goal 4x, which looks like a weak drive rather
-than a clock bug. Fixed in both `FrankaBaseController` and `OpenArmBaseController`.
+**Controllers that advance their own trajectory clock or integrate an open-loop
+reference** (`joint_space_position`, `joint_space_velocity`, `task_space_velocity`,
+`task_space_ik`, `vla_controller` in its position/velocity modes) must take the
+per-cycle period from `nominal_period(period)`, never from `1 / get_update_rate()`,
+never from a hardcoded constant, and never from the raw measured period.
+`get_update_rate()` returns 0 whenever a controller inherits the controller_manager's
+rate, which is every controller here — no config sets a per-controller `update_rate`.
+The old `: 0.001` fallback was silently correct only at a 1 kHz controller_manager
+(MuJoCo); at Isaac's 250 Hz it stretched every goal 4x, which looks like a weak drive
+rather than a clock bug. Fixed in both `FrankaBaseController` and
+`OpenArmBaseController`.
+
+Two variants of the same bug hid from the `get_update_rate()` sweep and were fixed
+separately (2026-09-08), so grep for all three forms when auditing a new controller:
+
+- a **literal** `const double dt = 0.001` (`task_space_ik_controller`), which no
+  search for `get_update_rate` finds;
+- the **raw measured period** (`vla_controller`'s position/velocity reference
+  integrator). Besides the jitter this feeds into the commanded rate, `period` is
+  exactly 0 on any cycle that saw no new state — which the Isaac config documents as
+  routine when `update_rate` and the `/clock` rate disagree — so
+  `(q_ref - q_ref_prev) / period` produced NaN, and `std::clamp` propagates NaN
+  rather than sanitizing it.
+
+Because of that last point, every command write that can be reached by a divide or an
+unbounded solve now carries an `allFinite()` guard before it, in the style of
+`clip_torque()`: zero on a velocity interface, hold the previous command on a position
+interface.
 
 ### Task Manager / Behavior Tree Flow
 

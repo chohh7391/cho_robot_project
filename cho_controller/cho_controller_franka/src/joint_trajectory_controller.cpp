@@ -30,7 +30,13 @@ CallbackReturn JointTrajectoryController::on_init()
     try {
         auto_declare<std::vector<double>>("kp_joint", {});
         auto_declare<std::vector<double>>("kd_joint", {});
-        auto_declare<double>("traj_duration", 0.0);
+        // Declared name must match what the bringup YAMLs actually supply, which is
+        // `duration` (config/{real,gazebo}/controllers.yaml). This declared
+        // "traj_duration" while on_configure read "duration": the read only resolved
+        // because a controller node auto-declares parameters from its overrides, so
+        // any config that omits the key threw ParameterNotDeclaredException out of
+        // on_configure instead of falling back to the default declared here.
+        auto_declare<double>("duration", 0.0);
     } catch (const std::exception & e) {
         RCLCPP_ERROR(get_node()->get_logger(), "Exception thrown during init stage with message: %s", e.what());
         return CallbackReturn::ERROR;
@@ -57,8 +63,23 @@ CallbackReturn JointTrajectoryController::on_configure(
         RCLCPP_FATAL(get_node()->get_logger(), "Invalid kd_joint parameter");
         return CallbackReturn::FAILURE;
     }
-    if (duration < 0.0) {
-        RCLCPP_FATAL(get_node()->get_logger(), "Invalid duration parameter");
+    // Reject a non-positive duration here rather than letting it through to
+    // compute_desired_q(). This controller plays a fixed-length excitation profile
+    // (the paper's Eq. 25, two repetitions over T = 6 s) with a 1 s fade at each
+    // end, so it has nothing to run without a duration of at least 2 * ramp_time --
+    // there is no "0 means unbounded" reading that produces a valid profile.
+    //
+    // Failing at configure is deliberate. Before the parameter name was corrected,
+    // a config omitting the key threw out of on_configure, which was at least loud;
+    // taking the declared 0.0 default and quietly holding the initial pose would
+    // trade that for a controller that accepts /start_trajectory, reports success
+    // and never moves. compute_desired_q() keeps its own guard as a backstop.
+    constexpr double kMinDuration = 2.0;  // 2 * the 1 s fade window [s]
+    if (!std::isfinite(duration) || duration < kMinDuration) {
+        RCLCPP_FATAL(get_node()->get_logger(),
+            "duration = %f is unusable: this controller needs a finite duration of at "
+            "least %.1f s (two 1 s fade windows). Set it in the bringup YAML.",
+            duration, kMinDuration);
         return CallbackReturn::FAILURE;
     }
 
@@ -141,9 +162,15 @@ controller_interface::return_type JointTrajectoryController::update(
 
     const double kAlpha = 0.99;
     dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
-    Vector7d torque_desired = 
-        kp_joint_.cwiseProduct(state_.q_arm_des - state_.q_arm) + 
-        kd_joint_.cwiseProduct(state_.v_arm_des - state_.v_arm);
+    // Damp against the filtered velocity, not the raw one: dq_filtered_ was computed
+    // and then ignored here, unlike joint_space_impedance_controller.cpp which feeds
+    // it into the same kd term. At kAlpha = 0.99 the filter is nearly a pass-through,
+    // so this is a consistency fix rather than a retune -- but the two controllers
+    // must not disagree about which velocity the damping term sees, or a later change
+    // to kAlpha would silently apply to only one of them.
+    Vector7d torque_desired =
+        kp_joint_.cwiseProduct(state_.q_arm_des - state_.q_arm) +
+        kd_joint_.cwiseProduct(state_.v_arm_des - dq_filtered_);
 
     torque_desired += state_.nle; // gravity compensation
 
@@ -195,12 +222,30 @@ void JointTrajectoryController::compute_desired_q(double & tau)
         tau = duration_;
     }
 
+    const double ramp_time = 1.0; // smooth accel/decel window at start and end [s]
+
+    // The fade profile needs a full ramp_time at each end of the run, so it is only
+    // defined for duration_ >= 2 * ramp_time. Outside that window the ramp-down
+    // branch below (tau > duration_ - ramp_time) is entered for every tau > -1 s --
+    // i.e. from the very first cycle when duration_ is 0, the value declared by
+    // default and therefore in force on any config that omits the key -- and
+    // 0.5*(1 - cos(pi*(duration_ - tau)/ramp_time)) with a NEGATIVE (duration_ - tau)
+    // does not decay: cos is even, so the "fade" sweeps 0 -> 1 -> 0 -> 1 at the ramp
+    // frequency and drives the full Table II amplitude as an open-ended oscillation
+    // that never terminates (log_all_terms only saves once tau >= duration_).
+    // Hold the initial pose instead: there is no valid excitation profile to run in
+    // that window, and a motionless arm is both the least surprising response to an
+    // unusable duration and exactly what the pre-start branch of update() commands.
+    if (duration_ <= 0.0 || duration_ < 2.0 * ramp_time) {
+        state_.q_arm_des = state_.q_arm_init;
+        return;
+    }
+
     // Paper's base frequency f = 0.33 Hz (two repetitions over T=6s) [cite: 300]
     const double wf_base = 2.0 * M_PI * f_hz_(0);
 
     // --- C4-smooth trapezoidal fade profile per the paper's specification ---
     double fade = 1.0;
-    const double ramp_time = 1.0; // smooth accel/decel window at start and end [s]
 
     if (tau < ramp_time) {
         // 1. Start segment: smooth ramp-up from 0 to ramp_time (0.0 -> 1.0)

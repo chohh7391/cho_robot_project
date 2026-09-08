@@ -44,11 +44,16 @@ packages.
   regression in either would go unnoticed. `controller_check_position` /
   `controller_check_velocity` mirror the Franka ones.
 
-- **Franka/UR still have no `nominal_period()` equivalent audit beyond the three
-  controllers fixed.** Only `joint_space_position`, `joint_space_velocity` and
-  `task_space_velocity` were found using `1 / get_update_rate()`. If a new
-  controller is added that advances its own trajectory clock, it must use
-  `nominal_period(period)` — see the note in `CLAUDE.md`.
+- **(done 2026-09-08) The Franka `nominal_period()` audit was incomplete.** The
+  original sweep searched for `1 / get_update_rate()` and so found only
+  `joint_space_position`, `joint_space_velocity` and `task_space_velocity`. Two more
+  were carrying the same bug in forms that search could not see:
+  `task_space_ik_controller` had a literal `const double dt = 0.001`, and
+  `vla_controller` parameterised its open-loop reference integrator by the raw
+  measured period (which is 0 on a cycle with no new state, so its velocity
+  feedforward produced NaN). Both now use `nominal_period(period)`. `CLAUDE.md`
+  lists all three forms to grep for. UR remains unaffected: it keeps no trajectory
+  clock of its own and passes the real `time` to its action server.
 
 ## LOW — deferred by decision, or blocked externally
 

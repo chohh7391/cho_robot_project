@@ -232,6 +232,21 @@ controller_interface::return_type VLAController::update(
       ref_fk_dirty_ = true;
     }
 
+    // Per-cycle step size for the open-loop integrator, its step clamps, and the
+    // velocity-mode feedforward below. It MUST be the nominal period, not the raw
+    // measured one, for two independent reasons:
+    //  - the repo-wide rule for controllers that advance their own reference clock
+    //    (see FrankaBaseController::nominal_period()): the measured period jitters by
+    //    up to 2x, so parameterizing the reference rate by it makes each cycle's step
+    //    -- and the velocity the actuator infers from it -- jitter in proportion;
+    //  - the measured period is exactly 0 on any cycle that saw no new state, which
+    //    the Isaac bringup's own config documents as happening whenever update_rate
+    //    and the /clock rate disagree (config/isaac/controllers.yaml: four cycles fire
+    //    per clock message and three of them report measured_period == 0). With the
+    //    raw period that collapsed both step clamps to zero and, worse, turned the
+    //    (q_ref_ - q_ref_prev) / period feedforward into 0/0 = NaN.
+    const double dt = nominal_period(period);
+
     // Previous reference, for the velocity-mode feedforward term.
     const Vector7d q_ref_prev = q_ref_;
 
@@ -242,7 +257,7 @@ controller_interface::return_type VLAController::update(
         // an acceleration spike/jitter.
         Vector7d step = state_.q_arm_des - q_ref_;
         if (max_joint_vel_ > 0.0) {
-          const double max_step = max_joint_vel_ * period.seconds();
+          const double max_step = max_joint_vel_ * dt;
           for (int i = 0; i < num_dof_; ++i) {
             step(i) = std::clamp(step(i), -max_step, max_step);
           }
@@ -277,9 +292,9 @@ controller_interface::return_type VLAController::update(
         // Euler-integrate into the reference, clamped like the joint branch above --
         // bounds the per-cycle step even if the seed is briefly off (e.g. right after
         // a new goal starts). See CONTROLLER_STABILITY_TODO.md.
-        Vector7d step = dq_des * period.seconds();
+        Vector7d step = dq_des * dt;
         if (max_joint_vel_ > 0.0) {
-          const double max_step = max_joint_vel_ * period.seconds();
+          const double max_step = max_joint_vel_ * dt;
           for (int i = 0; i < num_dof_; ++i) {
             step(i) = std::clamp(step(i), -max_step, max_step);
           }
@@ -310,6 +325,26 @@ controller_interface::return_type VLAController::update(
     if (control_mode_ == "position") {
       Vector7d q_cmd = q_ref_;
       FrankaBaseController::clip_position(q_cmd);
+      // Same contract as the velocity guard below: nothing non-finite may reach a
+      // command interface, and clip_position() does not sanitize (Eigen's array
+      // max/min propagate NaN unchanged -- cf. FrankaBaseController::clip_torque).
+      // Unlike velocity, a position interface has a fallback that is not a motion:
+      // the value already sitting on the interface, i.e. what was commanded last
+      // cycle. Hold that instead of writing the poison.
+      if (!q_cmd.allFinite()) {
+        RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+            "Non-finite position command detected; holding the previous command.");
+        for (int i = 0; i < num_dof_; ++i) {
+          const double held = command_interfaces_[i].get_value();
+          q_cmd(i) = std::isfinite(held) ? held : state_.q_arm(i);
+        }
+        // clip_position() has already advanced its rate-limit baseline
+        // (state_.q_arm_ref) to the poisoned value. Restore it, otherwise every
+        // later cycle would be clipped against a NaN band and stay poisoned even
+        // after q_ref_ recovers. This only bounds what reaches the hardware; it
+        // deliberately does not try to repair q_ref_ itself.
+        state_.q_arm_ref = q_cmd;
+      }
       for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(q_cmd(i));
       }
@@ -318,12 +353,25 @@ controller_interface::return_type VLAController::update(
       // (reference rate) plus a joint-space P correction. At idle the feedforward
       // is zero and the P term actively holds q_ref_ against gravity (velocity
       // actuators have no gravity compensation of their own in sim).
-      Vector7d dq_cmd = (q_ref_ - q_ref_prev) / period.seconds()
+      Vector7d dq_cmd = (q_ref_ - q_ref_prev) / dt
                       + kp_joint_vel_.cwiseProduct(q_ref_ - state_.q_arm);
       if (max_joint_vel_ > 0.0) {
         for (int i = 0; i < num_dof_; ++i) {
           dq_cmd(i) = std::clamp(dq_cmd(i), -max_joint_vel_, max_joint_vel_);
         }
+      }
+      // Last line of defence before the actuators. std::clamp propagates NaN
+      // unchanged (it returns the value whenever both comparisons are false), so the
+      // clamp above is not a sanitizer -- exactly the reason clip_torque() carries
+      // its own allFinite() check. A non-finite value is far worse on a velocity
+      // interface than on a position one: there is no setpoint for the drive to fall
+      // back to, so instead of a soft fault it becomes an uncommanded runaway at
+      // whatever the hardware casts the NaN to. Zero velocity is the only safe
+      // substitute -- it holds wherever the drive holds.
+      if (!dq_cmd.allFinite()) {
+        RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+            "Non-finite velocity command detected; commanding zero velocity.");
+        dq_cmd.setZero();
       }
       for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(dq_cmd(i));

@@ -92,7 +92,17 @@ controller_interface::return_type TaskSpaceIKController::update(
     ik_init_ = true;
   }
 
-  const double dt = 0.001;
+  // Nominal seconds per update() call, for the trajectory clock below. This was a
+  // hardcoded 0.001, which the earlier sweep of the `1 / get_update_rate()` fallback
+  // missed here because the value is a literal rather than a call. A 1 ms literal is
+  // only correct where the controller_manager also runs at 1 kHz -- the MuJoCo,
+  // Gazebo and real/FCI bringups. This controller is also spawned by the Isaac
+  // bringup (POSITION_CONTROLLERS in cho_bringup_franka/utils/launch_utils.py), whose
+  // controller_manager runs at 250 Hz to match the physics rate, so the clock advanced
+  // at a quarter of sim time and every task-space goal took four times its requested
+  // duration. See FrankaBaseController::nominal_period() for why this cannot be
+  // 1 / get_update_rate() either (that returns 0 for every controller in this repo).
+  const double dt = nominal_period(period);
 
   // Run the open-loop IK ONLY while a goal is active. When idle, FREEZE q_ref_
   // (hold the last reference). Re-solving toward a measured-derived hold pose would
@@ -108,8 +118,8 @@ controller_interface::return_type TaskSpaceIKController::update(
     Eigen::Matrix<double, 6, 7> J;
     FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
 
-    // Sample the trajectory on the jitter-free clock (fixed 1 ms cadence, matching
-    // the FCI), not the measured ROS time which jitters 0.9-2.2 ms.
+    // Sample the trajectory on the jitter-free clock (fixed nominal cadence -- 1 ms
+    // on the FCI), not the measured ROS time which jitters 0.9-2.2 ms.
     traj_clock_ += dt;
     const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
     action_server_->compute(traj_time, state_);

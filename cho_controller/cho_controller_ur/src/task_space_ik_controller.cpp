@@ -1,5 +1,7 @@
 #include "cho_controller_ur/task_space_ik_controller.hpp"
 
+#include <algorithm>
+
 namespace cho_controller {
 namespace ur {
 
@@ -77,8 +79,29 @@ controller_interface::return_type TaskSpaceIKController::update(
     JJt.diagonal().array() += lambda_ * lambda_;
     Eigen::VectorXd delta_q = J.transpose() * JJt.inverse() * delta_pose;
 
+    // Bound the per-cycle DLS step, exactly as cho_controller_franka's and
+    // cho_controller_fr5's task_space_ik_controller do. max_delta_q was validated in
+    // assign_parameters() and then never applied: the only use was a commented-out
+    // clip_position() call, so this controller had NO per-cycle bound at all, and
+    // near a singularity JJt.inverse() turns a small task error into an arbitrarily
+    // large joint step that is handed straight to the position interface.
+    //
+    // The clamp is applied to delta_q BEFORE adding it to the configuration rather
+    // than by re-enabling clip_position(): clip_position() rate-limits against
+    // state_.q_ref and then advances that baseline, but this controller commands
+    // state_.q.head(num_dof_) + delta_q -- it closes on the MEASURED position, not on
+    // a held reference. The two baselines would therefore fight, with the command
+    // pulled between the measurement and a reference that never converges to it.
+    //
+    // That measured-position closure is left as it is, and it remains the difference
+    // from the Franka/FR5 versions, which integrate an open-loop q_ref_ (no encoder
+    // noise, no servo-lag creep). Only the per-cycle step is bounded here; moving
+    // this controller onto an open-loop reference is a separate, larger change.
+    for (int i = 0; i < num_dof_; ++i) {
+        delta_q(i) = std::clamp(delta_q(i), -max_delta_q_, max_delta_q_);
+    }
+
     Eigen::VectorXd q_cmd = state_.q.head(num_dof_) + delta_q;
-    // clip_position(q_cmd, max_delta_q_);
 
     for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(q_cmd(i));
