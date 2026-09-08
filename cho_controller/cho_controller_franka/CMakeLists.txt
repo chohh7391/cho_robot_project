@@ -31,6 +31,7 @@ find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
+find_package(cho_vla_core REQUIRED)
 find_package(cho_interfaces REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
@@ -75,6 +76,7 @@ ament_target_dependencies(${PROJECT_NAME}
     realtime_tools
     control_msgs
     cho_controller_common
+    cho_vla_core
     cho_interfaces
 )
 
