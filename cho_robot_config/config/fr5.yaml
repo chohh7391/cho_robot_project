@@ -7,6 +7,10 @@ model:
   joints: [j1, j2, j3, j4, j5, j6]
 controllers:
   hold: joint_space_position_controller
+  # Position only: every FR5 bringup hard-codes control_mode 'position'
+  # (cho_bringup_fr5/launch/*.launch.py). See the ur5e entry.
+  hold_by_control_mode:
+    position: joint_space_position_controller
   direct_joint: joint_space_position_controller
   direct_task: task_space_ik_controller
   moveit_trajectory: joint_trajectory_controller

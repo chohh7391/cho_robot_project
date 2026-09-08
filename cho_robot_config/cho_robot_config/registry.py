@@ -13,6 +13,11 @@ _required_controller_roles = {
     'hold', 'direct_joint', 'direct_task', 'moveit_trajectory', 'gripper', 'vla'
 }
 
+# Bringup control modes. A bringup exports exactly one command interface per
+# joint, so the set of controllers that can even be loaded - and therefore the
+# one that can hold the arm - depends on which mode it was started in.
+CONTROL_MODES = ('position', 'velocity', 'torque')
+
 
 def _config_dir() -> Path:
     override = os.environ.get('CHO_ROBOT_CONFIG_DIR')
@@ -59,6 +64,36 @@ def _optional_name(value, label):
         raise ValueError(f'{label} must be null or a non-empty string')
 
 
+def _validate_hold_by_control_mode(mapping, robot_type):
+    """Validate the optional per-control-mode hold declaration.
+
+    Optional so a registry entry written before this key keeps validating; a
+    consumer that needs it says so by calling
+    :func:`hold_controllers_for_control_mode`, which raises when it is absent.
+    """
+    if mapping is None:
+        return
+    label = f'{robot_type}: controllers.hold_by_control_mode'
+    mapping = _mapping(mapping, label)
+    if not mapping:
+        raise ValueError(f'{label} must not be empty when present')
+    unknown = sorted(set(mapping) - set(CONTROL_MODES))
+    if unknown:
+        raise ValueError(f'{label} declares unknown control modes: {unknown}')
+    for mode, value in mapping.items():
+        # A single arm holds with one controller; a 14-axis bimanual profile
+        # needs one per arm, so a list is accepted for the same role.
+        names = value if isinstance(value, list) else [value]
+        if not names:
+            raise ValueError(f'{label}.{mode} must name at least one controller')
+        if len(names) != len(set(names)):
+            raise ValueError(f'{label}.{mode} must not repeat a controller')
+        for name in names:
+            if not isinstance(name, str) or not name:
+                raise ValueError(
+                    f'{label}.{mode} must contain only non-empty controller names')
+
+
 def validate_robot_config(config, expected_robot_type=None):
     """Validate a registry document and return it unchanged."""
     _mapping(config, 'config')
@@ -94,7 +129,11 @@ def validate_robot_config(config, expected_robot_type=None):
     if controllers['hold'] is None or controllers['moveit_trajectory'] is None:
         raise ValueError(f'{robot_type}: hold and moveit_trajectory controllers are required')
     for role, controller in controllers.items():
+        if role == 'hold_by_control_mode':
+            continue
         _optional_name(controller, f'{robot_type}: controllers.{role}')
+    _validate_hold_by_control_mode(
+        controllers.get('hold_by_control_mode'), robot_type)
 
     moveit = _mapping(config.get('moveit'), f'{robot_type}: moveit')
     for field in ('config_package', 'planning_group'):
@@ -239,6 +278,43 @@ def blocked_home_joint_goals(config):
                 'max_joint_distance': policy['max_joint_distance'],
             })
     return blocked
+
+
+def hold_controllers_for_control_mode(config, control_mode):
+    """Controllers that hold the arm when the bringup ran in *control_mode*.
+
+    ``controllers.hold`` alone cannot answer this. A bringup exports exactly
+    one command interface per joint, so the position-interface hold controller
+    is not even loaded in a torque bringup: activating it there fails, and the
+    exclusive switch path is deliberately BEST_EFFORT, so it fails *quietly*
+    and leaves nothing holding the arm. On a torque robot that is worse than
+    not trying at all. Raising here keeps the mistake at tree-build time,
+    where it costs one message instead of a dropped arm.
+
+    Returns a list because a 14-axis bimanual profile needs one hold
+    controller per arm.
+    """
+    controllers = _mapping(config, 'config').get('controllers', {})
+    robot_type = config.get('robot_type', '<unknown>')
+    profile = config.get('profile', 'single')
+    mapping = controllers.get('hold_by_control_mode')
+    if not mapping:
+        raise ValueError(
+            f"Robot '{robot_type}' (profile '{profile}') declares no "
+            'controllers.hold_by_control_mode, so no control-mode-specific hold '
+            'controller can be resolved. Add one to its cho_robot_config entry.')
+    if control_mode not in mapping:
+        raise ValueError(
+            f"Robot '{robot_type}' (profile '{profile}') has no hold controller for "
+            f"control_mode '{control_mode}'. Declared modes: {sorted(mapping)}")
+    value = mapping[control_mode]
+    return list(value) if isinstance(value, list) else [value]
+
+
+def declared_hold_control_modes(config):
+    """Control modes this robot/profile declares a hold controller for."""
+    mapping = config.get('controllers', {}).get('hold_by_control_mode') or {}
+    return sorted(mapping)
 
 
 def available_profiles(robot_type):

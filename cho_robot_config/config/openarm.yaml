@@ -7,6 +7,15 @@ model:
   joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4, openarm_joint5, openarm_joint6, openarm_joint7]
 controllers:
   hold: joint_space_position_controller
+  # Per-control-mode hold; see franka.yaml. Names must stay in step with
+  # cho_bringup_openarm/utils/launch_utils.py POSITION_/VELOCITY_/
+  # TORQUE_CONTROLLERS. The MIT prototype bringup is deliberately absent: it
+  # spawns only the selected MIT controller, so none of these is loaded there
+  # and a task on that path must not try to switch to one.
+  hold_by_control_mode:
+    position: joint_space_position_controller
+    velocity: joint_space_velocity_controller
+    torque: joint_space_impedance_controller
   direct_joint: joint_space_position_controller
   direct_task: task_space_impedance_mit_controller
   moveit_trajectory: joint_trajectory_controller
@@ -78,6 +87,13 @@ profiles:
       joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7]
     controllers:
       hold: left_joint_space_position_controller
+      # launch_utils.per_arm() prefixes every controller on a bimanual build,
+      # so the single-arm mapping inherited here would name controllers that
+      # do not exist. 'controllers' is merged per key, so this replaces it.
+      hold_by_control_mode:
+        position: left_joint_space_position_controller
+        velocity: left_joint_space_velocity_controller
+        torque: left_joint_space_impedance_controller
       direct_joint: left_joint_impedance_mit_controller
       direct_task: left_task_space_impedance_mit_controller
       gripper: left_gripper_controller
@@ -117,6 +133,11 @@ profiles:
       joints: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
     controllers:
       hold: right_joint_space_position_controller
+      # Per-arm instances; see the left profile.
+      hold_by_control_mode:
+        position: right_joint_space_position_controller
+        velocity: right_joint_space_velocity_controller
+        torque: right_joint_space_impedance_controller
       direct_joint: right_joint_impedance_mit_controller
       direct_task: right_task_space_impedance_mit_controller
       gripper: right_gripper_controller
@@ -148,6 +169,13 @@ profiles:
       joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7, openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
     controllers:
       hold: left_joint_space_position_controller
+      # Two independent seven-axis arms: holding this profile means holding
+      # both, so each mode names one controller per arm. 'hold' above stays a
+      # single name for the MoveIt metadata that predates this key.
+      hold_by_control_mode:
+        position: [left_joint_space_position_controller, right_joint_space_position_controller]
+        velocity: [left_joint_space_velocity_controller, right_joint_space_velocity_controller]
+        torque: [left_joint_space_impedance_controller, right_joint_space_impedance_controller]
       moveit_trajectory: left_joint_trajectory_controller
     moveit:
       planning_group: both_arms

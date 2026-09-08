@@ -4,8 +4,12 @@ import shutil
 import xml.etree.ElementTree as ET
 
 from cho_robot_config import (
+    CONTROL_MODES,
+    available_profiles,
     available_robot_types,
     blocked_home_joint_goals,
+    declared_hold_control_modes,
+    hold_controllers_for_control_mode,
     home_pose_policy,
     load_moveit_metadata,
     load_robot_config,
@@ -170,6 +174,16 @@ def test_openarm_reach_targets_are_fixed_absolute_world_poses():
     (lambda c: c['motions']['reach']['0'].__setitem__(
         'orientation', [0.0, 0.0, 0.0, 0.5]), 'normalized'),
     (lambda c: c['controllers'].pop('hold'), 'controller roles'),
+    (lambda c: c['controllers'].__setitem__('hold_by_control_mode', {}),
+     'must not be empty'),
+    (lambda c: c['controllers'].__setitem__(
+        'hold_by_control_mode', {'effort': 'a_controller'}), 'unknown control modes'),
+    (lambda c: c['controllers'].__setitem__(
+        'hold_by_control_mode', {'position': []}), 'at least one controller'),
+    (lambda c: c['controllers'].__setitem__(
+        'hold_by_control_mode', {'position': ['a', 'a']}), 'must not repeat'),
+    (lambda c: c['controllers'].__setitem__(
+        'hold_by_control_mode', {'position': ['']}), 'non-empty controller names'),
     (lambda c: c.__setitem__('schema_version', 2), 'schema_version'),
     (lambda c: c['model'].__setitem__('joints', ['j1', True]), 'unique list'),
     (lambda c: c['actions']['preferences'].__setitem__(
@@ -311,3 +325,93 @@ def test_profile_compatibility_is_replaced_not_merged():
 
     assert set(task_manager) == {'joint_space'}
     assert all(name.startswith('left_') for name in task_manager.values())
+
+
+# ---------------------------------------------------------------------------
+# controllers.hold_by_control_mode
+#
+# `controllers.hold` alone cannot say which controller can hold the arm: a
+# bringup exports exactly one command interface per joint, so the position
+# hold is not even loaded in a torque bringup. The consumer that matters is
+# cho_task_manager's safe-abort branch, and its switch path is BEST_EFFORT --
+# naming a controller the bringup never loaded fails quietly and leaves
+# nothing holding the arm.
+# ---------------------------------------------------------------------------
+
+def _all_profiles():
+    for robot_type in available_robot_types():
+        for profile in available_profiles(robot_type):
+            yield robot_type, profile
+
+
+def test_every_registry_profile_declares_a_hold_per_control_mode():
+    for robot_type, profile in _all_profiles():
+        config = load_robot_config(robot_type, profile)
+        modes = declared_hold_control_modes(config)
+        assert modes, f'{robot_type}/{profile} declares no hold_by_control_mode'
+        for mode in modes:
+            holds = hold_controllers_for_control_mode(config, mode)
+            assert holds, f'{robot_type}/{profile}/{mode} resolved to nothing'
+            assert len(holds) == len(set(holds))
+            assert all(isinstance(name, str) and name for name in holds)
+
+
+def test_position_hold_matches_the_mode_independent_hold():
+    """The two keys must not disagree about the position-interface controller.
+
+    `controllers.hold` predates this mapping and still feeds the MoveIt launch
+    metadata, which is position-mode only.
+    """
+    for robot_type, profile in _all_profiles():
+        config = load_robot_config(robot_type, profile)
+        if 'position' not in declared_hold_control_modes(config):
+            continue
+        holds = hold_controllers_for_control_mode(config, 'position')
+        assert config['controllers']['hold'] in holds, (
+            f"{robot_type}/{profile}: controllers.hold is not among the position holds")
+
+
+def test_bimanual_profiles_never_inherit_the_single_arm_hold_names():
+    """The regression this key exists to avoid.
+
+    `controllers` is merged per key across a profile overlay, so a profile that
+    did not restate the mapping would inherit the bare single-arm names --
+    which launch_utils.per_arm() never spawns on a bimanual build.
+    """
+    for profile in ('left', 'right'):
+        config = load_robot_config('openarm', profile)
+        for mode in declared_hold_control_modes(config):
+            for name in hold_controllers_for_control_mode(config, mode):
+                assert name.startswith(f'{profile}_'), (
+                    f'openarm/{profile}/{mode} holds {name}, which that build has no instance of')
+
+    both = load_robot_config('openarm', 'both')
+    for mode in declared_hold_control_modes(both):
+        holds = hold_controllers_for_control_mode(both, mode)
+        # Two independent seven-axis arms: holding this profile means both.
+        assert any(name.startswith('left_') for name in holds)
+        assert any(name.startswith('right_') for name in holds)
+
+
+def test_undeclared_control_mode_raises_and_names_the_declared_ones():
+    # Every UR bringup hard-codes control_mode position, so torque is genuinely
+    # absent rather than an oversight -- and must not silently fall back.
+    config = load_robot_config('ur5e')
+    assert declared_hold_control_modes(config) == ['position']
+    with pytest.raises(ValueError, match="no hold controller for control_mode 'torque'"):
+        hold_controllers_for_control_mode(config, 'torque')
+
+
+def test_absent_mapping_raises_rather_than_falling_back_to_hold():
+    config = deepcopy(load_robot_config('fr5'))
+    config['controllers'].pop('hold_by_control_mode')
+    # Still a valid document: the key is optional so older entries validate.
+    validate_robot_config(config, 'fr5')
+    with pytest.raises(ValueError, match='declares no'):
+        hold_controllers_for_control_mode(config, 'position')
+
+
+def test_declared_modes_are_a_subset_of_the_known_control_modes():
+    for robot_type, profile in _all_profiles():
+        config = load_robot_config(robot_type, profile)
+        assert set(declared_hold_control_modes(config)) <= set(CONTROL_MODES)

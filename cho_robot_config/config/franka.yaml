@@ -7,6 +7,16 @@ model:
   joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
 controllers:
   hold: joint_space_position_controller
+  # Which controller can hold the arm depends on the bringup's control_mode:
+  # the description exports exactly one command interface per joint, so the
+  # position hold is not even loaded in a torque bringup. Names must stay in
+  # step with cho_bringup_franka/utils/launch_utils.py POSITION_/VELOCITY_/
+  # TORQUE_CONTROLLERS. gravity_compensation_controller is deliberately not
+  # the torque hold: it lets the arm be pushed around and drift.
+  hold_by_control_mode:
+    position: joint_space_position_controller
+    velocity: joint_space_velocity_controller
+    torque: joint_space_impedance_controller
   direct_joint: joint_space_qp_controller
   direct_task: task_space_qp_controller
   moveit_trajectory: moveit_joint_trajectory_controller
