@@ -28,6 +28,7 @@ set(MSG_FILES
   "msg/ActionChunk.msg"
   "msg/GripperState.msg"
   "msg/PoseLog.msg"
+  "msg/VlaTelemetry.msg"
 )
 
 # Action

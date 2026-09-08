@@ -1,9 +1,34 @@
 # goal
-string model_name  # 'act', 'diffusion_policy', 'gr00t' ...
+string model_name  # 'act', 'diffusion_policy', 'gr00t', 'pi0' ...
+
+# Language instruction for the policy. Every stack bridged here except ACT is
+# language-conditioned, and without this field the instruction lives only inside
+# the bridge, so a behaviour tree has no way to say what the task is. The bridge
+# forwards it to the policy server; the controller only carries it.
+string task
+
+# Fallback for ActionChunk.control_dt when a chunk leaves it unset. Must be
+# finite and > 0.
 float32 inference_frequency
+
+# Quiet time on the chunk stream before the controller stops following it and
+# holds [s]. <= 0 uses the controller's configured default. This is a STREAM
+# timeout, not a goal budget: a goal budget cannot tell a long successful task
+# from a policy that died early, and while it runs down the arm sits frozen at a
+# mid-motion waypoint.
+float64 stream_timeout
 ---
 # result
 bool is_completed
+# Empty on success. On failure this carries the reason the goal did not
+# complete, so operator clients can print it instead of a bare failure.
+string message
 ---
 # feedback
-float32 percent_complete
+# Playback time left in the buffered horizon [s]. Replaces the pre-v2
+# percent_complete, which was never published and could not be defined anyway --
+# a VLA rollout has no known endpoint. A bridge paces its next observation off
+# this (LeRobot's chunk_size_threshold rule).
+float32 remaining_horizon_sec
+uint32 chunks_accepted
+uint32 chunks_rejected
