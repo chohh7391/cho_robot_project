@@ -53,6 +53,33 @@ CallbackReturn FrankaBaseController::on_init()
         auto_declare<double>("mass", 0.0);
         auto_declare<std::vector<double>>("center_of_mass", {0.0, 0.0, 0.0});
         auto_declare<std::vector<double>>("load_inertia", {0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001});
+        // Reflected rotor inertia of each arm joint, kg m^2, one entry per arm
+        // joint in URDF chain order. on_configure writes it into the model's
+        // Model::armature, which crba() adds to the mass-matrix diagonal, so
+        // every quantity derived from M(q) - the QP's inertia, Lambda, the
+        // null-space projector - sees the same correction.
+        //
+        // It affects the MASS MATRIX ONLY. nonLinearEffects() (gravity +
+        // Coriolis) does not depend on armature, so gravity compensation and the
+        // state_.nle feed-forward are bit-identical with or without this
+        // parameter, however reasonable the opposite assumption looks.
+        //
+        // Known values for the FR3: 0.195 on joints 1-4 and 0.074 on joints 5-7.
+        // The URDF cannot express rotor inertia, so the model built here carries
+        // link inertia only; the MuJoCo model this project tunes against declares
+        // those numbers on its joints (cho_description_franka/xml/fr3/fr3.xml -
+        // 0.195 comes from the "fr3" default class, joints 5-7 override it), and
+        // the Isaac bringup authors the identical vector onto its drives
+        // (cho_bringup_franka/config/isaac/robot_profile.json, "arm_armature",
+        // whose comment records that the wrist links are ~15x lighter than their
+        // own rotor).
+        //
+        // It is a parameter and not a constant because it belongs to the plant,
+        // not to the controller: MuJoCo, Isaac and the real FR3 do not have to
+        // agree, and a bringup that models no rotor wants none added. Empty is
+        // therefore the default and means "none", which is what every current
+        // config asks for - so this stays inert until some config opts in.
+        auto_declare<std::vector<double>>("rotor_inertia", {});
     } catch (const std::exception& e) {
         fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
         return CallbackReturn::ERROR;
@@ -114,6 +141,45 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     kin_v_zero_ = Eigen::VectorXd::Zero(model_.nv);
     kin_J_.setZero(6, model_.nv);
     q_scratch_ = Eigen::VectorXd::Zero(model_.nq);
+
+    // Optional rotor inertia (see the parameter's comment in on_init). Absent or
+    // empty leaves model_.armature untouched, so nothing below this block changes.
+    const auto rotor_inertia = get_node()->get_parameter("rotor_inertia").as_double_array();
+    if (!rotor_inertia.empty()) {
+        if (static_cast<int>(rotor_inertia.size()) != num_dof_) {
+            RCLCPP_FATAL(get_node()->get_logger(),
+                "rotor_inertia has %zu entries, expected %d (one per arm joint)",
+                rotor_inertia.size(), num_dof_);
+            return CallbackReturn::FAILURE;
+        }
+        for (int i = 0; i < num_dof_; ++i) {
+            if (!std::isfinite(rotor_inertia[i]) || rotor_inertia[i] < 0.0) {
+                RCLCPP_FATAL(get_node()->get_logger(),
+                    "rotor_inertia[%d] = %f is not a finite, non-negative inertia", i, rotor_inertia[i]);
+                return CallbackReturn::FAILURE;
+            }
+        }
+        rotor_inertia_ = Eigen::Map<const Vector7d>(rotor_inertia.data());
+        // Unlike the OpenArm base, which looks each arm joint up by name because a
+        // bimanual build interleaves two arms, this base assumes the arm occupies
+        // the LEADING num_dof_ entries of the configuration - the same assumption
+        // the q_lower_limits_ computation below documents - so index the armature
+        // vector by that leading block.
+        model_.armature.setZero(model_.nv);
+        model_.armature.head(num_dof_) = rotor_inertia_;
+        // model_ is this controller's own copy of the wrapper's model, so push it
+        // back before rebuilding anything that caches the model's dimensions.
+        robot_->model() = model_;
+        data_ = pinocchio::Data(model_);
+        // kin_data_ too: armature does not change kinematics, so compute_arm_kinematics()
+        // would still be correct - but two Data objects built from different models is a
+        // trap for whatever gets added to that helper next.
+        kin_data_ = pinocchio::Data(model_);
+        RCLCPP_INFO(get_node()->get_logger(),
+            "rotor inertia applied to the model: [%.4f %.4f %.4f %.4f %.4f %.4f %.4f] kg m^2",
+            rotor_inertia_(0), rotor_inertia_(1), rotor_inertia_(2), rotor_inertia_(3),
+            rotor_inertia_(4), rotor_inertia_(5), rotor_inertia_(6));
+    }
 
     nq_ = robot_->nq();
     nv_ = robot_->nv();

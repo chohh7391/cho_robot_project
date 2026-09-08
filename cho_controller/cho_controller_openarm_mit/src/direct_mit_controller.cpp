@@ -75,6 +75,18 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_init()
   auto_declare<double>("return_to_zero_tolerance", 0.05);
   auto_declare<std::vector<double>>("return_to_zero_kp", {});
   auto_declare<std::vector<double>>("return_to_zero_kd", {});
+  // Rotor inertia reflected onto each joint, kg m^2, added to the model's
+  // mass-matrix diagonal (Pinocchio's Model::armature, honoured by crba).
+  //
+  // URDF cannot express it, so the model configure_action_mujoco_dynamics()
+  // builds from robot_description alone carries link inertia only. It belongs
+  // to the plant rather than to the controller, hence a parameter: on this arm
+  // the Damiao rotors are not a small correction (see
+  // cho_bringup_openarm/config/isaac/robot_profile.json, where the DM4340 on
+  // joints 3 and 4 reflects 0.16 kg m^2, about fifteen times the link inertia
+  // it drives). Empty means none, which is what every shipped config wants;
+  // see configure_action_mujoco_dynamics() for what enabling it actually moves.
+  auto_declare<std::vector<double>>("rotor_inertia", {});
   // controller_manager does not normally carry this parameter in simulation;
   // configure_action_mujoco_dynamics() obtains the canonical description from
   // robot_state_publisher in that case.
@@ -296,6 +308,56 @@ controller_interface::CallbackReturn DirectMitControllerBase::configure_action_m
       }
       action_q_indices_[i] = static_cast<int>(q_index);
       action_v_indices_[i] = static_cast<int>(v_index);
+    }
+    // Rotor inertia, opt-in. Empty leaves the model exactly as the URDF built
+    // it, so this is a no-op for every shipped config.
+    //
+    // Two facts a reader will otherwise assume the other way round:
+    //
+    //  1. Armature enters the MASS MATRIX only. pinocchio::nonLinearEffects()
+    //     does not read Model::armature, so nle - and therefore tau_ff, which
+    //     on this arm carries the entire gravity support - is unchanged to the
+    //     last bit. What changes is crba()'s M, hence the regularized
+    //     operational-space inertia Lambda, the dynamically consistent
+    //     null-space projector (I - J^T Jbar^T), and the posture torque
+    //     (I - J^T Jbar^T) M (kp_null e - kd_null dq), which scales with M.
+    //
+    //  2. Because that posture torque is linear in M, enabling this changes it
+    //     on joints 3 and 4 by MORE THAN AN ORDER OF MAGNITUDE (0.16 kg m^2 of
+    //     rotor against roughly a fifteenth of that in link inertia).
+    //     kp_null/kd_null are sized against the present, rotor-free M, so they
+    //     must be re-checked before any config opts in. That is deliberately
+    //     why no YAML in this repository sets rotor_inertia.
+    const auto rotor_inertia = get_node()->get_parameter("rotor_inertia").as_double_array();
+    if (!rotor_inertia.empty()) {
+      if (rotor_inertia.size() != 7U) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+          "rotor_inertia must be empty or exactly 7 values, one per MIT actuator (got %zu)",
+          rotor_inertia.size());
+        return CallbackReturn::ERROR;
+      }
+      for (std::size_t i = 0; i < 7; ++i) {
+        if (!std::isfinite(rotor_inertia[i]) || rotor_inertia[i] < 0.0) {
+          RCLCPP_ERROR(get_node()->get_logger(),
+            "rotor_inertia[%zu]=%g must be finite and nonnegative", i, rotor_inertia[i]);
+          return CallbackReturn::ERROR;
+        }
+      }
+      // action_model_ is this controller's own copy, so writing it disturbs
+      // nothing else. Data caches model-derived terms, so it is rebuilt rather
+      // than reused: a Data built before the armature was written would leave
+      // the model and its Data disagreeing about M.
+      action_model_->armature.setZero(action_model_->nv);
+      for (std::size_t i = 0; i < 7; ++i) {
+        action_model_->armature(action_v_indices_[i]) = rotor_inertia[i];
+      }
+      action_model_data_ = std::make_unique<pinocchio::Data>(*action_model_);
+      RCLCPP_INFO(get_node()->get_logger(),
+        "rotor inertia applied to the action model mass matrix: "
+        "[%g %g %g %g %g %g %g] kg m^2 (crba/Lambda/null-space posture only; nle and "
+        "therefore tau_ff are unchanged - re-check kp_null/kd_null)",
+        rotor_inertia[0], rotor_inertia[1], rotor_inertia[2], rotor_inertia[3],
+        rotor_inertia[4], rotor_inertia[5], rotor_inertia[6]);
     }
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_node()->get_logger(), "action MuJoCo dynamics model rejected: %s", error.what());

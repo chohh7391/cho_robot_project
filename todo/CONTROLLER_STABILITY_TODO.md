@@ -73,8 +73,33 @@ real/gazebo = OFF until hardware validation.
 
 ## Deliberately NOT changing (owner decision)
 
-- `M_modified` wrist inertia inflation (`task_space_qp`, `joint_space_qp`) —
-  intentional practical compensation.
+- `M_modified` wrist inertia inflation (`task_space_qp`, `joint_space_qp`,
+  `operational_space`) — intentional practical compensation, left in place.
+
+  Context added 2026-09-08, for whoever revisits it. What those blocks do is
+  multiply the wrist diagonal of `M` by 6/6/10 *after* the QP has solved for `q̈`
+  with the true `M`, so the applied torque is `M_mod q̈` and the wrist's realised
+  acceleration is `M⁻¹M_mod q̈` — 6 to 10 times the commanded one, i.e. √6 to √10
+  on the closed-loop frequency. `Lambda` and the null-space projector do not see
+  the correction at all. The factors are also close to what a *modelling* fix
+  would give: the URDF cannot express rotor inertia, and both the MuJoCo model and
+  the Isaac profile put 0.074 kg m² on joints 5-7 against a link inertia the Isaac
+  profile's own comment calls ~15x smaller.
+
+  `FrankaBaseController` therefore now accepts a `rotor_inertia` parameter that
+  writes `Model::armature`, which `computeAllTerms()` adds to the mass-matrix
+  diagonal, so every derived quantity (`M_arm`, the QP inertia, `Lambda`, the
+  projector) sees one consistent model. It affects the mass matrix only —
+  `nonLinearEffects()` is armature-independent, verified against the installed
+  Pinocchio — so gravity compensation is untouched. It is **empty by default and
+  no config sets it**, so nothing has changed yet.
+
+  Replacing `M_modified` with `rotor_inertia: [0.195, 0.195, 0.195, 0.195, 0.074,
+  0.074, 0.074]` is the intended end state, but it is a real retune of three
+  torque controllers and must be A/B measured in MuJoCo and Isaac first. The
+  falsifiable prediction to test: Isaac's `fr3_joint5/6` limit cycle at their
+  12 N·m saturation, which the isaac config records as surviving every task-gain
+  change, is caused by this 6-10x and should disappear.
 - `kAlpha = 0.99` velocity blend — keep as is.
 - gazebo hand-gravity `= -1.0 m/s²` (`base_controller.cpp`) — intentional; matches
   the gazebo setup.

@@ -184,6 +184,12 @@ protected:
 
     const Eigen::Matrix<double, 7, 1> torque_limits_ {87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0};
 
+    // Reflected rotor inertia per arm joint [kg m^2], exactly as written into
+    // model_.armature by on_configure. Stays all-zero when the "rotor_inertia"
+    // parameter is absent (the default), which is precisely "no armature", so a
+    // derived controller can read it unconditionally.
+    Vector7d rotor_inertia_{Vector7d::Zero()};
+
     // Absolute joint position limits from the model (arm joints, margin applied),
     // cached in on_configure for clamp_to_joint_limits().
     Vector7d q_lower_limits_{Vector7d::Zero()};
