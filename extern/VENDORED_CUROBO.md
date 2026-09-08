@@ -9,12 +9,16 @@
 |---|---|---|---|
 | `extern/curobo` | [NVlabs/curobo](https://github.com/NVlabs/curobo) | 태그 `v0.7.8` = `d64c4b005459db10c5dd867d8b30a87d5bda9bdb` (검증됨) | **NVIDIA License — §3.3 non-commercial** |
 | `extern/isaac_ros_cumotion` | [NVIDIA-ISAAC-ROS/isaac_ros_cumotion](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion) | `release-3.2`, `dbaa7e8` (shallow) | 패키지별 Apache-2.0 / 저장소 루트는 NVIDIA Isaac ROS Software License |
-| `extern/isaac_ros_common` | [NVIDIA-ISAAC-ROS/isaac_ros_common](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common) | `release-3.2`, `fcf4d9e` (shallow) | Apache-2.0 |
 | `extern/nvblox_msgs_src/nvblox_msgs` | [NVIDIA-ISAAC-ROS/isaac_ros_nvblox](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox) | `release-3.2` (sparse checkout, 이 패키지만) | Apache-2.0 |
 
-앞의 셋은 **git submodule로 등록돼 있다**(기존 `extern/` 관례와 동일). 최상위
+앞의 둘은 **git submodule로 등록돼 있다**(기존 `extern/` 관례와 동일). 최상위
 `git clone --recursive` 가 함께 받아오고, 아니면
-`git submodule update --init extern/curobo extern/isaac_ros_cumotion extern/isaac_ros_common`.
+`git submodule update --init extern/curobo extern/isaac_ros_cumotion`.
+
+`isaac_ros_common` 은 **의도적으로 없다.** 한때 받아뒀지만 그 저장소의 패키지 13개 중
+이 프로젝트가 쓰는 것은 0개다. cuMotion 패키지들이 빌드 시점에 원하는 것은 버전 스탬프
+리소스 두 개뿐이고, 정작 `isaac_ros_common` 패키지 자체는 아무도 쓰지 않는 NVIDIA VPI 를
+무조건 요구해 빌드되지 않는다. `cho_moveit_curobo_deps` 가 그 두 리소스를 대신 제공한다.
 
 `nvblox_msgs` 만 예외로 서브모듈이 아니다. `cumotion_planner.py` 가 무조건 import 하는데,
 `isaac_ros_nvblox` 전체 트리는 패키지 10개와 자체 nested submodule 을 들고 오고 그중
@@ -42,22 +46,34 @@ Humble용 `isaac_ros_cumotion`(release-3.2)의 플래너 노드가 v1 API
 적용되며 transfer 태스크에 한정되지 않는다"고 스스로 경고한다. 그쪽엔 사후 fail-closed
 가드가 있지만 이 프로젝트엔 없다.
 
-## colcon 경계 — `extern/README.md` 정책과의 차이
+## colcon 경계 — `tools/setup_curobo_vendor.sh`
 
-`extern/README.md`는 "패키지 이름이 `cho_*`와 충돌하지 않으므로 upstream 체크아웃에
-`COLCON_IGNORE`를 넣는 대신 명시적 allowlist로 경계를 강제한다"고 적고 있다.
-여기서는 **발견 단계에서 막았다.** 이유는 두 가지다:
+`extern/isaac_ros_cumotion` 은 패키지 11개를 담고 있고 이 프로젝트는 5개만 빌드한다
+(`isaac_ros_cumotion`, `_interfaces`, `_python_utils`, `_robot_description`, `_moveit`).
+나머지 6개를 그냥 두면 안 되는 이유는 두 가지다:
 
-1. `curobo_core`는 빌드 시점에 시스템 python의 torch를 요구하고 `curobo/` 서브모듈이
-   비어 있어, 통상 빌드(`cbr`)에서 **실패한다.** 실패하는 패키지를 워크스페이스에 남길 수 없다.
-2. 두 저장소를 그대로 두면 쓰지 않는 패키지 19개가 매 전체 빌드에 추가된다.
-   이 머신은 빌드 워커가 2개로 제한돼 있어(`CLAUDE.md`) 실질 비용이다.
+1. `curobo_core` 는 빌드 시점에 시스템 python 의 torch 를 요구하고 `curobo/` 서브모듈이
+   비어 있어 통상 빌드(`cbr`)에서 **실패한다.**
+2. `extern/curobo` 는 `package.xml` 이 없는 pip 소스 트리인데 colcon 이 `setup.py` 를 보고
+   python 패키지로 오인해 빌드를 시도한다.
 
-그래서 allowlist 6개(`isaac_ros_common`, `isaac_ros_cumotion`, `_interfaces`,
-`_python_utils`, `_robot_description`, `_moveit`, 그리고 `nvblox_msgs`)만 남기고 나머지
-19개에 `COLCON_IGNORE`를 넣었다. 각 파일에 이유가 적혀 있고, 지우면 되살아난다.
-`extern/curobo`에도 넣었다 — ROS 패키지가 아니라 pip 소스 트리인데 colcon이 `setup.py`를
-보고 python 패키지로 오인하기 때문이다.
+colcon 의 발견 차단 수단은 패키지 디렉터리 안의 `COLCON_IGNORE` 뿐이고, 그 디렉터리는
+서브모듈 소유다. 상위(서브모듈 루트)에 두면 원하는 5개까지 같이 막힌다. 그래서 마커 자체는
+추적할 수 없지만 **생성은 스크립트로 추적한다**:
+
+```bash
+tools/setup_curobo_vendor.sh              # 생성 + 검증
+tools/setup_curobo_vendor.sh --check-only # 검증만
+```
+
+멱등이고, 루프를 믿지 않고 `colcon list` 결과가 정확히 6개인지 검증한다. 서브모듈을 다시
+체크아웃하면(`git submodule update`) 상류 트리가 복원되면서 마커가 사라지므로 재실행해야 한다.
+
+`extern/README.md` 는 "패키지 이름이 `cho_*` 와 충돌하지 않으므로 upstream 체크아웃에
+`COLCON_IGNORE` 를 넣는 대신 명시적 allowlist 로 경계를 강제한다"고 적고 있다. 여기서는
+발견 단계에서 막았는데, 그 정책이 상정한 상황과 다르기 때문이다 — OpenArm 벤더 패키지들은
+빌드가 되고 allowlist 는 "쓰지 말 것" 의 문제였지만, `curobo_core` 는 실제로 실패한다.
+빌드 스크립트만으로는 `cbr` 이 여전히 깨진다.
 
 ## 파이썬 환경
 
@@ -153,22 +169,15 @@ FR5 설정으로 실제 계획까지 확인했다 (`MotionGen` 생성 5.1 s + wa
 마지막 줄이 `velocity_scale: 0.5`가 실제로 적용됐다는 증거다 — 커미셔닝 상한
 `1.575 x time_dilation 0.25 = 0.394 rad/s` 아래에 들어온다.
 
-## 미해결 — `COLCON_IGNORE` 가 추적되지 않는다
+## 남은 한계 — 마커는 여전히 추적되지 않는다
 
-위 §colcon 경계에서 벤더 체크아웃 **안에** `COLCON_IGNORE` 24개를 넣었다. 서브모듈로
-등록해도 이 사정은 그대로다 — 서브모듈은 상류의 커밋 SHA 만 기록하므로, 그 안에 우리가 만든
-파일은 상류를 수정하지 않는 한 담기지 않는다. 즉 **추적되지 않는다.**
+`tools/setup_curobo_vendor.sh` 가 생성·검증을 맡아 새로 클론한 사람이 한 명령으로 끝낼 수
+있게 됐지만, 마커 파일 자체는 서브모듈 안에 있어 여전히 이 저장소가 담지 못한다. 즉
+**설치 절차를 건너뛰면 `cbr` 이 `curobo_core` 에서 실패한다.** `docs/installation.md` §2 가
+그 단계를 "건너뛰지 말 것" 으로 명시하고 있고, 스크립트가 검증까지 하므로 틀렸을 때 즉시
+알 수 있다.
 
-결과: 새로 클론한 사람은 `COLCON_IGNORE` 가 없는 상태가 되고, `cbr`(전체 빌드)이
-`curobo_core` 에서 실패한다 — 시스템 python 에 torch 가 없고 `curobo/` 서브모듈이 비어 있기
-때문이다. `docs/installation.md` §2 가 이 생성 단계를 명시하고 있으므로 절차를 따르면
-막히지 않지만, 잊으면 그대로 실패한다.
-
-**설계 실수다.** 경계는 이 저장소가 소유하는 방식이어야 한다. 후속으로 둘 중 하나:
-
-1. `tools/build_curobo_vendor.sh` — OpenArm 의 `tools/build_openarm_vendor.sh` 와 같은
-   allowlist 빌드 스크립트. 벤더 트리를 수정하지 않고 `--packages-select` 로 경계를 강제한다.
-   `extern/README.md` 정책과도 맞고, `COLCON_IGNORE` 를 아예 없앨 수 있다.
-2. `docs/installation.md` §2 에 생성 단계를 명시한다 — **현재 상태**. 싸지만 잊기 쉽다.
-
-1번이 맞다. 그때 이 절과 §colcon 경계를 함께 정리한다.
+완전히 없애려면 `extern/isaac_ros_cumotion` 을 서브모듈이 아니라 `nvblox_msgs` 처럼 5개
+패키지만 sparse checkout 하면 된다 — 원치 않는 6개가 애초에 존재하지 않으므로 마커가 0개가
+되고 새 클론이 그냥 빌드된다. 대신 `extern/` 에 서브모듈 아닌 항목이 둘로 늘어난다.
+서브모듈 유지를 우선해 현재 방식을 택했다.

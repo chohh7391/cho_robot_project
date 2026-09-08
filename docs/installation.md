@@ -98,14 +98,18 @@ guide already fetched them. If you cloned without `--recursive`:
 
 ```bash
 cd ~/ros2_ws/src/cho_robot_project
-git submodule update --init extern/curobo extern/isaac_ros_cumotion extern/isaac_ros_common
+git submodule update --init extern/curobo extern/isaac_ros_cumotion
 ```
 
 | Submodule | Pinned at |
 |---|---|
 | `extern/curobo` | tag `v0.7.8` (`d64c4b00…`) -- the last cuRobo v1 release |
 | `extern/isaac_ros_cumotion` | `release-3.2` -- the last branch that supports Humble |
-| `extern/isaac_ros_common` | `release-3.2` |
+
+`isaac_ros_common` is deliberately absent. The cuMotion packages reach into it
+at build time for two version-stamping resources, but its own package
+hard-requires NVIDIA VPI, which nothing here uses. `cho_moveit_curobo_deps`
+supplies those two resources instead, so the upstream repository is not needed.
 
 `nvblox_msgs` is the exception: it is **not** a submodule. `cumotion_planner.py`
 imports it unconditionally, but the full `isaac_ros_nvblox` tree carries ten
@@ -125,55 +129,31 @@ git fetch -q --depth 1 origin release-3.2 && git checkout -q FETCH_HEAD
 
 ### 2. colcon boundary -- do not skip this
 
-Those checkouts carry 19 packages this project does not use, and one of them,
-`curobo_core`, **fails** a plain workspace build: it wants torch in the system
-interpreter and its own `curobo/` submodule is empty. `extern/curobo` is worse --
-it has no `package.xml`, so colcon identifies it by `setup.py` and tries to build
-the pip tree.
+`extern/isaac_ros_cumotion` carries eleven packages; this project builds five.
+One of the six it does not, `curobo_core`, **fails** a plain workspace build: it
+wants torch in the system interpreter and its own `curobo/` submodule is empty.
+`extern/curobo` is worse -- it has no `package.xml`, so colcon identifies it by
+`setup.py` and tries to build the pip tree.
 
-The boundary is enforced at discovery, and because the vendor trees are
-gitignored these markers are not tracked. Create them:
-
-```bash
-cd ~/ros2_ws/src/cho_robot_project/extern
-NOTE="Excluded: not used by this project. See docs/installation.md."
-
-# The pip source tree is not a colcon package at all.
-echo "$NOTE" > curobo/COLCON_IGNORE
-
-# isaac_ros_common: none of it is built. Its own isaac_ros_common package
-# hard-requires NVIDIA VPI; cho_moveit_curobo_deps supplies the two
-# version-stamping resources the cuMotion packages actually need instead.
-for d in isaac_ros_common/*/; do
-  [ -f "$d/package.xml" ] && echo "$NOTE" > "$d/COLCON_IGNORE"
-done
-
-# isaac_ros_cumotion: keep five packages, exclude the rest.
-KEEP="isaac_ros_cumotion isaac_ros_cumotion_interfaces \
-      isaac_ros_cumotion_python_utils isaac_ros_cumotion_robot_description \
-      isaac_ros_cumotion_moveit"
-for d in isaac_ros_cumotion/*/; do
-  p=$(basename "$d")
-  [ -f "$d/package.xml" ] || continue
-  case " $KEEP " in *" $p "*) continue;; esac
-  echo "$NOTE" > "$d/COLCON_IGNORE"
-done
-```
-
-Verify -- exactly six packages should appear:
+colcon's only discovery-level opt-out is a `COLCON_IGNORE` file inside the
+package directory, and those directories belong to submodules, whose contents
+are upstream's. So the markers cannot be committed -- but their creation is
+scripted and verified:
 
 ```bash
-colcon list --base-paths . | awk '{print $1}' | grep -E 'isaac|curobo|nvblox'
+cd ~/ros2_ws/src/cho_robot_project
+tools/setup_curobo_vendor.sh
 ```
 
 ```
-isaac_ros_cumotion
-isaac_ros_cumotion_interfaces
-isaac_ros_cumotion_moveit
-isaac_ros_cumotion_python_utils
-isaac_ros_cumotion_robot_description
-nvblox_msgs
+colcon boundary OK: 6 packages (isaac_ros_cumotion isaac_ros_cumotion_interfaces
+isaac_ros_cumotion_moveit isaac_ros_cumotion_python_utils
+isaac_ros_cumotion_robot_description nvblox_msgs)
 ```
+
+It is idempotent, and `--check-only` verifies without writing. Re-run it after
+re-checking out either submodule -- `git submodule update` restores upstream's
+tree and takes the markers with it.
 
 ### 3. Python environment
 

@@ -28,6 +28,3 @@
 [submodule "extern/isaac_ros_cumotion"]
 	path = extern/isaac_ros_cumotion
 	url = https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion.git
-[submodule "extern/isaac_ros_common"]
-	path = extern/isaac_ros_common
-	url = https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common.git

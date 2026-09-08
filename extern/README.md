@@ -65,3 +65,22 @@ candidate commit, build only the two packages above, and commit the updated
 gitlink in the superproject.  Never leave `main` as a floating dependency.
 Cho-specific policy belongs in a Cho wrapper or adapter; do not patch vendor
 source unless the design review records why a wrapper is insufficient.
+
+## cuRobo / cuMotion
+
+`extern/curobo` and `extern/isaac_ros_cumotion` are pinned submodules for the
+optional GPU planning pipeline (`cumotion:=true` on the FR5 MoveIt entry points).
+`extern/nvblox_msgs_src` is a sparse checkout of one package, not a submodule,
+and is gitignored -- the reasons are in `extern/VENDORED_CUROBO.md`.
+
+Unlike the OpenArm boundary above, this one is enforced at colcon's discovery
+stage rather than by an allowlist at build time: `curobo_core` does not merely
+go unused, it fails to build here. Run the helper once after checking the
+submodules out, and again after any `git submodule update`:
+
+```bash
+tools/setup_curobo_vendor.sh              # create the markers and verify
+tools/setup_curobo_vendor.sh --check-only # verify only
+```
+
+Full setup, including the venv cuRobo needs, is in `docs/installation.md`.
