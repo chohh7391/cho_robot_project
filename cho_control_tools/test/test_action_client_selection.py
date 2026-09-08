@@ -177,7 +177,13 @@ def test_task_reach_honors_an_optional_motion_duration():
 
 
 @pytest.mark.parametrize('arm', ['single', 'left', 'right'])
-def test_openarm_task_reach_is_absolute_and_idempotent_at_action_boundary(arm):
+def test_openarm_registry_task_reach_is_absolute_and_idempotent_at_action_boundary(arm):
+    """The registry contract: absolute targets, so a repeat is not a relative move.
+
+    The operator client substitutes relative probes for selectors 0-2 on the
+    direct MIT task endpoint only - see
+    test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary.
+    """
     shell = bare_shell('openarm')
     shell.arm = arm
     shell.robot_config = MODULE.load_robot_config('openarm', arm)
@@ -194,6 +200,46 @@ def test_openarm_task_reach_is_absolute_and_idempotent_at_action_boundary(arm):
     assert second.relative is False
     assert first.target_pose.position == second.target_pose.position
     assert first.target_pose.orientation == second.target_pose.orientation
+
+
+@pytest.mark.parametrize('arm', ['single', 'left', 'right'])
+def test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary(monkeypatch, arm,
+                                                                         capsys):
+    """The one documented exception to the absolute registry contract.
+
+    Direct MIT task control starts from nominal zero, where the `home 1`-derived
+    absolute targets can be unreachable, so the operator client substitutes
+    bounded relative TCP probes for selectors 0-2. Two `reach 0` commands
+    therefore send two relative goals and the displacement compounds.
+    """
+    from cho_control_tools.clients import operator_client
+
+    prefix = '' if arm == 'single' else f'{arm}_'
+    shell = bare_shell('openarm')
+    shell.arm = arm
+    shell.robot_config = MODULE.load_robot_config('openarm', arm)
+    shell.task_action_name = (
+        f'/controller_action_server/{prefix}task_space_impedance_mit_controller')
+    shell.task_space_action_client = object()
+    shell.joint_space_action_client = None
+    shell.gripper_action_client = None
+    shell.robotiq_command_publisher = None
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append(goal) or True
+
+    monkeypatch.setattr(operator_client, '_control_suite_shell',
+                        lambda: (lambda **_kwargs: shell))
+    operator_client.RobotActionShell('openarm', arm)
+    assert 'repeats accumulate' in capsys.readouterr().out
+
+    shell.do_reach('0')
+    shell.do_reach('0')
+    shell.do_reach('3')
+
+    assert [goal.relative for goal in sent] == [True, True, False]
+    # Identical relative goals: the arm moves the same delta again, it does not
+    # return to a fixed world target.
+    assert sent[0].target_pose.position == sent[1].target_pose.position
 
 
 def test_openarm_both_reach_sends_all_registered_14_joint_goals(capsys):

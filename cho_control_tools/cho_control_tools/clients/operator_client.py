@@ -102,9 +102,13 @@ class RobotActionShell:
 
         # Keep the ordinary metadata untouched for MoveIt/non-MIT task
         # endpoints. Only the direct MIT endpoint starts from nominal zero, so
-        # only it replaces its presets with these operator goals.
+        # only it replaces its presets with these operator goals. The registry
+        # targets are absolute and idempotent; these are not, so the operator
+        # is told rather than left to read the source.
         motions = getattr(shell, 'robot_config', {}).get('motions')
         if isinstance(motions, dict):
+            print('Direct MIT task control: reach 0-2 are relative TCP probes '
+                  '(repeats accumulate); reach 3 is absolute.')
             motions['reach'] = {
                 selector: {
                     'relative': True,

@@ -156,7 +156,7 @@ def test_openarm_mit_does_not_retry_accepted_task_failure(monkeypatch):
        0.707106781185, -0.000001298672))),
 ])
 def test_openarm_mit_task_endpoint_uses_relative_probes_and_absolute_forward_bend(
-        monkeypatch, endpoint, profile, forward_bend):
+        monkeypatch, capsys, endpoint, profile, forward_bend):
     class BaseShell:
         def __init__(self, **kwargs):
             self.arm = kwargs.get('arm', 'single')
@@ -171,6 +171,12 @@ def test_openarm_mit_task_endpoint_uses_relative_probes_and_absolute_forward_ben
 
     monkeypatch.setattr(operator_client, '_control_suite_shell', lambda: BaseShell)
     shell = operator_client.RobotActionShell('openarm', profile)._shell
+
+    # The substituted contract differs from the registry's absolute one, so the
+    # operator is told at startup instead of having to read the source.
+    startup = capsys.readouterr().out
+    assert 'reach 0-2 are relative TCP probes' in startup
+    assert 'repeats accumulate' in startup
 
     reach = shell.robot_config['motions']['reach']
     expected_relative = {
@@ -200,7 +206,7 @@ def test_openarm_mit_task_endpoint_uses_relative_probes_and_absolute_forward_ben
     assert not reach['3']['relative']
 
 
-def test_openarm_non_mit_task_metadata_keeps_its_absolute_presets(monkeypatch):
+def test_openarm_non_mit_task_metadata_keeps_its_absolute_presets(monkeypatch, capsys):
     class BaseShell:
         def __init__(self, **kwargs):
             del kwargs
@@ -218,6 +224,8 @@ def test_openarm_non_mit_task_metadata_keeps_its_absolute_presets(monkeypatch):
 
     assert all(not motion['relative']
                for motion in shell.robot_config['motions']['reach'].values())
+    # No substitution here, so no contract line either.
+    assert 'relative TCP probes' not in capsys.readouterr().out
 
 
 def test_openarm_mit_startup_rejection_is_not_retried_after_launch_window(monkeypatch):

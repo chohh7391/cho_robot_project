@@ -126,10 +126,20 @@ ros2 run cho_control_tools openarm_action_client --arm left
 ros2 run cho_control_tools openarm_action_client --arm right
 ```
 
-The task-space MIT controller uses absolute world-frame `reach` targets, so a
-repeated selector is not a cumulative relative move. It first settles into its
-configured non-singular startup posture; a client may briefly retry a goal
-during that bounded startup window.
+`reach` targets in the robot registry are absolute world-frame poses, so a
+repeated selector is idempotent rather than a cumulative relative move. The
+direct MIT task endpoint is the one exception: it starts from the nominal-zero
+posture, where the absolute targets (which were resolved from the `home 1`
+posture) may be out of reach, so the operator client substitutes bounded
+relative TCP probes for selectors `0`-`2` on that endpoint only. **On the
+direct MIT task path, repeating `reach 0`-`reach 2` therefore accumulates
+displacement** (about 45 mm per `reach 0`); selector `3` stays absolute and
+idempotent. The client prints which contract is in force when it starts. Every
+other endpoint - MoveIt, non-MIT task, joint-space fallback - keeps the
+absolute registry presets. The controller first settles into its configured
+non-singular startup posture; a client may briefly retry a goal during that
+bounded startup window. See
+[docs/action_clients.md](docs/action_clients.md) for the probe values.
 
 ### Paired fourteen-axis MoveIt control
 
