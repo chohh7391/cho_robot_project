@@ -1,0 +1,157 @@
+# FR5 XRDF for the cuMotion MoveIt planner (todo/CUROBO_MOVEIT_TODO.md Step 3).
+#
+# PROVENANCE: collision spheres and the self-collision ignore list are taken
+# verbatim from the user's earlier project,
+#   ~/sdl_ws/src/sdl_project/TAMP/tamp/content/assets/robot/dcp_description/config/fr5/fr5.xrdf
+# whose joint and link names match this project's FR5 description exactly
+# (j1..j6, base_link / shoulder_link / upperarm_link / forearm_link /
+# wrist1..3_link). Spheres are expressed in each link's own frame, so they
+# transfer to our URDF unchanged.
+#
+# THREE DELIBERATE CHANGES from that source file:
+#
+# 1. `add_frame: attached_object` was added. isaac_ros_cumotion's
+#    `update_kinematics.get_robot_config()` unconditionally injects
+#    `extra_collision_spheres: {attached_object: 100}` for every XRDF it loads,
+#    so cuRobo needs that link to exist in the kinematics tree.
+#
+# 2. `acceleration_limits` 10 -> 0.7 rad/s^2, matching `joint_limits.yaml`.
+#    The source file carried the sphere generator's default of 10, which is 14x
+#    this cell's commissioned acceleration. cuMotion does NOT read MoveIt's
+#    `joint_limits.yaml` -- it plans from this file plus the URDF -- so the
+#    ceiling has to be restated here or it is silently lost.
+#
+# 3. `jerk_limits` 10000 -> 35 rad/s^3. MoveIt's TOTG has no jerk limit, so
+#    there is no existing project value to copy. 35 is a commissioning value,
+#    not a measurement: the FR5 driver streams ServoJ at 8 ms, so jerk beyond
+#    a_max/dt = 0.7/0.008 = 87.5 rad/s^3 cannot be expressed at the command
+#    rate, and 35 sits in the low half of that band.
+#
+#    Do NOT raise these two to fix a cuRobo `FINETUNE_TRAJOPT_FAIL`. That was
+#    measured (2026-09-08) and neither limit is the cause: sweeping
+#    acceleration 0.7 vs 2.0 and jerk 35 vs 500 changed nothing, while
+#    `trajopt_tsteps` 32 -> 64 fixed every failing goal. The solver never gets
+#    near these limits anyway -- the planned trajectories peak around
+#    0.04 rad/s^2. The waypoint count is set on the planner node
+#    (`num_trajopt_time_steps`), see launch/cumotion_planner.launch.py.
+#
+# KNOWN GAP -- VELOCITY IS NOT SET HERE AND CANNOT BE:
+#   cuRobo's XRDF parser (`curobo/util/xrdf_utils.py`) reads only
+#   `acceleration_limits` and `jerk_limits` from `cspace`. Velocity comes from
+#   the URDF, and this project's FR5 URDF carries the DATASHEET maxima
+#   (3.15 / 3.2 rad/s). The commissioned ceiling is half that (1.575 / 1.6) and
+#   lives only in `joint_limits.yaml`, which cuMotion never reads.
+#
+#   At the project's standard 0.25 scaling that means cuMotion would command
+#   3.15 * 0.25 = 0.7875 rad/s -- which is exactly the value `joint_limits.yaml`
+#   records the real FR5 refusing (`ServoJ refused, code 14`).
+#
+#   The fix is `velocity_scale: 0.5` in cuRobo's robot config, which the XRDF
+#   format cannot express. It is applied in the generated companion yml
+#   (`fr5_curobo.yml`) that the planner node is pointed at instead. Do not use
+#   this XRDF directly against real hardware without that wrapper.
+
+format: "xrdf"
+
+format_version: 1.0
+
+modifiers:
+  - add_frame:
+      frame_name: "attached_object"
+      parent_frame_name: "wrist3_link"
+      joint_name: "attach_joint"
+      joint_type: FIXED
+      fixed_transform:
+        position: [0.0, 0.0, 0.0]
+        orientation: {w: 1.0, xyz: [0.0, 0.0, 0.0]}
+
+default_joint_positions:
+  # home1, this cell's canonical simulation ready pose
+  # (cho_robot_config/config/fr5.yaml poses.home['1']).
+  j1: 0.0
+  j2: -0.7853981634
+  j3: -1.5707963268
+  j4: 0.7853981634
+  j5: -1.5707963268
+  j6: 0.0
+
+cspace:
+  joint_names:
+    - "j1"
+    - "j2"
+    - "j3"
+    - "j4"
+    - "j5"
+    - "j6"
+  # See notes 2 and 3 in the header before changing these.
+  acceleration_limits: [0.7, 0.7, 0.7, 0.7, 0.7, 0.7]
+  jerk_limits: [35.0, 35.0, 35.0, 35.0, 35.0, 35.0]
+
+tool_frames: ["wrist3_link"]
+
+collision:
+  geometry: "fr5_collision_spheres"
+
+self_collision:
+  geometry: "fr5_collision_spheres"
+  ignore:
+    base_link:
+      - "shoulder_link"
+    shoulder_link:
+      - "upperarm_link"
+    upperarm_link:
+      - "forearm_link"
+    forearm_link:
+      - "wrist1_link"
+    wrist1_link:
+      - "wrist2_link"
+    wrist2_link:
+      - "wrist3_link"
+
+geometry:
+  # base_link deliberately carries no spheres, as in the source file: it is
+  # fixed at the world origin and the static floor sits below it at z = -0.05.
+  fr5_collision_spheres:
+    spheres:
+      shoulder_link:
+        - center: [-0.0, -0.004, 0.159]
+          radius: 0.0868
+      upperarm_link:
+        - center: [0.001, -0.0, 0.14]
+          radius: 0.0877
+        - center: [-0.423, -0.003, 0.147]
+          radius: 0.085
+        - center: [-0.22, -0.0, 0.138]
+          radius: 0.0588
+        - center: [-0.156, 0.0, 0.138]
+          radius: 0.0588
+        - center: [-0.283, -0.0, 0.138]
+          radius: 0.0588
+        - center: [-0.073, 0.002, 0.136]
+          radius: 0.0705
+        - center: [-0.354, 0.0, 0.136]
+          radius: 0.0616
+      forearm_link:
+        - center: [-0.009, 0.002, 0.035]
+          radius: 0.076
+        - center: [-0.392, 0.0, 0.004]
+          radius: 0.0699
+        - center: [-0.249, 0.0, 0.0]
+          radius: 0.0544
+        - center: [-0.121, -0.0, -0.0]
+          radius: 0.0544
+        - center: [-0.059, 0.001, 0.0]
+          radius: 0.0534
+        - center: [-0.313, 0.001, -0.0]
+          radius: 0.0539
+        - center: [-0.184, -0.0, 0.0]
+          radius: 0.0544
+      wrist1_link:
+        - center: [-0.0, 0.004, 0.101]
+          radius: 0.0645
+      wrist2_link:
+        - center: [-0.0, -0.005, 0.097]
+          radius: 0.0645
+      wrist3_link:
+        - center: [-0.0, -0.0, 0.07]
+          radius: 0.0529

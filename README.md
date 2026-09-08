@@ -199,6 +199,10 @@ For collision-aware planning, launch the FR5 MoveIt wrapper instead:
 ros2 launch cho_bringup_fr5 bringup_mujoco_moveit.launch.py
 ```
 
+FR5 can also plan on the GPU with NVIDIA cuMotion / cuRobo by adding
+`cumotion:=true`. It is off by default and applies to pose goals only; see
+`cho_moveit/README.md` for what it changes and what it costs.
+
 `home 0` is a diagnostic/singular pose and is not appropriate for task-space
 motion near the floor.
 

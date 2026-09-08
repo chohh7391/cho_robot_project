@@ -66,12 +66,21 @@ class MoveItActionBridge(Node):
         self.declare_parameter('supports_task', True)
         self.declare_parameter('max_velocity_scaling_factor', 0.25)
         self.declare_parameter('max_acceleration_scaling_factor', 0.25)
+        # Which MoveIt planning pipeline each action asks for. Split on purpose:
+        # cuMotion converts a joint goal to an EE pose via FK and plans to the
+        # pose, so an exact joint target is not preserved. Task goals are already
+        # poses and lose nothing. See todo/CUROBO_MOVEIT_TODO.md D1, and the
+        # measured confirmation in todo/curobo_bench/README.md.
+        self.declare_parameter('joint_planning_pipeline', 'ompl')
+        self.declare_parameter('task_planning_pipeline', 'ompl')
         self.declare_parameter('move_group_action', '/move_action')
         self.declare_parameter('ready_service', '/static_scene_ready')
         self.declare_parameter('controller_manager', '/controller_manager')
         self.declare_parameter('planning_scene_service', '/get_planning_scene')
         self._robot_type = self.get_parameter('robot_type').value.strip('/')
         self._profile = self.get_parameter('profile').value.strip('/') or 'single'
+        self._joint_pipeline = self.get_parameter('joint_planning_pipeline').value
+        self._task_pipeline = self.get_parameter('task_planning_pipeline').value
         self._group = self.get_parameter('planning_group').value
         self._ee_link = self.get_parameter('ee_link').value
         self._world_frame = self.get_parameter('world_frame').value
@@ -150,6 +159,9 @@ class MoveItActionBridge(Node):
         self.get_logger().info(
             f'Advertising identity-scoped actions: {self._joint_action}'
             + (f', {self._task_action}' if self._supports_task else ' (joint-only profile)'))
+        self.get_logger().info(
+            f'Planning pipelines: joint={self._joint_pipeline}, '
+            f'task={self._task_pipeline}')
 
     def _poll_ready(self):
         services = (self._ready_client, self._controllers_client, self._scene_client)
@@ -368,10 +380,10 @@ class MoveItActionBridge(Node):
         constraints.orientation_constraints.append(orientation)
         return constraints
 
-    def _move_goal(self, constraints, duration):
+    def _move_goal(self, constraints, duration, pipeline):
         goal = MoveGroup.Goal()
         goal.request.group_name = self._group
-        goal.request.pipeline_id = 'ompl'
+        goal.request.pipeline_id = pipeline
         goal.request.num_planning_attempts = 5
         goal.request.allowed_planning_time = max(1.0, min(float(duration), 10.0))
         # Cho duration is used as the planning-time budget. MoveIt trajectory
@@ -384,14 +396,14 @@ class MoveItActionBridge(Node):
         goal.planning_options.replan_attempts = 2
         return goal
 
-    def _run_move_group(self, cho_handle, constraints, duration, feedback_type):
+    def _run_move_group(self, cho_handle, constraints, duration, feedback_type, pipeline):
         """Return (succeeded, reason); reason is '' only on success."""
         feedback = feedback_type()
         feedback.percent_complete = 0.0
         cho_handle.publish_feedback(feedback)
         try:
             send_future = self._move_client.send_goal_async(
-                self._move_goal(constraints, duration))
+                self._move_goal(constraints, duration, pipeline))
         except Exception as error:  # noqa: BLE001 - transport state is unknown
             reason = f'MoveGroup send_goal transport failed: {error}'
             self._latch_fault(reason)
@@ -561,7 +573,8 @@ class MoveItActionBridge(Node):
                 return result
             result.is_completed, result.message = self._run_move_group(
                 goal_handle, self._joint_constraints(positions),
-                goal_handle.request.duration, JointSpace.Feedback)
+                goal_handle.request.duration, JointSpace.Feedback,
+                self._joint_pipeline)
             return result
         finally:
             self._release_goal()
@@ -577,7 +590,8 @@ class MoveItActionBridge(Node):
                 goal_handle.abort()
                 return result
             result.is_completed, result.message = self._run_move_group(
-                goal_handle, constraints, goal_handle.request.duration, TaskSpace.Feedback)
+                goal_handle, constraints, goal_handle.request.duration, TaskSpace.Feedback,
+                self._task_pipeline)
             if not result.is_completed:
                 result.message = f'{result.message}; {self._target_summary(constraints)}'
             return result

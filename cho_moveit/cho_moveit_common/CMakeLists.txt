@@ -26,6 +26,9 @@ install(PROGRAMS
   scripts/moveit_action_bridge.py
   scripts/publish_static_scene.py
   scripts/wait_for_static_scene.py
+  # Runs under ~/ros2_ws/.venv-curobo, not the system interpreter: it imports
+  # cuRobo. Installed here so launch files can find it by package path.
+  scripts/curobo_robot_config.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

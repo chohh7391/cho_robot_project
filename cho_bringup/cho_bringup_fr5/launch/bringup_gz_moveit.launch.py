@@ -51,8 +51,18 @@ def generate_launch_description():
             'controller_ready_timeout': LaunchConfiguration('controller_ready_timeout'),
             'activate_controller_after_scene': metadata['trajectory_controller'],
             'deactivate_controller_after_scene': metadata['hold_controller'],
+            'cumotion': LaunchConfiguration('cumotion'),
         }.items())
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'cumotion',
+            default_value='false',
+            description=(
+                'Register the isaac_ros_cumotion planning pipeline beside OMPL and '
+                'start its GPU planner node. Default false: identical to before. '
+                'See todo/CUROBO_MOVEIT_TODO.md.'
+            ),
+        ),
         DeclareLaunchArgument('gazebo_gui', default_value='true'),
         DeclareLaunchArgument('world_file', default_value='empty.sdf'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
