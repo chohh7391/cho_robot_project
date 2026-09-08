@@ -41,6 +41,13 @@ ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torq
 
 # VLA mode (requires control_mode set in controller config)
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
+# OpenArm VLA: the MIT prototype path only. Verified in MuJoCo; the real bringup
+# deliberately does not offer it (see launch_utils.REAL_MIT_DIRECT_CONTROLLERS).
+ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
+  mujoco_mit_prototype:=true control_mode:=torque mit_controller_name:=vla_mit_controller
+# End-to-end check against a running sim: streams chunks like a bridge would and
+# asserts what the arm and the telemetry actually did.
+ros2 run cho_control_tools vla_mit_probe
 
 # Behavior tree task
 ros2 launch cho_task_manager run_task_manager.launch.py task:=<task_name>
@@ -58,8 +65,18 @@ cho_controller/
   cho_controller_common/     # Shared C++ math: Pinocchio FK/IK/dynamics, Eigen utilities
   cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
   utils/cho_trajectory_smoother/  # Time-optimal trajectory generation
+  utils/cho_vla_core/        # Robot-independent VLA action-chunk pipeline: chunk
+                             # validation, observation-time splicing, reference
+                             # sampling/limiting, stream watchdog, gripper edge
+                             # detection. NO ROS (rclcpp is not a dependency) and
+                             # no clock of its own - time is a plain double on the
+                             # host's control clock, so the whole pipeline is
+                             # gtest-able without a controller_manager fixture.
+                             # Consumed by cho_controller_franka's VLAActionServer
+                             # and cho_controller_openarm_mit's VlaMitController.
+                             # See its DESIGN.md.
 
-cho_interfaces/              # ROS2 msgs (ActionChunk, PoseLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
+cho_interfaces/              # ROS2 msgs (ActionChunk, VlaTelemetry, PoseLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
 
 cho_description/cho_description_franka/
   robots/                    # Xacro entry points per robot variant
@@ -131,7 +148,20 @@ Key controllers:
 - `task_space_qp_controller` — operational-space QP with contact-aware force control
 - `task_space_impedance_controller` — impedance control in Cartesian space
 - `joint_space_qp_controller` — joint-level QP controller
-- `vla_controller` — receives `ActionChunk` from VLA inference and streams joint/task commands
+- `vla_controller` — receives `ActionChunk` from VLA inference and streams joint/task commands.
+  The chunk semantics live in `cho_vla_core`; this controller keeps only the three
+  control laws (effort / position / velocity) and its `VLAActionServer` is a thin
+  ROS adapter over that core. OpenArm's equivalent is
+  `cho_controller_openarm_mit/VlaMitController`, which derives from
+  `TaskSpaceImpedanceMitController` and overrides `write_task_target()` alone, so
+  both action spaces run drive-side impedance and the MIT session/ACK/lease/SAFE
+  protocol is inherited unchanged. Two invariants there that the base class does
+  NOT enforce and the VLA path makes mandatory at configure time:
+  `max_reference_offset` (the only bound on `kp*(q_des - q)`, which the drive
+  applies downstream of `torque_limit`) and `stream_timeout_sec > 0`.
+  `max_task_wrench` is inert under `drive_side_impedance` but is still validated
+  as six positive values, so every controller config derived from that base needs
+  it.
 - `ee_state_broadcaster` — publishes `/ee_state/pose` and `/ee_state/twist` (Cartesian state used by Python tasks)
 - `joint_trajectory_controller` — executes trajectories; logs desired-vs-current on its own `~/controller_state`
 
@@ -227,6 +257,20 @@ robot and per profile (a bimanual profile must restate it: `controllers` is merg
 key-by-key, so it would otherwise inherit unprefixed names `per_arm()` never
 spawns). Each task declares the mode it is written for; `control_mode:=` on the
 launch overrides it, and an undeclared mode raises at tree-build time.
+
+### The `-Ofast` / `isfinite()` trap
+
+`cho_controller_common` compiles with `-Ofast`, which implies `-ffinite-math-only`,
+which folds `std::isfinite()` to `true`. Measured on g++ 11.4: an `-Ofast` build
+reports a NaN-carrying vector as all-finite, with no warning. **Never put a
+finiteness check in that package**, and never add `-Ofast` to a package that has
+one. It is the only package in the repo using that flag; every package carrying
+an `allFinite()` / `isfinite()` guard (franka, openarm_mit, the MIT hardware
+adapters, cho_vla_core) builds at default optimisation and is safe.
+
+`cho_vla_core` pins `-fno-finite-math-only` explicitly, which beats `-Ofast`
+regardless of flag order (also measured), and `test_finite_math_guard` fails the
+build if that flag is ever removed.
 
 ### Frame Conventions
 

@@ -2,22 +2,145 @@
 
 ## §0 지금 상태
 
-**FR5에 cuRobo/cuMotion이 MoveIt 두 번째 파이프라인으로 붙었고 동작한다. 기본값은 OMPL이고
-`cumotion:=true`로만 켜진다.** 궤적 실행(JTC 추종)은 아직 안 돌려봤다 — 배선은 붙어 있다.
+**VLA 파이프라인이 로봇 무관 코어로 분리되고 OpenArm MIT에 VLA 컨트롤러가 붙었다.
+테스트 438개 + MuJoCo 프로브 18/18 통과. joint/task 양쪽 다 실제로 추종한다.**
 
-측정으로 갈린 결론: 계획 속도로는 얻을 게 없다(OMPL 15~25 ms 대 cuMotion 244 ms, 그중
-cuRobo 자체는 54 ms이고 190 ms는 플러그인 IPC + 월드 재구축). 이득은 **좁은 씬의 pose 목표
-도달 성공률**이다(27/27 대 23/27, 충돌 인식 IK 덕분). joint 목표는 OMPL이 이긴다(3/9 대 0/9,
-FK 변환이 자유도를 없앰) → 그래서 task만 cuMotion으로 보낸다. 궤적은 2배 길다.
+새 패키지 `cho_controller/utils/cho_vla_core`(구현 1615줄, gtest 87개)가 청크 검증·시간 정렬
+splice·샘플링·레이트 제한·스트림 워치독을 소유한다. ROS 없이(rclcpp 미의존) 컴파일되므로
+controller_manager 픽스처 없이 테스트된다. Franka `VLAActionServer`는 이 코어의 어댑터로
+축소됐고, `cho_controller_openarm_mit/VlaMitController`가 `TaskSpaceImpedanceMitController`를
+상속해 `write_task_target()` 하나만 override 한다 — **task/joint 모두 drive-side impedance.**
 
-미해결 둘: ① cuRobo는 구, MoveIt은 메시로 팔을 보므로 MoveIt이 통과시킨 시작 자세를
-cuMotion이 거부할 수 있다(케이지 씬 0/55의 원인). ② `COLCON_IGNORE` 11개가 서브모듈 안에
-있어 추적 불가 — `tools/setup_curobo_vendor.sh`를 안 돌리면 `cbr`이 실패한다.
+고친 기존 결함 넷: ① 청크 무검증(모르는 `rotation_type` + 빈 배열 = UB, NaN 하나로 컨트롤러
+영구 먹통), ② 스트림 staleness 개념 없음(60초 goal 타임아웃까지 동작 중간 자세로 대기),
+③ 그리퍼가 재생 시각이 아니라 청크 도착 시각에 발사, ⑥ 속도 피드포워드 없음.
 
-상세는 §1의 2026-09-08. 벤치 원자료·판정은 `todo/curobo_bench/README.md`,
-설계 결정은 `todo/CUROBO_MOVEIT_TODO.md`.
+**측정으로 갈린 결정 하나**: 코어를 `cho_controller_common`에 넣으면 안 된다. 그 패키지는
+`-Ofast`로 컴파일되고 이건 `-ffinite-math-only`를 함의해 **`isfinite()`가 NaN에 true를 반환한다**
+(g++ 11.4 실측). 검증기가 그 자리에서 정확히 고치려는 결함을 갖게 된다. 저장소에서 `-Ofast`를
+쓰는 패키지는 그것 하나뿐이고 기존 `allFinite()` 가드들은 안전하다.
+
+**MuJoCo 검증이 단위 테스트로 잡을 수 없는 결함 둘을 잡았다.** ① `resume_on_chunk` 기본값이
+틀렸다 — hold가 `hold_timeout` → abort까지 사실상 종결 상태여서 15 Hz BEST_EFFORT 스트림에서
+두 개 연속 유실이면 rollout이 끝났다. 단위 테스트는 그 latch 동작을 *설계대로* 맞다고 단정하고
+있었다. 두 호스트 모두 `resume_on_stream_recovery` 기본 true로 바꿨다. ② 과거 접두사 판정이
+`t <= now`라 도착시각 경로에서 매 청크의 웨이포인트 0을 버렸고(`dropped_past`가 항상 청크당 1)
+지연 경보로 쓸모가 없었다 → `t < now`.
+
+검증 도구는 `ros2 run cho_control_tools vla_mit_probe`로 저장소에 남겼다.
+
+미해결: real bringup에서 선택 불가(의도, 이제 결정 가능한 상태) / OpenArm VLA 행동 트리 없음 /
+실제 정책으로는 미검증(프로브는 합성 청크) / 브릿지 넷(openpi·GR00T·OpenVLA-OFT·LeRobot)은
+저장소 밖이라 `header.stamp` 에코가 필요하고 그때까지 `chunk_time_source: arrival`이 기본이다.
+
+상세는 §1의 2026-09-09. 설계·결정 근거는 `todo/VLA_TODO.md`,
+코어의 설계 문서는 `cho_controller/utils/cho_vla_core/DESIGN.md`.
 
 ## §1 기록
+
+### 2026-09-09
+
+VLA 파이프라인 1~5단계를 전부 진행했다. 커밋 전 상태.
+
+**시작은 "openarm mit에도 vla controller를 만들고 싶다"였고, 먼저 기존 Franka 코드를 평가했다.**
+
+사용자가 "잘 짜져 있나"를 물었고, 읽어보니 제어 법칙과 RT 규율은 강했다 — `readFromRT()`를 구독
+콜백에서 부르면 RealtimeBuffer의 single-RT-reader 계약을 깬다는 걸 찾아내 shadow copy로 바꾼 것,
+매 사이클 재앵커링이 runaway라는 걸 sim에서 재현하고 앵커를 청크 동안 상수로 고정한 것, 포화에
+`√(2·a·dist)` 제동 엔벨로프를 둔 것. 반면 **입력 검증과 스트림 생존성은 비어 있었다.**
+
+| 결함 | 내용 |
+|---|---|
+| ① | `arm_actions`에 `isfinite` 검사가 한 군데도 없음. 모르는 `rotation_type` → `dim=0` → 빈 배열이 크기 검사 통과 → 역순 이터레이터 범위(UB). NaN 하나면 `q_ref_`가 영구 오염(주석이 스스로 인정) |
+| ② | `goal_timeout_sec`(60초)는 **goal** 타임아웃이라 정책이 5초에 죽으면 팔이 동작 중간 자세로 55초 대기 |
+| ③ | 그리퍼가 파싱 루프(non-RT)에서 발사 → "청크 안에 닫으라는 게 있으면 지금 닫는다", EE 도달보다 최대 1 추론주기 빠름 |
+| ④⑤ | 재생 클럭과 상대 앵커가 도착 시각 기준 → 추론 지연만큼 항상 과거 계획을 따르고 과이동 |
+| ⑥ | 위치만 출력 → velocity 모드는 컨트롤러에서 다시 미분, MIT는 `v_des`가 없어 `dq_des = J⁺v_des` 불가 |
+
+**LeRobot을 코드로 읽은 것이 설계를 바꿨다**
+
+사용자가 async_inference 참고를 제안해 로컬 체크아웃(`~/lerobot`)과 업스트림 `main`(2774d9bd)을
+diff했다. `async_inference/`는 import 정리만 있었지만 업스트림엔 **정책 레벨 RTC**(`policies/rtc/`)와
+새 롤아웃 실행기가 들어와 있었고 지원 목록에 groot가 있다 — 우리 네 스택 중 둘에 직접 걸린다.
+
+가져온 것 중 가장 중요한 건 **"컨트롤러 클럭을 에코한다"**는 계약이다. 처음엔 "브릿지가 관측
+캡처 시각을 stamp에 찍는다"고 썼는데, 그건 브릿지 wall-clock이라 이 저장소의 Multi-PC 구성에서
+chrony 없이 틀어진다. LeRobot은 정수 timestep을 에코해 시각 동기를 아예 필요 없게 만든다 —
+같은 원리로 **브릿지가 관측에 쓴 joint state의 stamp를 그대로 복사**하게 했다.
+
+바꾼 것: LeRobot은 큐가 곧 클럭(틱당 1 pop)이고 신형 실행기도 **인덱스 기반** 등분 보간이다.
+30 Hz 서보 버스에는 맞지만 우리는 750~1000 Hz 대 30~50 Hz 격자에 지터가 있어 시간 샘플링이
+필요하다. 큐가 비면 무명령으로 두는 것도 안 된다 — 토크 제어 팔은 스스로 버티지 않고, MIT는
+write 누락이 프로토콜 폴트다.
+
+**코어를 어디에 둘지가 측정으로 뒤집혔다**
+
+계획은 `cho_controller_common/vla`였다. 그런데 그 패키지는 `-Ofast`로 컴파일된다. `-Ofast`는
+`-ffast-math` → `-ffinite-math-only`를 함의하고, g++ 11.4에서 실측하니 **NaN을 담은 벡터를
+all-finite로 보고한다.** 결함 ①을 고치려는 검증기가 그 자리에서 정확히 그 결함을 갖는다.
+
+저장소 전체를 훑어 `-Ofast`를 쓰는 패키지가 `cho_controller_common` 하나뿐이고 `allFinite()`
+가드를 가진 패키지들(franka/openarm_mit/hardware)은 전부 기본 최적화라 **기존 가드는 안전함**을
+확인했다. 별도 패키지 `cho_vla_core`로 옮겼고, 부수 이득으로 MIT가 eiquadprog/TSID 스택을
+끌어오는 것도 피했다.
+
+플래그 상호작용도 실측했다: `-fno-finite-math-only`는 **순서와 무관하게 `-Ofast`를 이긴다.**
+그래서 tripwire 테스트가 지키는 것은 최적화 레벨이 아니라 그 플래그의 존재다 — 플래그를 지우고
+`-Ofast`를 넣으면 실패하고, 플래그가 있으면 `-Ofast`를 뒤에 붙여도 통과하는 것까지 확인했다.
+
+**MIT 이식은 새 제어법이 아니라 레퍼런스 소스 교체였다**
+
+`TaskSpaceImpedanceMitController`를 상속하고 `write_task_target()` 하나만 override 한다. 베이스
+변경은 최소(`final` 해제, `private`→`protected`, virtual화, `uses_task_space_action()` 신설).
+39 인터페이스 클레임, 세션/ACK/lease/SAFE, return-to-zero 램프, drive-side 임피던스, null-space
+posture, joint-limit 스프링, 마찰 FF, `max_reference_offset`이 전부 그대로 따라온다.
+
+베이스가 허용하는 두 가지를 **설정 단계에서 거부**하게 만들었다. `max_reference_offset`은
+파생 기본값(`0.5·torque_limit/kp`)을 쓰지 않고 필수로 했다 — 드라이브가 `kp(q_des−q)`를 이
+컨트롤러가 클램프할 수 있는 지점 뒤에서 더하므로 이것이 임피던스 토크의 유일한 바운드이고,
+운영자가 쓴 goal에 합당한 기본값이 신뢰할 수 없는 정책 출력에는 합당하지 않다. 설정값은
+`min(0.25·torque_limit/kp, 0.15 rad)`: 토크 바운드만으로는 joint 2에 1.5 rad을 허용하는데 그건
+임피던스 오프셋이 아니라 lunge다. `stream_timeout_sec > 0`도 필수로 했다.
+
+**내가 틀렸다가 테스트가 정정한 것 넷**
+
+1. `dim == 0` 가드가 죽은 코드였다. `rotation_dim()`은 잘못된 enum에 0을 주지만
+   `task_waypoint_dim()`이 `3+0=3`을 반환한다. 회전 **블록** 크기를 검사하도록 고쳤다.
+2. `max_task_wrench`는 drive-side에서 무효라도 **항상 필수 검증** 대상이다. 두 config 블록이
+   빼먹어서 실제로 `on_configure`에 실패할 상태였고 CM 픽스처가 잡았다. 같은 종류를 앞으로
+   잡도록 config 블록이 컨트롤러 요구를 만족하는지 검사하는 pytest를 추가했다.
+3. `task_start_time_`을 VLA goal 시작 시 설정하지 않아 `goal_timeout_sec > 0`이면 마지막
+   TaskSpace goal 시점 기준으로 측정됐다.
+4. 테스트가 틀렸던 것 둘: `AngleAxisd` 추출 각도는 [0, π]로 접히는데 무한히 커지는 값과 그대로
+   비교해 seqlock을 오판했고, `SE3::Interpolate`가 **나사 운동** 보간이라 회전이 동반되면
+   translation이 직선 lerp가 아닌 것을 몰랐다(이건 franka 기존 동작이라 코드가 맞다).
+
+**MuJoCo에서 돌렸고, 그것이 단위 테스트로 잡을 수 없는 결함 둘을 잡았다**
+
+프로브(`vla_mit_probe`, 저장소에 남김)가 추론 브릿지처럼 청크를 흘려보내고 팔과 텔레메트리가
+실제로 무엇을 했는지 단정한다. joint space는 q1 −0.0008 → **정확히 +0.3500**, task space는
+TCP x +0.0019 → **+0.0405**(목표 +0.0419, 횡방향 1.6/3.6 mm). 최종 18/18.
+
+첫 실행은 4개가 실패했고 원인이 하나였다. **`resume_on_chunk` 기본값이 틀렸다.** malformed 청크만
+오는 구간은 워치독을 갱신하지 않으니 200 ms 뒤 hold로 갔는데, 기본 false라서 이후 정상 청크가
+와도 running으로 복귀하지 못했다. 즉 hold가 abort까지 사실상 종결이고, 15 Hz BEST_EFFORT에서
+두 개 연속 유실이면 rollout이 끝난다.
+
+내 근거("정책이 왜 멈췄는지 컨트롤러는 모른다")가 틀렸다 — 실제로 죽은 경우는 `hold_timeout`이
+이미 처리한다. latch는 **일시적 갭으로 goal을 죽이는 것**만 추가한다. 그리고 복귀는 계단이
+아니다: hold 진입 시 참조가 released 되고 돌아온 청크는 blend로 splice 된다.
+
+**단위 테스트가 놓친 이유가 중요하다.** `ResumeIsOptIn`이 두 분기를 다 검증하고 있었다 — latch
+동작을 *설계대로* 맞다고 단정한 것이다. 테스트는 내 설계를 검증했고 설계가 틀렸다.
+
+두 번째는 과거 접두사 판정이 `t <= now`였던 것. 도착시각 경로는 `t_obs = arrival`이라 웨이포인트
+0이 정확히 `now`에 놓이고 매 청크에서 하나 버려졌다(수락 15개에 `dropped_past` 정확히 15). 지금
+실행될 웨이포인트는 과거가 아니므로 `t < now`가 맞다. 고친 뒤 0.
+
+**여전히 안 한 것.** real bringup 선택 불가(의도, 이제 결정 가능). OpenArm VLA 행동 트리 없음.
+**실제 정책으로는 미검증** — 프로브는 합성 청크다. 브릿지 넷은 저장소 밖이라 `header.stamp`
+에코가 필요하고 그때까지 `chunk_time_source: arrival`이 기본이다.
+
 
 ### 2026-09-08
 
