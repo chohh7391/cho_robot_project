@@ -42,7 +42,9 @@ sudo apt-get install libcli11-dev
 ```
 
 The upstream `openarm_can/package.xml` does not currently declare CLI11, so
-`rosdep` alone does not install this system dependency.  The hardware library
+`rosdep` alone does not install this system dependency. `install_dependencies.bash`
+installs `libcli11-dev` by apt for that reason, so the command above is only
+needed when building this vendor checkout without having run that script.  The hardware library
 itself uses Linux SocketCAN and has no additional ROS package dependency.
 `openarm_hardware` directly needs `hardware_interface`, `pluginlib`, `rclcpp`,
 `rclcpp_lifecycle`, and the CMake target exported by `openarm_can`.

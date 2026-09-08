@@ -172,3 +172,15 @@ marked `// cho patch`:
 
 Command interface is unchanged for the arm (position only, `ServoJ`).
 Effort/torque remain unwired (see FR5_TODO.md §3.3).
+
+`package.xml` carries one further patch, marked with an XML comment:
+
+5. **gmock test dependency** — the `<test_depend>` was `ament_add_gmock`, which
+   is the CMake macro `ament_cmake_gmock` provides rather than a package name.
+   No such package exists, so `rosdep` reported
+   `Cannot locate rosdep definition for [ament_add_gmock]` and, because
+   `install_dependencies.bash` runs under `set -e`, the whole dependency install
+   aborted before finishing — for every robot in the workspace, not just the
+   FR5. `CMakeLists.txt:119` does `find_package(ament_cmake_gmock REQUIRED)`, so
+   that is the name the manifest should have carried. The v3.9.9 checkout this
+   replaced declared it correctly; the typo arrived with this vendor drop.

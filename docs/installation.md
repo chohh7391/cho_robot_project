@@ -18,12 +18,24 @@ cd ~/ros2_ws/src/cho_robot_project
 bash install_dependencies.bash
 ```
 
-The dependency script updates and installs the ROS distribution's matching
-`libfranka` and Pinocchio packages together, then uses `rosdep` from the whole
-ROS workspace source directory. It skips their rosdep keys to keep that package
-selection centralized, and excludes a checked-out
-`extern/mujoco_vendor` source package, if present, so rosdep can install
-`ros-humble-mujoco-vendor` for the vendored `mujoco_ros2_control` packages.
+The dependency script installs three packages by apt directly and resolves
+everything else with `rosdep`, running it over the whole ROS workspace source
+directory.
+
+- `libfranka` and Pinocchio are taken from the ROS distribution as an
+  ABI-compatible pair, and their rosdep keys are skipped so that selection stays
+  in one place.
+- `libcli11-dev` covers an upstream manifest omission. `extern/openarm_can`
+  builds its `openarm-can-cli` tool unconditionally and so requires CLI11 at
+  CMake configure time, but its `package.xml` declares no dependencies, so
+  `rosdep` has nothing to resolve. Without it a real OpenArm MIT build fails to
+  configure. Installing it here means the manual `apt install libcli11-dev` step
+  quoted in [OpenArm real bringup](openarm_real_bringup.md) and in
+  `extern/README.md` is already done.
+
+The script also excludes a checked-out `extern/mujoco_vendor` source package, if
+present, so rosdep can install `ros-humble-mujoco-vendor` for the vendored
+`mujoco_ros2_control` packages.
 
 ## MuJoCo
 

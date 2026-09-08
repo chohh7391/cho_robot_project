@@ -18,7 +18,9 @@
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-  <test_depend>ament_add_gmock</test_depend>
+  <!-- cho patch: was ament_add_gmock, which is the CMake macro this package
+       provides and not a package name, so rosdep could not resolve it. -->
+  <test_depend>ament_cmake_gmock</test_depend>
   <test_depend>hardware_interface</test_depend>
 
   <export>

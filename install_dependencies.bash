@@ -24,6 +24,25 @@ SKIP_KEYS=(
   # The external OpenArm packages declare this absent source dependency.
   openarm_description
 )
+# Installed by apt directly rather than resolved by rosdep, for two unrelated
+# reasons:
+#
+#  - libfranka and Pinocchio are an ABI-compatible pair. They are pinned to the
+#    ROS distribution's build of each and their rosdep keys are skipped above,
+#    so the selection stays in one place.
+#
+#  - CLI11 is an upstream manifest omission, not a pin. extern/openarm_can 1.3.4
+#    builds its openarm-can-cli tool unconditionally and so does
+#    find_package(CLI11 REQUIRED) (CMakeLists.txt:129), but its package.xml
+#    declares no dependencies at all beyond ament_cmake. rosdep therefore has
+#    nothing to resolve, and a real OpenArm MIT build fails at CMake configure
+#    time without it. Unlike the pair above this is a plain Ubuntu package, not a
+#    ros-<distro> one: libcli11-dev, in jammy/universe.
+APT_PACKAGES=(
+  "ros-${ROS_DISTRO_NAME}-libfranka"
+  "ros-${ROS_DISTRO_NAME}-pinocchio"
+  libcli11-dev
+)
 EXCLUDED_SOURCE_PACKAGES=(
   "${REPO_ROOT}/extern/mujoco_vendor"
 )
@@ -65,14 +84,10 @@ if [[ "${SKIP_ROSDEP_UPDATE:-0}" != "1" ]]; then
 fi
 
 if [[ "${SIMULATE_APT}" == "1" ]]; then
-  apt-get --simulate install -y \
-    "ros-${ROS_DISTRO_NAME}-libfranka" \
-    "ros-${ROS_DISTRO_NAME}-pinocchio"
+  apt-get --simulate install -y "${APT_PACKAGES[@]}"
 else
   sudo apt update
-  sudo apt install -y \
-    "ros-${ROS_DISTRO_NAME}-libfranka" \
-    "ros-${ROS_DISTRO_NAME}-pinocchio"
+  sudo apt install -y "${APT_PACKAGES[@]}"
 fi
 
 rosdep install \
