@@ -15,7 +15,13 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
-BLACKBOARD_NAMESPACE = '/mit_tuning'
+from cho_task_manager.utils.blackboard import (
+    MIT_TUNING_NAMESPACE,
+    read_if_set,
+    write_client,
+)
+
+BLACKBOARD_NAMESPACE = MIT_TUNING_NAMESPACE
 DEFAULT_EE_POSE_TOPIC = '/ee_state/pose'
 
 
@@ -47,10 +53,7 @@ class EeStateSampleBehavior(py_trees.behaviour.Behaviour):
         self.subscription = None
         self._latest = None
         self._deadline = None
-        self.board = py_trees.blackboard.Client(name=name, namespace=BLACKBOARD_NAMESPACE)
-        for key in (record_as, compare_to):
-            if key:
-                self.board.register_key(key=key, access=py_trees.common.Access.WRITE)
+        self.board = write_client(name, (record_as, compare_to), BLACKBOARD_NAMESPACE)
 
     def setup(self, **kwargs):
         self.node = kwargs['node']
@@ -89,7 +92,11 @@ class EeStateSampleBehavior(py_trees.behaviour.Behaviour):
             f'[{sample[0]:+.5f}, {sample[1]:+.5f}, {sample[2]:+.5f}] m'
         ]
 
-        before = getattr(self.board, self.compare_to, None) if self.compare_to else None
+        # read_if_set, not getattr(..., None): py_trees raises KeyError for a
+        # registered-but-unwritten key, which getattr's default does not
+        # absorb, and that KeyError would escape update() and take the node
+        # down instead of just skipping the comparison.
+        before = read_if_set(self.board, self.compare_to)
         if before:
             delta = [a - b for a, b in zip(sample, before)]
             achieved = math.dist(sample, before)

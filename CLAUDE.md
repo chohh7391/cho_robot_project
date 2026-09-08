@@ -191,6 +191,21 @@ Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
 - `tare_ft_children()` — FT tare plus its settle wait, spliced ahead of the home
   block by the contact-rich forge tasks.
 
+Motion targets can come from the blackboard instead of being fixed at tree-build
+time. `TaskSpaceActionBehavior(target_pose_key=...)` / `JointSpaceActionBehavior(target_joints_key=...)`
+resolve the target in `initialise()`, which py_trees calls immediately before the
+goal is sent; exactly one of literal / key is required. `behaviors/topic/pose_target.py`
+(`PoseTargetBehavior`) is the producer side — it latches a `PoseStamped` off a
+topic into a key. Namespaces live in `utils/blackboard.py` (`/task` for motion
+targets, `/mit_tuning` for the tuning task's measurements) so producer and consumer
+cannot drift. Nothing transforms frames, so `PoseTargetBehavior.required_frame`
+has no default and a pose from another frame is rejected rather than driven to.
+
+Note for any blackboard read: py_trees raises `KeyError` for a registered but
+unwritten key, and `getattr(board, key, None)` does **not** absorb it — that
+KeyError escapes `update()` and takes the node down. Use
+`utils/blackboard.read_if_set()`.
+
 Which controller can hold the arm is `control_mode`-dependent — the description
 exports one command interface per joint, so the position hold is not loaded in a
 torque bringup. `cho_robot_config` carries `controllers.hold_by_control_mode` per

@@ -52,6 +52,47 @@ MIT prototype bringup spawns only the selected MIT controller, so none of the
 hold controllers exists on that path, and the MIT controller owns its own bounded
 SAFE stop and return-to-zero phase.
 
+## Targets computed during the run
+
+`TaskSpaceActionBehavior(target_pose=...)` fixes the pose when the tree is built.
+Pass `target_pose_key=` instead and the pose is read off the blackboard in
+`initialise()`, i.e. immediately before the goal is sent, so it can be something
+no one knew at build time. `JointSpaceActionBehavior` has the same
+`target_joints_key=`. Exactly one of literal / key must be given.
+
+`PoseTargetBehavior` is the producer: it latches the next `geometry_msgs/PoseStamped`
+published on a topic into a blackboard key. Both sides default to the `/task`
+namespace, so a detector and a motion only have to agree on the key name.
+
+```python
+from cho_task_manager.behaviors.topic import PoseTargetBehavior
+
+seq.add_children([
+    PoseTargetBehavior(
+        name='Detect_Object', record_as='grasp_pose',
+        topic='/detector/grasp', required_frame='fr3_link0'),
+    TaskSpaceActionBehavior(
+        name='Move_To_Object', target_pose_key='grasp_pose',
+        controller_name=ControllerNames.TASK_QP, duration=3.0),
+])
+```
+
+`required_frame` has no default and is checked against `header.frame_id`. Nothing
+transforms frames: an absolute `TaskSpace` goal is driven in the robot's arm base
+link (`fr3_link0` on Franka, `model.arm_base_link` in the registry generally,
+which is also what `ee_state_broadcaster` stamps on `/ee_state/pose`). A pose
+arriving in a camera frame is rejected rather than obeyed; transform it before it
+reaches the blackboard. `required_frame=None` disables the check and warns on
+every sample.
+
+`best_effort=True` is needed for a publisher using sensor-data QoS — including
+`/ee_state/pose`, which makes "record where the arm is now, come back to exactly
+here later" a use of the same two behaviours with no extra code.
+
+A target that is unset or the wrong message type fails that one behaviour with a
+log line naming the blackboard path; it does not raise out of the tick. No shipped
+task uses these yet — the trees here all have fixed waypoints.
+
 ## Franka tasks
 
 | task | what it does | required bringup |
