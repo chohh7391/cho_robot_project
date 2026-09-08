@@ -19,6 +19,7 @@ def _peg_insert_approach_position(x_offset, y_offset):
 
 def create_franka_peg_insert_tree(robot_config=None):
     return build_forge_tree(
+        robot_config=robot_config,
         task_label="Peg_Insert",
         approach_position_fn=_peg_insert_approach_position,
         base_orientation=PEG_INSERT_FRANKA_BASE_ORIENTATION,

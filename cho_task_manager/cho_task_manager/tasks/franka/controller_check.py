@@ -36,7 +36,8 @@ from cho_task_manager.utils.msg_utils import (
     make_down_pose,
     make_up_pose,
 )
-from cho_task_manager.utils.controller_names import ControllerNames
+from cho_task_manager.subtrees import guarded_mission, home_subtree
+from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
 
 # Two known-safe joint poses (same values as the pick_place / forge trees).
 # Every joint-space check moves B -> A so the arm demonstrably tracks; B is
@@ -125,36 +126,41 @@ def _hold_check(controller, hold_sec=3.0):
     return seq
 
 
-def _finalize(home_controller):
+def _finalize(robot_config, home_controller):
     """Leave the robot parked at pose A under a position-holding controller."""
-    seq = py_trees.composites.Sequence(name="Finalize", memory=True)
-    seq.add_children([
-        _switch(home_controller, suffix="_Final"),
-        _joint_move(home_controller, JOINT_POSE_A, "Park"),
-    ])
-    return seq
-
-
-def _wrap(name, children):
-    mission = py_trees.composites.Sequence(name=name, memory=True)
-    mission.add_children(children)
-    return py_trees.decorators.OneShot(
-        child=mission,
-        name="OneShot_Root",
-        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION,
+    return home_subtree(
+        robot_config,
+        target_joints=JOINT_POSE_A,
+        controller=home_controller,
+        duration=MOVE_DURATION_SEC,
+        name="Finalize",
+        suffix="_Final",
+        # The gripper is swept by _gripper_check() and left open there.
+        open_gripper=False,
     )
 
 
+def _wrap(name, children, robot_config, control_mode):
+    mission = py_trees.composites.Sequence(name=name, memory=True)
+    mission.add_children(children)
+    # A sweep that fails part-way never reaches Finalize, so without the guard
+    # it walks away from the arm under whichever controller was being probed --
+    # operational_space or gravity_compensation, say.
+    return guarded_mission(mission, robot_config, control_mode)
+
+
 def create_franka_controller_check_position_tree(robot_config=None):
+    robot_config = robot_config or load_robot_config('franka')
     return _wrap("Franka_Controller_Check_Position", [
         _joint_check(ControllerNames.JOINT_POSITION),
         _gripper_check(),
         _task_check(ControllerNames.IK),
-        _finalize(ControllerNames.JOINT_POSITION),
-    ])
+        _finalize(robot_config, ControllerNames.JOINT_POSITION),
+    ], robot_config, 'position')
 
 
 def create_franka_controller_check_torque_tree(robot_config=None):
+    robot_config = robot_config or load_robot_config('franka')
     return _wrap("Franka_Controller_Check_Torque", [
         _joint_check(ControllerNames.JOINT_IMPEDANCE),
         _gripper_check(),
@@ -163,11 +169,12 @@ def create_franka_controller_check_torque_tree(robot_config=None):
         _task_check(ControllerNames.TASK_IMPEDANCE),
         _task_check(ControllerNames.OPERATIONAL_SPACE),
         _hold_check(ControllerNames.GRAVITY_COMPENSATION),
-        _finalize(ControllerNames.JOINT_IMPEDANCE),
-    ])
+        _finalize(robot_config, ControllerNames.JOINT_IMPEDANCE),
+    ], robot_config, 'torque')
 
 
 def create_franka_controller_check_velocity_tree(robot_config=None):
+    robot_config = robot_config or load_robot_config('franka')
     # The VLA hold check is optional: a velocity bringup without vla:=true has no
     # vla_controller loaded, and that must not fail the whole smoke check. When VLA
     # is present but broken, the inner failure is still visible in the tree/log.
@@ -179,5 +186,5 @@ def create_franka_controller_check_velocity_tree(robot_config=None):
         _joint_check(ControllerNames.JOINT_VELOCITY),
         _task_check(ControllerNames.TASK_VELOCITY),
         vla_optional,
-        _finalize(ControllerNames.JOINT_VELOCITY),
-    ])
+        _finalize(robot_config, ControllerNames.JOINT_VELOCITY),
+    ], robot_config, 'velocity')

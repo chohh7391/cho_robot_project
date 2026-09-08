@@ -1,9 +1,13 @@
 import py_trees
-from cho_task_manager.behaviors.action import JointSpaceActionBehavior, TaskSpaceActionBehavior
+from cho_task_manager.behaviors.action import TaskSpaceActionBehavior
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
+from cho_task_manager.subtrees import guarded_mission, home_subtree
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
 
 UR5E_HOME_POSITION = make_joint_state([0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
+
+# See ur/pick_place.py: every UR bringup runs the position interface.
+CONTROL_MODE = 'position'
 
 # Absolute waypoints to visit (base frame, [x, y, z]).
 # Rectangular path within the UR5e reach (~0.85 m), then back to center.
@@ -27,25 +31,14 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
 
     mission_sequence = py_trees.composites.Sequence(name="UR5e_Multi_Move_Sequence", memory=True)
 
-    # 1. Home (joint space)
-    init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
-    init_seq.add_children([
-        # Every switch here is exclusive (the default), so the deactivate list
-        # is derived, not given: pass robot_config so it is derived from the
-        # UR registry entry instead of the Franka controller names.
-        SwitchControllerServiceBehavior(
-            name="Switch_To_UR_Joint",
-            activate=[joint_controller],
-            strict=False,
-            robot_config=robot_config,
-        ),
-        JointSpaceActionBehavior(
-            name="UR_Go_Home",
-            target_joints=UR5E_HOME_POSITION,
-            controller_name=joint_controller,
-            duration=3.0,
-        ),
-    ])
+    # 1. Home (joint space). This robot has no gripper step in this task.
+    init_seq = home_subtree(
+        robot_config,
+        target_joints=UR5E_HOME_POSITION,
+        controller=joint_controller,
+        duration=3.0,
+        open_gripper=False,
+    )
 
     # 2. Waypoint tour (task space, absolute)
     tour_seq = py_trees.composites.Sequence(name="2_Visit_Waypoints", memory=True)
@@ -53,7 +46,6 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
         SwitchControllerServiceBehavior(
             name="Switch_To_UR_Task_IK",
             activate=[task_controller],
-            strict=False,
             robot_config=robot_config,
         )
     )
@@ -69,26 +61,17 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
         )
 
     # 3. Return home (joint space)
-    finish_seq = py_trees.composites.Sequence(name="3_Finish", memory=True)
-    finish_seq.add_children([
-        SwitchControllerServiceBehavior(
-            name="Switch_To_UR_Joint_Final",
-            activate=[joint_controller],
-            strict=False,
-            robot_config=robot_config,
-        ),
-        JointSpaceActionBehavior(
-            name="UR_Go_Home_Final",
-            target_joints=UR5E_HOME_POSITION,
-            controller_name=joint_controller,
-            duration=3.0,
-        ),
-    ])
+    finish_seq = home_subtree(
+        robot_config,
+        target_joints=UR5E_HOME_POSITION,
+        controller=joint_controller,
+        duration=3.0,
+        name="3_Finish",
+        suffix="_Final",
+        open_gripper=False,
+    )
 
     mission_sequence.add_children([init_seq, tour_seq, finish_seq])
 
-    return py_trees.decorators.OneShot(
-        child=mission_sequence,
-        name="UR5e_MultiMove_OneShot_Root",
-        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION,
-    )
+    return guarded_mission(
+        mission_sequence, robot_config, CONTROL_MODE, name="UR5e_MultiMove_OneShot_Root")

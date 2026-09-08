@@ -1,8 +1,10 @@
 from enum import Enum
 from typing import List
 
+from cho_robot_config import CONTROL_MODES
 from cho_robot_config import available_profiles as registry_profiles
 from cho_robot_config import available_robot_types as registry_robot_types
+from cho_robot_config import hold_controllers_for_control_mode as registry_hold_controllers
 from cho_robot_config import load_robot_config as load_registry_config
 
 
@@ -176,6 +178,12 @@ def exclusive_arm_controllers(robot_config=None) -> List[str]:
         controllers = registry.get('controllers', {})
         for role in _EXCLUSIVE_CONTROLLER_ROLES:
             add(controllers.get(role))
+        # The per-control-mode holds claim the same arm interfaces as everything
+        # else here. Leaving them out would let a switch to the torque hold run
+        # without deactivating the velocity one on a robot that has both.
+        for hold in (controllers.get('hold_by_control_mode') or {}).values():
+            for name in (hold if isinstance(hold, list) else [hold]):
+                add(name)
         preferences = registry.get('actions', {}).get('preferences', {})
         # Not 'gripper': those endpoints are backed by the gripper controller.
         for space in ('joint', 'task'):
@@ -195,6 +203,40 @@ def exclusive_arm_controllers(robot_config=None) -> List[str]:
         gripper = controller_name_value(gripper)
         names = [name for name in names if name != gripper]
     return names
+
+
+def resolve_control_mode(robot_config, default=None) -> str:
+    """The bringup control_mode a task should assume.
+
+    The operator's ``control_mode`` parameter wins, because only the operator
+    knows how the bringup was actually started. ``default`` is the mode the
+    task itself is written for - every task here selects controllers from one
+    mode's switchable set, so it has one.
+    """
+    mode = (robot_config or {}).get('control_mode') or default
+    if not mode:
+        raise ValueError(
+            'No control_mode available: pass control_mode:=<mode> to the task '
+            f'manager, or give the task a default. Valid modes: {list(CONTROL_MODES)}')
+    mode = str(mode)
+    if mode not in CONTROL_MODES:
+        raise ValueError(
+            f"Unknown control_mode '{mode}'. Valid modes: {list(CONTROL_MODES)}")
+    return mode
+
+
+def hold_controllers(robot_config, control_mode) -> List[str]:
+    """Controllers that hold this robot's arm in *control_mode*.
+
+    Delegates to the canonical registry so a bimanual profile's per-arm names
+    come out right. Raises ValueError when the robot declares no hold for that
+    mode - see cho_robot_config.hold_controllers_for_control_mode for why that
+    is louder than falling back to ``controllers.hold``.
+    """
+    registry = load_registry_config(
+        robot_config['robot_type'], robot_config.get('profile', 'single'))
+    return registry_hold_controllers(registry, control_mode)
+
 
 
 def controller_action_name(controller):

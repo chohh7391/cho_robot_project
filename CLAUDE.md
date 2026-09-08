@@ -174,6 +174,31 @@ interface.
 
 `task_manager_node.py` instantiates a py_trees tree from `tasks/<task>.py`. Leaf behaviors in `behaviors/action/` (JointSpace, TaskSpace, Gripper) send goals to the controller action servers. `behaviors/service/` handles controller switching via `controller_manager`. The VLA flow adds `vla_controller` activation and a `VLACompletionWaiterBehavior`.
 
+Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
+
+- `home_subtree()` — the switch → go-home → open-gripper block four trees used to
+  carry their own copy of. It takes `robot_config`, which is what makes the
+  exclusive switch derive its deactivate list from the robot's own registry entry
+  instead of the historical hard-coded Franka name list.
+- `guarded_mission()` — the standard root, `OneShot -> Selector(mission, safe abort)`.
+  A failing leaf used to propagate straight to the root and shut the node down with
+  the last-driven controller still active. Now the abort branch runs first: it
+  switches to the hold controller and verifies with `list_controllers` that the
+  switch took, because the exclusive switch path is BEST_EFFORT and activating a
+  controller the bringup never loaded leaves `result.ok` true. `Inverter(FailureIsSuccess(...))`
+  keeps the root reporting FAILURE, so a successful abort is never mistaken for a
+  successful mission.
+- `tare_ft_children()` — FT tare plus its settle wait, spliced ahead of the home
+  block by the contact-rich forge tasks.
+
+Which controller can hold the arm is `control_mode`-dependent — the description
+exports one command interface per joint, so the position hold is not loaded in a
+torque bringup. `cho_robot_config` carries `controllers.hold_by_control_mode` per
+robot and per profile (a bimanual profile must restate it: `controllers` is merged
+key-by-key, so it would otherwise inherit unprefixed names `per_arm()` never
+spawns). Each task declares the mode it is written for; `control_mode:=` on the
+launch overrides it, and an undeclared mode raises at tree-build time.
+
 ### Frame Conventions
 
 - EE pose published on `/ee_state/pose` is **fr3_hand_tcp** frame (tip of gripper).

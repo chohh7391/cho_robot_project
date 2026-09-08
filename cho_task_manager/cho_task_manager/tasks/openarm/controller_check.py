@@ -17,7 +17,13 @@ from cho_task_manager.behaviors.service import (
     ListControllersServiceBehavior,
     SwitchControllerServiceBehavior,
 )
+from cho_task_manager.subtrees import guarded_mission
 from cho_task_manager.utils.msg_utils import make_joint_state
+
+# The legacy effort controller this check drives only exists on a
+# control_mode:=torque bringup, which is also where openarm.yaml's torque hold
+# controller lives.
+CONTROL_MODE = 'torque'
 
 # POSE_HOME is the pose the controller homes to on activation (home_position in
 # the bringup controllers.yaml), so the return leg ends where the arm started.
@@ -72,8 +78,8 @@ def create_openarm_controller_check_torque_tree(robot_config):
         ),
     ])
 
-    return py_trees.decorators.OneShot(
-        child=seq,
-        name='OneShot_Root',
-        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION,
-    )
+    # A check that fails mid-motion leaves this effort controller active with a
+    # half-executed goal; the abort re-asserts the torque hold and proves it
+    # took. On this profile the hold is the same controller, so a healthy
+    # controller makes the abort a no-op switch and the verify still reports.
+    return guarded_mission(seq, robot_config, CONTROL_MODE)

@@ -23,6 +23,7 @@ def _gear_mesh_approach_position(x_offset, y_offset):
 
 def create_franka_gear_mesh_tree(robot_config=None):
     return build_forge_tree(
+        robot_config=robot_config,
         task_label="Gear_Mesh",
         approach_position_fn=_gear_mesh_approach_position,
         base_orientation=GEAR_MESH_FRANKA_BASE_ORIENTATION,

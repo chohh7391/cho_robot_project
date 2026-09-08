@@ -20,12 +20,37 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 | --- | --- | --- |
 | `task` | `pick_place` | task name (must exist for the given `robot_type`) |
 | `robot_type` | `franka` | `franka`, `ur5e` or `openarm` |
+| `arm` | `single` | arm profile; `left` / `right` select the per-arm controller names of a bimanual build |
+| `control_mode` | *(empty)* | `position`, `velocity` or `torque`. Empty keeps the mode the task itself is written for; set it only when the bringup was started in a different one. See below. |
 | `use_sim_time` | `false` | set `true` when running against a simulator |
 | `debug_tree` | `true` | print the unicode tree on every tick |
 | `print_tree` | `true` | print the final tree snapshot when the task finishes |
 
 Running a task against the wrong bringup fails at the first controller switch with
 `no controller with this name exists` — match the `required bringup` column below.
+
+## What happens when a task fails
+
+Every task root is `OneShot -> Selector(mission, safe abort)`. A leaf that fails
+takes the mission branch down, and the selector then runs the abort branch, which
+switches the arm onto its hold controller and verifies with `list_controllers`
+that the switch actually took. The root still reports FAILURE afterwards — the
+abort is not a success. Without it a failed mission left whichever controller it
+was last driving active, with nothing holding the arm.
+
+Which controller can hold the arm depends on the bringup's `control_mode`: the
+description exports exactly one command interface per joint, so the position
+hold is not even loaded in a torque bringup. Each task declares the mode it is
+written for, and `cho_robot_config/config/<robot>.yaml` maps mode to hold
+controller under `controllers.hold_by_control_mode`. Pass `control_mode:=` to
+override the task's assumption; asking for a mode the robot declares no hold for
+fails at tree-build time with the declared modes listed, rather than issuing a
+switch that cannot succeed.
+
+`mit_task_tuning` is the one task with no abort branch, deliberately: the OpenArm
+MIT prototype bringup spawns only the selected MIT controller, so none of the
+hold controllers exists on that path, and the MIT controller owns its own bounded
+SAFE stop and return-to-zero phase.
 
 ## Franka tasks
 

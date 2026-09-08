@@ -1,17 +1,21 @@
 import numpy as np
 import py_trees
 from cho_task_manager.behaviors.action import (
-    JointSpaceActionBehavior,
     TaskSpaceActionBehavior,
     GripperActionBehavior,
 )
 from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
     VLACompletionWaiterBehavior,
-    TareFTSensorServiceBehavior,
 )
+from cho_task_manager.subtrees import guarded_mission, home_subtree, tare_ft_children
 from cho_task_manager.utils.msg_utils import make_pose, make_joint_state
-from cho_task_manager.utils.controller_names import ControllerNames
+from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
+
+# Every forge task drives joint/task impedance and QP controllers, all of which
+# are torque controllers, so these trees only run on a control_mode:=torque
+# bringup. The safe-abort branch resolves its hold controller from this.
+CONTROL_MODE = 'torque'
 
 FRANKA_HOME_POSITION = make_joint_state(
     [0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785]
@@ -64,6 +68,7 @@ def build_forge_tree(
     home_position=FRANKA_HOME_POSITION,
     approach_duration=3.0,
     tare_ft_sensor=True,
+    robot_config=None,
 ):
     """
     Assemble the Franka forge (VLA) mission tree shared by peg_insert/gear_mesh/nut_thread.
@@ -74,6 +79,8 @@ def build_forge_tree(
     tare_ft_sensor: zero the Bota FT sensor at mission start (plus a settle wait). Tasks
     that never consume FT data can pass False to skip both steps.
     """
+    robot_config = robot_config or load_robot_config('franka')
+
     x_offset, y_offset = random_xy_offset(xy_range)
     approach_orientation = random_yaw_orientation(base_orientation, yaw_range)
     approach_pose = make_pose(
@@ -84,32 +91,21 @@ def build_forge_tree(
     mission_sequence = py_trees.composites.Sequence(name=f"{task_label}_Sequence", memory=True)
 
     # 1. initialize
-    init_seq = py_trees.composites.Sequence(name="1_Initialize", memory=True)
-    if tare_ft_sensor:
-        init_seq.add_children([
-            TareFTSensorServiceBehavior(name="Tare_FT_Sensor"),
-            py_trees.timers.Timer(name="Wait_After_Tare", duration=3.0),
-        ])
-    init_seq.add_children([
-        SwitchControllerServiceBehavior(
-            name="Switch_To_Joint_Impedance",
-            activate=[ControllerNames.JOINT_IMPEDANCE]
-        ),
-        JointSpaceActionBehavior(
-            name="Go_Home_Init",
-            target_joints=default_position,
-            controller_name=ControllerNames.JOINT_IMPEDANCE,
-            duration=3.0
-        ),
-        GripperActionBehavior(name="Open_Gripper_Init", grasp=False)
-    ])
+    init_seq = home_subtree(
+        robot_config,
+        target_joints=default_position,
+        controller=ControllerNames.JOINT_IMPEDANCE,
+        duration=3.0,
+        lead_children=tare_ft_children() if tare_ft_sensor else None,
+    )
 
     # 2. Approach to fixed object
     approach_seq = py_trees.composites.Sequence(name="2_Approach_Fixed_Object", memory=True)
     approach_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_Task_QP",
-            activate=[ControllerNames.TASK_QP]
+            activate=[ControllerNames.TASK_QP],
+            robot_config=robot_config,
         ),
         TaskSpaceActionBehavior(
             name="Approach_Object",
@@ -126,7 +122,8 @@ def build_forge_tree(
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
-            activate=[ControllerNames.VLA]
+            activate=[ControllerNames.VLA],
+            robot_config=robot_config,
         ),
         VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion"),
         py_trees.timers.Timer(name="Wait_1_Seconds", duration=1.0),
@@ -136,28 +133,16 @@ def build_forge_tree(
     # 4. finish — built but intentionally NOT wired into mission_sequence below.
     # Owner decision: forge tasks do not auto-return home after VLA completion (unlike
     # pick_place.py). Kept here, one line away from re-enabling, for when that changes.
-    finish_seq = py_trees.composites.Sequence(name="4_Finish", memory=True)
-    finish_seq.add_children([
-        SwitchControllerServiceBehavior(
-            name="Switch_To_Joint_Impedance_Final",
-            activate=[ControllerNames.JOINT_IMPEDANCE]
-        ),
-        JointSpaceActionBehavior(
-            name="Go_Home_Final",
-            target_joints=home_position,
-            controller_name=ControllerNames.JOINT_IMPEDANCE,
-            duration=5.0
-        ),
-        GripperActionBehavior(name="Open_Gripper_Final", grasp=False),
-    ])
+    finish_seq = home_subtree(  # noqa: F841
+        robot_config,
+        target_joints=home_position,
+        controller=ControllerNames.JOINT_IMPEDANCE,
+        duration=5.0,
+        name="4_Finish",
+        suffix="_Final",
+    )
 
     mission_sequence.add_children([init_seq, approach_seq, vla_seq])
     # mission_sequence.add_children([init_seq, approach_seq, vla_seq, finish_seq])
 
-    root = py_trees.decorators.OneShot(
-        child=mission_sequence,
-        name="OneShot_Root",
-        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION
-    )
-
-    return root
+    return guarded_mission(mission_sequence, robot_config, CONTROL_MODE)

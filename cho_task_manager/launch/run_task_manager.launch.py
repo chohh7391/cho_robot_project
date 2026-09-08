@@ -15,6 +15,12 @@ def generate_launch_description():
             'arm', default_value='single',
             description='Arm profile: single, or an arm of a bimanual build (left/right). '
                         'Selects the profile-prefixed controller names.'),
+        DeclareLaunchArgument(
+            'control_mode', default_value='',
+            description='Bringup control mode (position/velocity/torque). Empty keeps the '
+                        'mode the selected task is written for. It decides which controller '
+                        "the task's safe-abort branch switches to, so set it when the "
+                        'bringup was started in a different mode than the task assumes.'),
         DeclareLaunchArgument('debug_tree', default_value='true'),
         DeclareLaunchArgument('print_tree', default_value='true'),
         # Probe geometry for parameterised tuning tasks (openarm mit_task_tuning).
@@ -42,6 +48,7 @@ def generate_launch_description():
                 'task': LaunchConfiguration('task'),
                 'robot_type': LaunchConfiguration('robot_type'),
                 'arm': LaunchConfiguration('arm'),
+                'control_mode': LaunchConfiguration('control_mode'),
                 'debug_tree': LaunchConfiguration('debug_tree'),
                 'print_tree': LaunchConfiguration('print_tree'),
                 'probe_translation': PythonExpression([

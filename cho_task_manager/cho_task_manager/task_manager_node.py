@@ -17,6 +17,12 @@ def main():
     # task that hard-coded the single-arm name would look for an action server
     # that does not exist on that build.
     node.declare_parameter("arm", "single")
+    # Bringup control mode. A bringup exports exactly one command interface per
+    # joint, so it decides which controller can hold the arm -- and therefore
+    # which one a task's safe-abort branch may switch to. Empty means "use the
+    # mode the task itself is written for"; set it when the bringup was started
+    # in a different one.
+    node.declare_parameter("control_mode", "")
     node.declare_parameter("debug_tree", True)
     node.declare_parameter("print_tree", True)
     # Probe geometry for parameterised tuning tasks. Declared here so a gain
@@ -32,6 +38,7 @@ def main():
     task = node.get_parameter("task").get_parameter_value().string_value
     robot_type = node.get_parameter("robot_type").get_parameter_value().string_value
     arm = node.get_parameter("arm").get_parameter_value().string_value
+    control_mode = node.get_parameter("control_mode").get_parameter_value().string_value
     debug_tree = node.get_parameter("debug_tree").get_parameter_value().bool_value
     print_tree = node.get_parameter("print_tree").get_parameter_value().bool_value
 
@@ -59,6 +66,9 @@ def main():
     if probe_duration > 0.0:
         robot_config['probe_duration'] = probe_duration
     robot_config['probe_return'] = probe_return
+    if control_mode:
+        robot_config['control_mode'] = control_mode
+        node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
     try:
         root = build_task_tree(task, robot_config)

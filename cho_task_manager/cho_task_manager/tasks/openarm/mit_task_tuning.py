@@ -45,6 +45,7 @@ from cho_task_manager.behaviors.service import (
     MitTaskDiagnosticsServiceBehavior,
 )
 from cho_task_manager.behaviors.topic import EeStateSampleBehavior
+from cho_task_manager.subtrees import guarded_mission
 
 # A forward-and-slightly-down TCP-local probe. The negative Z keeps a forward
 # probe inside the reach sphere when the arm sits near full extension.
@@ -187,8 +188,10 @@ def create_openarm_mit_task_tuning_tree(robot_config):
     ]
     seq.add_children(children)
 
-    return py_trees.decorators.OneShot(
-        child=seq,
-        name='OneShot_Root',
-        policy=py_trees.common.OneShotPolicy.ON_SUCCESSFUL_COMPLETION,
-    )
+    # No safe-abort branch, deliberately. The MIT prototype bringup spawns only
+    # the selected MIT controller, so none of the hold controllers in
+    # openarm.yaml is loaded on this path and a switch to one would fail. The
+    # MIT controller owns its own bounded SAFE stop and return-to-zero phase,
+    # which is the correct recovery here; a tree-driven switch away from it
+    # mid-fault would take that away.
+    return guarded_mission(seq, robot_config, abort=False)

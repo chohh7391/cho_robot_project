@@ -48,16 +48,32 @@ def test_random_xy_offset_resamples_on_every_call():
     assert replay == first  # reseeding proves each call actually draws fresh, not cached
 
 
-def test_build_forge_tree_does_not_wire_in_finish_seq():
-    tree = build_forge_tree(
+def _mission(tree):
+    """The mission sequence under the standard guarded root.
+
+    The root is OneShot -> Selector(mission, safe abort); the abort branch is
+    what a mid-mission failure runs instead of the tree simply dying with a
+    controller still driving the arm.
+    """
+    assert isinstance(tree, py_trees.decorators.OneShot)
+    guard = tree.decorated
+    assert isinstance(guard, py_trees.composites.Selector)
+    assert [child.name for child in guard.children][1] == "Report_Mission_Failure"
+    return guard.children[0]
+
+
+def _build_test_forge_tree():
+    return build_forge_tree(
         task_label="Test_Task",
         approach_position_fn=lambda x, y: [0.6 + x, y, 0.1],
         base_orientation=[1.0, 0.0, 0.0, 0.0],
         yaw_range=[0.0, 0.0],
         grasp_params=dict(width=0.01, speed=0.05, force=50.0, epsilon_inner=0.005, epsilon_outer=0.005),
     )
-    assert isinstance(tree, py_trees.decorators.OneShot)
-    mission_sequence = tree.decorated
+
+
+def test_build_forge_tree_does_not_wire_in_finish_seq():
+    mission_sequence = _mission(_build_test_forge_tree())
     child_names = [child.name for child in mission_sequence.children]
     assert child_names == ["1_Initialize", "2_Approach_Fixed_Object", "3_Start_VLA"]
     assert "4_Finish" not in child_names
@@ -73,8 +89,23 @@ def test_forge_task_trees_still_build():
         assert isinstance(tree, py_trees.decorators.OneShot)
 
 
+def test_forge_trees_hold_the_arm_when_the_mission_fails():
+    """A forge mission that fails part-way used to leave whichever controller
+    it was driving active with nothing putting the arm anywhere safe.
+    """
+    guard = _build_test_forge_tree().decorated
+    abort = guard.children[1].decorated.decorated
+
+    assert abort.name == "Safe_Abort"
+    switch = abort.children[0]
+    # Forge tasks are torque-mode only, so the hold must be the torque one.
+    assert switch.make_request().activate_controllers == [
+        "joint_space_impedance_controller"]
+    assert abort.children[1].require_active == ["joint_space_impedance_controller"]
+
+
 def _init_child_names(tree):
-    init_seq = tree.decorated.children[0]
+    init_seq = _mission(tree).children[0]
     assert init_seq.name == "1_Initialize"
     return [child.name for child in init_seq.children]
 

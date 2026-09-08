@@ -23,6 +23,7 @@ def _nut_thread_approach_position(x_offset, y_offset):
 
 def create_franka_nut_thread_tree(robot_config=None):
     return build_forge_tree(
+        robot_config=robot_config,
         task_label="Nut_Thread",
         approach_position_fn=_nut_thread_approach_position,
         base_orientation=NUT_THREAD_FRANKA_BASE_ORIENTATION,
