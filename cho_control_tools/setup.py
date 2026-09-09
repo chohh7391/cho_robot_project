@@ -37,6 +37,7 @@ setup(
             'vla_action_client = cho_control_tools.vla.action_client:main',
             'vla_success_gui = cho_control_tools.vla.success_gui:main',
             'vla_mit_probe = cho_control_tools.vla.mit_probe:main',
+            'vla_task_probe = cho_control_tools.vla.task_probe:main',
             'gravity_compensation_sweep = cho_control_tools.diagnostics.gravity_compensation_sweep:main',
             'openarm_task_goal = cho_control_tools.openarm_task.goal:main',
             'openarm_task_tour = cho_control_tools.openarm_task.tour:main',

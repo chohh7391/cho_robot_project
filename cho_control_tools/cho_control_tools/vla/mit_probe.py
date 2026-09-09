@@ -49,13 +49,14 @@ BEST_EFFORT = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
 
 class Probe(Node):
     def __init__(self, controller=DEFAULT_CONTROLLER, chunk_topic=DEFAULT_CHUNKS,
-                 joint_index=0):
+                 joint_index=0, joint_prefix='openarm_joint'):
         super().__init__('vla_mit_probe')
         # Both derived from the controller name, exactly as the controller itself
         # derives its action name from get_node()->get_name().
         action = f'/controller_action_server/{controller}'
         telemetry = f'/{controller}/vla_telemetry'
         self.joint_index = joint_index
+        self.joint_prefix = joint_prefix
         self.client = ActionClient(self, VisionLanguageAction, action)
         self.pub = self.create_publisher(ActionChunk, chunk_topic, BEST_EFFORT)
         self.create_subscription(VlaTelemetry, telemetry, self._telem, 10)
@@ -70,9 +71,23 @@ class Probe(Node):
     def _pose(self, m): self.pose = m
 
     def q(self, i=None):
+        """Measured position of the joint the joint-space phase drives.
+
+        Resolved by NAME. /joint_states carries name[] alongside position[] and
+        its order is whatever the resource manager produced, not the order the
+        config declares -- on the bimanual model it is visibly shuffled. Reading
+        position[i] happens to work on the single-arm model and is luck, not
+        correctness.
+        """
+        if self.joints is None:
+            return float('nan')
         if i is None:
             i = self.joint_index
-        return self.joints.position[i] if self.joints else float('nan')
+        name = f'{self.joint_prefix}{i + 1}'
+        try:
+            return self.joints.position[list(self.joints.name).index(name)]
+        except ValueError:
+            return float('nan')
 
     def tcp(self):
         if not self.pose:
@@ -160,10 +175,13 @@ def main(argv=None):
     parser.add_argument('--chunk-topic', default=DEFAULT_CHUNKS)
     parser.add_argument('--joint-index', type=int, default=0,
                         help='joint the joint-space phase drives')
+    parser.add_argument('--joint-prefix', default='openarm_joint',
+                        help='joint name prefix, e.g. openarm_left_joint or fr3_joint')
     args, ros_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
     rclpy.init(args=ros_args)
-    node = Probe(args.controller, args.chunk_topic, args.joint_index)
+    node = Probe(args.controller, args.chunk_topic, args.joint_index,
+                 args.joint_prefix)
     # The controller's return-to-zero ramp gates its action server, so waiting
     # for the server is also waiting for the arm to reach its start posture.
     if not node.client.wait_for_server(timeout_sec=60.0):
