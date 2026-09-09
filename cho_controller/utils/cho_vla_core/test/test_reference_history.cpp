@@ -1,6 +1,7 @@
 // Copyright 2026 Hyunho Cho
 // SPDX-License-Identifier: Apache-2.0
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <thread>
@@ -153,7 +154,30 @@ TEST(ReferenceHistory, ConcurrentWriterNeverHandsTheReaderATornPose) {
       }
     });
 
+  // Wait for the writer to publish something before timing the read loop. The
+  // loop below is non-blocking and 200k iterations of it take milliseconds, so
+  // on a loaded machine it used to finish before the writer thread was ever
+  // scheduled -- every newest() returned false and the test failed with zero
+  // reads while the library was fine. Observed for real with a simulator running
+  // alongside.
+  {
+    Anchor ready;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!history.newest(ready) && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(history.newest(ready)) << "writer thread never produced an entry";
+  }
+
+  // Bounded by time as well as by iterations, so the read count stays meaningful
+  // whether this runs on an idle machine or a busy one.
+  const auto read_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   for (int attempt = 0; attempt < 200000; ++attempt) {
+    if (reads.load(std::memory_order_relaxed) >= 5000 &&
+      std::chrono::steady_clock::now() > read_deadline)
+    {
+      break;
+    }
     Anchor anchor;
     if (!history.newest(anchor)) {continue;}
     reads.fetch_add(1, std::memory_order_relaxed);
