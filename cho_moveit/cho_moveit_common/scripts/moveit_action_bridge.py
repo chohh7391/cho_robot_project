@@ -66,21 +66,17 @@ class MoveItActionBridge(Node):
         self.declare_parameter('supports_task', True)
         self.declare_parameter('max_velocity_scaling_factor', 0.25)
         self.declare_parameter('max_acceleration_scaling_factor', 0.25)
-        # Which MoveIt planning pipeline each action asks for. Split on purpose:
-        # cuMotion converts a joint goal to an EE pose via FK and plans to the
-        # pose, so an exact joint target is not preserved. Task goals are already
-        # poses and lose nothing. See todo/CUROBO_MOVEIT_TODO.md D1, and the
-        # measured confirmation in todo/curobo_bench/README.md.
-        self.declare_parameter('joint_planning_pipeline', 'ompl')
-        self.declare_parameter('task_planning_pipeline', 'ompl')
+        # Named explicitly rather than left to move_group's default, so the
+        # pipeline a goal is planned with is visible in the launch file. OMPL is
+        # the only pipeline this project registers.
+        self.declare_parameter('planning_pipeline', 'ompl')
         self.declare_parameter('move_group_action', '/move_action')
         self.declare_parameter('ready_service', '/static_scene_ready')
         self.declare_parameter('controller_manager', '/controller_manager')
         self.declare_parameter('planning_scene_service', '/get_planning_scene')
         self._robot_type = self.get_parameter('robot_type').value.strip('/')
         self._profile = self.get_parameter('profile').value.strip('/') or 'single'
-        self._joint_pipeline = self.get_parameter('joint_planning_pipeline').value
-        self._task_pipeline = self.get_parameter('task_planning_pipeline').value
+        self._pipeline = self.get_parameter('planning_pipeline').value
         self._group = self.get_parameter('planning_group').value
         self._ee_link = self.get_parameter('ee_link').value
         self._world_frame = self.get_parameter('world_frame').value
@@ -159,9 +155,7 @@ class MoveItActionBridge(Node):
         self.get_logger().info(
             f'Advertising identity-scoped actions: {self._joint_action}'
             + (f', {self._task_action}' if self._supports_task else ' (joint-only profile)'))
-        self.get_logger().info(
-            f'Planning pipelines: joint={self._joint_pipeline}, '
-            f'task={self._task_pipeline}')
+        self.get_logger().info(f'Planning pipeline: {self._pipeline}')
 
     def _poll_ready(self):
         services = (self._ready_client, self._controllers_client, self._scene_client)
@@ -574,7 +568,7 @@ class MoveItActionBridge(Node):
             result.is_completed, result.message = self._run_move_group(
                 goal_handle, self._joint_constraints(positions),
                 goal_handle.request.duration, JointSpace.Feedback,
-                self._joint_pipeline)
+                self._pipeline)
             return result
         finally:
             self._release_goal()
@@ -591,7 +585,7 @@ class MoveItActionBridge(Node):
                 return result
             result.is_completed, result.message = self._run_move_group(
                 goal_handle, constraints, goal_handle.request.duration, TaskSpace.Feedback,
-                self._task_pipeline)
+                self._pipeline)
             if not result.is_completed:
                 result.message = f'{result.message}; {self._target_summary(constraints)}'
             return result

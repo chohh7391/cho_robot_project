@@ -17,14 +17,13 @@ from launch_ros.substitutions import FindPackageShare
 from cho_robot_config import load_moveit_metadata
 
 
-def _rviz_include(package_share, use_sim_time, gripper, cumotion, condition=None):
+def _rviz_include(package_share, use_sim_time, gripper, condition=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([package_share, 'launch', 'moveit_rviz.launch.py'])
         ),
         condition=condition,
-        launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper,
-                          'cumotion': cumotion}.items(),
+        launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper}.items(),
     )
 
 
@@ -37,9 +36,6 @@ def generate_launch_description():
     # gave the controllers. A mismatch shows up as move_group rejecting
     # gripper_finger_joint out of /joint_states.
     gripper = LaunchConfiguration('gripper')
-    # Opt-in second planning pipeline (todo/CUROBO_MOVEIT_TODO.md D2). Off by
-    # default: with cumotion:=false this launch behaves exactly as before.
-    cumotion = LaunchConfiguration('cumotion')
     package_share = FindPackageShare(metadata['config_package'])
 
     def validate_timeouts(context):
@@ -78,17 +74,6 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([package_share, 'launch', 'move_group.launch.py'])
         ),
-        launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper,
-                          'cumotion': cumotion}.items(),
-    )
-    # The plugin inside move_group only forwards; this node is what actually
-    # plans. It runs under the cuRobo venv, so it is ExecuteProcess, not a Node.
-    cumotion_planner = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [package_share, 'launch', 'cumotion_planner.launch.py'])
-        ),
-        condition=IfCondition(cumotion),
         launch_arguments={'use_sim_time': use_sim_time, 'gripper': gripper}.items(),
     )
     static_scene = Node(
@@ -145,17 +130,11 @@ def generate_launch_description():
                 LaunchConfiguration('max_velocity_scaling_factor'), value_type=float),
             'max_acceleration_scaling_factor': ParameterValue(
                 LaunchConfiguration('max_acceleration_scaling_factor'), value_type=float),
-            # D1: only the task action goes to cuMotion. A joint goal would be
-            # converted to an EE pose by FK and the exact joint target lost -
-            # measured 3/9 vs 0/9 in favour of OMPL (todo/curobo_bench/README.md).
-            'joint_planning_pipeline': 'ompl',
-            'task_planning_pipeline': PythonExpression([
-                "'isaac_ros_cumotion' if '", cumotion,
-                "'.lower() in ('true', '1', 'yes') else 'ompl'"]),
+            'planning_pipeline': 'ompl',
         }],
     )
 
-    gated_rviz = _rviz_include(package_share, use_sim_time, gripper, cumotion)
+    gated_rviz = _rviz_include(package_share, use_sim_time, gripper)
 
     def after_gate(event, context):
         if event.returncode != 0:
@@ -176,7 +155,6 @@ def generate_launch_description():
         package_share,
         use_sim_time,
         gripper,
-        cumotion,
         condition=IfCondition(PythonExpression([
             "'", launch_rviz, "'.lower() in ('true', '1', 'yes') and '",
             publish_static_scene, "'.lower() not in ('true', '1', 'yes')",
@@ -187,17 +165,6 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('publish_static_scene', default_value='true'),
-        DeclareLaunchArgument(
-            'cumotion',
-            default_value='false',
-            description=(
-                'Register the isaac_ros_cumotion planning pipeline beside OMPL and '
-                'start its GPU planner node. Default false leaves this stack '
-                'byte-for-byte as it was. OMPL stays the default pipeline either '
-                'way: a request only reaches cuMotion by asking for '
-                'pipeline_id=isaac_ros_cumotion.'
-            ),
-        ),
         DeclareLaunchArgument(
             'gripper',
             default_value='none',
@@ -235,7 +202,6 @@ def generate_launch_description():
             default_value=metadata['hold_controller']),
         OpaqueFunction(function=validate_timeouts),
         move_group,
-        cumotion_planner,
         action_bridge,
         static_scene,
         wait_for_scene,

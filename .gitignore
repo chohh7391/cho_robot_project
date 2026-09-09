@@ -12,9 +12,3 @@ log/
 # They are large binaries and always reproducible, so they stay out of git.
 cho_description/*/usd/*
 !cho_description/*/usd/README.md
-
-# nvblox_msgs is a sparse checkout, not a submodule: the full isaac_ros_nvblox
-# tree carries ten packages plus its own nested submodules, and nvblox_ros needs
-# the nvblox CUDA library that nothing here uses. Only nvblox_msgs is wanted, and
-# a submodule cannot express that. See docs/installation.md.
-/extern/nvblox_msgs_src/

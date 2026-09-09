@@ -12,11 +12,6 @@ def rviz_node(context):
     # Same eager xacro expansion as move_group: RViz has to be given the same
     # model, or the robot it draws is missing whatever the bringup added.
     gripper = LaunchConfiguration('gripper').perform(context)
-    # Must match what move_group registered, or the RViz Planning Library
-    # dropdown cannot offer the pipeline the plugin is serving.
-    cumotion = LaunchConfiguration('cumotion').perform(context).lower() in (
-        'true', '1', 'yes')
-    pipelines = ['ompl', 'isaac_ros_cumotion'] if cumotion else ['ompl']
     moveit_config = (
         MoveItConfigsBuilder('fr5', package_name=metadata['config_package'])
         .robot_description(mappings={'hardware': 'mock', 'gripper': gripper})
@@ -26,7 +21,7 @@ def rviz_node(context):
                                     mappings={'gripper': gripper})
         .robot_description_kinematics(file_path='config/kinematics.yaml')
         .joint_limits(file_path='config/joint_limits.yaml')
-        .planning_pipelines(default_planning_pipeline='ompl', pipelines=pipelines)
+        .planning_pipelines(default_planning_pipeline='ompl', pipelines=['ompl'])
         .to_moveit_configs()
     )
     rviz_config = PathJoinSubstitution(
@@ -53,12 +48,6 @@ def rviz_node(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument(
-            'cumotion',
-            default_value='false',
-            description='Offer the isaac_ros_cumotion pipeline in RViz too. '
-                        'Keep equal to move_group.launch.py cumotion.',
-        ),
         DeclareLaunchArgument(
             'gripper',
             default_value='none',

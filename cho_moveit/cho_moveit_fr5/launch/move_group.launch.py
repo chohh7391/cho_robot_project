@@ -12,13 +12,6 @@ def move_group_node(context):
     # strings, so the gripper has to be resolved here rather than handed in as
     # a LaunchConfiguration.
     gripper = LaunchConfiguration('gripper').perform(context)
-    # Registering the cuMotion pipeline only loads the planner plugin; OMPL stays
-    # the default, so a request without an explicit pipeline_id is unaffected.
-    # The plugin needs the cumotion planner node running to answer at all - see
-    # cumotion_planner.launch.py.
-    cumotion = LaunchConfiguration('cumotion').perform(context).lower() in (
-        'true', '1', 'yes')
-    pipelines = ['ompl', 'isaac_ros_cumotion'] if cumotion else ['ompl']
     moveit_config = (
         MoveItConfigsBuilder('fr5', package_name=metadata['config_package'])
         .robot_description(mappings={'hardware': 'mock', 'gripper': gripper})
@@ -29,7 +22,7 @@ def move_group_node(context):
         .robot_description_kinematics(file_path='config/kinematics.yaml')
         .joint_limits(file_path='config/joint_limits.yaml')
         .trajectory_execution(file_path='config/moveit_controllers.yaml')
-        .planning_pipelines(default_planning_pipeline='ompl', pipelines=pipelines)
+        .planning_pipelines(default_planning_pipeline='ompl', pipelines=['ompl'])
         .planning_scene_monitor(
             publish_planning_scene=True,
             publish_geometry_updates=True,
@@ -59,16 +52,6 @@ def move_group_node(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument(
-            'cumotion',
-            default_value='false',
-            description=(
-                'Also register the isaac_ros_cumotion planning pipeline. Default '
-                'false: OMPL stays the only pipeline and nothing changes. When '
-                'true, move_group loads the cuMotion planner plugin, which needs '
-                'the planner node from cumotion_planner.launch.py to be running.'
-            ),
-        ),
         DeclareLaunchArgument(
             'gripper',
             default_value='none',

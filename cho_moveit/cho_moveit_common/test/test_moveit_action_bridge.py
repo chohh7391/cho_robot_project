@@ -65,9 +65,8 @@ def bare_bridge():
     bridge._velocity_scaling = 0.25
     bridge._acceleration_scaling = 0.25
     bridge._blocked_joint_goals = []
-    # Defaults must match the node's parameter defaults: OMPL on both sides.
-    bridge._joint_pipeline = 'ompl'
-    bridge._task_pipeline = 'ompl'
+    # Must match the node's parameter default.
+    bridge._pipeline = 'ompl'
     return bridge
 
 
@@ -315,21 +314,11 @@ def test_move_goal_carries_the_requested_pipeline():
     """The pipeline is per-request, not baked in."""
     bridge = bare_bridge()
     constraints = bridge._joint_constraints([0.0] * len(bridge._joint_names))
-    for pipeline in ('ompl', 'isaac_ros_cumotion'):
+    for pipeline in ('ompl', 'some_other_pipeline'):
         assert bridge._move_goal(constraints, 5.0, pipeline).request.pipeline_id == pipeline
 
 
-def test_joint_and_task_pipelines_are_independent_and_default_to_ompl():
-    """D1: a joint goal must never be silently routed to cuMotion.
-
-    cuMotion converts a joint goal to an EE pose by FK and plans to the pose, so
-    the exact joint target is not preserved (measured 3/9 vs 0/9 in favour of
-    OMPL - todo/curobo_bench/README.md). Both default to ompl, and the task side
-    can be switched without dragging the joint side along.
-    """
+def test_planning_pipeline_defaults_to_ompl():
+    """OMPL is the only pipeline this project registers, and both goal types use it."""
     bridge = bare_bridge()
-    assert bridge._joint_pipeline == 'ompl'
-    assert bridge._task_pipeline == 'ompl'
-
-    bridge._task_pipeline = 'isaac_ros_cumotion'
-    assert bridge._joint_pipeline == 'ompl', 'switching task must not move joint'
+    assert bridge._pipeline == 'ompl'
