@@ -83,12 +83,17 @@ REAL_MIT_DIRECT_CONTROLLERS = frozenset({
 # Only the action-producing MIT controllers implement the acknowledged,
 # bounded return-to-zero phase.  Topic producers and paired trajectory
 # controllers intentionally remain outside this launch contract.
+# Joint-space control only. Nominal zero is a kinematic singularity for this arm
+# (sigma_min(J) = 9e-5 measured on the bimanual torso), and the Cartesian paths
+# resolve their error through J there: joints 3, 4 and 5 have essentially zero
+# reference-offset sensitivity at that posture, so the wrist is left to produce
+# the whole task motion. A joint-space law never forms J and is unaffected.
+#
+# This gates the MuJoCo launch only. Real bringup keeps its own rule, where
+# gravity_compensation REQUIRES nominal zero with the task-space controller -
+# hand guiding needs the gravity-neutral posture and never forms a Jacobian.
 RETURN_TO_ZERO_MIT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
-    'task_space_impedance_mit_controller',
-    # Derives from the task-space producer, so it runs the same acknowledged
-    # return-to-zero ramp before its action server becomes available.
-    'vla_mit_controller',
 })
 
 

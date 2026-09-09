@@ -74,11 +74,17 @@ ros2 run cho_control_tools openarm_action_client --arm right
 ### MuJoCo nominal-zero initialization
 
 For direct MuJoCo MIT joint- and task-space launches, `return_to_zero` defaults
-to `true`. The selected arm(s) first move to the bounded nominal-zero posture
-before actions are accepted. Use `return_to_zero:=false` only when deliberately
-skipping that initialization phase. A task-space controller then latches its
-current measured TCP pose and becomes ready in Cartesian damped-torque idle;
-it does not execute the configured legacy `startup_posture`. The non-MIT
+to `false`, as it does on real hardware. Nominal zero is a kinematic singularity
+for this arm, and entering Cartesian control there costs the vertical axis:
+measured on the bimanual torso, the elbow buys 0.001 m of vertical TCP travel
+per radian at the return-to-zero target against 0.349 at a normal working
+posture, so a task-space goal tracked horizontal motion and not vertical.
+With it off, a task-space controller latches its current measured TCP pose and
+becomes ready in Cartesian damped-torque idle. Use `return_to_zero:=true` to opt
+into the bounded nominal-zero posture before actions are accepted. Either way
+the controller does not execute the configured legacy `startup_posture` — that
+key is unused on this path, because `return_to_zero` is the only joint-space
+initialization the controller has. The non-MIT
 legacy MuJoCo backend does not
 implement this controller-owned phase and is unaffected by the default:
 

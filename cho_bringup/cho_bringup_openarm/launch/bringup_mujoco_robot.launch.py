@@ -61,9 +61,16 @@ def generate_launch_description():
             'mujoco_mit_headless', default_value='false', choices=['true', 'false'],
             description='Run the opt-in MIT MuJoCo wrapper without its GUI'),
         DeclareLaunchArgument(
-            'return_to_zero', default_value='true', choices=['true', 'false'],
+            'return_to_zero', default_value='false', choices=['true', 'false'],
             description='Ramp the selected MIT action controller to the bounded nominal-zero '
-                        'joint posture before accepting actions. Set false to opt out.'),
+                        'joint posture before accepting actions. Defaults OFF, matching the '
+                        'real bringup, because nominal zero is a kinematic singularity for '
+                        'this arm: measured in MuJoCo on the bimanual torso, the elbow buys '
+                        '0.001 m of vertical TCP travel per radian at the return-to-zero '
+                        'target against 0.349 at a normal working posture, so a Cartesian '
+                        'goal entered from it tracks horizontal motion and not vertical. '
+                        'Opting out holds the measured Cartesian pose instead. Set true to '
+                        'opt in.'),
         DeclareLaunchArgument(
             'mit_controller_name', default_value='joint_position_mit_controller',
             choices=['joint_position_mit_controller',
@@ -171,9 +178,9 @@ def generate_launch_description():
             mit_prototype, mode, bimanual, mit_controller_base, mit_arm,
             requested_controllers_file)
         # The default MuJoCo backend does not expose the direct MIT action
-        # contract, so the default-on initialization applies only after the
-        # caller has opted into that backend.  This keeps the legacy default
-        # launch usable while direct MIT controllers initialize by default.
+        # contract, so this initialization applies only after the caller has
+        # opted into that backend.  return_to_zero is opt-in here as it is on
+        # real hardware, so the legacy default launch is unaffected either way.
         if return_to_zero and mit_prototype:
             if mit_controller_base not in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS:
                 raise RuntimeError(

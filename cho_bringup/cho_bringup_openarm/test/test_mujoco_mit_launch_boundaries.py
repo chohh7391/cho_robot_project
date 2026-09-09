@@ -223,10 +223,20 @@ def test_direct_bimanual_yaml_has_two_disjoint_one_arm_task_and_joint_plugins():
     assert 'mit_pair_ownership' not in serialized
 
 
-def test_return_to_zero_defaults_on_and_is_limited_to_direct_action_producers():
+def test_return_to_zero_defaults_off_and_is_limited_to_direct_action_producers():
+    """Opt-in here as on real hardware, and only for the direct action producers.
+
+    It used to default ON in MuJoCo while the real bringup defaulted OFF, so the
+    two environments initialized the arm differently and a MuJoCo result did not
+    describe the real one. Nominal zero is a kinematic singularity for this arm:
+    measured on the bimanual torso, the elbow buys 0.001 m of vertical TCP travel
+    per radian at the return-to-zero target against 0.349 at a normal working
+    posture, so a Cartesian goal entered from it tracked horizontal motion and
+    not vertical.
+    """
     launch = PACKAGE / 'launch' / 'bringup_mujoco_robot.launch.py'
     source = launch.read_text()
-    assert "'return_to_zero', default_value='true'" in source
+    assert "'return_to_zero', default_value='false'" in source
     assert 'if return_to_zero and mit_prototype:' in source
     assert 'RETURN_TO_ZERO_MIT_CONTROLLERS' in source
     assert "'return_to_zero_duration': 5.0" in source
@@ -335,9 +345,15 @@ def test_vla_mit_controller_is_registered_and_selectable():
     assert root['controller_manager']['ros__parameters']['vla_mit_controller']['type'] == \
         'cho_controller_openarm_mit/VlaMitController'
     assert 'vla_mit_controller' in launch_utils.MIT_DIRECT_CONTROLLERS
-    # It derives from the task-space producer, so it runs the same acknowledged
-    # return-to-zero ramp before its action server becomes available.
-    assert 'vla_mit_controller' in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
+    # Nominal zero is reserved for the joint-space law. It is a kinematic
+    # singularity for this arm, and a Cartesian path resolving its error through
+    # J there leaves joints 3, 4 and 5 with no reference-offset sensitivity, so
+    # the wrist produces the whole task motion.
+    assert 'vla_mit_controller' not in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
+    assert 'task_space_impedance_mit_controller' not in \
+        launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
+    assert launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS == \
+        frozenset({'joint_impedance_mit_controller'})
 
 
 VLA_ONLY_KEYS = {
