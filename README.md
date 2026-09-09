@@ -199,8 +199,7 @@ For collision-aware planning, launch the FR5 MoveIt wrapper instead:
 ros2 launch cho_bringup_fr5 bringup_mujoco_moveit.launch.py
 ```
 
-MoveIt plans with OMPL only, on CPU, and needs nothing beyond the ROS
-distribution. `cho_moveit/README.md` records why no GPU planner is in the stack.
+MoveIt plans with OMPL only, and needs nothing beyond the ROS distribution.
 
 `home 0` is a diagnostic/singular pose and is not appropriate for task-space
 motion near the floor.
