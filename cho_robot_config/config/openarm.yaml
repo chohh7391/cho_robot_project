@@ -100,6 +100,9 @@ profiles:
         torque: left_joint_space_impedance_controller
       direct_joint: left_joint_impedance_mit_controller
       direct_task: left_task_space_impedance_mit_controller
+      # per_arm() prefixes every controller on a bimanual build, so the
+      # unprefixed top-level name would not exist here.
+      vla: left_vla_mit_controller
       gripper: left_gripper_controller
       moveit_trajectory: left_joint_trajectory_controller
     # Per-arm instance of the legacy effort controller. Without this the profile
@@ -119,6 +122,7 @@ profiles:
         joint: [/openarm/left/controller_action_server/moveit_joint, /controller_action_server/left_joint_impedance_mit_controller]
         task: [/openarm/left/controller_action_server/moveit_task, /controller_action_server/left_task_space_impedance_mit_controller]
         gripper: [/controller_action_server/left_gripper_controller]
+        vla: [/controller_action_server/left_vla_mit_controller]
     # World-frame, idempotent task targets resolved from this arm's MIT
     # startup posture. They deliberately differ from the single-arm targets:
     # both arms hang from the bimanual torso at different world transforms.
@@ -144,6 +148,9 @@ profiles:
         torque: right_joint_space_impedance_controller
       direct_joint: right_joint_impedance_mit_controller
       direct_task: right_task_space_impedance_mit_controller
+      # per_arm() prefixes every controller on a bimanual build, so the
+      # unprefixed top-level name would not exist here.
+      vla: right_vla_mit_controller
       gripper: right_gripper_controller
       moveit_trajectory: right_joint_trajectory_controller
     # Per-arm instance of the legacy effort controller; see the left profile.
@@ -159,6 +166,7 @@ profiles:
         joint: [/openarm/right/controller_action_server/moveit_joint, /controller_action_server/right_joint_impedance_mit_controller]
         task: [/openarm/right/controller_action_server/moveit_task, /controller_action_server/right_task_space_impedance_mit_controller]
         gripper: [/controller_action_server/right_gripper_controller]
+        vla: [/controller_action_server/right_vla_mit_controller]
     motions:
       reach:
         '0': {relative: false, position: [0.353214573, -0.028147131, 0.380270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}

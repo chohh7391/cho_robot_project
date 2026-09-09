@@ -101,21 +101,31 @@ controller_interface::CallbackReturn VlaMitController::on_configure(
     return CallbackReturn::ERROR;
   }
 
-  // max_reference_offset is the ONLY bound on the impedance torque, because the
-  // drive adds kp*(q_des - q) downstream of every clamp this controller can
-  // apply. The base class derives a default from torque_limit/kp when the
-  // parameter is unset; that is a reasonable default for an operator-authored
-  // TaskSpace goal and not for untrusted policy output, so require it here.
-  const auto offset = get_node()->get_parameter("max_reference_offset").as_double_array();
-  if (offset.size() != 7 ||
-    std::any_of(offset.begin(), offset.end(),
-    [](const double v) {return !std::isfinite(v) || v <= 0.0;}))
-  {
-    RCLCPP_ERROR(get_node()->get_logger(),
-      "max_reference_offset must be explicitly set to 7 finite positive values for the "
-      "VLA path: it is the only bound on kp*(q_des - q), which the drive applies "
-      "downstream of torque_limit");
-    return CallbackReturn::ERROR;
+  // Under drive-side impedance, max_reference_offset is the ONLY bound on the
+  // impedance torque: the drive adds kp*(q_des - q) downstream of every clamp
+  // this controller can apply. The base class derives a default from
+  // torque_limit/kp when the parameter is unset, which is reasonable for an
+  // operator-authored TaskSpace goal and not for untrusted policy output, so it
+  // is required here instead.
+  //
+  // It is NOT required under the legacy law (drive_side_impedance: false), where
+  // the joint stiffness is zero and q_des carries measured position: the offset
+  // then bounds nothing, and demanding a value would only invite a meaningless
+  // one. What bounds that law is max_task_wrench and torque_limit, both of which
+  // the base class already validates.
+  if (drive_side_impedance_) {
+    const auto offset =
+      get_node()->get_parameter("max_reference_offset").as_double_array();
+    if (offset.size() != 7 ||
+      std::any_of(offset.begin(), offset.end(),
+      [](const double v) {return !std::isfinite(v) || v <= 0.0;}))
+    {
+      RCLCPP_ERROR(get_node()->get_logger(),
+        "max_reference_offset must be explicitly set to 7 finite positive values "
+        "when drive_side_impedance is true: it is the only bound on kp*(q_des - q), "
+        "which the drive applies downstream of torque_limit");
+      return CallbackReturn::ERROR;
+    }
   }
 
   cho_vla_core::ReferenceLimiter::Params limiter;
@@ -580,7 +590,14 @@ bool VlaMitController::write_joint_reference_target(
     // into torque, so it is bounded here exactly as the Cartesian path bounds
     // its own J^+ offset. Without this a policy could ask for a step of any
     // size and the drive would apply kp times it.
-    const double bound = reference_offset_limit_[joint];
+    // Under the legacy law the base derives this from kp, which is zero there,
+    // so the bound would clamp every offset to zero and the joint reference
+    // would never leave measured position. Fall back to the profile position
+    // window's own span in that case: the emitted q_des is still clamped to the
+    // window by clamp_command_positions() downstream.
+    const double bound = (reference_offset_limit_[joint] > 0.0)
+      ? reference_offset_limit_[joint]
+      : (position_upper_[joint] - position_lower_[joint]);
     const double offset =
       std::clamp(reference.joints(index) - q[joint], -bound, bound);
     target.position[joint] = q[joint] + offset;

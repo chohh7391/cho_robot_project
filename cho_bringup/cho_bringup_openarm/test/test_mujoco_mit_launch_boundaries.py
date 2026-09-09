@@ -340,16 +340,148 @@ def test_vla_mit_controller_is_registered_and_selectable():
     assert 'vla_mit_controller' in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
 
 
-def test_vla_mit_controller_is_not_offered_on_real_hardware():
-    # The real bringup only offers controllers commissioned on hardware. The real
-    # config carries the block so its parameters can be reviewed, but selecting
-    # it is a separate decision after MuJoCo validation.
-    assert 'vla_mit_controller' not in launch_utils.REAL_MIT_DIRECT_CONTROLLERS
+VLA_ONLY_KEYS = {
+    'max_reference_offset', 'chunk_topic', 'chunk_time_source',
+    'stream_timeout_sec', 'hold_timeout_sec', 'resume_on_stream_recovery',
+    'chunk_blend_duration', 'chunk_aggregate_weight', 'chunk_ema_factor',
+    'goal_timeout_sec', 'telemetry_period_sec', 'max_task_lin_vel',
+    'max_task_ang_vel', 'max_task_lin_acc', 'max_joint_ref_acc', 'enable_gripper',
+}
+
+
+@pytest.mark.parametrize('config,pairs', [
+    ('real/controllers_mit.yaml',
+     [('task_space_impedance_mit_controller', 'vla_mit_controller')]),
+    ('real/controllers_mit_bimanual.yaml',
+     [('left_task_space_impedance_mit_controller', 'left_vla_mit_controller'),
+      ('right_task_space_impedance_mit_controller', 'right_vla_mit_controller')]),
+    ('mujoco/controllers_mit_direct_bimanual.yaml',
+     [('left_task_space_impedance_mit_controller', 'left_vla_mit_controller'),
+      ('right_task_space_impedance_mit_controller', 'right_vla_mit_controller')]),
+])
+def test_every_vla_block_is_its_task_space_sibling_plus_vla_keys(config, pairs):
+    """A VLA block must be its TaskSpace sibling verbatim, plus VLA keys only.
+
+    The TaskSpace blocks are what has run on hardware, and much of what is in
+    them is not derivable: per-joint friction levels walked up by hand on the
+    arm, the gravity scale on joint 7, the startup ramp length, and -- differing
+    per file -- whether the drive-side or the legacy impedance law is in use.
+    A hand-written VLA block lost every one of those once. Generating each block
+    from its sibling is the fix; this is the guard.
+    """
+    root = _controllers_mit(config)
+    for task_name, vla_name in pairs:
+        task = root[task_name]['ros__parameters']
+        vla = root[vla_name]['ros__parameters']
+
+        dropped = sorted(set(task) - set(vla))
+        assert not dropped, f'{vla_name} dropped {dropped} from {task_name}'
+        extra = set(vla) - set(task) - VLA_ONLY_KEYS
+        assert not extra, f'{vla_name} adds non-VLA keys {sorted(extra)}'
+        for key in set(task):
+            assert vla[key] == task[key], \
+                f'{vla_name}.{key} diverged from the commissioned {task_name}'
+
+        # max_reference_offset bounds kp*(q_des - q), which only exists under
+        # drive-side impedance. Required there, meaningless under the legacy law.
+        if vla['drive_side_impedance']:
+            offset = vla['max_reference_offset']
+            assert len(offset) == 7 and all(v > 0.0 for v in offset)
+            for kp, limit, bound in zip(vla['kp'], vla['torque_limit'], offset):
+                assert kp * bound < 0.30 * limit
+        else:
+            assert 'max_reference_offset' not in vla
+
+        assert vla['stream_timeout_sec'] > 0.0
+        assert vla['chunk_time_source'] == 'arrival'
+        assert vla['enable_gripper'] is False
+
+    # Per-arm blocks must not share a chunk topic.
+    topics = [root[v]['ros__parameters']['chunk_topic'] for _, v in pairs]
+    assert len(set(topics)) == len(topics)
+
+
+def test_real_vla_block_keeps_every_hardware_identified_value():
+    """The real VLA block must not diverge from the commissioned TaskSpace one.
+
+    A hand-written block lost all of it once: the per-joint friction levels
+    walked up by hand on the arm, the 0.85 friction scale, the 1.25 gravity
+    scale on joint 7, and the 15 s startup ramp. None of those are derivable, so
+    the VLA block is generated from the TaskSpace one and this guards the result.
+    """
     root = _controllers_mit('real/controllers_mit.yaml')
-    assert 'vla_mit_controller' in root
+    task = root['task_space_impedance_mit_controller']['ros__parameters']
+    vla = root['vla_mit_controller']['ros__parameters']
+
+    vla_only = {
+        'max_reference_offset', 'chunk_topic', 'chunk_time_source',
+        'stream_timeout_sec', 'hold_timeout_sec', 'resume_on_stream_recovery',
+        'chunk_blend_duration', 'chunk_aggregate_weight', 'chunk_ema_factor',
+        'goal_timeout_sec', 'telemetry_period_sec', 'max_task_lin_vel',
+        'max_task_ang_vel', 'max_task_lin_acc', 'max_joint_ref_acc',
+        'enable_gripper',
+    }
+    assert not (set(task) - set(vla)), \
+        f'VLA block dropped hardware-identified keys: {sorted(set(task) - set(vla))}'
+    assert set(vla) - set(task) == vla_only
+
+    # Everything inherited must be identical, not merely present.
+    for key in set(task):
+        assert vla[key] == task[key], f'{key} diverged from the commissioned value'
+
+    # And the VLA-only envelope must be TIGHTER than the TaskSpace path, never
+    # looser: this is a commissioning envelope for an untrusted reference.
+    assert vla['max_task_lin_vel'] <= 0.10
+    assert vla['stream_timeout_sec'] > 0.0
+    assert all(v > 0.0 for v in vla['max_reference_offset'])
+    for kp, limit, bound in zip(vla['kp'], vla['torque_limit'],
+                                vla['max_reference_offset']):
+        assert kp * bound < 0.30 * limit
 
 
-@pytest.mark.parametrize('config', ['mujoco/controllers_mit.yaml', 'real/controllers_mit.yaml'])
+def test_vla_mit_controller_is_selectable_on_real_hardware_for_the_task_path():
+    # Offered because its Cartesian law IS the commissioned one, unchanged. Its
+    # joint action space is MuJoCo-only; that is a runtime choice the bringup
+    # cannot gate, so it lives in the launch_utils comment and the docs.
+    assert 'vla_mit_controller' in launch_utils.REAL_MIT_DIRECT_CONTROLLERS
+    selection = launch_utils.resolve_real_mit_selection(
+        bimanual='false', controller_name='vla_mit_controller', arm='left')
+    assert selection['controller_names'] == ['vla_mit_controller']
+    assert selection['controllers_file'] == 'controllers_mit.yaml'
+
+
+def test_bimanual_vla_controllers_are_per_arm_and_independent():
+    """One VLA controller per arm, not one driving both.
+
+    cho_vla_core is 7-DoF, and each controller claims its own arm's 39 MIT
+    interfaces, so a bimanual build spawns two. They must differ in every field
+    that binds a controller to an arm -- a shared chunk topic in particular would
+    make both arms follow the same chunk, which is only ever right by accident.
+    """
+    root = _controllers_mit('mujoco/controllers_mit_direct_bimanual.yaml')
+    types = root['controller_manager']['ros__parameters']
+    left = root['left_vla_mit_controller']['ros__parameters']
+    right = root['right_vla_mit_controller']['ros__parameters']
+
+    for side in ('left', 'right'):
+        assert types[f'{side}_vla_mit_controller']['type'] == \
+            'cho_controller_openarm_mit/VlaMitController'
+
+    assert left['arm'] == 'left' and right['arm'] == 'right'
+    assert left['ee_frame'] == 'openarm_left_hand_tcp'
+    assert right['ee_frame'] == 'openarm_right_hand_tcp'
+    assert left['chunk_topic'] != right['chunk_topic']
+
+    # The right chain is mirrored in the torso MJCF, so the symmetric-looking
+    # left home is outside its validated startup envelope and would time out
+    # into SAFE. Inherited from the task-space blocks; guard it here so a future
+    # edit cannot quietly symmetrise them.
+    assert left['startup_posture'] != right['startup_posture']
+
+
+@pytest.mark.parametrize('config', ['mujoco/controllers_mit.yaml',
+                                    'real/controllers_mit.yaml',
+                                    'mujoco/controllers_mit_direct_bimanual.yaml'])
 def test_vla_config_blocks_satisfy_the_controllers_configure_time_requirements(config):
     """Guard the parameters VlaMitController::on_configure refuses to start without.
 
@@ -359,8 +491,14 @@ def test_vla_config_blocks_satisfy_the_controllers_configure_time_requirements(c
     max_reference_offset and stream_timeout_sec mandatory where the TaskSpace
     controller derives or disables them.
     """
-    params = _controllers_mit(config)['vla_mit_controller']['ros__parameters']
+    root = _controllers_mit(config)
+    names = [k for k in root if k.endswith('vla_mit_controller')]
+    assert names, f'{config} declares no VLA controller block'
+    for name in names:
+        _assert_vla_block_configures(root[name]['ros__parameters'])
 
+
+def _assert_vla_block_configures(params):
     wrench = params['max_task_wrench']
     assert len(wrench) == 6 and all(v > 0.0 for v in wrench)
 
