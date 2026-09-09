@@ -44,8 +44,17 @@ def generate_launch_description():
             description='Use the two-arm torso; each arm has a separate CAN bus.'),
         DeclareLaunchArgument(
             'controller_name', default_value='joint_impedance_mit_controller',
-            choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller'],
-            description='Direct seven-axis MIT action controller to activate.'),
+            choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller',
+                     'vla_mit_controller'],
+            description='Direct seven-axis MIT action controller to activate. '
+                        'vla_mit_controller is admitted for its TASK action space '
+                        'only: its Cartesian path is the commissioned '
+                        'task_space_impedance_mit_controller law fed by a chunk '
+                        'stream, but its JOINT action space is new code that has '
+                        'only ever run in MuJoCo and omits the joint-limit spring, '
+                        'so do not send joint chunks to a real arm. '
+                        'launch_utils.REAL_MIT_DIRECT_CONTROLLERS is the resolver '
+                        'side of this list and already carried it.'),
         DeclareLaunchArgument(
             'mit_arm', default_value='both_independent',
             choices=['left', 'right', 'both_independent'],
