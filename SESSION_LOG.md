@@ -142,6 +142,51 @@ TCP x +0.0019 → **+0.0405**(목표 +0.0419, 횡방향 1.6/3.6 mm). 최종 18/1
 에코가 필요하고 그때까지 `chunk_time_source: arrival`이 기본이다.
 
 
+---
+
+**cuRobo / cuMotion을 저장소에서 제거했다.** 전날(아래 § 2026-09-08)에 붙인 GPU 플래닝 경로를
+통째로 되돌린 것이다. 판단 근거는 성능이 아니라 **의존성과 워크스페이스 설정 비용**이다:
+cuRobo는 python3.10 전용 별도 venv(`~/ros2_ws/.venv-curobo`, torch cu128), 커밋할 수 없는
+`COLCON_IGNORE` 마커와 그 생성 스크립트, `isaac_ros_common` shim 패키지, nvblox_msgs 스파스
+체크아웃, 서브모듈 둘을 끌고 온다. 그 전부가 MoveIt 파이프라인 하나를 위한 것이었다. curobo를
+쓸 일이 생기면 MoveIt 플러그인이 아니라 **외부 프로세스로 돌리고 VLA 컨트롤러 쪽으로 명령을
+넣는 편이 간단하다** — 그러면 이 워크스페이스는 curobo를 전혀 알 필요가 없다.
+**MoveIt은 OMPL만 쓴다.**
+
+지운 것: 서브모듈 `extern/curobo`, `extern/isaac_ros_cumotion`(`.gitmodules`에서도 제거),
+`extern/VENDORED_CUROBO.md`, `extern/nvblox_msgs_src`(+ 그 `.gitignore` 규칙),
+`tools/setup_curobo_vendor.sh`, `cho_moveit/cho_moveit_curobo_deps` 패키지,
+`cho_moveit_common/scripts/curobo_robot_config.py`, FR5의 `cumotion_planner.launch.py` /
+`config/fr5.xrdf` / `config/isaac_ros_cumotion_planning.yaml`, `todo/CUROBO_MOVEIT_TODO.md`,
+`todo/curobo_bench/`(벤치 스크립트와 CSV 전부), 그리고 `docs/installation.md`·`README.md`·
+`cho_moveit/README.md`·`extern/README.md`의 해당 절.
+
+지우기만 하면 "왜 없는지"가 사라지므로 **새 상태를 적어 뒀다. 단, 문서마다 성격에 맞는 만큼만.**
+`cho_moveit/README.md`가 정본이다 — 「Planning pipeline: OMPL only」 절에 네 로봇 전부
+`pipelines=['ompl']` 하나만 등록한다는 사실, 브릿지의 `planning_pipeline` 파라미터, GPU 플래너를
+뺀 이유, 나중에 쓸 경우의 외부 프로세스 → `ActionChunk` 경로(미구현)를 모았다. `README.md`는 FR5
+MoveIt 문단에 한 줄. `extern/README.md`에는 「Motion planners」 절로 **규칙만** — 플래너 벤더
+소스를 이 폴더에 두지 않는다는 것과 설정 소유자가 `cho_moveit/`이라는 것. 사용자 지적으로 두 곳을
+되돌렸다: `docs/installation.md`는 **설치할 것이 없으면 절 자체가 없어야** 하므로 넣었던 「MoveIt」
+절을 뺐고, `extern/README.md`에서는 cuRobo 평가·제거 경위를 걷어냈다 — **벤더 정책 문서는 매뉴얼이지
+기록이 아니다.** 경위는 이 로그가 갖는다.
+
+고친 것: FR5 MoveIt 런치 셋(`moveit` / `move_group` / `moveit_rviz`)과
+`cho_bringup_fr5/bringup_gz_moveit.launch.py`에서 `cumotion` 인자와 두 번째 파이프라인 등록을
+없앴다. 액션 브릿지의 `joint_planning_pipeline` / `task_planning_pipeline` 두 파라미터는
+**cuMotion이 조인트 목표를 FK로 EE 포즈로 바꿔버리는 것 때문에만 갈라 놨던 것**이라 단일
+`planning_pipeline`(기본 `ompl`)로 합쳤다. `_move_goal`의 per-request 인자는 남겼다 —
+파이프라인이 요청마다 실린다는 성질 자체는 MoveIt 쪽 사실이고 테스트도 그것을 검증한다.
+
+`~/ros2_ws`에 남아 있던 잔해도 정리했다: `build/isaac_ros_cumotion_{interfaces,python_utils}`,
+`install/isaac_ros_cumotion_python_utils`, 그리고 `install/cho_moveit_common/lib/`에서 끊어진
+`curobo_robot_config.py` 심볼릭 링크.
+
+검증: `cho_moveit_common` 파이테스트 21개 통과(브릿지 19 + 파라미터 2), 세 패키지 재빌드 성공,
+`bringup_gz_moveit.launch.py --show-args`에 `cumotion` 없음, `MoveItConfigsBuilder`가
+`pipeline_names: ['ompl']`로 확인. 아래 § 2026-09-08 기록은 당시의 측정과 판단 그대로 남긴다.
+
+
 ### 2026-09-08
 
 cuRobo를 MoveIt 플래너 플러그인으로 붙였다(A안). 커밋 3개: `d28ff9d` 연동,

@@ -15,43 +15,32 @@ plugin.  Base bringup launch files therefore accept only actual controllers in
 | OpenArm v1.0 | MuJoCo, single arm | `ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py` |
 | OpenArm v1.0 | MuJoCo, bimanual | `ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py bimanual:=true arm:=left` |
 
-## GPU planning: NVIDIA cuMotion / cuRobo (FR5, opt-in)
+## Planning pipeline: OMPL only
 
-FR5 can plan with cuRobo instead of OMPL. Add `cumotion:=true` to any FR5 MoveIt
-entry point above:
+Every robot registers exactly one pipeline -
+`.planning_pipelines(default_planning_pipeline='ompl', pipelines=['ompl'])` in
+its `move_group.launch.py` and `moveit_rviz.launch.py` - and
+`moveit_action_bridge.py` names it per request through its `planning_pipeline`
+parameter (default `ompl`) rather than leaving `pipeline_id` empty for
+move_group to fill in. Both Cho actions, `moveit_joint` and `moveit_task`, plan
+with it.
 
-```bash
-ros2 launch cho_bringup_fr5 bringup_gz_moveit.launch.py cumotion:=true
-```
+A GPU planner is deliberately not part of this stack. cuRobo / NVIDIA cuMotion
+was integrated and then removed on 2026-09-09, on dependency cost rather than on
+planning quality: it is not one more MoveIt plugin but a second toolchain - a
+python3.10-only venv with a CUDA-matched torch wheel, two vendor submodules, an
+`isaac_ros_common` shim package, a sparse `nvblox_msgs` checkout, and
+`COLCON_IGNORE` markers that cannot be committed because they live inside
+upstream trees that `git submodule update` restores. That is a large permanent
+tax on every clone and every build of this workspace, for one planning pipeline.
 
-That registers a second planning pipeline (`isaac_ros_cumotion`) beside OMPL,
-starts the GPU planner node, and offers the pipeline in the RViz Planning
-Library dropdown. Cho actions route by goal type:
-
-| Cho action | Pipeline |
-|---|---|
-| `moveit_task` (TaskSpace, a pose) | **cuMotion** |
-| `moveit_joint` (JointSpace, home presets) | OMPL |
-
-The split is deliberate: cuMotion converts a joint goal to an end-effector pose
-by forward kinematics and plans to the pose, so an exact joint target is not
-preserved. Measured 3/9 for OMPL against 0/9 for cuMotion on joint goals, and
-27/27 for cuMotion against 23/27 for OMPL on pose goals in a narrow scene.
-
-**Default is `false`, and with it off this stack is unchanged** - no extra
-pipeline, no planner node. Requirements, measurements and the known gaps are in
-`todo/curobo_bench/README.md`; the integration plan and design decisions are in
-`todo/CUROBO_MOVEIT_TODO.md`. In short:
-
-- Needs `~/ros2_ws/.venv-curobo` (python3.10 + torch cu128 + cuRobo v0.7.8).
-  Build recipe and its four traps: `extern/VENDORED_CUROBO.md`.
-- cuRobo v0.7.x is under the NVIDIA License with a **non-commercial** use
-  limitation. Research and evaluation only.
-- Trajectories come out about twice as long as MoveIt's TOTG output, and planning
-  latency is roughly three times OMPL's. Turn it on for narrow scenes, not for speed.
-- cuRobo models the arm with collision spheres while MoveIt uses meshes, so a
-  start state MoveIt accepts can be rejected by cuMotion. Not yet reconciled.
-- Real hardware is out of scope until this is judged in simulation.
+The route recorded for cuRobo, if it is wanted later, is to run it as an
+**external process** and hand its output to the VLA controller as
+`cho_interfaces/ActionChunk`, not to wrap it as a MoveIt planner plugin - that
+keeps the workspace itself unaware of it, which is the point. Nothing in this
+repository implements that today. The measurements from the removed integration
+(OMPL vs cuMotion on joint and pose goals, the trajectory-length and latency
+costs) are kept in the 2026-09-08 entry of `SESSION_LOG.md`.
 
 Legacy wrappers start the backend with a safe hold controller, load the
 position trajectory controller inactive, and start the matching MoveIt stack.
