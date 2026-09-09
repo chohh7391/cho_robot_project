@@ -106,6 +106,28 @@
       safety_profile_file: ''
       ee_frame: openarm_left_hand_tcp
       drive_side_impedance: true
+      # Bias the redundancy resolution off the wrist roll. A larger weight means
+      # the joint is used less for the same Cartesian error; all ones is the
+      # unweighted damped-least-squares solution this controller shipped with.
+      #
+      # Measured on the right arm, 60 mm task path, 45 s: weight 10 cut the
+      # roll's travel 48% (2.749 -> 1.429 rad) and its peak rate 70% (0.611 ->
+      # 0.184 rad/s), and the worst tracking error IMPROVED, 89.0 -> 62.8 mm.
+      # It improves because the load moves to joint 1, whose z-row is the
+      # largest of the seven while the unweighted solve gave it 5.5% of a
+      # vertical command. Weight 30 takes the roll to a 5.6% share but tracking
+      # slips to 66.8 mm, so 10 is the knee.
+      #
+      # A static, fixed-error calculation predicts the opposite - it says a
+      # weight of 100 costs 70% of the achieved motion - because it holds the
+      # error constant. The loop does not: reduced authority raises the error
+      # until the offset is restored from the other joints. Trust the closed-loop
+      # measurement over the open-loop algebra here.
+      #
+      # The left arm mirrors the right geometrically and carries the same value,
+      # but was not measured. Task-space and VLA blocks carry it identically so
+      # the launch-boundary mirror test stays satisfied.
+      reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
       # declares no armature, so M_ii is roughly a quarter of the real arm's on
       # the elbow, and the MJCF's own joint damping="0.4" counts toward zeta.
@@ -150,6 +172,28 @@
       safety_profile_file: ''
       ee_frame: openarm_right_hand_tcp
       drive_side_impedance: true
+      # Bias the redundancy resolution off the wrist roll. A larger weight means
+      # the joint is used less for the same Cartesian error; all ones is the
+      # unweighted damped-least-squares solution this controller shipped with.
+      #
+      # Measured on the right arm, 60 mm task path, 45 s: weight 10 cut the
+      # roll's travel 48% (2.749 -> 1.429 rad) and its peak rate 70% (0.611 ->
+      # 0.184 rad/s), and the worst tracking error IMPROVED, 89.0 -> 62.8 mm.
+      # It improves because the load moves to joint 1, whose z-row is the
+      # largest of the seven while the unweighted solve gave it 5.5% of a
+      # vertical command. Weight 30 takes the roll to a 5.6% share but tracking
+      # slips to 66.8 mm, so 10 is the knee.
+      #
+      # A static, fixed-error calculation predicts the opposite - it says a
+      # weight of 100 costs 70% of the achieved motion - because it holds the
+      # error constant. The loop does not: reduced authority raises the error
+      # until the offset is restored from the other joints. Trust the closed-loop
+      # measurement over the open-loop algebra here.
+      #
+      # The left arm mirrors the right geometrically and carries the same value,
+      # but was not measured. Task-space and VLA blocks carry it identically so
+      # the launch-boundary mirror test stays satisfied.
+      reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
       # declares no armature, so M_ii is roughly a quarter of the real arm's on
       # the elbow, and the MJCF's own joint damping="0.4" counts toward zeta.
@@ -199,6 +243,28 @@
       safety_profile_file: ''
       ee_frame: openarm_left_hand_tcp
       drive_side_impedance: true
+      # Bias the redundancy resolution off the wrist roll. A larger weight means
+      # the joint is used less for the same Cartesian error; all ones is the
+      # unweighted damped-least-squares solution this controller shipped with.
+      #
+      # Measured on the right arm, 60 mm task path, 45 s: weight 10 cut the
+      # roll's travel 48% (2.749 -> 1.429 rad) and its peak rate 70% (0.611 ->
+      # 0.184 rad/s), and the worst tracking error IMPROVED, 89.0 -> 62.8 mm.
+      # It improves because the load moves to joint 1, whose z-row is the
+      # largest of the seven while the unweighted solve gave it 5.5% of a
+      # vertical command. Weight 30 takes the roll to a 5.6% share but tracking
+      # slips to 66.8 mm, so 10 is the knee.
+      #
+      # A static, fixed-error calculation predicts the opposite - it says a
+      # weight of 100 costs 70% of the achieved motion - because it holds the
+      # error constant. The loop does not: reduced authority raises the error
+      # until the offset is restored from the other joints. Trust the closed-loop
+      # measurement over the open-loop algebra here.
+      #
+      # The left arm mirrors the right geometrically and carries the same value,
+      # but was not measured. Task-space and VLA blocks carry it identically so
+      # the launch-boundary mirror test stays satisfied.
+      reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
       # declares no armature, so M_ii is roughly a quarter of the real arm's on
       # the elbow, and the MJCF's own joint damping="0.4" counts toward zeta.
@@ -274,6 +340,28 @@
       safety_profile_file: ''
       ee_frame: openarm_right_hand_tcp
       drive_side_impedance: true
+      # Bias the redundancy resolution off the wrist roll. A larger weight means
+      # the joint is used less for the same Cartesian error; all ones is the
+      # unweighted damped-least-squares solution this controller shipped with.
+      #
+      # Measured on the right arm, 60 mm task path, 45 s: weight 10 cut the
+      # roll's travel 48% (2.749 -> 1.429 rad) and its peak rate 70% (0.611 ->
+      # 0.184 rad/s), and the worst tracking error IMPROVED, 89.0 -> 62.8 mm.
+      # It improves because the load moves to joint 1, whose z-row is the
+      # largest of the seven while the unweighted solve gave it 5.5% of a
+      # vertical command. Weight 30 takes the roll to a 5.6% share but tracking
+      # slips to 66.8 mm, so 10 is the knee.
+      #
+      # A static, fixed-error calculation predicts the opposite - it says a
+      # weight of 100 costs 70% of the achieved motion - because it holds the
+      # error constant. The loop does not: reduced authority raises the error
+      # until the offset is restored from the other joints. Trust the closed-loop
+      # measurement over the open-loop algebra here.
+      #
+      # The left arm mirrors the right geometrically and carries the same value,
+      # but was not measured. Task-space and VLA blocks carry it identically so
+      # the launch-boundary mirror test stays satisfied.
+      reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
       # declares no armature, so M_ii is roughly a quarter of the real arm's on
       # the elbow, and the MJCF's own joint damping="0.4" counts toward zeta.

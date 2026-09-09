@@ -213,6 +213,12 @@ protected:
   // evaluates kp*(q_des - q) internally and adds it downstream of anything
   // this controller can clamp.  With kp fixed, |tau_impedance| <= kp * limit.
   std::array<double, 7> reference_offset_limit_{};
+  // Per-joint weight in the reference-offset solve. All ones is the unweighted
+  // damped least-squares solution this controller has always used; a joint given
+  // a larger weight is used less for the same Cartesian error. Stored inverted
+  // because that is the form the solve needs. See joint_reference_offset().
+  std::array<double, 7> reference_offset_weight_inverse_{{1.0, 1.0, 1.0, 1.0,
+                                                          1.0, 1.0, 1.0}};
   std::array<double, 7> startup_posture_{}, startup_start_{}, startup_kp_{}, startup_kd_{};
   double startup_duration_{0.0};
   double startup_tolerance_{0.05};

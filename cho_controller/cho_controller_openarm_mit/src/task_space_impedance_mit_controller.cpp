@@ -89,6 +89,7 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_init()
   auto_declare<std::string>("friction_velocity_source", "reference");
   auto_declare<bool>("drive_side_impedance", true);
   auto_declare<std::vector<double>>("max_reference_offset", std::vector<double>(7, 0.0));
+  auto_declare<std::vector<double>>("reference_offset_weight", std::vector<double>(7, 1.0));
   auto_declare<double>("gravity_scale", 1.0);
   auto_declare<std::vector<double>>("gravity_joint_scale", std::vector<double>(7, 1.0));
   return CallbackReturn::SUCCESS;
@@ -231,6 +232,34 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
       " (ratio 1 = flat law, no shaping: over-compensates once sliding)" : "");
   }
   drive_side_impedance_ = get_node()->get_parameter("drive_side_impedance").as_bool();
+  // Redundancy preference in the reference-offset solve. All ones (the default)
+  // is the unweighted solution, so an existing config is unchanged.
+  //
+  // What it can and cannot do: it chooses WHICH joints resolve a given Cartesian
+  // error, not how much error is resolved. Measured on the bimanual torso, the
+  // wrist roll's share of a pure +z command is 37% and its sensitivity to
+  // translational error (2.27 rad/m) is the second highest of the seven, so it
+  // reads as a nervous joint. But a large part of that motion opposes joint 4
+  // rather than producing z - the two nearly cancel - so weighting the roll down
+  // also costs joint 4 its freedom, and the achieved z fell to 30% of baseline
+  // at weight 100 even with the weights geometric-mean normalised. Treat a
+  // non-unit weight as an experiment and check the achieved motion, not just how
+  // much the weighted joint moved.
+  const auto offset_weight =
+    get_node()->get_parameter("reference_offset_weight").as_double_array();
+  if (offset_weight.size() != 7 ||
+    std::any_of(offset_weight.begin(), offset_weight.end(),
+    [](double w) {return !std::isfinite(w) || w <= 0.0;}))
+  {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "reference_offset_weight requires exactly 7 finite POSITIVE values (got %zu); "
+      "it is inverted in the solve, so zero is not a way to disable a joint",
+      offset_weight.size());
+    return CallbackReturn::ERROR;
+  }
+  for (std::size_t i = 0; i < 7; ++i) {
+    reference_offset_weight_inverse_[i] = 1.0 / offset_weight[i];
+  }
   const auto offset_limit = get_node()->get_parameter("max_reference_offset").as_double_array();
   if (!finite_array(offset_limit, 7, true)) {
     RCLCPP_ERROR(get_node()->get_logger(),
@@ -887,14 +916,25 @@ void TaskSpaceImpedanceMitController::joint_reference_offset(
 {
   offset.setZero();
   if (pose_error.squaredNorm() == 0.0) return;
-  Eigen::Matrix<double, 6, 6> jjt = jacobian * jacobian.transpose();
+  // Weighted damped least squares: dq = W^-1 J^T (J W^-1 J^T + lambda I)^-1 e,
+  // which minimises dq^T W dq instead of ||dq||^2 and so expresses a preference
+  // over which joints resolve the error. W = I recovers the unweighted solution
+  // exactly, and W is diagonal, so the weighting is element-wise and costs no
+  // extra factorisation. Note lambda is NOT rescaled with W: shrinking W^-1
+  // shrinks J W^-1 J^T against a fixed lambda I, so a large weight attenuates
+  // the whole solution rather than only redistributing it. That is measured, not
+  // theoretical - see the configure-time comment on reference_offset_weight.
+  const Eigen::Map<const Vector7> weight_inverse(reference_offset_weight_inverse_.data());
+  const Eigen::Matrix<double, 7, 6> weighted_jt =
+    weight_inverse.asDiagonal() * jacobian.transpose();
+  Eigen::Matrix<double, 6, 6> jjt = jacobian * weighted_jt;
   jjt.diagonal().array() += task_velocity_reference_damping_;
   const Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(jjt);
   // Degrade to "no offset" rather than aborting: q_des then equals measured q
   // and the arm holds on gravity alone, which is the same failure the velocity
   // reference already chooses near a singularity.
   if (llt.info() != Eigen::Success) return;
-  const Vector7 dq = jacobian.transpose() * llt.solve(pose_error);
+  const Vector7 dq = weighted_jt * llt.solve(pose_error);
   if (!dq.allFinite()) return;
   // One scale for all seven, for the same reason the wrench is scaled rather
   // than clipped: this offset IS a Cartesian direction expressed in joint
