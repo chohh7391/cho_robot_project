@@ -90,7 +90,11 @@ private:
         cho_vla_core::Chunk & chunk, std::string & reason);
     // Gripper sends and telemetry publication, both of which must not happen on
     // the control loop.
+    // Contains non_rt_tick_impl(): a throw out of a timer callback is
+    // std::terminate, which kills the controller_manager and every controller
+    // in it, so the tick must never propagate one.
     void non_rt_tick();
+    void non_rt_tick_impl();
     void call_gripper(bool grasp);
 
     // ---- RT side -----------------------------------------------------------

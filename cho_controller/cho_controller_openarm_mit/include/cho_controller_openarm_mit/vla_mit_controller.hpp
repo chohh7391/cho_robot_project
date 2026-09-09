@@ -104,7 +104,11 @@ private:
   rclcpp_action::CancelResponse vla_cancel_callback(
     const std::shared_ptr<VlaGoalHandle> & handle);
   void vla_accepted_callback(const std::shared_ptr<VlaGoalHandle> & handle);
+  // Contains vla_non_rt_tick_impl(): a throw out of a timer callback is
+  // std::terminate, which kills the controller_manager and every controller in
+  // it, so the tick must never propagate one.
   void vla_non_rt_tick();
+  void vla_non_rt_tick_impl();
   void on_action_chunk(const cho_interfaces::msg::ActionChunk::SharedPtr message);
   bool build_chunk(
     const cho_interfaces::msg::ActionChunk & message, double arrival,

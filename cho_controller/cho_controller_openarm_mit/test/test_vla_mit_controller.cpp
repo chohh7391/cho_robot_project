@@ -579,6 +579,39 @@ TEST_F(Fixture, ChunksAreIgnoredWithoutAnActiveGoal)
   EXPECT_EQ(Access::rejected(*controller), 0u);
 }
 
+TEST_F(Fixture, TheNonRealtimeTimerSurvivesTicksBetweenConfigureAndActivate)
+{
+  // Regression for a crash that took down the whole controller_manager.
+  //
+  // The 5 ms non-RT timer is created in on_configure, but the telemetry stamp it
+  // subtracts from used to be set in on_activate. A default-constructed
+  // rclcpp::Time carries RCL_SYSTEM_TIME; the node's clock under sim time is
+  // RCL_ROS_TIME; subtracting across sources THROWS, and a throw out of a timer
+  // callback is std::terminate, not a reported error. Any gap longer than one
+  // tick between configure and activate aborted the process -- reproduced in
+  // MuJoCo on the bimanual torso, where ros2_control_node died with SIGABRT
+  // immediately after the controller activated.
+  //
+  // The fixture already configures, spins for many ticks, and then activates, so
+  // reaching this assertion at all means the timer ran while inactive without
+  // terminating. The explicit spin below makes that the point of the test rather
+  // than an accident of the fixture's ordering.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  for (int i = 0; i < 40; ++i) {
+    executor->spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_EQ(
+    controller->get_node()->get_current_state().id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  // And it must still work afterwards, not merely have survived.
+  wait_ready();
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  publish(joint_chunk(0.1), 40);
+  EXPECT_GE(Access::accepted(*controller), 1u);
+}
+
 TEST_F(Fixture, ProtocolGenerationKeepsAdvancingUnderAVlaReference)
 {
   ASSERT_EQ(configured, controller_interface::return_type::OK);

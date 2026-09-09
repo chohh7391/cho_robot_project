@@ -206,6 +206,14 @@ controller_interface::CallbackReturn VlaMitController::on_configure(
 
   telemetry_pub_ = get_node()->create_publisher<cho_interfaces::msg::VlaTelemetry>(
     "~/vla_telemetry", rclcpp::SystemDefaultsQoS());
+  // Before vla_timer_ below can fire. A default-constructed rclcpp::Time carries
+  // RCL_SYSTEM_TIME, and subtracting that from a RCL_ROS_TIME stamp THROWS -- out
+  // of a timer callback, which terminates the process and takes the whole
+  // controller_manager with it. The timer is created in configure and the stamp
+  // used to be set in activate, so any gap longer than one 5 ms tick between the
+  // two crashed the node. It usually was shorter, which is why this survived
+  // several runs before showing up.
+  last_telemetry_ = get_node()->now();
 
   success_service_ = get_node()->create_service<std_srvs::srv::Trigger>(
     "~/trigger_success",
@@ -350,6 +358,23 @@ void VlaMitController::finish_vla(
 
 void VlaMitController::vla_non_rt_tick()
 {
+  // A throw out of a timer callback is not an error the executor reports, it is
+  // std::terminate: the whole controller_manager dies and every other
+  // controller with it. Everything below can throw -- rclcpp::Time subtraction
+  // across clock sources, publish_feedback on a goal that reached a terminal
+  // state between the RT thread finishing it and this tick draining the queue --
+  // so the tick is contained. A dropped telemetry cycle is a diagnostic gap; a
+  // dead controller_manager drops the arm.
+  try {
+    vla_non_rt_tick_impl();
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+      "VLA non-realtime tick threw (%s); skipping this cycle.", error.what());
+  }
+}
+
+void VlaMitController::vla_non_rt_tick_impl()
+{
   VlaTerminalEvent event;
   while (vla_terminal_queue_.pop(event)) {
     std::shared_ptr<VlaGoalHandle> handle;
@@ -394,6 +419,13 @@ void VlaMitController::vla_non_rt_tick()
   }
 
   const rclcpp::Time now = get_node()->now();
+  // The node's clock source can change under us -- most visibly when use_sim_time
+  // turns on and /clock starts arriving. Re-anchor instead of subtracting across
+  // sources, which throws.
+  if (last_telemetry_.get_clock_type() != now.get_clock_type()) {
+    last_telemetry_ = now;
+    return;
+  }
   if (telemetry_period_ > 0.0 &&
     (now - last_telemetry_).seconds() >= telemetry_period_)
   {

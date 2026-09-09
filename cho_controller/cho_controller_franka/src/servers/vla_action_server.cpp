@@ -398,6 +398,23 @@ void VLAActionServer::process_vla_action(
 
 void VLAActionServer::non_rt_tick()
 {
+    // A throw out of a timer callback is std::terminate, not an error the
+    // executor reports: the controller_manager dies and takes every controller
+    // with it. rclcpp::Time subtraction across clock sources throws, and so does
+    // publish_feedback on a goal that reached a terminal state between the RT
+    // thread finishing it and this tick running. Contained for that reason --
+    // the same crash was reproduced in MuJoCo on the OpenArm host, where the
+    // timer fired once between configure and activate.
+    try {
+        non_rt_tick_impl();
+    } catch (const std::exception & error) {
+        RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+            "VLA non-realtime tick threw (%s); skipping this cycle.", error.what());
+    }
+}
+
+void VLAActionServer::non_rt_tick_impl()
+{
     const int pending = pending_gripper_.exchange(0);
     if (pending == 1) {
         call_gripper(true);
@@ -406,6 +423,12 @@ void VLAActionServer::non_rt_tick()
     }
 
     const rclcpp::Time now = node_->now();
+    // Re-anchor rather than subtract across clock sources, which throws. The
+    // node's source changes when use_sim_time turns on and /clock starts.
+    if (last_telemetry_.get_clock_type() != now.get_clock_type()) {
+        last_telemetry_ = now;
+        return;
+    }
     if (telemetry_period_ <= 0.0 ||
         (now - last_telemetry_).seconds() < telemetry_period_)
     {
