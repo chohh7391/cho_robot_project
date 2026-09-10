@@ -43,7 +43,10 @@ Launch files follow the pattern:
 ros2 launch cho_bringup_<robot> bringup_<backend>_robot.launch.py
 ```
 
-See the launch file's `--show-args` output for backend-specific parameters.
+See the launch file's `--show-args` output for backend-specific parameters, and
+[docs/controllers_and_bringup.md](docs/controllers_and_bringup.md) for the
+lookup tables: which controller exists on which backend, which argument selects
+it, and a copy-pasteable command per robot and backend.
 
 ## Manual control clients
 
@@ -97,6 +100,10 @@ Detailed client behavior is in [docs/action_clients.md](docs/action_clients.md).
 The normal OpenArm controllers and the MIT adapter are separate paths. The
 default bringup remains the legacy controller path; set
 `mujoco_mit_prototype:=true` only for the MIT prototype.
+
+[docs/controllers_and_bringup.md](docs/controllers_and_bringup.md) tabulates
+the two paths side by side, including direct-vs-FJT ownership and what each
+`mit_arm` value spawns.
 
 ### Direct, independent seven-axis control
 
