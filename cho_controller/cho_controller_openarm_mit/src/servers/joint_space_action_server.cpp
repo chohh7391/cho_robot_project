@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include "cho_controller_openarm/servers/joint_space_action_server.hpp"
+#include "cho_controller_openarm_mit/servers/joint_space_action_server.hpp"
 
 #include <algorithm>
 #include <string>

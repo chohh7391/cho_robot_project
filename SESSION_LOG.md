@@ -8,7 +8,7 @@
 새 패키지 `cho_controller/utils/cho_vla_core`(구현 1615줄, gtest 87개)가 청크 검증·시간 정렬
 splice·샘플링·레이트 제한·스트림 워치독을 소유한다. ROS 없이(rclcpp 미의존) 컴파일되므로
 controller_manager 픽스처 없이 테스트된다. Franka `VLAActionServer`는 이 코어의 어댑터로
-축소됐고, `cho_controller_openarm_mit/VlaMitController`가 `TaskSpaceImpedanceMitController`를
+축소됐고, `cho_controller_openarm_mit/VlaController`가 `TaskSpaceImpedanceController`를
 상속해 `write_task_target()` 하나만 override 한다 — **task/joint 모두 drive-side impedance.**
 
 고친 기존 결함 넷: ① 청크 무검증(모르는 `rotation_type` + 빈 배열 = UB, NaN 하나로 컨트롤러
@@ -90,7 +90,7 @@ all-finite로 보고한다.** 결함 ①을 고치려는 검증기가 그 자리
 
 **MIT 이식은 새 제어법이 아니라 레퍼런스 소스 교체였다**
 
-`TaskSpaceImpedanceMitController`를 상속하고 `write_task_target()` 하나만 override 한다. 베이스
+`TaskSpaceImpedanceController`를 상속하고 `write_task_target()` 하나만 override 한다. 베이스
 변경은 최소(`final` 해제, `private`→`protected`, virtual화, `uses_task_space_action()` 신설).
 39 인터페이스 클레임, 세션/ACK/lease/SAFE, return-to-zero 램프, drive-side 임피던스, null-space
 posture, joint-limit 스프링, 마찰 FF, `max_reference_offset`이 전부 그대로 따라온다.

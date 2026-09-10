@@ -13,7 +13,7 @@
 #include <realtime_tools/lock_free_queue.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 
-#include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/direct_controller.hpp"
 
 namespace cho_controller_openarm_mit
 {
@@ -21,25 +21,25 @@ namespace cho_controller_openarm_mit
 // remains a direct-controller vertical: MoveIt/FJT owns only paired 14-axis
 // planning.  The base class supplies the one-arm 39-interface MIT protocol.
 //
-// Not `final`: VlaMitController derives from it to reuse this exact producer --
+// Not `final`: VlaController derives from it to reuse this exact producer --
 // the 39-interface claim, the session/ACK/lease/SAFE protocol, the startup ramp,
 // the drive-side impedance law, the null-space posture, the joint-limit spring
 // and the reference-offset bound -- and replaces only where q_des/dq_des come
-// from. That is the same relationship JointImpedanceMitActionController has to
-// the raw joint producer (see direct_mit_controller.hpp): "differs only in where
+// from. That is the same relationship JointImpedanceActionController has to
+// the raw joint producer (see direct_controller.hpp): "differs only in where
 // q_des/dq_des originate". Members are protected rather than private for that
 // reason, and the two extension points are the virtuals below.
-class TaskSpaceImpedanceMitController : public DirectMitControllerBase
+class TaskSpaceImpedanceController : public DirectControllerBase
 {
 public:
-  TaskSpaceImpedanceMitController() : DirectMitControllerBase(DirectMitMode::IMPEDANCE) {}
+  TaskSpaceImpedanceController() : DirectControllerBase(DirectMitMode::IMPEDANCE) {}
   CallbackReturn on_init() override;
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
   controller_interface::return_type update(const rclcpp::Time &, const rclcpp::Duration &) override;
 
 protected:
-  friend struct TaskSpaceImpedanceMitControllerTestAccess;
+  friend struct TaskSpaceImpedanceControllerTestAccess;
   bool uses_raw_topic() const override {return false;}
   bool supports_return_to_zero() const override {return true;}
   // Whether on_configure creates the cho_interfaces/TaskSpace action server and

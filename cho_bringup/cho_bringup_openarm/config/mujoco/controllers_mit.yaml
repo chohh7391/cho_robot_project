@@ -7,21 +7,21 @@
         type: joint_state_broadcaster/JointStateBroadcaster
 
       ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
 
       joint_position_mit_controller:
-        type: cho_controller_openarm_mit/JointPositionMitController
+        type: cho_controller_openarm_mit/JointPositionController
 
       joint_impedance_mit_controller:
-        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+        type: cho_controller_openarm_mit/JointImpedanceActionController
 
       task_space_impedance_mit_controller:
-        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
       # Same producer as above with the reference coming from VLA action chunks
       # instead of a TaskSpace goal. Both action spaces are impedance.
       vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaMitController
+        type: cho_controller_openarm_mit/VlaController
 
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so

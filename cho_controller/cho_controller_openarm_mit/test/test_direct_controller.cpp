@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/direct_controller.hpp"
 #include "cho_controller_openarm_mit/safety_backend.hpp"
 using namespace cho_controller_openarm_mit;
 using namespace cho_openarm_mit_core;

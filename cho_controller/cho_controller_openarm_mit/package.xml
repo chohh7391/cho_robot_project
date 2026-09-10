@@ -2,10 +2,15 @@
 <package format="3">
   <name>cho_controller_openarm_mit</name>
   <version>0.1.0</version>
-  <description>OpenArm MIT joint, Cartesian impedance, and trajectory controller plugins.</description>
+  <description>OpenArm ros2_control controllers: the MIT joint, Cartesian impedance, VLA and trajectory plugins, plus the shared EE state broadcaster and joint-space controllers every OpenArm bringup spawns.</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- Merged in with the former cho_controller_openarm sources. -->
+  <depend>ament_index_cpp</depend>
+  <depend>cho_controller_common</depend>
+  <depend>eigen</depend>
+  <depend>geometry_msgs</depend>
   <depend>cho_openarm_mit_core</depend>
   <depend>cho_vla_core</depend>
   <depend>controller_interface</depend>

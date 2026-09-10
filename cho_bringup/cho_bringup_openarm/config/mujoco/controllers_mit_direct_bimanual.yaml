@@ -13,27 +13,27 @@
         type: joint_state_broadcaster/JointStateBroadcaster
 
       left_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       right_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
 
       left_joint_impedance_mit_controller:
-        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+        type: cho_controller_openarm_mit/JointImpedanceActionController
       right_joint_impedance_mit_controller:
-        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+        type: cho_controller_openarm_mit/JointImpedanceActionController
       left_task_space_impedance_mit_controller:
-        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceController
       right_task_space_impedance_mit_controller:
-        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
       # Same producers as above with the reference coming from VLA action
       # chunks. One per arm: cho_vla_core is 7-DoF, and each controller claims
       # its own arm's 39 MIT interfaces, so the two are fully independent.
       left_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaMitController
+        type: cho_controller_openarm_mit/VlaController
 
       right_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaMitController
+        type: cho_controller_openarm_mit/VlaController
 
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so

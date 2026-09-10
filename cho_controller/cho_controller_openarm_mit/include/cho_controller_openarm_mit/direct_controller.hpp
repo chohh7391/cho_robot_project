@@ -53,10 +53,10 @@ bool exact_safe_stop_ack(
   double requested_generation, double observed_safe_generation,
   double observed_safe_ack_generation, double observed_status);
 
-class DirectMitControllerBase : public controller_interface::ControllerInterface
+class DirectControllerBase : public controller_interface::ControllerInterface
 {
 public:
-  explicit DirectMitControllerBase(DirectMitMode mode) : mode_(mode) {}
+  explicit DirectControllerBase(DirectMitMode mode) : mode_(mode) {}
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
   CallbackReturn on_init() override;
@@ -79,7 +79,7 @@ protected:
 // TaskSpace adapter can share the fail-closed lifecycle while owning its
 // distinct cho_interfaces/TaskSpace server.
 protected:
-  friend struct DirectMitControllerTestAccess;
+  friend struct DirectControllerTestAccess;
   using JointSpaceAction = cho_interfaces::action::JointSpace;
   using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
   enum class ActionTerminalKind : std::uint8_t {SUCCEEDED, CANCELED, ABORTED};
@@ -198,6 +198,28 @@ protected:
   std::array<std::atomic<double>, 7> action_reference_{};
   double action_start_time_{0.0};
   double action_control_time_{0.0};
+  // The node clock minus action_control_time_, refreshed on every cycle that
+  // advances the action clock.
+  //
+  // action_control_time_ IS NOT A CLOCK. It is seconds accumulated since
+  // on_activate, and it is the only time the action timeline is ever sampled
+  // at. Every timestamp that enters from outside -- a VLA chunk's arrival
+  // instant, or the observation stamp the chunk carries -- is read from
+  // get_node()->now(), which is the node clock. The two domains coincide only
+  // while /clock starts near zero as the controller activates, so a plant
+  // running on system time places every waypoint about 1.8e9 s ahead of the
+  // playback cursor. Nothing reports that: ingest accepts the chunk, the
+  // stream watchdog stays running, and sample_series takes its "not yet
+  // reached" branch and returns the FIRST waypoint forever, so the arm holds
+  // the pose it was commanded at goal start and follows nothing after it.
+  // Convert with action_time_from_node() wherever an outside timestamp enters
+  // the action timeline.
+  std::atomic<double> action_time_offset_{0.0};
+  // An outside (node-clock) timestamp -> the action timeline's own seconds.
+  double action_time_from_node(double node_seconds) const
+  {
+    return node_seconds - action_time_offset_.load(std::memory_order_acquire);
+  }
   std::atomic<double> action_percent_{0.0};
 
   // Pinocchio is configured only for the canonical JointSpace-action
@@ -217,24 +239,24 @@ protected:
 };
 
 #define CHO_DECLARE_DIRECT_MIT_CONTROLLER(Name, Mode) \
-  class Name final : public DirectMitControllerBase {public: Name() : DirectMitControllerBase(Mode) {}};
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointPositionMitController, DirectMitMode::POSITION)
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointVelocityMitController, DirectMitMode::VELOCITY)
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointImpedanceMitController, DirectMitMode::IMPEDANCE)
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(DirectTorqueMitController, DirectMitMode::DIRECT_TORQUE)
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(DampedTorqueMitController, DirectMitMode::DAMPED_TORQUE)
-CHO_DECLARE_DIRECT_MIT_CONTROLLER(CompensatedTorqueMitController, DirectMitMode::COMPENSATED_TORQUE)
+  class Name final : public DirectControllerBase {public: Name() : DirectControllerBase(Mode) {}};
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointPositionController, DirectMitMode::POSITION)
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointVelocityController, DirectMitMode::VELOCITY)
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointImpedanceController, DirectMitMode::IMPEDANCE)
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(DirectTorqueController, DirectMitMode::DIRECT_TORQUE)
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(DampedTorqueController, DirectMitMode::DAMPED_TORQUE)
+CHO_DECLARE_DIRECT_MIT_CONTROLLER(CompensatedTorqueController, DirectMitMode::COMPENSATED_TORQUE)
 #undef CHO_DECLARE_DIRECT_MIT_CONTROLLER
 
 // Canonical action-client controller.  Its controller-manager instance is
 // intentionally named joint_impedance_mit_controller, yielding the familiar
 // /controller_action_server/joint_impedance_mit_controller JointSpace API.
-// The topic-oriented JointImpedanceMitController remains available only as a
+// The topic-oriented JointImpedanceController remains available only as a
 // low-level diagnostic producer and is not selected by the MuJoCo launch.
-class JointImpedanceMitActionController final : public DirectMitControllerBase
+class JointImpedanceActionController final : public DirectControllerBase
 {
 public:
-  JointImpedanceMitActionController() : DirectMitControllerBase(DirectMitMode::IMPEDANCE) {}
+  JointImpedanceActionController() : DirectControllerBase(DirectMitMode::IMPEDANCE) {}
 protected:
   bool uses_joint_space_action() const override {return true;}
 };

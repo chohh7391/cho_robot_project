@@ -13,24 +13,24 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/direct_controller.hpp"
 
 namespace cho_controller_openarm_mit
 {
-struct DirectMitControllerTestAccess
+struct DirectControllerTestAccess
 {
-  static std::array<double, 7> last_feedforward(const DirectMitControllerBase & controller)
+  static std::array<double, 7> last_feedforward(const DirectControllerBase & controller)
   {
     std::array<double, 7> result{};
     for (std::size_t i = 0; i < result.size(); ++i)
       result[i] = controller.action_last_feedforward_[i].load(std::memory_order_acquire);
     return result;
   }
-  static double stiffness(const DirectMitControllerBase & controller, const std::size_t joint)
+  static double stiffness(const DirectControllerBase & controller, const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 2].get_value();
   }
-  static bool action_ready(const DirectMitControllerBase & controller)
+  static bool action_ready(const DirectControllerBase & controller)
   {
     return controller.action_ready_.load(std::memory_order_acquire);
   }
@@ -104,10 +104,10 @@ protected:
     auto resources = std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true);
     manager = std::make_shared<controller_manager::ControllerManager>(
       std::move(resources), executor, "controller_manager", "/mit_action_test");
-    controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceMitActionController>();
+    controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceActionController>();
     ASSERT_TRUE(manager->add_controller(
       controller, "joint_impedance_mit_controller",
-      "cho_controller_openarm_mit/JointImpedanceMitActionController"));
+      "cho_controller_openarm_mit/JointImpedanceActionController"));
     const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -209,7 +209,7 @@ protected:
   }
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
   std::shared_ptr<controller_manager::ControllerManager> manager;
-  std::shared_ptr<cho_controller_openarm_mit::JointImpedanceMitActionController> controller;
+  std::shared_ptr<cho_controller_openarm_mit::JointImpedanceActionController> controller;
   rclcpp::Node::SharedPtr client_node;
   std::atomic<bool> running{false};
   // Completed control cycles, published by the worker thread for cycle().
@@ -277,7 +277,7 @@ TEST_F(Fixture, ActionImpedanceAddsNonzeroModelFeedforward)
   while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle();
   ASSERT_TRUE(future.get());
   cycle(10);
-  const auto tau = cho_controller_openarm_mit::DirectMitControllerTestAccess::last_feedforward(*controller);
+  const auto tau = cho_controller_openarm_mit::DirectControllerTestAccess::last_feedforward(*controller);
   EXPECT_TRUE(std::any_of(tau.begin(), tau.end(), [](double value) {
     return std::abs(value) > 1e-4;
   }));
@@ -294,7 +294,7 @@ TEST_F(ReturnToZeroFixture, ActionRemainsGatedUntilHighGainsRampDownToNormal)
     return future.get();
   };
 
-  using Access = cho_controller_openarm_mit::DirectMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::DirectControllerTestAccess;
   const auto stiffness = [&] {return Access::stiffness(*controller, 0);};
   const auto ready = [&] {return Access::action_ready(*controller);};
 
@@ -369,9 +369,9 @@ TEST(ActionImpedanceConfiguration, RejectsDescriptionWithoutControllableModel)
   auto resources = std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true);
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::move(resources), executor, "controller_manager", "/mit_action_invalid_model");
-  auto controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceMitActionController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceActionController>();
   ASSERT_TRUE(manager->add_controller(controller, "joint_impedance_mit_controller",
-    "cho_controller_openarm_mit/JointImpedanceMitActionController"));
+    "cho_controller_openarm_mit/JointImpedanceActionController"));
   const auto set = [&](const char * name, const auto & value) {
     ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
   };
@@ -397,9 +397,9 @@ TEST(ActionImpedanceConfiguration, RejectsMultiDofExpectedModelJoint)
   auto resources = std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true);
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::move(resources), executor, "controller_manager", "/mit_action_multidof_model");
-  auto controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceMitActionController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::JointImpedanceActionController>();
   ASSERT_TRUE(manager->add_controller(controller, "joint_impedance_mit_controller",
-    "cho_controller_openarm_mit/JointImpedanceMitActionController"));
+    "cho_controller_openarm_mit/JointImpedanceActionController"));
   const auto set = [&](const char * name, const auto & value) {
     ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
   };

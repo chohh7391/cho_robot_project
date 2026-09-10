@@ -43,7 +43,7 @@ MuJoCo, Isaac, or other actuator connection.
 
 ## Single-arm TaskSpace MIT impedance
 
-`TaskSpaceImpedanceMitController` is the direct single-arm Cartesian path. It claims the same 39
+`TaskSpaceImpedanceController` is the direct single-arm Cartesian path. It claims the same 39
 MIT command interfaces and exposes `/controller_action_server/task_space_impedance_mit_controller`
 as `cho_interfaces/action/TaskSpace`; it is not MoveIt and has no raw tuple topic. Its primary
 The impedance is evaluated **inside the drive** (`drive_side_impedance`, the default). The Cartesian

@@ -13,16 +13,16 @@
         type: joint_state_broadcaster/JointStateBroadcaster
 
       ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
 
       joint_space_impedance_controller:
-        type: cho_controller_openarm/JointSpaceImpedanceController
+        type: cho_controller_openarm_mit/JointSpaceImpedanceController
 
       joint_space_position_controller:
-        type: cho_controller_openarm/JointSpacePositionController
+        type: cho_controller_openarm_mit/JointSpacePositionController
 
       joint_space_velocity_controller:
-        type: cho_controller_openarm/JointSpaceVelocityController
+        type: cho_controller_openarm_mit/JointSpaceVelocityController
 
       joint_trajectory_controller:
         type: joint_trajectory_controller/JointTrajectoryController

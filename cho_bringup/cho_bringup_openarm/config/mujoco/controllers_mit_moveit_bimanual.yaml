@@ -7,9 +7,9 @@
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
       left_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       right_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       bimanual_follow_joint_trajectory_mit_controller:
         type: cho_controller_openarm_mit/BimanualFollowJointTrajectoryController
 

@@ -1,4 +1,4 @@
-#include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/direct_controller.hpp"
 #include "cho_controller_openarm_mit/safety_backend.hpp"
 
 #include <algorithm>
@@ -51,10 +51,10 @@ bool exact_safe_stop_ack(
     status == static_cast<double>(MitStatus::SAFE);
 }
 
-controller_interface::InterfaceConfiguration DirectMitControllerBase::command_interface_configuration() const
+controller_interface::InterfaceConfiguration DirectControllerBase::command_interface_configuration() const
 {return {controller_interface::interface_configuration_type::INDIVIDUAL, complete_claims(side_)};}
 
-controller_interface::InterfaceConfiguration DirectMitControllerBase::state_interface_configuration() const
+controller_interface::InterfaceConfiguration DirectControllerBase::state_interface_configuration() const
 {
   std::vector<std::string> names;
   for (const auto & j : joint_names(side_)) {names.push_back(j + "/position"); names.push_back(j + "/velocity");}
@@ -63,7 +63,7 @@ controller_interface::InterfaceConfiguration DirectMitControllerBase::state_inte
   return {controller_interface::interface_configuration_type::INDIVIDUAL, names};
 }
 
-controller_interface::CallbackReturn DirectMitControllerBase::on_init()
+controller_interface::CallbackReturn DirectControllerBase::on_init()
 {
   auto_declare<std::string>("arm", "left"); auto_declare<std::vector<double>>("kp", std::vector<double>(7, 0));
   auto_declare<std::vector<double>>("kd", std::vector<double>(7, 0));
@@ -94,7 +94,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_init()
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const rclcpp_lifecycle::State &)
+controller_interface::CallbackReturn DirectControllerBase::on_configure(const rclcpp_lifecycle::State &)
 {
   side_ = get_node()->get_parameter("arm").as_string();
   if (side_ == "single") side_.clear();
@@ -196,13 +196,13 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
     // namespace, just like the existing OpenArm joint-space controllers.
     const auto action_name = std::string("/controller_action_server/") + get_node()->get_name();
     action_server_ = rclcpp_action::create_server<JointSpaceAction>(get_node(), action_name,
-      std::bind(&DirectMitControllerBase::action_goal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&DirectMitControllerBase::action_cancel, this, std::placeholders::_1),
-      std::bind(&DirectMitControllerBase::action_accepted, this, std::placeholders::_1));
+      std::bind(&DirectControllerBase::action_goal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&DirectControllerBase::action_cancel, this, std::placeholders::_1),
+      std::bind(&DirectControllerBase::action_accepted, this, std::placeholders::_1));
     action_timer_ = get_node()->create_wall_timer(
-      std::chrono::milliseconds(5), std::bind(&DirectMitControllerBase::action_non_realtime_tick, this));
+      std::chrono::milliseconds(5), std::bind(&DirectControllerBase::action_non_realtime_tick, this));
   } else if (uses_raw_topic()) {
-    subscription_=get_node()->create_subscription<std_msgs::msg::Float64MultiArray>("~/command",1,std::bind(&DirectMitControllerBase::accept_command,this,std::placeholders::_1));
+    subscription_=get_node()->create_subscription<std_msgs::msg::Float64MultiArray>("~/command",1,std::bind(&DirectControllerBase::accept_command,this,std::placeholders::_1));
   }
   kd_callback_ = get_node()->add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> & parameters) {
@@ -253,7 +253,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::on_configure(const
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn DirectMitControllerBase::configure_action_mujoco_dynamics()
+controller_interface::CallbackReturn DirectControllerBase::configure_action_mujoco_dynamics()
 {
   std::string description = get_node()->get_parameter("robot_description").as_string();
   if (description.empty()) {
@@ -367,7 +367,7 @@ controller_interface::CallbackReturn DirectMitControllerBase::configure_action_m
   return CallbackReturn::SUCCESS;
 }
 
-bool DirectMitControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & target)
+bool DirectControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & target)
 {
   if (!action_model_ || !action_model_data_ || state_interfaces_.size() != 19U) return false;
   for (std::size_t i = 0; i < 7; ++i) {
@@ -395,7 +395,7 @@ bool DirectMitControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & 
   return true;
 }
 
-void DirectMitControllerBase::accept_command(const std_msgs::msg::Float64MultiArray::SharedPtr m)
+void DirectControllerBase::accept_command(const std_msgs::msg::Float64MultiArray::SharedPtr m)
 {
   // Four canonical 7-vectors: q_des, dq_des, tau_ff, compensation.  Unused fields remain explicit.
   if (m->data.size()!=28 || !std::all_of(m->data.begin(),m->data.end(),[](double x){return std::isfinite(x);})) return;
@@ -409,14 +409,14 @@ void DirectMitControllerBase::accept_command(const std_msgs::msg::Float64MultiAr
   command_sequence_.fetch_add(1,std::memory_order_release);
 }
 
-std::array<double,7> DirectMitControllerBase::measured() const {std::array<double,7> q{};for(std::size_t i=0;i<7;++i)q[i]=state_interfaces_[2*i].get_value();return q;}
-std::array<double, 7> DirectMitControllerBase::current_kd() const
+std::array<double,7> DirectControllerBase::measured() const {std::array<double,7> q{};for(std::size_t i=0;i<7;++i)q[i]=state_interfaces_[2*i].get_value();return q;}
+std::array<double, 7> DirectControllerBase::current_kd() const
 {
   std::array<double, 7> out{};
   for (std::size_t i = 0; i < 7; ++i) out[i] = kd_[i].load(std::memory_order_acquire);
   return out;
 }
-void DirectMitControllerBase::ramped_return_to_zero_gains(
+void DirectControllerBase::ramped_return_to_zero_gains(
   const std::array<double, 7> & target_kp, const std::array<double, 7> & target_kd,
   const double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const
 {
@@ -440,7 +440,7 @@ void DirectMitControllerBase::ramped_return_to_zero_gains(
     kd[i] = std::min(kd[i], profile_kd_max_[i]);
   }
 }
-double DirectMitControllerBase::return_to_zero_gain_handoff_duration(
+double DirectControllerBase::return_to_zero_gain_handoff_duration(
   const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd) const
 {
   double duration = 0.0;
@@ -451,7 +451,7 @@ double DirectMitControllerBase::return_to_zero_gain_handoff_duration(
   }
   return duration;
 }
-void DirectMitControllerBase::ramped_return_to_zero_handoff_gains(
+void DirectControllerBase::ramped_return_to_zero_handoff_gains(
   const std::array<double, 7> & source_kp, const std::array<double, 7> & source_kd,
   const double elapsed, std::array<double, 7> & kp, std::array<double, 7> & kd) const
 {
@@ -468,7 +468,7 @@ void DirectMitControllerBase::ramped_return_to_zero_handoff_gains(
     kd[i] = std::min(kd[i], profile_kd_max_[i]);
   }
 }
-bool DirectMitControllerBase::protocol_ok() const
+bool DirectControllerBase::protocol_ok() const
 {
   for(std::size_t i=14;i<19;++i)if(!is_exact_nonnegative_integer(state_interfaces_[i].get_value()))return false;
   if(state_interfaces_[14].get_value()!=double(session_))return false;
@@ -483,15 +483,15 @@ bool DirectMitControllerBase::protocol_ok() const
   return state_==State::SAFE_STOPPED && status==double(MitStatus::SAFE);
 }
 
-controller_interface::CallbackReturn DirectMitControllerBase::on_activate(const rclcpp_lifecycle::State &)
+controller_interface::CallbackReturn DirectControllerBase::on_activate(const rclcpp_lifecycle::State &)
 {
   if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
-  session_=static_cast<std::uint64_t>(s);generation_=0;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
+  session_=static_cast<std::uint64_t>(s);generation_=0;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
 }
-controller_interface::CallbackReturn DirectMitControllerBase::on_deactivate(const rclcpp_lifecycle::State &)
+controller_interface::CallbackReturn DirectControllerBase::on_deactivate(const rclcpp_lifecycle::State &)
 {if(!safe_stopped_.load()){RCLCPP_ERROR(get_node()->get_logger(),"unsafe deactivate before SAFE ACK");return CallbackReturn::ERROR;}action_ready_.store(false);state_=State::INACTIVE;return CallbackReturn::SUCCESS;}
-bool DirectMitControllerBase::request_safe()
+bool DirectControllerBase::request_safe()
 {
   const double safe_ack=state_interfaces_[17].get_value();
   const double safe_generation=state_interfaces_[16].get_value();
@@ -508,7 +508,7 @@ bool DirectMitControllerBase::request_safe()
   state_=State::STOPPING;wait_cycles_=0;return true;
 }
 
-controller_interface::return_type DirectMitControllerBase::update(const rclcpp::Time &,const rclcpp::Duration & period)
+controller_interface::return_type DirectControllerBase::update(const rclcpp::Time &,const rclcpp::Duration & period)
 {
   if(state_==State::INACTIVE||state_==State::SAFE_STOPPED)return controller_interface::return_type::OK;
   // Trajectory time is controller-local rather than ROS/wall time. MuJoCo's
@@ -517,6 +517,11 @@ controller_interface::return_type DirectMitControllerBase::update(const rclcpp::
   // action controllers.
   const double dt = period.seconds();
   if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) action_control_time_ += dt;
+  // Unconditional: the offset must stay valid even on a cycle whose dt was
+  // rejected above, or a chunk arriving on that cycle converts against a
+  // stale one.
+  action_time_offset_.store(
+    get_node()->now().seconds() - action_control_time_, std::memory_order_release);
   if(!protocol_ok()){state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return controller_interface::return_type::ERROR;}
   if(stop_requested_.exchange(false)&&state_!=State::STOPPING) {
     action_abort_current();
@@ -626,7 +631,7 @@ controller_interface::return_type DirectMitControllerBase::update(const rclcpp::
   return controller_interface::return_type::OK;
 }
 
-rclcpp_action::GoalResponse DirectMitControllerBase::action_goal(
+rclcpp_action::GoalResponse DirectControllerBase::action_goal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const JointSpaceAction::Goal> goal)
 {
   if (!uses_joint_space_action() || !action_ready_.load(std::memory_order_acquire) ||
@@ -653,7 +658,7 @@ rclcpp_action::GoalResponse DirectMitControllerBase::action_goal(
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse DirectMitControllerBase::action_cancel(
+rclcpp_action::CancelResponse DirectControllerBase::action_cancel(
   const std::shared_ptr<JointSpaceGoalHandle> & handle)
 {
   std::lock_guard<std::mutex> lock(action_handles_mutex_);
@@ -666,7 +671,7 @@ rclcpp_action::CancelResponse DirectMitControllerBase::action_cancel(
   return rclcpp_action::CancelResponse::REJECT;
 }
 
-void DirectMitControllerBase::action_accepted(const std::shared_ptr<JointSpaceGoalHandle> & handle)
+void DirectControllerBase::action_accepted(const std::shared_ptr<JointSpaceGoalHandle> & handle)
 {
   const auto goal = handle->get_goal();
   ActionGoal action_goal;
@@ -682,7 +687,7 @@ void DirectMitControllerBase::action_accepted(const std::shared_ptr<JointSpaceGo
   action_goal_buffer_.writeFromNonRT(action_goal);
 }
 
-void DirectMitControllerBase::action_finish(std::uint64_t id, ActionTerminalKind kind)
+void DirectControllerBase::action_finish(std::uint64_t id, ActionTerminalKind kind)
 {
   if (id != 0U) {
     if (!action_terminal_queue_.push(ActionTerminal{id, kind})) {
@@ -695,7 +700,7 @@ void DirectMitControllerBase::action_finish(std::uint64_t id, ActionTerminalKind
   }
 }
 
-void DirectMitControllerBase::action_abort_current()
+void DirectControllerBase::action_abort_current()
 {
   if (uses_joint_space_action() && action_id_ != 0U) {
     action_finish(action_id_, ActionTerminalKind::ABORTED);
@@ -705,7 +710,7 @@ void DirectMitControllerBase::action_abort_current()
   }
 }
 
-bool DirectMitControllerBase::action_write_target(double control_time, DirectMitTarget & target)
+bool DirectControllerBase::action_write_target(double control_time, DirectMitTarget & target)
 {
   const auto incoming = *action_goal_buffer_.readFromRT();
   const auto canceled_id = action_cancel_id_.exchange(0, std::memory_order_acq_rel);
@@ -770,7 +775,7 @@ bool DirectMitControllerBase::action_write_target(double control_time, DirectMit
   return true;
 }
 
-void DirectMitControllerBase::action_non_realtime_tick()
+void DirectControllerBase::action_non_realtime_tick()
 {
   if (!uses_joint_space_action()) return;
   ActionTerminal terminal;
@@ -805,10 +810,10 @@ void DirectMitControllerBase::action_non_realtime_tick()
 } // namespace cho_controller_openarm_mit
 
 #define CHO_EXPORT(T) PLUGINLIB_EXPORT_CLASS(cho_controller_openarm_mit::T, controller_interface::ControllerInterface)
-CHO_EXPORT(JointPositionMitController)
-CHO_EXPORT(JointVelocityMitController)
-CHO_EXPORT(JointImpedanceMitController)
-CHO_EXPORT(JointImpedanceMitActionController)
-CHO_EXPORT(DirectTorqueMitController)
-CHO_EXPORT(DampedTorqueMitController)
-CHO_EXPORT(CompensatedTorqueMitController)
+CHO_EXPORT(JointPositionController)
+CHO_EXPORT(JointVelocityController)
+CHO_EXPORT(JointImpedanceController)
+CHO_EXPORT(JointImpedanceActionController)
+CHO_EXPORT(DirectTorqueController)
+CHO_EXPORT(DampedTorqueController)
+CHO_EXPORT(CompensatedTorqueController)

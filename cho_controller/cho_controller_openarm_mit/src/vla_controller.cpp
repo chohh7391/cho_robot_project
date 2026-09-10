@@ -1,6 +1,6 @@
 // Copyright 2026 Hyunho Cho
 // SPDX-License-Identifier: Apache-2.0
-#include "cho_controller_openarm_mit/vla_mit_controller.hpp"
+#include "cho_controller_openarm_mit/vla_controller.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -23,7 +23,7 @@ bool stamp_is_set(const builtin_interfaces::msg::Time & stamp)
 }
 }  // namespace
 
-const char * VlaMitController::terminal_reason(const std::uint8_t reason)
+const char * VlaController::terminal_reason(const std::uint8_t reason)
 {
   switch (reason) {
     case kReasonNone: return "";
@@ -37,9 +37,9 @@ const char * VlaMitController::terminal_reason(const std::uint8_t reason)
   }
 }
 
-controller_interface::CallbackReturn VlaMitController::on_init()
+controller_interface::CallbackReturn VlaController::on_init()
 {
-  if (TaskSpaceImpedanceMitController::on_init() != CallbackReturn::SUCCESS) {
+  if (TaskSpaceImpedanceController::on_init() != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
   auto_declare<std::string>("chunk_time_source", "arrival");
@@ -64,10 +64,10 @@ controller_interface::CallbackReturn VlaMitController::on_init()
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn VlaMitController::on_configure(
+controller_interface::CallbackReturn VlaController::on_configure(
   const rclcpp_lifecycle::State & previous)
 {
-  if (TaskSpaceImpedanceMitController::on_configure(previous) != CallbackReturn::SUCCESS) {
+  if (TaskSpaceImpedanceController::on_configure(previous) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
 
@@ -190,19 +190,19 @@ controller_interface::CallbackReturn VlaMitController::on_configure(
   const auto action_name =
     std::string("/controller_action_server/") + get_node()->get_name();
   vla_server_ = rclcpp_action::create_server<VlaAction>(get_node(), action_name,
-    std::bind(&VlaMitController::vla_goal_callback, this,
+    std::bind(&VlaController::vla_goal_callback, this,
       std::placeholders::_1, std::placeholders::_2),
-    std::bind(&VlaMitController::vla_cancel_callback, this, std::placeholders::_1),
-    std::bind(&VlaMitController::vla_accepted_callback, this, std::placeholders::_1));
+    std::bind(&VlaController::vla_cancel_callback, this, std::placeholders::_1),
+    std::bind(&VlaController::vla_accepted_callback, this, std::placeholders::_1));
   vla_timer_ = get_node()->create_wall_timer(
-    std::chrono::milliseconds(5), std::bind(&VlaMitController::vla_non_rt_tick, this));
+    std::chrono::milliseconds(5), std::bind(&VlaController::vla_non_rt_tick, this));
 
   // Depth-1 BEST_EFFORT: only the latest chunk matters (receding horizon), and a
   // deeper reliable queue would burst-deliver stale chunks after an executor
   // hiccup, each one re-splicing the timeline.
   chunk_sub_ = get_node()->create_subscription<cho_interfaces::msg::ActionChunk>(
     chunk_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
-    std::bind(&VlaMitController::on_action_chunk, this, std::placeholders::_1));
+    std::bind(&VlaController::on_action_chunk, this, std::placeholders::_1));
 
   telemetry_pub_ = get_node()->create_publisher<cho_interfaces::msg::VlaTelemetry>(
     "~/vla_telemetry", rclcpp::SystemDefaultsQoS());
@@ -247,10 +247,10 @@ controller_interface::CallbackReturn VlaMitController::on_configure(
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn VlaMitController::on_activate(
+controller_interface::CallbackReturn VlaController::on_activate(
   const rclcpp_lifecycle::State & previous)
 {
-  if (TaskSpaceImpedanceMitController::on_activate(previous) != CallbackReturn::SUCCESS) {
+  if (TaskSpaceImpedanceController::on_activate(previous) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
   telemetry_pub_->on_activate();
@@ -271,22 +271,23 @@ controller_interface::CallbackReturn VlaMitController::on_activate(
   gripper_rejected_.store(false);
   limiter_seeded_ = false;
   releasing_on_hold_ = false;
+  limiter_resume_pending_ = false;
   gripper_dispatch_.reset();
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn VlaMitController::on_deactivate(
+controller_interface::CallbackReturn VlaController::on_deactivate(
   const rclcpp_lifecycle::State & previous)
 {
   telemetry_pub_->on_deactivate();
-  return TaskSpaceImpedanceMitController::on_deactivate(previous);
+  return TaskSpaceImpedanceController::on_deactivate(previous);
 }
 
 // ---------------------------------------------------------------------------
 // Goal lifecycle (executor)
 // ---------------------------------------------------------------------------
 
-rclcpp_action::GoalResponse VlaMitController::vla_goal_callback(
+rclcpp_action::GoalResponse VlaController::vla_goal_callback(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const VlaAction::Goal> goal)
 {
   if (!goal) {return rclcpp_action::GoalResponse::REJECT;}
@@ -310,7 +311,7 @@ rclcpp_action::GoalResponse VlaMitController::vla_goal_callback(
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse VlaMitController::vla_cancel_callback(
+rclcpp_action::CancelResponse VlaController::vla_cancel_callback(
   const std::shared_ptr<VlaGoalHandle> & handle)
 {
   if (!handle) {return rclcpp_action::CancelResponse::REJECT;}
@@ -318,7 +319,7 @@ rclcpp_action::CancelResponse VlaMitController::vla_cancel_callback(
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void VlaMitController::vla_accepted_callback(const std::shared_ptr<VlaGoalHandle> & handle)
+void VlaController::vla_accepted_callback(const std::shared_ptr<VlaGoalHandle> & handle)
 {
   const std::uint64_t id = vla_next_id_.fetch_add(1);
   inference_dt_ = 1.0 / static_cast<double>(handle->get_goal()->inference_frequency);
@@ -349,14 +350,14 @@ void VlaMitController::vla_accepted_callback(const std::shared_ptr<VlaGoalHandle
     handle->get_goal()->task.c_str());
 }
 
-void VlaMitController::finish_vla(
+void VlaController::finish_vla(
   const std::uint64_t id, const VlaTerminal terminal, const std::uint8_t reason)
 {
   if (!id) {return;}
   vla_terminal_queue_.push(VlaTerminalEvent{id, terminal, reason});
 }
 
-void VlaMitController::vla_non_rt_tick()
+void VlaController::vla_non_rt_tick()
 {
   // A throw out of a timer callback is not an error the executor reports, it is
   // std::terminate: the whole controller_manager dies and every other
@@ -373,7 +374,7 @@ void VlaMitController::vla_non_rt_tick()
   }
 }
 
-void VlaMitController::vla_non_rt_tick_impl()
+void VlaController::vla_non_rt_tick_impl()
 {
   VlaTerminalEvent event;
   while (vla_terminal_queue_.pop(event)) {
@@ -469,7 +470,7 @@ void VlaMitController::vla_non_rt_tick_impl()
 // Chunk ingest (executor)
 // ---------------------------------------------------------------------------
 
-bool VlaMitController::build_chunk(
+bool VlaController::build_chunk(
   const cho_interfaces::msg::ActionChunk & message, const double arrival,
   cho_vla_core::Chunk & chunk, std::string & reason)
 {
@@ -497,7 +498,7 @@ bool VlaMitController::build_chunk(
   const bool use_observation =
     chunk_time_source_ == "observation" && stamp_is_set(message.header.stamp);
   chunk.t_obs = use_observation
-    ? rclcpp::Time(message.header.stamp).seconds()
+    ? action_time_from_node(rclcpp::Time(message.header.stamp).seconds())
     : arrival;
   chunk.seq = message.seq;
   chunk.chunk_size = message.chunk_size;
@@ -542,13 +543,15 @@ bool VlaMitController::build_chunk(
   return true;
 }
 
-void VlaMitController::on_action_chunk(
+void VlaController::on_action_chunk(
   const cho_interfaces::msg::ActionChunk::SharedPtr message)
 {
   if (!vla_public_id_.load(std::memory_order_acquire)) {
     return;  // no goal: chunks are not authorised to drive the arm
   }
-  const double arrival = get_node()->now().seconds();
+  // The action timeline is sampled at action_control_time_, not at the node
+  // clock; see action_time_from_node().
+  const double arrival = action_time_from_node(get_node()->now().seconds());
 
   cho_vla_core::Chunk chunk;
   std::string reason;
@@ -606,7 +609,7 @@ void VlaMitController::on_action_chunk(
 // Control loop
 // ---------------------------------------------------------------------------
 
-bool VlaMitController::write_joint_reference_target(
+bool VlaController::write_joint_reference_target(
   const cho_vla_core::Reference & reference, const double dt, DirectMitTarget & target)
 {
   const auto q = measured();
@@ -648,7 +651,7 @@ bool VlaMitController::write_joint_reference_target(
   return true;
 }
 
-bool VlaMitController::write_task_target(
+bool VlaController::write_task_target(
   const double control_time, const double dt, DirectMitTarget & target)
 {
   task_compute_failed_ = false;
@@ -681,6 +684,7 @@ bool VlaMitController::write_task_target(
     rt_seen_accepted_ = 0;
     limiter_seeded_ = false;
     releasing_on_hold_ = false;
+    limiter_resume_pending_ = false;
     gripper_dispatch_.reset();
   }
 
@@ -696,6 +700,9 @@ bool VlaMitController::write_task_target(
           return false;
         }
         releasing_on_hold_ = true;
+        // The reference is about to leave the limiter's rate state behind; the
+        // resume has to re-seed rather than continue from it.
+        limiter_resume_pending_ = true;
       }
       Vector6 twist = Vector6::Zero();
       if (idle_release_active_) {
@@ -798,7 +805,17 @@ bool VlaMitController::write_task_target(
   active_action_space_ =
     (reference.space == cho_vla_core::ActionSpace::kJoint) ? "joint" : "task";
 
-  if (!limiter_seeded_) {
+  // Goal start, and every resume out of hold. ReferenceLimiter's own contract
+  // asks for both; only goal start was honoured, so a stream gap left the rate
+  // state anchored to wherever the reference was when the stream died while
+  // release_and_idle() had meanwhile blended idle_pose_ onto the measured pose.
+  // The next accepted chunk then restarted the emitted reference from that
+  // stale pose - a backwards step under kp_task, and now a backwards dq_des
+  // too, which points the friction feed-forward the wrong way. Re-seeding from
+  // idle_pose_ makes the resume continuous with what the arm is actually
+  // holding. hold_timeout_sec 3.0 over stream_timeout_sec 0.2 means a real
+  // bringup passes through here whenever three chunks in a row are dropped.
+  if (!limiter_seeded_ || limiter_resume_pending_) {
     cho_vla_core::Reference seed = reference;
     seed.pose = idle_pose_valid_ ? idle_pose_ : reference.pose;
     for (std::size_t joint = 0; joint < 7; ++joint) {
@@ -806,6 +823,7 @@ bool VlaMitController::write_task_target(
     }
     limiter_.seed(seed, control_time);
     limiter_seeded_ = true;
+    limiter_resume_pending_ = false;
   }
   limiter_.apply(control_time, reference);
 
@@ -862,4 +880,4 @@ bool VlaMitController::write_task_target(
 
 #include "pluginlib/class_list_macros.hpp"
 PLUGINLIB_EXPORT_CLASS(
-  cho_controller_openarm_mit::VlaMitController, controller_interface::ControllerInterface)
+  cho_controller_openarm_mit::VlaController, controller_interface::ControllerInterface)

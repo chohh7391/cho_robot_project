@@ -15,7 +15,7 @@
 
 #include <memory>
 
-#include "cho_controller_openarm/servers/base_action_server.hpp"
+#include "cho_controller_openarm_mit/servers/base_action_server.hpp"
 #include "cho_interfaces/action/joint_space.hpp"
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
 

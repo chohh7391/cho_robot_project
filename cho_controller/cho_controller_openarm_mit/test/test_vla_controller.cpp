@@ -1,7 +1,7 @@
 // Copyright 2026 Hyunho Cho
 // SPDX-License-Identifier: Apache-2.0
 //
-// controller_manager fixture for VlaMitController.
+// controller_manager fixture for VlaController.
 //
 // What this proves is the wiring, not the chunk arithmetic: splicing, sampling,
 // validation and watchdog transitions are covered exhaustively in cho_vla_core's
@@ -28,49 +28,49 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "cho_controller_openarm_mit/vla_mit_controller.hpp"
+#include "cho_controller_openarm_mit/vla_controller.hpp"
 
 namespace cho_controller_openarm_mit
 {
-struct VlaMitControllerTestAccess
+struct VlaControllerTestAccess
 {
-  static bool ready(const VlaMitController & controller)
+  static bool ready(const VlaController & controller)
   {
     return controller.task_ready_.load(std::memory_order_acquire);
   }
-  static double command(const VlaMitController & controller, const std::size_t index)
+  static double command(const VlaController & controller, const std::size_t index)
   {
     return controller.command_interfaces_[index].get_value();
   }
-  static double position_command(const VlaMitController & controller, const std::size_t joint)
+  static double position_command(const VlaController & controller, const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint].get_value();
   }
-  static double stiffness(const VlaMitController & controller, const std::size_t joint)
+  static double stiffness(const VlaController & controller, const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 2].get_value();
   }
-  static double effort(const VlaMitController & controller, const std::size_t joint)
+  static double effort(const VlaController & controller, const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 4].get_value();
   }
-  static double measured(const VlaMitController & controller, const std::size_t joint)
+  static double measured(const VlaController & controller, const std::size_t joint)
   {
     return controller.state_interfaces_[2 * joint].get_value();
   }
-  static int stream_state(const VlaMitController & controller)
+  static int stream_state(const VlaController & controller)
   {
     return controller.rt_stream_state_.load();
   }
-  static std::uint64_t accepted(const VlaMitController & controller)
+  static std::uint64_t accepted(const VlaController & controller)
   {
     return controller.telemetry_.chunks_accepted;
   }
-  static std::uint64_t rejected(const VlaMitController & controller)
+  static std::uint64_t rejected(const VlaController & controller)
   {
     return controller.telemetry_.chunks_rejected;
   }
-  static double reference_offset_limit(const VlaMitController & controller, std::size_t joint)
+  static double reference_offset_limit(const VlaController & controller, std::size_t joint)
   {
     return controller.reference_offset_limit_[joint];
   }
@@ -80,9 +80,9 @@ struct VlaMitControllerTestAccess
 namespace
 {
 using VlaAction = cho_interfaces::action::VisionLanguageAction;
-using cho_controller_openarm_mit::VlaMitController;
-using cho_controller_openarm_mit::VlaMitControllerTestAccess;
-using Access = VlaMitControllerTestAccess;
+using cho_controller_openarm_mit::VlaController;
+using cho_controller_openarm_mit::VlaControllerTestAccess;
+using Access = VlaControllerTestAccess;
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr const char * kControllerName = "vla_mit_controller";
@@ -162,9 +162,9 @@ protected:
       std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true);
     manager = std::make_shared<controller_manager::ControllerManager>(
       std::move(resources), executor, "controller_manager", kNamespace);
-    controller = std::make_shared<VlaMitController>();
+    controller = std::make_shared<VlaController>();
     ASSERT_TRUE(manager->add_controller(
-        controller, kControllerName, "cho_controller_openarm_mit/VlaMitController"));
+        controller, kControllerName, "cho_controller_openarm_mit/VlaController"));
 
     set("arm", "single");
     set("kp", std::vector<double>(7, 5.0));
@@ -328,7 +328,7 @@ protected:
 
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
   std::shared_ptr<controller_manager::ControllerManager> manager;
-  std::shared_ptr<VlaMitController> controller;
+  std::shared_ptr<VlaController> controller;
   rclcpp::Node::SharedPtr client_node;
   rclcpp::Publisher<cho_interfaces::msg::ActionChunk>::SharedPtr chunk_pub;
   controller_interface::return_type configured {controller_interface::return_type::OK};

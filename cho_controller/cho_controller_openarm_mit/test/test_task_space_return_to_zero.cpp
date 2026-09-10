@@ -14,61 +14,61 @@
 #include <cho_openarm_mit_core/mit_protocol.hpp>
 #include <pinocchio/algorithm/crba.hpp>
 
-#include "cho_controller_openarm_mit/task_space_impedance_mit_controller.hpp"
+#include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
 
 namespace cho_controller_openarm_mit
 {
-struct TaskSpaceImpedanceMitControllerTestAccess
+struct TaskSpaceImpedanceControllerTestAccess
 {
-  static bool ready(const TaskSpaceImpedanceMitController & controller)
+  static bool ready(const TaskSpaceImpedanceController & controller)
   {
     return controller.task_ready_.load(std::memory_order_acquire);
   }
-  static double position_command(const TaskSpaceImpedanceMitController & controller,
+  static double position_command(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint].get_value();
   }
-  static double stiffness_command(const TaskSpaceImpedanceMitController & controller,
+  static double stiffness_command(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 2].get_value();
   }
-  static double damping_command(const TaskSpaceImpedanceMitController & controller,
+  static double damping_command(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 3].get_value();
   }
-  static double effort_command(const TaskSpaceImpedanceMitController & controller,
+  static double effort_command(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 4].get_value();
   }
-  static double measured_position(const TaskSpaceImpedanceMitController & controller,
+  static double measured_position(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.state_interfaces_[2 * joint].get_value();
   }
-  static double configured_damping(const TaskSpaceImpedanceMitController & controller,
+  static double configured_damping(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.kd_[joint].load(std::memory_order_acquire);
   }
-  static double configured_stiffness(const TaskSpaceImpedanceMitController & controller,
+  static double configured_stiffness(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.kp_[joint];
   }
-  static double reference_offset_limit(const TaskSpaceImpedanceMitController & controller,
+  static double reference_offset_limit(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.reference_offset_limit_[joint];
   }
-  static bool drive_side_impedance(const TaskSpaceImpedanceMitController & controller)
+  static bool drive_side_impedance(const TaskSpaceImpedanceController & controller)
   {
     return controller.drive_side_impedance_;
   }
-  static double kp_task(const TaskSpaceImpedanceMitController & controller,
+  static double kp_task(const TaskSpaceImpedanceController & controller,
     const std::size_t axis)
   {
     return controller.kp_task_[axis].load(std::memory_order_acquire);
@@ -76,12 +76,12 @@ struct TaskSpaceImpedanceMitControllerTestAccess
   // The rotor inertia the model actually carries, read at the joint's own
   // Pinocchio velocity index rather than at 0..6: the description also holds
   // the two finger joints, so the arm's indices are not the leading ones.
-  static double model_armature(const TaskSpaceImpedanceMitController & controller,
+  static double model_armature(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.action_model_->armature(controller.action_v_indices_[joint]);
   }
-  static double model_mass_diagonal(TaskSpaceImpedanceMitController & controller,
+  static double model_mass_diagonal(TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     pinocchio::crba(
@@ -90,14 +90,14 @@ struct TaskSpaceImpedanceMitControllerTestAccess
       controller.action_v_indices_[joint], controller.action_v_indices_[joint]);
   }
   static void friction(
-    const TaskSpaceImpedanceMitController & controller,
+    const TaskSpaceImpedanceController & controller,
     const std::array<double, 7> & dq, const std::array<double, 7> & dq_des,
     Eigen::Matrix<double, 7, 1> & torque)
   {
     controller.friction_torque(dq, dq_des, torque);
   }
   static void set_friction(
-    TaskSpaceImpedanceMitController & controller, const std::array<double, 7> & level,
+    TaskSpaceImpedanceController & controller, const std::array<double, 7> & level,
     const double scale, const double epsilon)
   {
     for (std::size_t joint = 0; joint < 7; ++joint) {
@@ -107,50 +107,50 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     controller.friction_velocity_epsilon_ = epsilon;
   }
   static void set_friction_stribeck(
-    TaskSpaceImpedanceMitController & controller, const double ratio, const double velocity)
+    TaskSpaceImpedanceController & controller, const double ratio, const double velocity)
   {
     controller.friction_kinetic_ratio_.store(ratio, std::memory_order_release);
     controller.friction_stribeck_velocity_.store(velocity, std::memory_order_release);
   }
   static void set_friction_source_measured(
-    TaskSpaceImpedanceMitController & controller, const bool measured)
+    TaskSpaceImpedanceController & controller, const bool measured)
   {
     controller.friction_velocity_source_ = measured ?
-      TaskSpaceImpedanceMitController::FrictionVelocity::MEASURED :
-      TaskSpaceImpedanceMitController::FrictionVelocity::REFERENCE;
+      TaskSpaceImpedanceController::FrictionVelocity::MEASURED :
+      TaskSpaceImpedanceController::FrictionVelocity::REFERENCE;
   }
-  static double position_lower(const TaskSpaceImpedanceMitController & controller,
+  static double position_lower(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.position_lower_[joint];
   }
-  static double position_upper(const TaskSpaceImpedanceMitController & controller,
+  static double position_upper(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.position_upper_[joint];
   }
   static ArmCommand clamp_positions(
-    const TaskSpaceImpedanceMitController & controller, ArmCommand command)
+    const TaskSpaceImpedanceController & controller, ArmCommand command)
   {
     controller.clamp_command_positions(command);
     return command;
   }
-  static bool return_to_zero_handoff_active(const TaskSpaceImpedanceMitController & controller)
+  static bool return_to_zero_handoff_active(const TaskSpaceImpedanceController & controller)
   {
     return controller.return_to_zero_handoff_active_;
   }
-  static bool startup_active(const TaskSpaceImpedanceMitController & controller)
+  static bool startup_active(const TaskSpaceImpedanceController & controller)
   {
     return controller.startup_active_;
   }
-  static double q_reference(const TaskSpaceImpedanceMitController & controller,
+  static double q_reference(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.task_q_reference_observed_[joint].load(std::memory_order_acquire);
   }
-  static void stage_unbounded_relative_goal(TaskSpaceImpedanceMitController & controller)
+  static void stage_unbounded_relative_goal(TaskSpaceImpedanceController & controller)
   {
-    TaskSpaceImpedanceMitController::Goal goal;
+    TaskSpaceImpedanceController::Goal goal;
     goal.id = controller.task_last_started_id_ + 1;
     goal.duration = 5.0;
     goal.relative = true;
@@ -162,9 +162,9 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     controller.task_goal_buffer_.writeFromNonRT(goal);
   }
   static rclcpp_action::GoalResponse accept_unbounded_relative_goal(
-    TaskSpaceImpedanceMitController & controller)
+    TaskSpaceImpedanceController & controller)
   {
-    auto goal = std::make_shared<TaskSpaceImpedanceMitController::Action::Goal>();
+    auto goal = std::make_shared<TaskSpaceImpedanceController::Action::Goal>();
     goal->duration = 5.0F;
     goal->relative = true;
     // 300 mm/2 rad deliberately exceeds the retired Cartesian goal guards.
@@ -174,9 +174,9 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     return controller.goal_callback({}, goal);
   }
   static void stage_absolute_goal_without_cartesian_caps(
-    TaskSpaceImpedanceMitController & controller)
+    TaskSpaceImpedanceController & controller)
   {
-    TaskSpaceImpedanceMitController::Goal goal;
+    TaskSpaceImpedanceController::Goal goal;
     goal.id = controller.task_last_started_id_ + 1;
     goal.duration = 5.0;
     goal.relative = false;
@@ -184,9 +184,9 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     goal.rotation = Eigen::Quaterniond::Identity();
     controller.task_goal_buffer_.writeFromNonRT(goal);
   }
-  static void stage_stationary_relative_goal(TaskSpaceImpedanceMitController & controller)
+  static void stage_stationary_relative_goal(TaskSpaceImpedanceController & controller)
   {
-    TaskSpaceImpedanceMitController::Goal goal;
+    TaskSpaceImpedanceController::Goal goal;
     goal.id = controller.task_last_started_id_ + 1;
     goal.duration = 0.25;
     goal.relative = true;
@@ -194,16 +194,16 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     goal.rotation = Eigen::Quaterniond::Identity();
     controller.task_goal_buffer_.writeFromNonRT(goal);
   }
-  static bool capacity_rejected(const TaskSpaceImpedanceMitController & controller)
+  static bool capacity_rejected(const TaskSpaceImpedanceController & controller)
   {
     return controller.task_capacity_rejected_;
   }
-  static std::uint64_t active_task_id(const TaskSpaceImpedanceMitController & controller)
+  static std::uint64_t active_task_id(const TaskSpaceImpedanceController & controller)
   {
     return controller.task_public_id_.load(std::memory_order_acquire);
   }
   static void set_nonzero_idle_orientation_error(
-    TaskSpaceImpedanceMitController & controller, const double radians)
+    TaskSpaceImpedanceController & controller, const double radians)
   {
     pinocchio::SE3 measured_pose;
     Eigen::Matrix<double, 6, 7> jacobian;
@@ -215,61 +215,61 @@ struct TaskSpaceImpedanceMitControllerTestAccess
       measured_pose.translation());
     controller.idle_pose_valid_ = true;
   }
-  static pinocchio::SE3 idle_pose(const TaskSpaceImpedanceMitController & controller)
+  static pinocchio::SE3 idle_pose(const TaskSpaceImpedanceController & controller)
   {
     return controller.idle_pose_;
   }
-  static pinocchio::SE3 measured_pose(TaskSpaceImpedanceMitController & controller)
+  static pinocchio::SE3 measured_pose(TaskSpaceImpedanceController & controller)
   {
     pinocchio::SE3 pose;
     Eigen::Matrix<double, 6, 7> jacobian;
     EXPECT_TRUE(controller.task_pose_and_jacobian(controller.measured(), pose, jacobian));
     return pose;
   }
-  static pinocchio::SE3 task_start_pose(const TaskSpaceImpedanceMitController & controller)
+  static pinocchio::SE3 task_start_pose(const TaskSpaceImpedanceController & controller)
   {
     return controller.task_start_pose_;
   }
   static bool write_task_cycle(
-    TaskSpaceImpedanceMitController & controller, const double time,
+    TaskSpaceImpedanceController & controller, const double time,
     const double dt, DirectMitTarget & target)
   {
     return controller.write_task_target(time, dt, target);
   }
-  static double velocity_command(const TaskSpaceImpedanceMitController & controller,
+  static double velocity_command(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint + 1].get_value();
   }
-  static double command_velocity_limit(const TaskSpaceImpedanceMitController & controller,
+  static double command_velocity_limit(const TaskSpaceImpedanceController & controller,
     const std::size_t joint)
   {
     return controller.command_velocity_[joint];
   }
-  static bool release_active(const TaskSpaceImpedanceMitController & controller)
+  static bool release_active(const TaskSpaceImpedanceController & controller)
   {
     return controller.idle_release_active_;
   }
-  static double mit_status(const TaskSpaceImpedanceMitController & controller)
+  static double mit_status(const TaskSpaceImpedanceController & controller)
   {
     return controller.state_interfaces_[18].get_value();
   }
-  static bool safe_stopped(const TaskSpaceImpedanceMitController & controller)
+  static bool safe_stopped(const TaskSpaceImpedanceController & controller)
   {
     return controller.safe_stopped_.load(std::memory_order_acquire);
   }
-  static void request_cancel(TaskSpaceImpedanceMitController & controller, const std::uint64_t id)
+  static void request_cancel(TaskSpaceImpedanceController & controller, const std::uint64_t id)
   {
     controller.task_cancel_id_.store(id, std::memory_order_release);
   }
   static bool pose_and_jacobian(
-    TaskSpaceImpedanceMitController & controller, const std::array<double, 7> & q,
+    TaskSpaceImpedanceController & controller, const std::array<double, 7> & q,
     pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian)
   {
     return controller.task_pose_and_jacobian(q, pose, jacobian);
   }
   static std::array<double, 7> velocity_reference(
-    const TaskSpaceImpedanceMitController & controller,
+    const TaskSpaceImpedanceController & controller,
     const Eigen::Matrix<double, 6, 7> & jacobian, const Eigen::Matrix<double, 6, 1> & twist)
   {
     std::array<double, 7> out{};
@@ -277,7 +277,7 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     return out;
   }
   static bool nullspace_torque(
-    TaskSpaceImpedanceMitController & controller, const std::array<double, 7> & posture,
+    TaskSpaceImpedanceController & controller, const std::array<double, 7> & posture,
     const double kp_null, const double kd_null, Eigen::Matrix<double, 7, 1> & torque,
     Eigen::Matrix<double, 6, 7> & jacobian, Eigen::Matrix<double, 7, 7> & mass)
   {
@@ -294,44 +294,44 @@ struct TaskSpaceImpedanceMitControllerTestAccess
     return controller.nullspace_posture_torque(jacobian, q, dq, torque);
   }
   static void set_joint_limit_guard(
-    TaskSpaceImpedanceMitController & controller, const std::array<double, 7> & stiffness,
+    TaskSpaceImpedanceController & controller, const std::array<double, 7> & stiffness,
     const double margin)
   {
     controller.joint_limit_stiffness_ = stiffness;
     controller.joint_limit_margin_ = margin;
   }
   static Eigen::Matrix<double, 7, 1> joint_limit_torque(
-    const TaskSpaceImpedanceMitController & controller, const std::array<double, 7> & q)
+    const TaskSpaceImpedanceController & controller, const std::array<double, 7> & q)
   {
     Eigen::Matrix<double, 7, 1> torque;
     controller.joint_limit_torque(q, torque);
     return torque;
   }
   static double feedforward_slew(
-    const TaskSpaceImpedanceMitController & controller, const std::size_t joint)
+    const TaskSpaceImpedanceController & controller, const std::size_t joint)
   {
     return controller.feedforward_slew_[joint];
   }
   static void set_torque_limit(
-    TaskSpaceImpedanceMitController & controller, const double limit)
+    TaskSpaceImpedanceController & controller, const double limit)
   {
     controller.torque_limit_.fill(limit);
   }
   static double slew_model_feedforward(
-    TaskSpaceImpedanceMitController & controller, const std::size_t joint,
+    TaskSpaceImpedanceController & controller, const std::size_t joint,
     const double desired, const double dt)
   {
     return controller.slew_model_feedforward(joint, desired, dt);
   }
   static double last_model_feedforward(
-    const TaskSpaceImpedanceMitController & controller, const std::size_t joint)
+    const TaskSpaceImpedanceController & controller, const std::size_t joint)
   {
     return controller.task_last_model_feedforward_[joint];
   }
   static void stage_moving_relative_goal(
-    TaskSpaceImpedanceMitController & controller)
+    TaskSpaceImpedanceController & controller)
   {
-    TaskSpaceImpedanceMitController::Goal goal;
+    TaskSpaceImpedanceController::Goal goal;
     goal.id = controller.task_last_started_id_ + 1;
     goal.duration = 1.0;
     goal.relative = true;
@@ -432,8 +432,8 @@ protected:
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
     manager_ = std::make_shared<controller_manager::ControllerManager>(
       std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true), executor_, "controller_manager", "/task_zero_test");
-    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
-    ASSERT_TRUE(manager_->add_controller(controller_, "task_space_impedance_mit_controller", "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
+    ASSERT_TRUE(manager_->add_controller(controller_, "task_space_impedance_mit_controller", "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
     const auto set = [&](const char * name, const auto & value) {ASSERT_TRUE(controller_->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);};
     set("arm", "single"); set("kp", std::vector<double>(7, 5.0)); set("kd", std::vector<double>(7, 0.4)); set("torque_limit", std::vector<double>(7, 3.0));
     set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE); set("safety_profile_name", "mujoco_sim_safe"); set("robot_description", urdf()); set("ee_frame", "openarm_hand_tcp");
@@ -467,7 +467,7 @@ protected:
   }
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::shared_ptr<controller_manager::ControllerManager> manager_;
-  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceMitController> controller_;
+  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceController> controller_;
   std::atomic<bool> running_{false}; std::thread worker_;
   // Completed control cycles, published by the worker thread for cycle().
   std::atomic<unsigned long long> update_count_{0};
@@ -481,23 +481,23 @@ TEST_F(Fixture, EmittedJointReferenceIsClampedIntoTheProfilePositionWindow)
   cho_controller_openarm_mit::ArmCommand command;
   for (std::size_t joint = 0; joint < 7; ++joint) {
     command.joints[joint].position =
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_lower(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_lower(
       *controller_, joint) - 1e-3;
   }
   command.joints[0].position =
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_upper(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_upper(
     *controller_, 0) + 5.0;
   const auto clamped =
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::clamp_positions(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::clamp_positions(
     *controller_, command);
   EXPECT_DOUBLE_EQ(
     clamped.joints[0].position,
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_upper(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_upper(
       *controller_, 0));
   for (std::size_t joint = 1; joint < 7; ++joint) {
     EXPECT_DOUBLE_EQ(
       clamped.joints[joint].position,
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_lower(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_lower(
         *controller_, joint));
   }
 }
@@ -507,33 +507,33 @@ TEST_F(Fixture, ReturnToZeroSuppressesTheOrdinaryTaskStartupPostureUntilGainHand
   bool observed_handoff = false;
   for (int i = 0; i < 700; ++i) {
     cycle(1);
-    if (!cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::return_to_zero_handoff_active(*controller_)) continue;
+    if (!cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::return_to_zero_handoff_active(*controller_)) continue;
     observed_handoff = true;
-    EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_));
+    EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_));
     // The fake begins at 0.1 rad, so a seed-command regression is observable.
     // Every handoff tuple must instead retain the converged nominal-zero q_des.
     for (std::size_t joint = 0; joint < 7; ++joint) {
       EXPECT_NEAR(
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_command(*controller_, joint),
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::q_reference(*controller_, joint),
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_command(*controller_, joint),
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::q_reference(*controller_, joint),
         0.005);
       EXPECT_NEAR(
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_command(*controller_, joint),
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_command(*controller_, joint),
         joint == 3 ? 0.001 : 0.0, 0.03);
       // The handoff ramps stiffness to zero but damping only down to the
       // controller's own kd, which the damped Cartesian mode keeps applying.
       // Ramping damping to zero here would hand the Cartesian law an arm whose
       // null space has no dissipation at all.
       EXPECT_GE(
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::damping_command(
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::damping_command(
           *controller_, joint),
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::configured_damping(
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::configured_damping(
           *controller_, joint) - 1e-9);
     }
   }
   EXPECT_TRUE(observed_handoff);
   cycle(100);
-  EXPECT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_));
+  EXPECT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_));
 }
 
 class ConfigureFixture : public ::testing::Test
@@ -551,10 +551,10 @@ TEST_F(ConfigureFixture, ExactRealRightReturnToZeroParametersConfigureAgainstBim
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
     executor, "configure_controller_manager", "/task_zero_configure_test");
-  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
   ASSERT_TRUE(manager->add_controller(
     controller, "right_real_task_configure_regression",
-    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
   const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -598,10 +598,10 @@ TEST_F(ConfigureFixture, LegacyTauFfLawStillConfiguresWithZeroJointGains)
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
     executor, "legacy_controller_manager", "/task_zero_legacy_test");
-  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
   ASSERT_TRUE(manager->add_controller(
     controller, "legacy_tau_ff_regression",
-    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
   const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -633,10 +633,10 @@ TEST_F(ConfigureFixture, DriveSideImpedanceRefusesGainsItCannotPushAgainst)
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
     executor, "dead_loop_controller_manager", "/task_zero_dead_loop_test");
-  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
   ASSERT_TRUE(manager->add_controller(
     controller, "dead_loop_regression",
-    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
   const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -670,10 +670,10 @@ TEST_F(ConfigureFixture, RotorInertiaIsOptInValidatedAndLandsOnTheModelMassMatri
         "/task_zero_rotor_test_" + std::to_string(instance));
       ++instance;
       auto controller =
-        std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+        std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
       const auto name = "rotor_regression_" + std::to_string(instance);
       EXPECT_TRUE(manager->add_controller(
-        controller, name, "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+        controller, name, "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
       const auto set = [&](const char * key, const auto & value) {
           EXPECT_TRUE(controller->get_node()->set_parameter(
             rclcpp::Parameter(key, value)).successful) << key;
@@ -700,7 +700,7 @@ TEST_F(ConfigureFixture, RotorInertiaIsOptInValidatedAndLandsOnTheModelMassMatri
     ASSERT_EQ(status, controller_interface::return_type::OK);
     for (std::size_t joint = 0; joint < 7; ++joint) {
       EXPECT_DOUBLE_EQ(
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_armature(
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::model_armature(
           *controller, joint), 0.0) << "joint " << joint + 1;
     }
   }
@@ -712,13 +712,13 @@ TEST_F(ConfigureFixture, RotorInertiaIsOptInValidatedAndLandsOnTheModelMassMatri
     ASSERT_EQ(status, controller_interface::return_type::OK);
     for (std::size_t joint = 0; joint < 7; ++joint) {
       EXPECT_DOUBLE_EQ(
-        cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_armature(
+        cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::model_armature(
           *controller, joint), damiao[joint]) << "joint " << joint + 1;
     }
     // The Data must have been rebuilt, or crba would keep reporting the
     // rotor-free mass matrix while the Model claims otherwise.
     EXPECT_GT(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::model_mass_diagonal(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::model_mass_diagonal(
         *controller, 2), damiao[2]);
   }
   // Wrong count and a negative entry are both configure failures: a partially
@@ -741,10 +741,10 @@ TEST_F(ConfigureFixture, RuntimeCartesianGainSetIsRejectedWhileTheDriveOwnsTheIm
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
     executor, "inert_gain_controller_manager", "/task_zero_inert_gain_test");
-  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
   ASSERT_TRUE(manager->add_controller(
     controller, "inert_gain_regression",
-    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
   const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -769,7 +769,7 @@ TEST_F(ConfigureFixture, RuntimeCartesianGainSetIsRejectedWhileTheDriveOwnsTheIm
     manager->configure_controller("inert_gain_regression"),
     controller_interface::return_type::OK);
   ASSERT_TRUE(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::drive_side_impedance(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::drive_side_impedance(
       *controller));
 
   for (const char * name : {"kp_task", "kd_task"}) {
@@ -784,7 +784,7 @@ TEST_F(ConfigureFixture, RuntimeCartesianGainSetIsRejectedWhileTheDriveOwnsTheIm
   }
   // A rejected set must not have partially landed.
   EXPECT_DOUBLE_EQ(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::kp_task(*controller, 0),
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::kp_task(*controller, 0),
     50.0);
 }
 
@@ -797,10 +797,10 @@ TEST_F(ConfigureFixture, RuntimeCartesianGainSetStillWorksUnderTheLegacyLaw)
   auto manager = std::make_shared<controller_manager::ControllerManager>(
     std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true),
     executor, "legacy_gain_controller_manager", "/task_zero_legacy_gain_test");
-  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+  auto controller = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
   ASSERT_TRUE(manager->add_controller(
     controller, "legacy_gain_regression",
-    "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+    "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
   const auto set = [&](const char * name, const auto & value) {
       ASSERT_TRUE(controller->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
     };
@@ -822,14 +822,14 @@ TEST_F(ConfigureFixture, RuntimeCartesianGainSetStillWorksUnderTheLegacyLaw)
     manager->configure_controller("legacy_gain_regression"),
     controller_interface::return_type::OK);
   ASSERT_FALSE(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::drive_side_impedance(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::drive_side_impedance(
       *controller));
 
   const auto result = controller->get_node()->set_parameter(
     rclcpp::Parameter("kp_task", std::vector<double>{30.0, 30.0, 30.0, 3.0, 3.0, 3.0}));
   EXPECT_TRUE(result.successful) << result.reason;
   EXPECT_DOUBLE_EQ(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::kp_task(*controller, 0),
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::kp_task(*controller, 0),
     30.0);
 }
 
@@ -848,10 +848,10 @@ protected:
       std::make_unique<hardware_interface::ResourceManager>(
         right_bimanual_control_urdf(), true, true),
       executor_, "opt_out_controller_manager", "/task_zero_opt_out_test");
-    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
     ASSERT_TRUE(manager_->add_controller(
       controller_, "right_task_space_impedance_mit_controller",
-      "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+      "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
     const auto set = [&](const char * name, const auto & value) {
         ASSERT_TRUE(controller_->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
       };
@@ -933,7 +933,7 @@ protected:
 
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::shared_ptr<controller_manager::ControllerManager> manager_;
-  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceMitController> controller_;
+  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceController> controller_;
   std::atomic<bool> running_{false};
   std::thread worker_;
   // Completed control cycles, published by the worker thread for cycle().
@@ -943,36 +943,36 @@ protected:
 TEST_F(OptOutFixture, SkipsJointStartupAndHoldsCurrentCartesianPoseWithDriveSideStiffness)
 {
   for (int i = 0; i < 300 &&
-       !cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(
+       !cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(
          *controller_); ++i) {
     cycle(1);
   }
-  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(
+  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(
     *controller_));
   EXPECT_FALSE(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::startup_active(
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::startup_active(
       *controller_));
 
   const auto idle =
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::idle_pose(*controller_);
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::idle_pose(*controller_);
   const auto measured =
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::measured_pose(*controller_);
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::measured_pose(*controller_);
   EXPECT_TRUE(idle.translation().isApprox(measured.translation(), 1e-9));
   EXPECT_TRUE(idle.rotation().isApprox(measured.rotation(), 1e-9));
   for (std::size_t joint = 0; joint < 7; ++joint) {
     EXPECT_NEAR(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::measured_position(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::measured_position(
         *controller_, joint),
       0.1, 1e-6);
     EXPECT_DOUBLE_EQ(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::stiffness_command(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::stiffness_command(
         *controller_, joint),
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::configured_stiffness(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::configured_stiffness(
         *controller_, joint));
     EXPECT_DOUBLE_EQ(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::damping_command(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::damping_command(
         *controller_, joint),
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::configured_damping(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::configured_damping(
         *controller_, joint));
   }
 }
@@ -980,42 +980,42 @@ TEST_F(OptOutFixture, SkipsJointStartupAndHoldsCurrentCartesianPoseWithDriveSide
 TEST_F(Fixture, RelativeGoalBeyondFormerCartesianCapsIsAcceptedAndExecuted)
 {
   for (int i = 0; i < 900 &&
-       !cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_); ++i) {
+       !cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_); ++i) {
     cycle(1);
   }
-  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_));
+  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_));
 
   EXPECT_EQ(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::
       accept_unbounded_relative_goal(*controller_),
     rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE);
-  cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::stage_unbounded_relative_goal(*controller_);
+  cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::stage_unbounded_relative_goal(*controller_);
   cycle(20);
 
-  EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::capacity_rejected(*controller_));
-  EXPECT_NE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::active_task_id(*controller_), 0U);
+  EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::capacity_rejected(*controller_));
+  EXPECT_NE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::active_task_id(*controller_), 0U);
 }
 
 TEST_F(Fixture, AbsoluteGoalWithoutCartesianCapsIsAcceptedAndExecuted)
 {
   for (int i = 0; i < 900 &&
-       !cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_); ++i) {
+       !cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_); ++i) {
     cycle(1);
   }
-  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_));
+  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_));
 
   // Absolute goals use the same direct Cartesian-torque path as relative goals.
-  cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::
+  cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::
     stage_absolute_goal_without_cartesian_caps(*controller_);
   cycle(20);
 
-  EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::capacity_rejected(*controller_));
-  EXPECT_NE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::active_task_id(*controller_), 0U);
+  EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::capacity_rejected(*controller_));
+  EXPECT_NE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::active_task_id(*controller_), 0U);
 }
 
 TEST_F(Fixture, ActiveTaskDrivesCartesianErrorThroughTheDriveReferenceOffset)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   ASSERT_TRUE(Access::drive_side_impedance(*controller_));
@@ -1078,7 +1078,7 @@ TEST_F(Fixture, FrictionTermIsSilentUntilItIsDeliberatelyTurnedOn)
   // friction_level must behave exactly as if the term did not exist. Anything
   // else would put an unexplained constant push on the arm the moment someone
   // wrote a number into the config.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1094,7 +1094,7 @@ TEST_F(Fixture, FrictionTermNeverExceedsTheIdentifiedLevelAndVanishesAtRest)
   // The two properties that keep this from being a torque source of its own:
   // tanh saturates at the identified level so it can never exceed it, and it
   // passes through zero so a stationary joint gets no push.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1129,7 +1129,7 @@ TEST_F(Fixture, StribeckShapingBacksOffOnceTheJointIsSliding)
   // larger than sliding friction, so a flat law over-compensates while moving
   // and the excess acts as negative damping. Hand-guided at scale 0.7 the arm
   // slid away under a harder push while every stationary check passed.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1155,7 +1155,7 @@ TEST_F(Fixture, KineticRatioOfOneIsExactlyTheUnshapedLaw)
 {
   // Default, and what every other friction test assumes. Shaping has to be
   // opt-in or enabling it would silently change an already-tuned arm.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1175,7 +1175,7 @@ TEST_F(Fixture, FrictionSourceDecidesWhichVelocitySignIsUsed)
   // Hand guiding has dq_des identically zero, so a reference-sourced term is
   // silent there and the mode would test nothing. This is why the source is
   // selectable rather than fixed.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1203,7 +1203,7 @@ TEST_F(Fixture, ReferenceOffsetSaturationKeepsItsCartesianDirection)
   // arm 100 mm opposite the command: the Lambda-weighted wrench asked for
   // [-19.9, 6.2, 118.8] N, per-axis clipping at 10 N returned [-10, 6.2, 10],
   // which is 40 degrees away from where it was pointing.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1237,7 +1237,7 @@ TEST_F(Fixture, CartesianErrorReachesTheDriveReferenceAndStaysBounded)
   // reference offset, which is what the drive's kp acts on. Injected rather
   // than waited for, so the test does not depend on where an interpolated goal
   // happens to be after N cycles.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   ASSERT_TRUE(Access::drive_side_impedance(*controller_));
@@ -1262,7 +1262,7 @@ TEST_F(Fixture, ReferenceOffsetSaturatesRatherThanTrackingAHugeCartesianError)
   // A large error must not become a large q_des: the drive multiplies that
   // offset by kp and adds the result after this controller's torque_limit, so
   // the clamp is the only bound on the impedance torque.
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1284,43 +1284,43 @@ TEST_F(Fixture, ReferenceOffsetSaturatesRatherThanTrackingAHugeCartesianError)
 TEST_F(Fixture, CompletedTaskLatchesCartesianIdleWithoutSnappingToOldJointReference)
 {
   for (int i = 0; i < 900 &&
-       !cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_); ++i) {
+       !cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_); ++i) {
     cycle(1);
   }
-  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::ready(*controller_));
+  ASSERT_TRUE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::ready(*controller_));
 
   std::array<double, 7> idle_reference{};
   for (std::size_t joint = 0; joint < 7; ++joint) {
     idle_reference[joint] =
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::q_reference(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::q_reference(
       *controller_, joint);
   }
-  cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::
+  cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::
     stage_stationary_relative_goal(*controller_);
   cycle(400);
 
   EXPECT_EQ(
-    cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::active_task_id(*controller_),
+    cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::active_task_id(*controller_),
     0U);
   for (std::size_t joint = 0; joint < 7; ++joint) {
     EXPECT_DOUBLE_EQ(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::stiffness_command(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::stiffness_command(
         *controller_, joint),
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::configured_stiffness(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::configured_stiffness(
         *controller_, joint));
     EXPECT_DOUBLE_EQ(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::damping_command(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::damping_command(
         *controller_, joint),
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::configured_damping(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::configured_damping(
         *controller_, joint));
     EXPECT_DOUBLE_EQ(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::q_reference(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::q_reference(
         *controller_, joint),
       idle_reference[joint]);
     EXPECT_NEAR(
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::position_command(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::position_command(
         *controller_, joint),
-      cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess::measured_position(
+      cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::measured_position(
         *controller_, joint),
       1e-6);
   }
@@ -1328,7 +1328,7 @@ TEST_F(Fixture, CompletedTaskLatchesCartesianIdleWithoutSnappingToOldJointRefere
 
 TEST_F(Fixture, NonzeroCartesianErrorTransitionsPreserveReferenceAndReleaseByBlending)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1395,7 +1395,7 @@ TEST_F(Fixture, NonzeroCartesianErrorTransitionsPreserveReferenceAndReleaseByBle
 
 TEST_F(Fixture, ModelFeedforwardSlewStaysInsideControllerTorqueLimit)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1428,7 +1428,7 @@ TEST_F(Fixture, ModelFeedforwardSlewStaysInsideControllerTorqueLimit)
 
 TEST_F(Fixture, MovingGoalPreemptionContinuesFromCommandedReferenceWithVelocityReference)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1478,7 +1478,7 @@ TEST_F(Fixture, MovingGoalPreemptionContinuesFromCommandedReferenceWithVelocityR
 
 TEST_F(Fixture, CancelReleasesReferenceToMeasuredPoseWithoutSafeStop)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
 
@@ -1523,7 +1523,7 @@ TEST_F(Fixture, CancelReleasesReferenceToMeasuredPoseWithoutSafeStop)
 
 TEST_F(Fixture, VelocityReferenceSolvesRangeSpaceTwistWithinCommandVelocity)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1553,7 +1553,7 @@ TEST_F(Fixture, VelocityReferenceSolvesRangeSpaceTwistWithinCommandVelocity)
 
 TEST_F(Fixture, NullspacePostureTorqueProducesNoTaskAcceleration)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1580,7 +1580,7 @@ TEST_F(Fixture, NullspacePostureTorqueProducesNoTaskAcceleration)
 
 TEST_F(Fixture, JointLimitSpringActsOnlyInsideTheMarginBand)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();
@@ -1629,10 +1629,10 @@ protected:
     manager_ = std::make_shared<controller_manager::ControllerManager>(
       std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true), executor_,
       "controller_manager", "/task_zero_ceiling_test");
-    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceMitController>();
+    controller_ = std::make_shared<cho_controller_openarm_mit::TaskSpaceImpedanceController>();
     ASSERT_TRUE(manager_->add_controller(
       controller_, "task_space_impedance_mit_controller",
-      "cho_controller_openarm_mit/TaskSpaceImpedanceMitController"));
+      "cho_controller_openarm_mit/TaskSpaceImpedanceController"));
     const auto set = [&](const char * name, const auto & value) {
         ASSERT_TRUE(controller_->get_node()->set_parameter(rclcpp::Parameter(name, value)).successful);
       };
@@ -1678,13 +1678,13 @@ protected:
   cho_openarm_mit_core::SafetyProfile profile_;
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::shared_ptr<controller_manager::ControllerManager> manager_;
-  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceMitController> controller_;
+  std::shared_ptr<cho_controller_openarm_mit::TaskSpaceImpedanceController> controller_;
   std::atomic<bool> running_{false}; std::thread worker_;
 };
 
 TEST_F(HardwareCeilingFixture, ReturnToZeroRampNeverEmitsAboveTheHardwarePerJointCeiling)
 {
-  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceMitControllerTestAccess;
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
   // Sanity: the profile really does disagree with the homing gains, otherwise
   // this test would pass without exercising the clamp.
   ASSERT_LT(profile_.kp_max[1], 70.0);

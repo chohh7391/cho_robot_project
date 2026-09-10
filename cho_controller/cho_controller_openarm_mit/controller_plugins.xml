@@ -1,3 +1,37 @@
+<class_libraries>
+<!-- Shared, non-MIT-specific controllers, merged in from the former
+     cho_controller_openarm package. They keep the cho_controller::openarm
+     namespace: the MIT drive protocol is what the rest of this package is named
+     for, and these do not speak it. The EE state broadcaster is the reason the
+     merge had to happen rather than a deletion - every MIT bringup config
+     spawns it, and the MIT controllers have no broadcaster of their own.
+
+     Its own library, in the same package: these link cho_controller_common,
+     whose .so leaves qpOASES symbols undefined, and that hole is unfillable in
+     an executable. See the CMakeLists note. -->
+<library path="cho_controller_openarm_shared">
+  <class name="cho_controller_openarm_mit/EEStateBroadcaster"
+         type="cho_controller::openarm::EEStateBroadcaster"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Publishes /ee_state/pose and /ee_state/twist for OpenArm</description>
+  </class>
+  <class name="cho_controller_openarm_mit/JointSpaceImpedanceController"
+         type="cho_controller::openarm::JointSpaceImpedanceController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Joint-space impedance controller with gravity compensation for OpenArm</description>
+  </class>
+  <class name="cho_controller_openarm_mit/JointSpacePositionController"
+         type="cho_controller::openarm::JointSpacePositionController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Joint-space position controller for OpenArm</description>
+  </class>
+  <class name="cho_controller_openarm_mit/JointSpaceVelocityController"
+         type="cho_controller::openarm::JointSpaceVelocityController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Joint-space velocity controller for OpenArm</description>
+  </class>
+</library>
+
 <library path="cho_controller_openarm_mit">
   <class name="cho_controller_openarm_mit/BimanualFollowJointTrajectoryController"
          type="cho_controller_openarm_mit::BimanualFollowJointTrajectoryController"
@@ -9,21 +43,22 @@
          base_class_type="controller_interface::ControllerInterface">
     <description>Single-arm seven-axis MIT FollowJointTrajectory producer.</description>
   </class>
-  <class name="cho_controller_openarm_mit/JointPositionMitController" type="cho_controller_openarm_mit::JointPositionMitController" base_class_type="controller_interface::ControllerInterface"/>
-  <class name="cho_controller_openarm_mit/JointVelocityMitController" type="cho_controller_openarm_mit::JointVelocityMitController" base_class_type="controller_interface::ControllerInterface"/>
-  <class name="cho_controller_openarm_mit/JointImpedanceMitController" type="cho_controller_openarm_mit::JointImpedanceMitController" base_class_type="controller_interface::ControllerInterface"/>
-  <class name="cho_controller_openarm_mit/JointImpedanceMitActionController" type="cho_controller_openarm_mit::JointImpedanceMitActionController" base_class_type="controller_interface::ControllerInterface">
+  <class name="cho_controller_openarm_mit/JointPositionController" type="cho_controller_openarm_mit::JointPositionController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/JointVelocityController" type="cho_controller_openarm_mit::JointVelocityController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/JointImpedanceController" type="cho_controller_openarm_mit::JointImpedanceController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/JointImpedanceActionController" type="cho_controller_openarm_mit::JointImpedanceActionController" base_class_type="controller_interface::ControllerInterface">
     <description>Single-arm MIT impedance producer with the canonical cho_interfaces/JointSpace action API.</description>
   </class>
-  <class name="cho_controller_openarm_mit/TaskSpaceImpedanceMitController" type="cho_controller_openarm_mit::TaskSpaceImpedanceMitController" base_class_type="controller_interface::ControllerInterface">
+  <class name="cho_controller_openarm_mit/TaskSpaceImpedanceController" type="cho_controller_openarm_mit::TaskSpaceImpedanceController" base_class_type="controller_interface::ControllerInterface">
     <description>Single-arm Cartesian impedance with cho_interfaces/TaskSpace action and MIT tuple output.</description>
   </class>
-  <class name="cho_controller_openarm_mit/VlaMitController"
-         type="cho_controller_openarm_mit::VlaMitController"
+  <class name="cho_controller_openarm_mit/VlaController"
+         type="cho_controller_openarm_mit::VlaController"
          base_class_type="controller_interface::ControllerInterface">
     <description>VLA action-chunk reference source over the single-arm MIT drive-side impedance producer. Both joint and task action spaces are impedance.</description>
   </class>
-  <class name="cho_controller_openarm_mit/DirectTorqueMitController" type="cho_controller_openarm_mit::DirectTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>
-  <class name="cho_controller_openarm_mit/DampedTorqueMitController" type="cho_controller_openarm_mit::DampedTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>
-  <class name="cho_controller_openarm_mit/CompensatedTorqueMitController" type="cho_controller_openarm_mit::CompensatedTorqueMitController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/DirectTorqueController" type="cho_controller_openarm_mit::DirectTorqueController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/DampedTorqueController" type="cho_controller_openarm_mit::DampedTorqueController" base_class_type="controller_interface::ControllerInterface"/>
+  <class name="cho_controller_openarm_mit/CompensatedTorqueController" type="cho_controller_openarm_mit::CompensatedTorqueController" base_class_type="controller_interface::ControllerInterface"/>
 </library>
+</class_libraries>

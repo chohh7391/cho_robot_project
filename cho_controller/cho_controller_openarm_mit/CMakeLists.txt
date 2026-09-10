@@ -7,6 +7,11 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
 find_package(cho_openarm_mit_core REQUIRED)
+# Pulled in with the merged cho_controller_openarm sources.
+find_package(ament_index_cpp REQUIRED)
+find_package(cho_controller_common REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_interfaces REQUIRED)
@@ -22,12 +27,13 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 
+# The MIT drive-protocol controllers.
 add_library(${PROJECT_NAME} SHARED
   src/bimanual_fjt_controller.cpp
   src/single_arm_fjt_controller.cpp
-  src/direct_mit_controller.cpp
-  src/task_space_impedance_mit_controller.cpp
-  src/vla_mit_controller.cpp)
+  src/direct_controller.cpp
+  src/task_space_impedance_controller.cpp
+  src/vla_controller.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -37,9 +43,45 @@ ament_target_dependencies(${PROJECT_NAME}
   std_srvs trajectory_msgs)
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 
+# The shared, non-MIT OpenArm controllers (namespace cho_controller::openarm),
+# merged in from the former cho_controller_openarm package: the EE state
+# broadcaster every OpenArm bringup spawns, plus joint-space
+# impedance/position/velocity and the JointSpace action server.
+#
+# ONE PACKAGE, TWO LIBRARIES, and the reason is a link surface rather than
+# taste. These need cho_controller_common, whose own .so leaves the qpOASES
+# symbols of its HQP solver UNDEFINED - it links eiquadprog and pinocchio and
+# never qpOASES, because libqpOASES.a is built without -fPIC and so cannot go
+# into a shared object at all. A shared library tolerates that hole, which is
+# how this code has always shipped and how controller_manager still dlopens it;
+# an EXECUTABLE that links it must fill the hole, and cannot. Folding these
+# sources into ${PROJECT_NAME} therefore broke every gtest binary in this
+# package, which links that library. Keeping them apart also leaves the MIT
+# plugin .so byte-for-byte the dependency set it had before the merge.
+#
+# Not compiled with -Ofast, deliberately: these carry isfinite() guards, which
+# -ffinite-math-only folds to true. See the CLAUDE.md note on that trap.
+set(OPENARM_SHARED_LIB cho_controller_openarm_shared)
+add_library(${OPENARM_SHARED_LIB} SHARED
+  src/base_controller.cpp
+  src/ee_state_broadcaster.cpp
+  src/joint_space_impedance_controller.cpp
+  src/joint_space_position_controller.cpp
+  src/joint_space_velocity_controller.cpp
+  src/servers/joint_space_action_server.cpp)
+target_include_directories(${OPENARM_SHARED_LIB} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS})
+ament_target_dependencies(${OPENARM_SHARED_LIB}
+  ament_index_cpp cho_controller_common cho_interfaces control_msgs controller_interface
+  geometry_msgs hardware_interface pinocchio pluginlib rclcpp rclcpp_action
+  rclcpp_lifecycle realtime_tools)
+target_link_libraries(${OPENARM_SHARED_LIB} pinocchio::pinocchio)
+
 pluginlib_export_plugin_description_file(controller_interface controller_plugins.xml)
 
-install(TARGETS ${PROJECT_NAME} EXPORT export_${PROJECT_NAME}
+install(TARGETS ${PROJECT_NAME} ${OPENARM_SHARED_LIB} EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
@@ -58,10 +100,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_mit_protocol ${PROJECT_NAME})
   ament_target_dependencies(test_mit_protocol controller_interface control_msgs hardware_interface pluginlib rclcpp)
 
-  ament_add_gtest(test_direct_mit_controller test/test_direct_mit_controller.cpp)
-  target_link_libraries(test_direct_mit_controller ${PROJECT_NAME})
-  ament_target_dependencies(test_direct_mit_controller controller_interface hardware_interface rclcpp)
-  target_compile_definitions(test_direct_mit_controller PRIVATE
+  ament_add_gtest(test_direct_controller test/test_direct_controller.cpp)
+  target_link_libraries(test_direct_controller ${PROJECT_NAME})
+  ament_target_dependencies(test_direct_controller controller_interface hardware_interface rclcpp)
+  target_compile_definitions(test_direct_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_controller_manager_action test/test_controller_manager_action.cpp)
@@ -88,12 +130,12 @@ if(BUILD_TESTING)
   target_compile_definitions(test_impedance_action_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
-  ament_add_gtest(test_vla_mit_controller test/test_vla_mit_controller.cpp)
-  target_link_libraries(test_vla_mit_controller ${PROJECT_NAME})
-  ament_target_dependencies(test_vla_mit_controller
+  ament_add_gtest(test_vla_controller test/test_vla_controller.cpp)
+  target_link_libraries(test_vla_controller ${PROJECT_NAME})
+  ament_target_dependencies(test_vla_controller
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
     rclcpp rclcpp_action cho_interfaces std_srvs)
-  target_compile_definitions(test_vla_mit_controller PRIVATE
+  target_compile_definitions(test_vla_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
@@ -114,12 +156,15 @@ if(BUILD_TESTING)
       TEST_ARM_SIDE="${arm_side}"
       OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
   endforeach()
+
 endif()
 
 ament_export_dependencies(
   cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
-  std_srvs trajectory_msgs)
+  std_srvs trajectory_msgs
+  ament_index_cpp cho_controller_common geometry_msgs)
 ament_export_include_directories(include)
+ament_export_libraries(${PROJECT_NAME} ${OPENARM_SHARED_LIB})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_package()

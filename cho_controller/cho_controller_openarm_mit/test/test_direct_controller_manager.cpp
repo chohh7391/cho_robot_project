@@ -10,7 +10,7 @@
 #include <sstream>
 #include <thread>
 
-#include "cho_controller_openarm_mit/direct_mit_controller.hpp"
+#include "cho_controller_openarm_mit/direct_controller.hpp"
 
 namespace {
 using controller_interface::return_type;
@@ -64,15 +64,15 @@ std::string urdf(bool bimanual, const std::string & single_side = "left")
   return x.str();
 }
 
-std::shared_ptr<cho_controller_openarm_mit::DirectMitControllerBase> make_controller(const std::string & type)
+std::shared_ptr<cho_controller_openarm_mit::DirectControllerBase> make_controller(const std::string & type)
 {
   using namespace cho_controller_openarm_mit;
-  if (type.find("JointPosition") != std::string::npos) return std::make_shared<JointPositionMitController>();
-  if (type.find("JointVelocity") != std::string::npos) return std::make_shared<JointVelocityMitController>();
-  if (type.find("JointImpedance") != std::string::npos) return std::make_shared<JointImpedanceMitController>();
-  if (type.find("Compensated") != std::string::npos) return std::make_shared<CompensatedTorqueMitController>();
-  if (type.find("Damped") != std::string::npos) return std::make_shared<DampedTorqueMitController>();
-  return std::make_shared<DirectTorqueMitController>();
+  if (type.find("JointPosition") != std::string::npos) return std::make_shared<JointPositionController>();
+  if (type.find("JointVelocity") != std::string::npos) return std::make_shared<JointVelocityController>();
+  if (type.find("JointImpedance") != std::string::npos) return std::make_shared<JointImpedanceController>();
+  if (type.find("Compensated") != std::string::npos) return std::make_shared<CompensatedTorqueController>();
+  if (type.find("Damped") != std::string::npos) return std::make_shared<DampedTorqueController>();
+  return std::make_shared<DirectTorqueController>();
 }
 
 class Harness
@@ -183,7 +183,7 @@ public:
   std::shared_ptr<controller_manager::ControllerManager> manager;
   hardware_interface::ResourceManager * resources{};
   rclcpp::Node::SharedPtr node;
-  std::map<std::string, std::shared_ptr<cho_controller_openarm_mit::DirectMitControllerBase>> controllers;
+  std::map<std::string, std::shared_ptr<cho_controller_openarm_mit::DirectControllerBase>> controllers;
   std::atomic<bool> running{false};
   // Completed control cycles, published by the control thread for cycle().
   std::atomic<unsigned long long> update_count{0};
@@ -200,12 +200,12 @@ protected:
 TEST_F(DirectManagerTest, AllSixPluginsLoadSeedAckMapCommandsAndStopSafely)
 {
   const std::vector<std::string> types{
-    "cho_controller_openarm_mit/JointPositionMitController",
-    "cho_controller_openarm_mit/JointVelocityMitController",
-    "cho_controller_openarm_mit/JointImpedanceMitController",
-    "cho_controller_openarm_mit/DirectTorqueMitController",
-    "cho_controller_openarm_mit/DampedTorqueMitController",
-    "cho_controller_openarm_mit/CompensatedTorqueMitController"};
+    "cho_controller_openarm_mit/JointPositionController",
+    "cho_controller_openarm_mit/JointVelocityController",
+    "cho_controller_openarm_mit/JointImpedanceController",
+    "cho_controller_openarm_mit/DirectTorqueController",
+    "cho_controller_openarm_mit/DampedTorqueController",
+    "cho_controller_openarm_mit/CompensatedTorqueController"};
   for (std::size_t i = 0; i < types.size(); ++i) {
     for (const auto & side : {std::string("left"), std::string("right")}) {
       Harness h(false, side);
@@ -226,8 +226,8 @@ TEST_F(DirectManagerTest, AllSixPluginsLoadSeedAckMapCommandsAndStopSafely)
 TEST_F(DirectManagerTest, DisjointLeftRightClaimsRunTogetherAndStopIndependently)
 {
   Harness h(true);
-  h.add("left_direct", "cho_controller_openarm_mit/JointPositionMitController", "left");
-  h.add("right_direct", "cho_controller_openarm_mit/DampedTorqueMitController", "right");
+  h.add("left_direct", "cho_controller_openarm_mit/JointPositionController", "left");
+  h.add("right_direct", "cho_controller_openarm_mit/DampedTorqueController", "right");
   h.activate({"left_direct", "right_direct"});
   for (int i = 0; i < 20; ++i) {
     h.publish("left_direct", .01 * i, 0, 0, 0);
@@ -242,7 +242,7 @@ TEST_F(DirectManagerTest, DisjointLeftRightClaimsRunTogetherAndStopIndependently
 TEST_F(DirectManagerTest, WatchdogTransitionsToSafeAndAllowsDeactivate)
 {
   Harness h;
-  h.add("watchdog", "cho_controller_openarm_mit/JointImpedanceMitController", "left");
+  h.add("watchdog", "cho_controller_openarm_mit/JointImpedanceController", "left");
   h.activate({"watchdog"});
   h.publish("watchdog", .1, 0, 0, 0);
   h.cycle(180);
@@ -253,7 +253,7 @@ TEST_F(DirectManagerTest, WatchdogTransitionsToSafeAndAllowsDeactivate)
 TEST_F(DirectManagerTest, ImmediateSafeStopAfterActivateBeforeExplicitSeedWait)
 {
   Harness h;
-  h.add("immediate_stop", "cho_controller_openarm_mit/JointPositionMitController", "left");
+  h.add("immediate_stop", "cho_controller_openarm_mit/JointPositionController", "left");
   ASSERT_EQ(h.manager->switch_controller(
     {"immediate_stop"}, {}, controller_manager_msgs::srv::SwitchController::Request::STRICT),
     return_type::OK);
@@ -269,7 +269,7 @@ TEST_F(DirectManagerTest, ImmediateSafeStopAfterActivateBeforeExplicitSeedWait)
 TEST_F(DirectManagerTest, UnprefixedSingleArmClaimsAndExecutes)
 {
   Harness h(false, "");
-  h.add("single_direct", "cho_controller_openarm_mit/JointImpedanceMitController", "single");
+  h.add("single_direct", "cho_controller_openarm_mit/JointImpedanceController", "single");
   h.activate({"single_direct"});
   h.publish("single_direct", .12, .05, .2, 0.0);
   EXPECT_NEAR(h.state("", 1, "position"), .12, 1e-12);

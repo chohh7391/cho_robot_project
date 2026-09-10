@@ -1,4 +1,4 @@
-#include "cho_controller_openarm_mit/task_space_impedance_mit_controller.hpp"
+#include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -59,9 +59,9 @@ double bounded_dt(const double dt)
 }
 }  // namespace
 
-controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_init()
+controller_interface::CallbackReturn TaskSpaceImpedanceController::on_init()
 {
-  if (DirectMitControllerBase::on_init() != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
+  if (DirectControllerBase::on_init() != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
   auto_declare<std::vector<double>>("kp_task", std::vector<double>(6, 0.0));
   auto_declare<std::vector<double>>("kd_task", std::vector<double>(6, 0.0));
   auto_declare<std::vector<double>>("max_task_wrench", std::vector<double>(6, 0.0));
@@ -95,10 +95,10 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_init()
   return CallbackReturn::SUCCESS;
 }
 
-controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configure(
+controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
   const rclcpp_lifecycle::State & state)
 {
-  if (DirectMitControllerBase::on_configure(state) != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
+  if (DirectControllerBase::on_configure(state) != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
   const auto kp = get_node()->get_parameter("kp_task").as_double_array();
   const auto kd = get_node()->get_parameter("kd_task").as_double_array();
   const auto wrench_limit = get_node()->get_parameter("max_task_wrench").as_double_array();
@@ -538,11 +538,11 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
   if (uses_task_space_action()) {
   const auto action_name = std::string("/controller_action_server/") + get_node()->get_name();
   task_server_ = rclcpp_action::create_server<Action>(get_node(), action_name,
-    std::bind(&TaskSpaceImpedanceMitController::goal_callback, this, std::placeholders::_1, std::placeholders::_2),
-    std::bind(&TaskSpaceImpedanceMitController::cancel_callback, this, std::placeholders::_1),
-    std::bind(&TaskSpaceImpedanceMitController::accepted_callback, this, std::placeholders::_1));
+    std::bind(&TaskSpaceImpedanceController::goal_callback, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&TaskSpaceImpedanceController::cancel_callback, this, std::placeholders::_1),
+    std::bind(&TaskSpaceImpedanceController::accepted_callback, this, std::placeholders::_1));
   task_timer_ = get_node()->create_wall_timer(std::chrono::milliseconds(5),
-    std::bind(&TaskSpaceImpedanceMitController::non_rt_tick, this));
+    std::bind(&TaskSpaceImpedanceController::non_rt_tick, this));
   task_diagnostics_service_ = get_node()->create_service<std_srvs::srv::Trigger>("~/task_diagnostics",
     [this](const std_srvs::srv::Trigger::Request::SharedPtr,
       std_srvs::srv::Trigger::Response::SharedPtr response) {
@@ -588,7 +588,7 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_configu
   return CallbackReturn::SUCCESS;
 }
 
-bool TaskSpaceImpedanceMitController::configure_task_model()
+bool TaskSpaceImpedanceController::configure_task_model()
 {
   if (configure_action_mujoco_dynamics() != CallbackReturn::SUCCESS) return false;
   if (!action_model_ || !action_model_data_) return false;
@@ -606,10 +606,10 @@ bool TaskSpaceImpedanceMitController::configure_task_model()
   return true;
 }
 
-controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_activate(
+controller_interface::CallbackReturn TaskSpaceImpedanceController::on_activate(
   const rclcpp_lifecycle::State & state)
 {
-  if (DirectMitControllerBase::on_activate(state) != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
+  if (DirectControllerBase::on_activate(state) != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
   task_ready_.store(false, std::memory_order_release);
   task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);
   task_compute_failed_ = false; task_capacity_rejected_ = false;
@@ -630,7 +630,7 @@ controller_interface::CallbackReturn TaskSpaceImpedanceMitController::on_activat
   return CallbackReturn::SUCCESS;
 }
 
-bool TaskSpaceImpedanceMitController::finite_pose(const Action::Goal & goal)
+bool TaskSpaceImpedanceController::finite_pose(const Action::Goal & goal)
 {
   const auto & p = goal.target_pose.position;
   const auto & q = goal.target_pose.orientation;
@@ -639,7 +639,7 @@ bool TaskSpaceImpedanceMitController::finite_pose(const Action::Goal & goal)
     std::isfinite(p.z) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w) && norm > 1e-6;
 }
 
-rclcpp_action::GoalResponse TaskSpaceImpedanceMitController::goal_callback(
+rclcpp_action::GoalResponse TaskSpaceImpedanceController::goal_callback(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal> goal)
 {
   if (!goal || !task_ready_.load(std::memory_order_acquire) || !finite_pose(*goal)) return rclcpp_action::GoalResponse::REJECT;
@@ -651,7 +651,7 @@ rclcpp_action::GoalResponse TaskSpaceImpedanceMitController::goal_callback(
   return task_handles_.size() < 2U ? rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE : rclcpp_action::GoalResponse::REJECT;
 }
 
-rclcpp_action::CancelResponse TaskSpaceImpedanceMitController::cancel_callback(const std::shared_ptr<GoalHandle> & handle)
+rclcpp_action::CancelResponse TaskSpaceImpedanceController::cancel_callback(const std::shared_ptr<GoalHandle> & handle)
 {
   std::lock_guard<std::mutex> lock(task_handles_mutex_);
   for (const auto & entry : task_handles_) if (entry.second == handle) {
@@ -660,7 +660,7 @@ rclcpp_action::CancelResponse TaskSpaceImpedanceMitController::cancel_callback(c
   return rclcpp_action::CancelResponse::REJECT;
 }
 
-void TaskSpaceImpedanceMitController::accepted_callback(const std::shared_ptr<GoalHandle> & handle)
+void TaskSpaceImpedanceController::accepted_callback(const std::shared_ptr<GoalHandle> & handle)
 {
   const auto & in = *handle->get_goal();
   Goal staged; staged.id = task_next_id_.fetch_add(1, std::memory_order_relaxed); staged.duration = in.duration; staged.relative = in.relative;
@@ -671,7 +671,7 @@ void TaskSpaceImpedanceMitController::accepted_callback(const std::shared_ptr<Go
   task_goal_buffer_.writeFromNonRT(staged);
 }
 
-bool TaskSpaceImpedanceMitController::task_pose_and_jacobian(
+bool TaskSpaceImpedanceController::task_pose_and_jacobian(
   const std::array<double, 7> & q, pinocchio::SE3 & pose, Jacobian & jacobian)
 {
   if (!action_model_ || !action_model_data_) return false;
@@ -688,7 +688,7 @@ bool TaskSpaceImpedanceMitController::task_pose_and_jacobian(
   } catch (...) {return false;}
 }
 
-bool TaskSpaceImpedanceMitController::model_nle(const std::array<double, 7> & q,
+bool TaskSpaceImpedanceController::model_nle(const std::array<double, 7> & q,
   const std::array<double, 7> & dq, std::array<double, 7> & nle)
 {
   if (!action_model_ || !action_model_data_) return false;
@@ -700,16 +700,16 @@ bool TaskSpaceImpedanceMitController::model_nle(const std::array<double, 7> & q,
   } catch (...) {return false;}
 }
 
-void TaskSpaceImpedanceMitController::finish(std::uint64_t id, Terminal terminal)
+void TaskSpaceImpedanceController::finish(std::uint64_t id, Terminal terminal)
 {
   if (id && !task_terminal_queue_.push(TerminalEvent{id, terminal})) {state_ = State::FAULT; stop_failed_.store(true);}
 }
-void TaskSpaceImpedanceMitController::abort_active()
+void TaskSpaceImpedanceController::abort_active()
 {
   if (task_id_) {finish(task_id_, Terminal::ABORTED); task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);}
 }
 
-bool TaskSpaceImpedanceMitController::latch_idle_pose()
+bool TaskSpaceImpedanceController::latch_idle_pose()
 {
   Jacobian jacobian;
   const auto q = measured();
@@ -722,7 +722,7 @@ bool TaskSpaceImpedanceMitController::latch_idle_pose()
   return true;
 }
 
-bool TaskSpaceImpedanceMitController::begin_idle_release()
+bool TaskSpaceImpedanceController::begin_idle_release()
 {
   pinocchio::SE3 measured_pose;
   Jacobian jacobian;
@@ -731,7 +731,7 @@ bool TaskSpaceImpedanceMitController::begin_idle_release()
   return true;
 }
 
-void TaskSpaceImpedanceMitController::begin_idle_release_from(const pinocchio::SE3 & measured_pose)
+void TaskSpaceImpedanceController::begin_idle_release_from(const pinocchio::SE3 & measured_pose)
 {
   if (!idle_pose_valid_ || release_duration_ <= 0.0) {
     idle_pose_ = measured_pose;
@@ -745,7 +745,7 @@ void TaskSpaceImpedanceMitController::begin_idle_release_from(const pinocchio::S
   idle_release_active_ = true;
 }
 
-void TaskSpaceImpedanceMitController::sample_pose_trajectory(
+void TaskSpaceImpedanceController::sample_pose_trajectory(
   const pinocchio::SE3 & start, const pinocchio::SE3 & goal, const double u, const double duration,
   pinocchio::SE3 & desired, Vector6 & twist)
 {
@@ -762,7 +762,7 @@ void TaskSpaceImpedanceMitController::sample_pose_trajectory(
     (ds * pinocchio::log3(start.rotation().transpose() * goal.rotation()));
 }
 
-bool TaskSpaceImpedanceMitController::task_dynamics(const Jacobian & jacobian)
+bool TaskSpaceImpedanceController::task_dynamics(const Jacobian & jacobian)
 {
   task_dynamics_valid_ = false;
   if (!action_model_ || !action_model_data_) return false;
@@ -799,7 +799,7 @@ bool TaskSpaceImpedanceMitController::task_dynamics(const Jacobian & jacobian)
   }
 }
 
-bool TaskSpaceImpedanceMitController::nullspace_posture_torque(
+bool TaskSpaceImpedanceController::nullspace_posture_torque(
   const Jacobian & jacobian, const std::array<double, 7> & q,
   const std::array<double, 7> & dq, Vector7 & torque) const
 {
@@ -848,7 +848,7 @@ void scale_into_limits(Vector & v, const double * limit, std::size_t offset)
 }
 }  // namespace
 
-void TaskSpaceImpedanceMitController::friction_torque(
+void TaskSpaceImpedanceController::friction_torque(
   const std::array<double, 7> & dq, const std::array<double, 7> & dq_des,
   Vector7 & torque) const
 {
@@ -875,7 +875,7 @@ void TaskSpaceImpedanceMitController::friction_torque(
   }
 }
 
-void TaskSpaceImpedanceMitController::joint_limit_torque(
+void TaskSpaceImpedanceController::joint_limit_torque(
   const std::array<double, 7> & q, Vector7 & torque) const
 {
   for (std::size_t i = 0; i < 7; ++i) {
@@ -892,7 +892,7 @@ void TaskSpaceImpedanceMitController::joint_limit_torque(
   }
 }
 
-void TaskSpaceImpedanceMitController::joint_velocity_reference(
+void TaskSpaceImpedanceController::joint_velocity_reference(
   const Jacobian & jacobian, const Vector6 & twist, std::array<double, 7> & dq_des) const
 {
   dq_des.fill(0.0);
@@ -911,7 +911,7 @@ void TaskSpaceImpedanceMitController::joint_velocity_reference(
   }
 }
 
-void TaskSpaceImpedanceMitController::joint_reference_offset(
+void TaskSpaceImpedanceController::joint_reference_offset(
   const Jacobian & jacobian, const Vector6 & pose_error, Vector7 & offset) const
 {
   offset.setZero();
@@ -953,7 +953,7 @@ void TaskSpaceImpedanceMitController::joint_reference_offset(
   offset = scale * dq;
 }
 
-void TaskSpaceImpedanceMitController::clamp_command_positions(ArmCommand & command) const
+void TaskSpaceImpedanceController::clamp_command_positions(ArmCommand & command) const
 {
   // The Cartesian modes emit measured q as q_des with zero stiffness, so this
   // cannot change the applied torque.  It exists because the consumer rejects
@@ -968,7 +968,7 @@ void TaskSpaceImpedanceMitController::clamp_command_positions(ArmCommand & comma
   }
 }
 
-double TaskSpaceImpedanceMitController::slew_model_feedforward(
+double TaskSpaceImpedanceController::slew_model_feedforward(
   const std::size_t joint, const double desired, const double dt)
 {
   // The controller torque_limit may be narrower than the profile's tau_ff
@@ -985,7 +985,7 @@ double TaskSpaceImpedanceMitController::slew_model_feedforward(
   return next;
 }
 
-bool TaskSpaceImpedanceMitController::write_cartesian_torque_target(
+bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   const pinocchio::SE3 & desired,
   const Vector6 & desired_twist,
   const double dt,
@@ -1118,7 +1118,7 @@ bool TaskSpaceImpedanceMitController::write_cartesian_torque_target(
   return true;
 }
 
-bool TaskSpaceImpedanceMitController::write_task_target(
+bool TaskSpaceImpedanceController::write_task_target(
   double control_time, double dt, DirectMitTarget & target)
 {
   task_compute_failed_ = false; task_capacity_rejected_ = false;
@@ -1218,10 +1218,15 @@ bool TaskSpaceImpedanceMitController::write_task_target(
   return true;
 }
 
-controller_interface::return_type TaskSpaceImpedanceMitController::update(const rclcpp::Time &, const rclcpp::Duration & period)
+controller_interface::return_type TaskSpaceImpedanceController::update(const rclcpp::Time &, const rclcpp::Duration & period)
 {
   if (state_ == State::INACTIVE || state_ == State::SAFE_STOPPED) return controller_interface::return_type::OK;
   const double dt = period.seconds(); if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) action_control_time_ += dt;
+  // Unconditional: the offset must stay valid even on a cycle whose dt was
+  // rejected above, or a chunk arriving on that cycle converts against a
+  // stale one.
+  action_time_offset_.store(
+    get_node()->now().seconds() - action_control_time_, std::memory_order_release);
   const double slew_dt = bounded_dt(dt);
   if (!protocol_ok()) {state_ = State::FAULT; stop_failed_.store(true); return controller_interface::return_type::ERROR;}
   if (stop_requested_.exchange(false) && state_ != State::STOPPING) {abort_active(); if (!request_safe()) return controller_interface::return_type::ERROR;}
@@ -1401,7 +1406,7 @@ controller_interface::return_type TaskSpaceImpedanceMitController::update(const 
   return controller_interface::return_type::OK;
 }
 
-void TaskSpaceImpedanceMitController::non_rt_tick()
+void TaskSpaceImpedanceController::non_rt_tick()
 {
   TerminalEvent event; while (task_terminal_queue_.pop(event)) {
     std::shared_ptr<GoalHandle> handle; {std::lock_guard<std::mutex> lock(task_handles_mutex_); const auto it = task_handles_.find(event.id); if (it == task_handles_.end()) continue; handle = it->second; task_handles_.erase(it);}
@@ -1414,4 +1419,4 @@ void TaskSpaceImpedanceMitController::non_rt_tick()
 }
 }  // namespace cho_controller_openarm_mit
 
-PLUGINLIB_EXPORT_CLASS(cho_controller_openarm_mit::TaskSpaceImpedanceMitController, controller_interface::ControllerInterface)
+PLUGINLIB_EXPORT_CLASS(cho_controller_openarm_mit::TaskSpaceImpedanceController, controller_interface::ControllerInterface)

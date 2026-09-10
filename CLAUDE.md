@@ -73,7 +73,7 @@ cho_controller/
                              # host's control clock, so the whole pipeline is
                              # gtest-able without a controller_manager fixture.
                              # Consumed by cho_controller_franka's VLAActionServer
-                             # and cho_controller_openarm_mit's VlaMitController.
+                             # and cho_controller_openarm_mit's VlaController.
                              # See its DESIGN.md.
 
 cho_interfaces/              # ROS2 msgs (ActionChunk, VlaTelemetry, PoseLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
@@ -96,10 +96,24 @@ cho_description/cho_description_openarm/   # enactic OpenArm v1.0, vendored fork
   usd/                       # Isaac USD (generated, gitignored; see usd/README.md)
   scripts/sync_mjcf_inertials.py  # keeps the MJCF's inertials/axes equal to the URDF
 
-cho_controller/cho_controller_openarm/    # namespace cho_controller::openarm
-  # 4 controllers: ee_state_broadcaster + joint_space impedance/position/velocity.
-  # Dynamic-size Eigen and name-based Pinocchio indexing, so one class serves both
-  # the single arm and either arm of the bimanual torso.
+cho_controller/cho_controller_openarm_mit/  # every OpenArm controller plugin
+  # Two families in one package, and the namespaces say which is which.
+  #
+  # namespace cho_controller::openarm - ee_state_broadcaster + joint_space
+  # impedance/position/velocity, merged in from the former
+  # cho_controller_openarm. Dynamic-size Eigen and name-based Pinocchio
+  # indexing, so one class serves both the single arm and either arm of the
+  # bimanual torso. ee_state_broadcaster is NOT optional for the MIT path:
+  # every MIT config spawns it, the MIT controllers have no broadcaster of
+  # their own, and the Inverse3 teleop bridge takes its observation from the
+  # /ee_state/<side>/pose it publishes.
+  #
+  # namespace cho_controller_openarm_mit - the MIT drive-protocol controllers:
+  # joint position/impedance, task-space impedance, VLA, and the FJT pair.
+  #
+  # Plugin lookup names all carry the cho_controller_openarm_mit/ prefix; the
+  # four merged ones were renamed from cho_controller_openarm/ when the
+  # packages joined, and every config moved with them.
 
 cho_bringup/cho_bringup_openarm/          # mujoco + isaac only (no real hardware yet)
   config/{mujoco,isaac}/controllers{,_bimanual}.yaml
@@ -152,8 +166,8 @@ Key controllers:
   The chunk semantics live in `cho_vla_core`; this controller keeps only the three
   control laws (effort / position / velocity) and its `VLAActionServer` is a thin
   ROS adapter over that core. OpenArm's equivalent is
-  `cho_controller_openarm_mit/VlaMitController`, which derives from
-  `TaskSpaceImpedanceMitController` and overrides `write_task_target()` alone, so
+  `cho_controller_openarm_mit/VlaController`, which derives from
+  `TaskSpaceImpedanceController` and overrides `write_task_target()` alone, so
   both action spaces run drive-side impedance and the MIT session/ACK/lease/SAFE
   protocol is inherited unchanged. Two invariants there that the base class does
   NOT enforce and the VLA path makes mandatory at configure time:

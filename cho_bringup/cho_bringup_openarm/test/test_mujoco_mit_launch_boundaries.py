@@ -56,7 +56,7 @@ def test_direct_impedance_yaml_has_an_explicit_single_arm_safe_profile():
     params = yaml.safe_load(DIRECT_CONFIG.read_text())['/**']
     manager = params['controller_manager']['ros__parameters']
     name = 'joint_impedance_mit_controller'
-    assert manager[name]['type'] == 'cho_controller_openarm_mit/JointImpedanceMitActionController'
+    assert manager[name]['type'] == 'cho_controller_openarm_mit/JointImpedanceActionController'
     config = params[name]['ros__parameters']
     assert config['arm'] == 'single'
     assert config['safety_profile_name'] == 'mujoco_sim_safe'
@@ -92,7 +92,7 @@ def test_task_impedance_yaml_exposes_explicit_cartesian_wrench_contract():
     params = yaml.safe_load(DIRECT_CONFIG.read_text())['/**']
     manager = params['controller_manager']['ros__parameters']
     name = 'task_space_impedance_mit_controller'
-    assert manager[name]['type'] == 'cho_controller_openarm_mit/TaskSpaceImpedanceMitController'
+    assert manager[name]['type'] == 'cho_controller_openarm_mit/TaskSpaceImpedanceController'
     config = params[name]['ros__parameters']
     assert config['arm'] == 'single'
     assert config['safety_profile_name'] == 'mujoco_sim_safe'
@@ -205,8 +205,8 @@ def test_direct_bimanual_yaml_has_two_disjoint_one_arm_task_and_joint_plugins():
     for side in ('left', 'right'):
         joint = f'{side}_joint_impedance_mit_controller'
         task = f'{side}_task_space_impedance_mit_controller'
-        assert manager[joint]['type'] == 'cho_controller_openarm_mit/JointImpedanceMitActionController'
-        assert manager[task]['type'] == 'cho_controller_openarm_mit/TaskSpaceImpedanceMitController'
+        assert manager[joint]['type'] == 'cho_controller_openarm_mit/JointImpedanceActionController'
+        assert manager[task]['type'] == 'cho_controller_openarm_mit/TaskSpaceImpedanceController'
         for name in (joint, task):
             assert params[name]['ros__parameters']['arm'] == side
         task_params = params[task]['ros__parameters']
@@ -340,10 +340,10 @@ def _controllers_mit(name):
         return yaml.safe_load(handle)['/**']
 
 
-def test_vla_mit_controller_is_registered_and_selectable():
+def test_vla_controller_is_registered_and_selectable():
     root = _controllers_mit('mujoco/controllers_mit.yaml')
     assert root['controller_manager']['ros__parameters']['vla_mit_controller']['type'] == \
-        'cho_controller_openarm_mit/VlaMitController'
+        'cho_controller_openarm_mit/VlaController'
     assert 'vla_mit_controller' in launch_utils.MIT_DIRECT_CONTROLLERS
     # Nominal zero is reserved for the joint-space law. It is a kinematic
     # singularity for this arm, and a Cartesian path resolving its error through
@@ -455,7 +455,7 @@ def test_real_vla_block_keeps_every_hardware_identified_value():
         assert kp * bound < 0.30 * limit
 
 
-def test_vla_mit_controller_is_selectable_on_real_hardware_for_the_task_path():
+def test_vla_controller_is_selectable_on_real_hardware_for_the_task_path():
     # Offered because its Cartesian law IS the commissioned one, unchanged. Its
     # joint action space is MuJoCo-only; that is a runtime choice the bringup
     # cannot gate, so it lives in the launch_utils comment and the docs.
@@ -481,7 +481,7 @@ def test_bimanual_vla_controllers_are_per_arm_and_independent():
 
     for side in ('left', 'right'):
         assert types[f'{side}_vla_mit_controller']['type'] == \
-            'cho_controller_openarm_mit/VlaMitController'
+            'cho_controller_openarm_mit/VlaController'
 
     assert left['arm'] == 'left' and right['arm'] == 'right'
     assert left['ee_frame'] == 'openarm_left_hand_tcp'
@@ -499,7 +499,7 @@ def test_bimanual_vla_controllers_are_per_arm_and_independent():
                                     'real/controllers_mit.yaml',
                                     'mujoco/controllers_mit_direct_bimanual.yaml'])
 def test_vla_config_blocks_satisfy_the_controllers_configure_time_requirements(config):
-    """Guard the parameters VlaMitController::on_configure refuses to start without.
+    """Guard the parameters VlaController::on_configure refuses to start without.
 
     Every one of these was found by the controller rejecting the block, not by
     reading the code: max_task_wrench is inert under drive_side_impedance yet

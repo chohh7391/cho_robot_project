@@ -69,7 +69,7 @@ MIT_DIRECT_CONTROLLERS = frozenset({
 MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
 MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
 # vla_mit_controller is offered here only for its TASK action space. Its
-# Cartesian path is TaskSpaceImpedanceMitController's own
+# Cartesian path is TaskSpaceImpedanceController's own
 # write_cartesian_torque_target() unchanged -- the controller derives from it and
 # overrides only where x_des/v_des come from -- so what runs on hardware is the
 # commissioned law fed by a chunk stream. Its JOINT action space is new code that

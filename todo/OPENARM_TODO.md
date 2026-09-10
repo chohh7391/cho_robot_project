@@ -5,8 +5,9 @@ Unresolved items only. What is done and verified has been left out; see
 
 **Shipped and verified so far (for context):** `cho_description_openarm` (single +
 bimanual, URDF/MJCF/USD kept consistent by `scripts/sync_mjcf_inertials.py`, 53
-tests), `cho_controller_openarm` (`ee_state_broadcaster` plus joint-space
-impedance / position / velocity), MuJoCo and Isaac bringups. All twelve
+tests), `cho_controller_openarm_mit` (`ee_state_broadcaster` plus joint-space
+impedance / position / velocity, merged in from the former
+`cho_controller_openarm`), MuJoCo and Isaac bringups. All twelve
 combinations of {single, bimanual} x {physx, newton} x {torque, position,
 velocity} pass their action-server thresholds. CI builds and tests both new
 packages.
@@ -34,7 +35,8 @@ packages.
 ## MEDIUM — parity with the other robot families
 
 - **Task-space control.** `openarm.yaml` has `task_space: null`. Nothing in
-  `cho_controller_openarm` works in Cartesian space, so no waypoint task
+  `cho_controller_openarm_mit`'s `cho_controller::openarm` half works in
+  Cartesian space, so no waypoint task
   (`multi_move`-style) can run. Porting `task_space_ik_controller` first is the
   cheapest useful step; the QP controllers need `cho_controller_common`'s HQP
   solver wired up, which OpenArm has never used.

@@ -20,19 +20,19 @@
         type: joint_state_broadcaster/JointStateBroadcaster
 
       left_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       right_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
 
       left_joint_space_impedance_controller:
-        type: cho_controller_openarm/JointSpaceImpedanceController
+        type: cho_controller_openarm_mit/JointSpaceImpedanceController
       right_joint_space_impedance_controller:
-        type: cho_controller_openarm/JointSpaceImpedanceController
+        type: cho_controller_openarm_mit/JointSpaceImpedanceController
 
       left_joint_space_position_controller:
-        type: cho_controller_openarm/JointSpacePositionController
+        type: cho_controller_openarm_mit/JointSpacePositionController
       right_joint_space_position_controller:
-        type: cho_controller_openarm/JointSpacePositionController
+        type: cho_controller_openarm_mit/JointSpacePositionController
 
       left_joint_trajectory_controller:
         type: joint_trajectory_controller/JointTrajectoryController
@@ -40,9 +40,9 @@
         type: joint_trajectory_controller/JointTrajectoryController
 
       left_joint_space_velocity_controller:
-        type: cho_controller_openarm/JointSpaceVelocityController
+        type: cho_controller_openarm_mit/JointSpaceVelocityController
       right_joint_space_velocity_controller:
-        type: cho_controller_openarm/JointSpaceVelocityController
+        type: cho_controller_openarm_mit/JointSpaceVelocityController
 
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so

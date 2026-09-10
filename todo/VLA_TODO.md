@@ -40,16 +40,16 @@
 ### OpenArm MIT 쪽
 
 - `cho_controller_openarm_mit`는 **프로듀서 전용** 패키지(DESIGN.md). 39개 MIT 커맨드 인터페이스
-  (7 조인트 × 5 필드 + 프로토콜 4)를 클레임하고 세션/ACK/lease/SAFE 프로토콜을 `DirectMitControllerBase`가 소유.
-- 출력은 MIT 튜플 `(q_des, dq_des, kp, kd, tau_ff)` 하나. `TaskSpaceImpedanceMitController`(drive-side, 기본)는
+  (7 조인트 × 5 필드 + 프로토콜 4)를 클레임하고 세션/ACK/lease/SAFE 프로토콜을 `DirectControllerBase`가 소유.
+- 출력은 MIT 튜플 `(q_des, dq_des, kp, kd, tau_ff)` 하나. `TaskSpaceImpedanceController`(drive-side, 기본)는
   `q_des = q + J⁺(x_des ⊖ x)`, `dq_des = J⁺ v_des`, kp/kd 고정, `tau_ff = nle + tau_null + tau_limit`.
-- **raw-topic 프로듀서 경로는 워치독 초과 시 SAFE 요청** ([direct_mit_controller.cpp:607](../cho_controller/cho_controller_openarm_mit/src/direct_mit_controller.cpp:607)).
+- **raw-topic 프로듀서 경로는 워치독 초과 시 SAFE 요청** ([direct_controller.cpp:607](../cho_controller/cho_controller_openarm_mit/src/direct_controller.cpp:607)).
   15 Hz 정책 스트림을 그 경로에 물리면 매번 SAFE로 떨어진다. VLA는 `uses_raw_topic() → false` 액션 경로여야 한다.
 - `max_reference_offset`이 **임피던스 토크의 유일한 바운드**. 모터가 `kp(q_des − q)`를 컨트롤러가 클램프할 수
   있는 지점 뒤에서 더한다. `torque_limit`은 `tau_ff` 필드만 자른다.
 - real MIT 어댑터에는 **핑거 트랜스포트가 없다**(openarm.yaml 주석). 그리퍼 액션은 sim에서만 유효.
-- `TaskSpaceImpedanceMitController`는 `final`이고 Cartesian 헬퍼가 `private`
-  ([task_space_impedance_mit_controller.hpp:24](../cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/task_space_impedance_mit_controller.hpp:24)).
+- `TaskSpaceImpedanceController`는 `final`이고 Cartesian 헬퍼가 `private`
+  ([task_space_impedance_controller.hpp:24](../cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/task_space_impedance_controller.hpp:24)).
 - 제어 주기: mujoco 1000 Hz, real 750 Hz(`controllers_mit.yaml`).
 
 ---
@@ -232,7 +232,7 @@ cho_controller_common/vla            ◀ 로봇 무관. rclcpp 없이 컴파일(
                      playback_stamp (브릿지의 RTC 접두사 부기용, §2a RTC)
 
 cho_controller_franka/VLAController       세 제어 법칙 그대로. 입력만 sampler에서. dq_des를 velocity ff로
-cho_controller_openarm_mit/VlaMitController   drive-side 법칙 그대로. x_des/v_des(또는 q_des/dq_des)만 sampler에서
+cho_controller_openarm_mit/VlaController   drive-side 법칙 그대로. x_des/v_des(또는 q_des/dq_des)만 sampler에서
 
 VLAActionServer (non-RT, 얇게)  goal/cancel, ActionChunk→POD 변환+submit, success 트리거, BT 통보, 텔레메트리 publish
                                  토픽/서비스 이름은 파라미터(기본값 = 현재 이름, 하위호환)
@@ -317,22 +317,22 @@ float32[] gripper_actions   # binary: 부호(<0 close, >0 open). continuous: 개
 
 ---
 
-## 6. OpenArm MIT — `VlaMitController`
+## 6. OpenArm MIT — `VlaController`
 
 ### 구조
 
 ```cpp
-class VlaMitController final : public TaskSpaceImpedanceMitController
+class VlaController final : public TaskSpaceImpedanceController
 ```
 
-- `TaskSpaceImpedanceMitController`의 `final` 해제, Cartesian 헬퍼 `private → protected`,
+- `TaskSpaceImpedanceController`의 `final` 해제, Cartesian 헬퍼 `private → protected`,
   `write_task_target(control_time, dt, target)`를 **virtual**로. VLA는 이것만 override:
   `sample_pose_trajectory(start, goal, u)` 대신 `ReferenceSampler.sample(now)`.
 - 상속으로 따라오는 것: 39 인터페이스 클레임, 세션/ACK/lease/SAFE, `home 1` 시동 램프, drive-side 임피던스,
   null-space posture, joint-limit 스프링, 마찰 FF, `gravity_scale`, `max_reference_offset`, release 블렌드.
 - `action_space: joint`는 `q_des = 샘플된 관절값`(프로파일 윈도우 + `max_reference_offset` 클램프),
   `dq_des = 샘플된 속도`(`command_velocity` 클램프), `tau_ff = nle`. task보다 단순.
-- `direct_mit_controller.hpp:73`의 정신 그대로: *"differs only in where q_des/dq_des originate."*
+- `direct_controller.hpp:73`의 정신 그대로: *"differs only in where q_des/dq_des originate."*
 
 ### MIT에서만 터지는 함정
 
@@ -347,12 +347,12 @@ class VlaMitController final : public TaskSpaceImpedanceMitController
 
 | 대상 | 할 일 |
 |---|---|
-| `controller_plugins.xml`, `CMakeLists.txt` | `VlaMitController` 등록·소스 추가 |
+| `controller_plugins.xml`, `CMakeLists.txt` | `VlaController` 등록·소스 추가 |
 | `config/{mujoco,real}/controllers_mit.yaml` | `vla_mit_controller` 블록(태스크 컨트롤러 파라미터 + VLA 파라미터) |
 | `utils/launch_utils.py` | `MIT_DIRECT_CONTROLLERS`, `RETURN_TO_ZERO_MIT_CONTROLLERS`에 추가. `REAL_MIT_DIRECT_CONTROLLERS`는 **sim 검증 후** |
 | `bringup_mujoco_robot.launch.py` | `mit_controller_name` choices |
 | `cho_robot_config/config/openarm.yaml` | `controllers.vla: vla_mit_controller`, `actions.preferences` |
-| `test/test_vla_mit_controller.cpp` | 기존 CM 픽스처 패턴. 세션/ACK/SAFE 불변, 청크 부재 hold, NaN 드롭, 워치독 HOLD |
+| `test/test_vla_controller.cpp` | 기존 CM 픽스처 패턴. 세션/ACK/SAFE 불변, 청크 부재 hold, NaN 드롭, 워치독 HOLD |
 
 ---
 
@@ -365,7 +365,7 @@ class VlaMitController final : public TaskSpaceImpedanceMitController
 | 1 | ~~`cho_controller_common/vla`~~ → **`cho_controller/utils/cho_vla_core` 별도 패키지. 완료** (§7a) | ①②③⑥ | gtest 87개 |
 | 2 | **완료.** Franka `VLAActionServer`를 코어 어댑터로 축소 | 구조 | 빌드 통과. sim 실행은 사용자 몫 |
 | 3 | **완료.** `ActionChunk` v2 + `VisionLanguageAction` v2 + `VlaTelemetry` 신설 | ④⑤ | gtest. 브릿지는 저장소 밖 |
-| 4 | **완료.** `VlaMitController` (task/joint 모두 impedance) | MIT | CM 픽스처 gtest 12개 → mujoco 실행은 미검증 |
+| 4 | **완료.** `VlaController` (task/joint 모두 impedance) | MIT | CM 픽스처 gtest 12개 → mujoco 실행은 미검증 |
 | 5 | **완료.** 연속 그리퍼, 합성 가중치, 텔레메트리 토픽, 이름 파라미터화 | 다듬기 | 435개 테스트 통과 |
 
 1→2가 끝나면 Franka는 결함 ①②③⑥이 사라진 상태로 **동작은 동일**해야 한다. 3에서 처음으로 동작이 바뀐다
@@ -473,9 +473,9 @@ RT(`sample_timeline`·limiter·watchdog·gripper edge, 할당 없음), 공유(`R
 `VlaTelemetry` 신설. 브릿지가 실제로 필요한 건 둘이다: `remaining_horizon_sec`(다음 관측 시점),
 `playback_stamp`(RTC 접두사 절단 지점).
 
-### 4단계 — `VlaMitController`
+### 4단계 — `VlaController`
 
-`TaskSpaceImpedanceMitController`를 상속하고 **`write_task_target()` 하나만** override 한다.
+`TaskSpaceImpedanceController`를 상속하고 **`write_task_target()` 하나만** override 한다.
 베이스에 가한 변경은 최소다: `final` 해제, 멤버 `private`→`protected`, `write_task_target` virtual화,
 `uses_task_space_action()` 신설(두 서버가 같은 39 인터페이스를 몰지 못하게).
 

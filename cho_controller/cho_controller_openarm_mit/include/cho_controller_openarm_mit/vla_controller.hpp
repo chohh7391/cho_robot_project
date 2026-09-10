@@ -14,7 +14,7 @@
 #include <cho_interfaces/msg/vla_telemetry.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 
-#include "cho_controller_openarm_mit/task_space_impedance_mit_controller.hpp"
+#include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
 #include "cho_vla_core/action_buffer.hpp"
 #include "cho_vla_core/chunk_smoother.hpp"
 #include "cho_vla_core/chunk_validator.hpp"
@@ -27,7 +27,7 @@ namespace cho_controller_openarm_mit
 {
 // VLA reference source on top of the Cartesian MIT impedance producer.
 //
-// It derives from TaskSpaceImpedanceMitController and overrides exactly one
+// It derives from TaskSpaceImpedanceController and overrides exactly one
 // thing: write_task_target(), the single point where the Cartesian reference is
 // produced. Everything that makes the MIT path safe is inherited unchanged --
 // the 39-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero
@@ -53,7 +53,7 @@ namespace cho_controller_openarm_mit
 // host:
 //
 //  1. The raw-topic producer path requests SAFE when a command goes older than
-//     the hardware watchdog (direct_mit_controller.cpp). A 15 Hz policy stream on
+//     the hardware watchdog (direct_controller.cpp). A 15 Hz policy stream on
 //     that path would trip SAFE continuously. This is an action-path controller
 //     that writes a full tuple EVERY cycle from its internal reference, so a
 //     quiet stream is a hold, never a missed write.
@@ -71,10 +71,10 @@ namespace cho_controller_openarm_mit
 //  4. The real MIT adapter has no finger transport, so gripper_actions are
 //     ignored with one warning rather than dispatched to a server that is not
 //     there. `enable_gripper` gates it; sim bringups may turn it on.
-class VlaMitController final : public TaskSpaceImpedanceMitController
+class VlaController final : public TaskSpaceImpedanceController
 {
 public:
-  VlaMitController() = default;
+  VlaController() = default;
   CallbackReturn on_init() override;
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
   CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
@@ -85,7 +85,7 @@ protected:
   bool write_task_target(double control_time, double dt, DirectMitTarget & target) override;
 
 private:
-  friend struct VlaMitControllerTestAccess;
+  friend struct VlaControllerTestAccess;
   using VlaAction = cho_interfaces::action::VisionLanguageAction;
   using VlaGoalHandle = rclcpp_action::ServerGoalHandle<VlaAction>;
   enum class VlaTerminal : std::uint8_t {SUCCEEDED, CANCELED, ABORTED};
@@ -167,6 +167,11 @@ private:
   std::uint64_t vla_started_id_ {0};
   bool limiter_seeded_ {false};
   bool releasing_on_hold_ {false};
+  // Set when release_and_idle() starts handing the reference back to the
+  // measured pose, cleared by the re-seed on the next accepted chunk. Separate
+  // from releasing_on_hold_, which a new chunk clears before the cycle knows
+  // whether a reference could be sampled.
+  bool limiter_resume_pending_ {false};
   std::string active_action_space_ {"task"};
 
   // ---- parameters -------------------------------------------------------

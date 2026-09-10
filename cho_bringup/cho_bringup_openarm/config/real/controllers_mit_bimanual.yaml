@@ -13,25 +13,25 @@
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
       left_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       right_ee_state_broadcaster:
-        type: cho_controller_openarm/EEStateBroadcaster
+        type: cho_controller_openarm_mit/EEStateBroadcaster
       left_joint_impedance_mit_controller:
-        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+        type: cho_controller_openarm_mit/JointImpedanceActionController
       right_joint_impedance_mit_controller:
-        type: cho_controller_openarm_mit/JointImpedanceMitActionController
+        type: cho_controller_openarm_mit/JointImpedanceActionController
       left_task_space_impedance_mit_controller:
-        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceController
       right_task_space_impedance_mit_controller:
-        type: cho_controller_openarm_mit/TaskSpaceImpedanceMitController
+        type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
       # One VLA producer per arm: cho_vla_core is 7-DoF and each claims its own
       # arm's 39 MIT interfaces.
       left_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaMitController
+        type: cho_controller_openarm_mit/VlaController
 
       right_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaMitController
+        type: cho_controller_openarm_mit/VlaController
 
       # Spawned only with hand:=true. It claims the finger's position and
       # max_effort interfaces, which no arm controller touches, so it stays

@@ -15,8 +15,8 @@
 
 #include <memory>
 
-#include "cho_controller_openarm/base_controller.hpp"
-#include "cho_controller_openarm/servers/joint_space_action_server.hpp"
+#include "cho_controller_openarm_mit/base_controller.hpp"
+#include "cho_controller_openarm_mit/servers/joint_space_action_server.hpp"
 
 namespace cho_controller {
 namespace openarm {

@@ -23,7 +23,7 @@ controllers:
   # bringup with hand:=true. The real MIT adapter has no finger transport yet,
   # so a real bringup exposes no gripper action.
   gripper: gripper_controller
-  # cho_controller_openarm_mit/VlaMitController. Selected only on the MuJoCo MIT
+  # cho_controller_openarm_mit/VlaController. Selected only on the MuJoCo MIT
   # prototype path (mit_controller_name:=vla_mit_controller); the real bringup
   # does not offer it yet, and the non-MIT bringups have no VLA controller at all.
   vla: vla_mit_controller

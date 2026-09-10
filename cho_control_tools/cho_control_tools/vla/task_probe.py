@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Task-space-only VLA probe, sized for a first run on real hardware.
 
-TASK ACTION SPACE ONLY, on purpose. VlaMitController's Cartesian path is
-TaskSpaceImpedanceMitController's own write_cartesian_torque_target() unchanged
+TASK ACTION SPACE ONLY, on purpose. VlaController's Cartesian path is
+TaskSpaceImpedanceController's own write_cartesian_torque_target() unchanged
 -- the controller derives from it and replaces only where x_des/v_des come from
 -- so what runs here is the commissioned law fed by a chunk stream. Its JOINT
 action space is new code that has only run in MuJoCo and additionally omits the
