@@ -200,4 +200,119 @@ TEST(ReferenceLimiter, OnlyTheActiveSpaceIsRateLimited) {
   limiter.apply(now + 0.01, task);
   EXPECT_NEAR(task.pose.translation()(0), 5.0025, 1e-9);
 }
+
+// --- The emitted reference carries its own rate ------------------------------
+//
+// A single-setpoint stream (chunk_size 1) exhausts the playback horizon on every
+// cycle between chunks, and sample_series zeroes the twist there by design. A
+// host that maps v_des to a drive-side dq_des then damps against zero while the
+// pose reference is still moving. These pin the contract that apply() reports
+// the derivative of what it just emitted.
+
+TEST(ReferenceLimiter, TaskTwistReportsTheLimitedTranslationRate) {
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = 0.10;   // the real bimanual bringup's cap
+  ReferenceLimiter limiter(params);
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+
+  // A far target with a zero twist, which is exactly what the horizon-exhausted
+  // branch of sample_series hands over.
+  Reference reference = task_reference(Eigen::Vector3d(10.0, 0.0, 0.0));
+  reference.twist.setZero();
+  limiter.apply(0.01, reference);
+
+  EXPECT_NEAR(reference.pose.translation()(0), 0.001, 1e-12);
+  EXPECT_NEAR(reference.twist(0), 0.10, 1e-12);
+  EXPECT_NEAR(reference.twist(1), 0.0, 1e-12);
+  EXPECT_NEAR(reference.twist(2), 0.0, 1e-12);
+}
+
+TEST(ReferenceLimiter, TaskTwistReplacesTheSamplersUnlimitedDemand) {
+  // The sampler's twist is the demand; the pose this limiter emits is the
+  // limited one. Reporting the demand would ask a drive for motion the position
+  // reference never makes.
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = 0.10;
+  ReferenceLimiter limiter(params);
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+
+  Reference reference = task_reference(Eigen::Vector3d(10.0, 0.0, 0.0));
+  reference.twist(0) = 0.52;   // faster than the cap, as a fast hand would ask
+  limiter.apply(0.01, reference);
+
+  EXPECT_NEAR(reference.twist(0), 0.10, 1e-12);
+}
+
+TEST(ReferenceLimiter, TaskTwistIsZeroOnceTheReferenceHasArrived) {
+  // "Zero while idle" has to survive: a stationary reference must not keep a
+  // friction feed-forward that rides sign(dq_des) firing.
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = 0.10;
+  ReferenceLimiter limiter(params);
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+
+  double now = 0.0;
+  for (int cycle = 0; cycle < 50; ++cycle) {
+    now += 0.01;
+    Reference reference = task_reference(Eigen::Vector3d(0.0, 0.0, 0.0));
+    limiter.apply(now, reference);
+    EXPECT_NEAR(reference.twist.head<3>().norm(), 0.0, 1e-12);
+    EXPECT_NEAR(reference.twist.tail<3>().norm(), 0.0, 1e-12);
+  }
+}
+
+TEST(ReferenceLimiter, TaskTwistAngularPartIsWorldAlignedAndClamped) {
+  // Same convention sample_series uses: log3(R_new * R_prev^T) / step, which the
+  // MIT velocity reference consumes against a LOCAL_WORLD_ALIGNED Jacobian.
+  ReferenceLimiter::Params params;
+  params.max_angular_velocity = 1.0;
+  ReferenceLimiter limiter(params);
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+
+  Reference reference;
+  reference.space = ActionSpace::kTask;
+  reference.pose = SE3(
+    Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix(),
+    Eigen::Vector3d::Zero());
+  reference.twist.setZero();
+  limiter.apply(0.01, reference);
+
+  EXPECT_NEAR(reference.twist(3), 0.0, 1e-9);
+  EXPECT_NEAR(reference.twist(4), 0.0, 1e-9);
+  EXPECT_NEAR(reference.twist(5), 1.0, 1e-9);
+}
+
+TEST(ReferenceLimiter, JointVelocityReportsTheEmittedRate) {
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(1.0);
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.0), 0.0);
+
+  Reference reference = joint_reference(100.0);
+  reference.joint_velocity.setZero();
+  limiter.apply(0.01, reference);
+
+  EXPECT_NEAR(reference.joints(0), 0.01, 1e-12);
+  EXPECT_NEAR(reference.joint_velocity(0), 1.0, 1e-12);
+}
+
+TEST(ReferenceLimiter, JointVelocityIsZeroWhereTheWindowClampPins) {
+  // The window clamp is the last bound, so the reported rate has to be taken
+  // after it: a joint held at its stop is not moving at the rate the rate bounds
+  // would have allowed.
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(1.0);
+  params.joint_lower.setConstant(-0.005);
+  params.joint_upper.setConstant(0.005);
+  params.clamp_joint_window = true;
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.005), 0.0);
+
+  Reference reference = joint_reference(100.0);
+  limiter.apply(0.01, reference);
+
+  EXPECT_NEAR(reference.joints(0), 0.005, 1e-12);
+  EXPECT_NEAR(reference.joint_velocity(0), 0.0, 1e-12);
+}
+
 }  // namespace

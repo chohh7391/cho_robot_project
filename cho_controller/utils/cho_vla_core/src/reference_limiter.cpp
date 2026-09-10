@@ -57,6 +57,32 @@ void ReferenceLimiter::apply(const double now, Reference & reference)
           Eigen::AngleAxisd(limit, axis_angle.axis()).toRotationMatrix();
       }
     }
+    // The emitted reference's OWN derivative, replacing whatever the sampler
+    // left here. Both fields describe one reference, so they have to agree: the
+    // sampler's twist is the UNLIMITED demand while the pose above is the
+    // limited one, and leaving the twist alone hands a consumer a velocity the
+    // position reference never moves at.
+    //
+    // It is also the only velocity a single-setpoint stream ever produces. At
+    // chunk_size 1 the playback horizon is exhausted on every cycle between
+    // chunks and sample_series zeroes the twist there by design, so a host that
+    // maps v_des to dq_des commands zero joint velocity while the pose
+    // reference is still moving. On the OpenArm MIT drive that inverts two
+    // things at once: the in-motor kd becomes a brake instead of a tracker, and
+    // the friction feed-forward, which rides sign(dq_des), stops firing exactly
+    // when a joint needs the help to break away.
+    //
+    // Smoothness comes from max_linear_acceleration. With that bound disabled
+    // this is the raw step difference, which is the honest derivative of a
+    // reference that genuinely jumps.
+    reference.twist.head<3>() = velocity;
+    // World-aligned, the same convention sample_series uses:
+    // log3(R_new * R_prev^T) / step. AngleAxis of a near-identity rotation
+    // reports a zero angle, so a stationary reference gives exactly zero rather
+    // than an arbitrary axis.
+    const Eigen::AngleAxisd applied(
+      reference.pose.rotation() * previous_pose_.rotation().transpose());
+    reference.twist.tail<3>() = applied.axis() * (applied.angle() / step);
     previous_pose_ = reference.pose;
     // Keep the joint rate state tracking the emitted joint field even in task
     // mode, so a later switch to joint space ramps from something current rather
@@ -90,6 +116,12 @@ void ReferenceLimiter::apply(const double now, Reference & reference)
         reference.joints(joint), params_.joint_lower(joint), params_.joint_upper(joint));
     }
   }
+  // The emitted step's own rate, for the same reason the task branch writes the
+  // twist. Taken AFTER the window clamp, so a joint pinned at its stop reports
+  // zero reference velocity rather than the rate the rate bounds would have
+  // allowed. previous_joint_velocity_ deliberately keeps the pre-clamp value:
+  // it is the acceleration bound's state, not a reported quantity.
+  reference.joint_velocity = (reference.joints - previous_joints_) / step;
   previous_joints_ = reference.joints;
   previous_pose_ = reference.pose;
   previous_linear_velocity_.setZero();

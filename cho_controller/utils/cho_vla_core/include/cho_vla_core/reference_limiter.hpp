@@ -22,6 +22,13 @@ namespace cho_vla_core
 // and oscillating, and by distance/dt so the target is never passed within a
 // cycle. Acceleration is clamped upward only -- instant deceleration is always
 // allowed. Rotation keeps a velocity clamp alone.
+//
+// apply() emits the RATE as well as the position: the active space's velocity
+// field is overwritten with the derivative of what this limiter just emitted,
+// never left carrying the sampler's unlimited demand. A host that turns v_des
+// into a drive-side velocity reference needs the two to describe one reference;
+// see the comment at the write site for what disagreeing costs on a drive that
+// damps against dq_des.
 class ReferenceLimiter
 {
 public:
