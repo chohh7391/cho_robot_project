@@ -13,6 +13,9 @@
   <depend>py_trees_ros</depend>
   <depend>cho_interfaces</depend>
   <depend>cho_robot_config</depend>
+  <!-- Launch-only: run_task_manager.launch.py starts it when a task passes
+       object_pose_config. Nothing in this package imports it. -->
+  <exec_depend>cho_object_pose</exec_depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>

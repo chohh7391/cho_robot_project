@@ -1,5 +1,6 @@
 from .pick_place import create_franka_pick_place_tree
 from .pick_place_position import create_franka_pick_place_position_tree
+from .tag_reach import create_franka_tag_reach_tree
 from .controller_check import (
     create_franka_controller_check_position_tree,
     create_franka_controller_check_torque_tree,
@@ -12,6 +13,7 @@ from .forge.nut_thread import create_franka_nut_thread_tree
 __all__ = [
     'create_franka_pick_place_tree',
     'create_franka_pick_place_position_tree',
+    'create_franka_tag_reach_tree',
     'create_franka_controller_check_position_tree',
     'create_franka_controller_check_torque_tree',
     'create_franka_controller_check_velocity_tree',

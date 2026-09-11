@@ -1,0 +1,35 @@
+# Object table for the franka `tag_reach` task.
+#
+# This file is task knowledge, not sensor knowledge: which tag marks what, and
+# where the arm should go relative to it, changes with the job. The generic
+# pipeline that consumes it lives in cho_object_pose, whose own
+# config/objects.yaml is only an example -- a task passes its own table with
+# object_pose_config:= and that is what run_task_manager.launch.py forwards.
+#
+# The tag's physical SIZE is NOT here. It belongs to the detector
+# (realsense_apriltag/config/apriltag_36h11.yaml), and duplicating it would
+# give two numbers that must agree with no way to notice when they stop.
+#
+# `topic` is spelled out rather than left to the default because
+# tasks/franka/tag_reach.py subscribes to it by name; test_tag_reach.py asserts
+# the two still match.
+objects:
+  - name: target
+    tag_id: 9
+    topic: /perception/object_pose/target
+
+    # A STANDOFF, not a grasp. The offset is expressed in the tag's own frame,
+    # where +z points out of the tag face, so this is 100 mm off the face --
+    # for a tag lying flat that is 100 mm above it. The task drives here and
+    # stops; descending to a real grasp is a separate, later decision, and
+    # doing it before the intrinsics are calibrated would be driving to a
+    # number nobody has checked against a ruler.
+    grasp_offset:
+      position: [0.0, 0.0, 0.100]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+    # Keep the tag's yaw, approach straight down. AprilTag's planar pose has a
+    # two-solution ambiguity that flips the tag normal between frames; the yaw
+    # survives it, the rest does not.
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]

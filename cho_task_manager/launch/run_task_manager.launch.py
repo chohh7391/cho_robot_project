@@ -1,8 +1,11 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.substitutions import PythonExpression
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -38,6 +41,39 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'probe_return', default_value='true',
             description='Run the reverse probe so the arm ends where it started.'),
+        # ---- perception, when the task needs a detected target ----
+        # cho_object_pose is generic: it owns the pipeline, the gates and the
+        # frame resolution, and knows nothing about any particular job. WHICH
+        # tag marks WHICH object, and where the arm should go relative to it,
+        # is task knowledge, so the table comes from here --
+        # config/perception/<task>.yaml -- rather than accumulating inside the
+        # perception package.
+        #
+        # Empty means "this task needs no perception" and nothing is started,
+        # which is why a robot that never sees a tag pays nothing for this.
+        DeclareLaunchArgument(
+            'object_pose_config', default_value='',
+            description='Path to a task-owned object table (see '
+                        'cho_task_manager/config/perception/). Empty starts no '
+                        'perception node at all.'),
+        # Accuracy gates, not decode gates. How closely repeated detections
+        # must agree is a property of the job -- a coarse pick tolerates what
+        # an insertion does not -- whereas hamming / decision_margin /
+        # min_edge_px follow from the optics and stay with cho_object_pose.
+        DeclareLaunchArgument('object_pose_min_samples', default_value='5'),
+        DeclareLaunchArgument('object_pose_max_spread_m', default_value='0.01'),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution([
+                FindPackageShare('cho_object_pose'), 'launch', 'object_pose.launch.py'])),
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('object_pose_config'), "' != ''"])),
+            launch_arguments={
+                'robot_type': LaunchConfiguration('robot_type'),
+                'objects_config': LaunchConfiguration('object_pose_config'),
+                'min_samples': LaunchConfiguration('object_pose_min_samples'),
+                'max_position_spread_m': LaunchConfiguration('object_pose_max_spread_m'),
+            }.items(),
+        ),
         Node(
             package='cho_task_manager',
             executable='task_manager_node',

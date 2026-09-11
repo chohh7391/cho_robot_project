@@ -89,7 +89,15 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
     Returns a flat dict, e.g.::
 
         {'robot_type': 'ur5e', 'joint_space': 'joint_space_position_controller',
-         'task_space': 'task_space_ik_controller', 'gripper': None, 'vla': None}
+         'task_space': 'task_space_ik_controller', 'gripper': None, 'vla': None,
+         'arm_base_link': 'base_link'}
+
+    ``arm_base_link`` is the frame an absolute task-space goal is interpreted
+    in, and it is here so a task that needs a frame does not have to re-open
+    the registry -- or worse, spell the frame out. Note it is the registry's
+    ``model.arm_base_link`` and NOT its ``model.base_frame``: the latter is
+    'world' for Franka, which MoveIt uses and which does not exist in the
+    published TF tree.
 
     Raises ValueError for unknown robot types.
     """
@@ -99,6 +107,7 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
     return {
         'robot_type': raw['robot_type'],
         'profile': raw.get('profile', 'single'),
+        'arm_base_link': raw['model']['arm_base_link'],
         'joint_space': compatibility.get('joint_space', controllers['direct_joint']),
         'task_space': compatibility.get('task_space', controllers['direct_task']),
         'gripper': compatibility.get('gripper', controllers['gripper']),

@@ -6,6 +6,8 @@ from cho_task_manager.tasks.franka import (
     # pick place
     create_franka_pick_place_tree,
     create_franka_pick_place_position_tree,
+    # perception-driven
+    create_franka_tag_reach_tree,
     # controller smoke checks
     create_franka_controller_check_position_tree,
     create_franka_controller_check_torque_tree,
@@ -31,6 +33,8 @@ _TASK_REGISTRY = {
         # pick place
         'pick_place': create_franka_pick_place_tree,
         'pick_place_position': create_franka_pick_place_position_tree,
+        # perception-driven: target comes from an AprilTag at run time
+        'tag_reach': create_franka_tag_reach_tree,
         # controller smoke checks (one per bringup control_mode)
         'controller_check_position': create_franka_controller_check_position_tree,
         'controller_check_torque': create_franka_controller_check_torque_tree,
