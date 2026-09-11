@@ -66,7 +66,6 @@ def generate_robot_nodes(context):
         control_mode=mode,
         use_vla=use_vla,
         requested_controller=ctrl_name,
-        extra_torque_controllers=['joint_trajectory_controller'],
     )
 
     pkg_bringup = get_package_share_directory('cho_bringup_franka')

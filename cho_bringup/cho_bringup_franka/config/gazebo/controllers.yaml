@@ -70,12 +70,7 @@
       vla_controller:
         type: cho_controller_franka/VLAController
 
-      # extra controllers
-      joint_trajectory_controller:
-        type: cho_controller_franka/JointTrajectoryController
-
-      # Standard FollowJointTrajectory backend used only by MoveIt.  The
-      # existing Cho controller above is a separate identification trajectory.
+      # Standard FollowJointTrajectory backend used only by MoveIt.
       moveit_joint_trajectory_controller:
         type: joint_trajectory_controller/JointTrajectoryController
 
@@ -193,14 +188,6 @@
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
       default_kd_task: [3.46410162, 3.46410162, 3.46410162, 0.89442719, 0.89442719, 0.89442719]
-
-/**:
-  joint_trajectory_controller:
-    ros__parameters:
-      robot_type: "fr3"
-      kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]
-      kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]
-      duration: 6.0
 
 /**:
   moveit_joint_trajectory_controller:

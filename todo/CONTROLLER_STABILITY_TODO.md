@@ -40,10 +40,6 @@ real/gazebo = OFF until hardware validation.
   A mode switch or the QP-fail→zero-accel step can produce a torque discontinuity
   that trips the rate reflex. Add a per-cycle Δτ clamp (parameterized) in
   `clip_torque` or after it. Needs a stored previous torque + tuning.
-- **joint_trajectory_controller gains underdamped** — e.g. real config
-  `kd=[15,15,15,15,2,2,1]` vs `kp=[400,500,500,400,100,100,30]` (ζ≈0.1 on the
-  wrist). Acceptable with feedforward, but re-tune `kd` upward on hardware if
-  oscillation shows.
 - **Minor RT preallocations** — `task_space_qp` `VectorXd ddq = getAccelerations()`
   and `TrajectorySample sample_posture_full(model_na)` in
   `update_default_control_reference()` (note: with `use_nullspace_posture: true`

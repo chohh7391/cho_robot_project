@@ -56,9 +56,8 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 
 ### Franka FR3 — `cho_controller_franka`
 
-Fourteen controllers, not all on every backend. Gazebo omits the two
-velocity-interface ones; only Gazebo and real declare the logging trajectory
-controller.
+Thirteen controllers, not all on every backend. Gazebo omits the two
+velocity-interface ones.
 
 | Instance | Plugin | What it does | MuJoCo | Gazebo | Isaac | Real |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -73,7 +72,6 @@ controller.
 | `joint_space_position_controller` | `JointSpacePositionController` | Joint-space position | ✓ | ✓ | ✓ | ✓ |
 | `gravity_compensation_controller` | `GravityCompensationController` | Zero torque — the arm hangs on its own gravity compensation | ✓ | ✓ | ✓ | ✓ |
 | `vla_controller` | `VLAController` | Streams `ActionChunk` references; effort / position / velocity laws | ✓ | ✓ | ✓ | ✓ |
-| `joint_trajectory_controller` | `JointTrajectoryController` | Trajectory execution with desired-vs-current logging | — | ✓ | — | ✓ |
 | `ee_state_broadcaster` | `EEStateBroadcaster` | `/ee_state/pose`, `/ee_state/twist` | ✓ | ✓ | ✓ | ✓ |
 | `gripper_controller` | `GripperController` | Franka hand | ✓ | ✓ | ✓ | ✓ |
 

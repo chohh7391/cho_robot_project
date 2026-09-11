@@ -177,7 +177,6 @@ Key controllers:
   as six positive values, so every controller config derived from that base needs
   it.
 - `ee_state_broadcaster` — publishes `/ee_state/pose` and `/ee_state/twist` (Cartesian state used by Python tasks)
-- `joint_trajectory_controller` — executes trajectories; logs desired-vs-current on its own `~/controller_state`
 
 Each arm controller publishes its state on **per-controller namespaced topics** (`BaseController`):
 `/<controller>/controller_state` (`control_msgs/JointTrajectoryControllerState`, reference=desired / feedback=current)

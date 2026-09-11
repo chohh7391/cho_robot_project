@@ -186,10 +186,9 @@ def generate_launch_description():
             control_mode=mode,
             use_vla=use_vla,
             requested_controller=requested_controller,
-            extra_torque_controllers=[
-                'joint_trajectory_controller',
-                *(['moveit_joint_trajectory_controller'] if load_moveit_controller else []),
-            ],
+            extra_torque_controllers=(
+                ['moveit_joint_trajectory_controller'] if load_moveit_controller else []
+            ),
         )
         # Position-mode MoveIt execution also needs the standard trajectory
         # controller loaded inactive until the planning-scene gate switches it.
