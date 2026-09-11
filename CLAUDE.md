@@ -147,6 +147,17 @@ cho_sensor/                  # Sensor stacks; grouping directory, not a package
                              # SELF-CONTAINED: no cho_* dependencies, meant to be
                              # usable as a standalone module. Do not entangle it
                              # with cho_interfaces or the robot verticals.
+  realsense_apriltag/        # D435 + apriltag_ros: includes the stock rs_launch.py
+                             # and hands it our config_file, bota-style. Publishes
+                             # tag_<id> TF frames and /detections, and deliberately
+                             # NO camera->robot transform. cho_* dependencies: none.
+
+cho_perception/              # Perception that knows a robot; grouping directory
+  cho_object_pose/           # tag_<id> TF + decode quality -> a gated PoseStamped in
+                             # the robot's base frame, which PoseTargetBehavior
+                             # latches. geometry.py is ROS-free and holds everything
+                             # worth testing; node.py is the tf2 adapter. See its
+                             # README, and docs/apriltag_perception.md.
 
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)

@@ -193,9 +193,14 @@ description, not from a run on the hardware with its actual payload.
 | `peg_insert` | forge: approach, grasp peg, VLA insertion | `control_mode:=torque vla:=true` |
 | `gear_mesh` | forge: approach, grasp gear, VLA meshing (FT tare at start) | `control_mode:=torque vla:=true` |
 | `nut_thread` | forge: approach, grasp nut, VLA threading (FT tare at start) | `control_mode:=torque vla:=true` |
+| `tag_reach` | home → wait for an AprilTag detection → drive to it → home | `control_mode:=torque`, plus `object_pose_config:=` and a running detector |
 | `controller_check_position` | smoke check: every position-mode controller + gripper | `control_mode:=position` |
 | `controller_check_torque` | smoke check: every torque-mode controller + gripper | `control_mode:=torque` |
 | `controller_check_velocity` | smoke check: velocity controllers (+ VLA hold if present) | `control_mode:=velocity` (`vla:=true` optional) |
+
+`tag_reach` is the one task whose target is not in the tree. It waits for
+`cho_object_pose` to publish, which `run_task_manager.launch.py` starts when given
+`object_pose_config:=` — see [apriltag_perception.md](apriltag_perception.md).
 
 The VLA tasks wait for an external VLA policy: an ActionChunk publisher on
 `/vla/action/ee_pose` plus the VLA action goal

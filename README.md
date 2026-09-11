@@ -20,6 +20,8 @@ cho_bringup/          Backend-specific launch and controller configuration
 cho_simulation/       Shared simulator backends (Isaac Sim runner, conversion, ROS helper nodes)
 cho_moveit/           MoveIt configuration and launch wrappers
 cho_robot_config/     Robot/controller/action metadata registry
+cho_sensor/           Sensor stacks (FT, scale, RealSense + AprilTag detector)
+cho_perception/       Detections turned into robot-frame targets
 cho_task_manager/     py_trees behaviors, tasks, and task-manager node
 cho_control_tools/    Manual action clients, VLA tools, and bag plotters
 cho_interfaces/       Project ROS messages and actions
@@ -232,3 +234,22 @@ Controllers publish desired-versus-measured state on per-controller topics:
 
 Record with `ros2 bag record`, then use the plot commands above with
 `--path <DB3_PATH> --topic <topic>`.
+
+## Targets detected at run time
+
+A task's motion target does not have to be written into the tree. An AprilTag can
+supply it: `cho_sensor/realsense_apriltag` runs a RealSense and the detector, and
+`cho_perception/cho_object_pose` turns a detection into a `PoseStamped` in the
+robot's base frame that a behaviour tree latches and drives to.
+
+```bash
+ros2 launch realsense_apriltag apriltag.launch.py rviz:=true
+
+TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_reach.yaml
+ros2 launch cho_task_manager run_task_manager.launch.py task:=tag_reach object_pose_config:=$TABLE
+```
+
+Which tag marks which object stays with the task, not with the perception package,
+and a task that passes no `object_pose_config` starts no perception at all. Where
+the camera is mounted is one transform into `camera_link` and nothing downstream
+depends on it. See [docs/apriltag_perception.md](docs/apriltag_perception.md).
