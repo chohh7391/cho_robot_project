@@ -2,247 +2,271 @@
 
 ## §0 지금 상태
 
-**VLA 파이프라인이 로봇 무관 코어로 분리되고 OpenArm MIT에 VLA 컨트롤러가 붙었다.
-테스트 438개 + MuJoCo 프로브 18/18 통과. joint/task 양쪽 다 실제로 추종한다.**
+**AprilTag 인식이 MuJoCo에서 태스크까지 끝까지 돈다 — `tag_reach` 2회 SUCCESS.**
+시뮬 로봇 + 실제 카메라 조합(MuJoCo는 이미지를 안 주므로). 검출 → `tag_9` TF → 임시 마운트
+static TF → `fr3_link0` 기준 `PoseStamped` → 트리가 그 좌표로 이동 → 복귀. 게이트도 실제로
+동작(손에 들면 `spread 60.3 mm` 거부, 정지하면 `0.7~3.9 mm`로 발행).
 
-새 패키지 `cho_controller/utils/cho_vla_core`(구현 1615줄, gtest 87개)가 청크 검증·시간 정렬
-splice·샘플링·레이트 제한·스트림 워치독을 소유한다. ROS 없이(rclcpp 미의존) 컴파일되므로
-controller_manager 픽스처 없이 테스트된다. Franka `VLAActionServer`는 이 코어의 어댑터로
-축소됐고, `cho_controller_openarm_mit/VlaController`가 `TaskSpaceImpedanceController`를
-상속해 `write_task_target()` 하나만 override 한다 — **task/joint 모두 drive-side impedance.**
+새 패키지 둘 — `cho_sensor/realsense_apriltag`(stock `rs_launch.py` include + `config_file`로 우리
+yaml만), `cho_perception/cho_object_pose`(ROS 없는 `geometry.py` 코어 + tf2 어댑터). 출력이
+`fr3_link0` 기준 `PoseStamped`라 `PoseTargetBehavior`가 그대로 받는다. 테스트 43개 + CI 등록.
 
-고친 기존 결함 넷: ① 청크 무검증(모르는 `rotation_type` + 빈 배열 = UB, NaN 하나로 컨트롤러
-영구 먹통), ② 스트림 staleness 개념 없음(60초 goal 타임아웃까지 동작 중간 자세로 대기),
-③ 그리퍼가 재생 시각이 아니라 청크 도착 시각에 발사, ⑥ 속도 피드포워드 없음.
+**미해결(하드웨어): USB 3 링크가 2분을 못 넘긴다.** 첫 케이블은 협상 자체가 안 됐고, 바꾼
+케이블은 협상은 되나 서로 다른 컨트롤러 두 곳에서 모두 끊긴다(8~119초). 스트리밍 없이도
+끊기고 포트를 바꿔도 시점만 달라진다 → **케이블 또는 카메라 커넥터**. 다음은 세 번째 케이블.
+**USB 2 폴백은 안정적**이라 480x270으로 커미셔닝은 가능하다. 살아 있던 USB 3 구간에서 848x480
+실측: `fx=fy=423.94`(USB 2는 239.96) → 40 mm 태그·25 px 게이트 작업 거리 **0.68 m** vs 0.38 m.
 
-**측정으로 갈린 결정 하나**: 코어를 `cho_controller_common`에 넣으면 안 된다. 그 패키지는
-`-Ofast`로 컴파일되고 이건 `-ffinite-math-only`를 함의해 **`isfinite()`가 NaN에 true를 반환한다**
-(g++ 11.4 실측). 검증기가 그 자리에서 정확히 고치려는 결함을 갖게 된다. 저장소에서 `-Ofast`를
-쓰는 패키지는 그것 하나뿐이고 기존 `allFinite()` 가드들은 안전하다.
-
-**MuJoCo 검증이 단위 테스트로 잡을 수 없는 결함 둘을 잡았다.** ① `resume_on_chunk` 기본값이
-틀렸다 — hold가 `hold_timeout` → abort까지 사실상 종결 상태여서 15 Hz BEST_EFFORT 스트림에서
-두 개 연속 유실이면 rollout이 끝났다. 단위 테스트는 그 latch 동작을 *설계대로* 맞다고 단정하고
-있었다. 두 호스트 모두 `resume_on_stream_recovery` 기본 true로 바꿨다. ② 과거 접두사 판정이
-`t <= now`라 도착시각 경로에서 매 청크의 웨이포인트 0을 버렸고(`dropped_past`가 항상 청크당 1)
-지연 경보로 쓸모가 없었다 → `t < now`.
-
-검증 도구는 `ros2 run cho_control_tools vla_mit_probe`로 저장소에 남겼다.
-
-미해결: real bringup에서 선택 불가(의도, 이제 결정 가능한 상태) / OpenArm VLA 행동 트리 없음 /
-실제 정책으로는 미검증(프로브는 합성 청크) / 브릿지 넷(openpi·GR00T·OpenVLA-OFT·LeRobot)은
-저장소 밖이라 `header.stamp` 에코가 필요하고 그때까지 `chunk_time_source: arrival`이 기본이다.
-
-상세는 §1의 2026-09-09. 설계·결정 근거는 `todo/VLA_TODO.md`,
-코어의 설계 문서는 `cho_controller/utils/cho_vla_core/DESIGN.md`.
+장착(손목/삼각대) 미정으로 갈 수 있는 이유는 노드가 카메라 프레임 이름을 언급하지 않기 때문 —
+`base ← tag_<id>`만 TF에 묻고 바깥에서 줄 변환은 `… → camera_link` 하나뿐이다. 상세는
+`todo/APRILTAG_TODO.md`, 직전 세션은 docs/sessions/2026-09-09.md.
 
 ## §1 기록
 
-### 2026-09-09
+### 2026-09-11
 
-VLA 파이프라인 1~5단계를 전부 진행했다. 커밋 전 상태.
+AprilTag 물체 위치 인식 도입. "cho_sensor에 넣으면 되지 않나"에서 시작해 설계 →
+장착 미정으로 범위 조정 → Phase A 구현까지. 커밋 전 상태.
 
-**시작은 "openarm mit에도 vla controller를 만들고 싶다"였고, 먼저 기존 Franka 코드를 평가했다.**
+**"cho_sensor가 맞다"는 절반만 맞았다.** 파이프라인이 두 층으로 갈린다. 검출 층(카메라 +
+apriltag_ros)은 `bota_ft_sensor` 패턴 그대로 cho_sensor에 들어가지만, 태그를 로봇 좌표계의
+grasp pose로 바꾸는 층은 base frame 이름·grasp 오프셋·`cho_robot_config`를 알아야 해서
+CLAUDE.md가 `hansung_scale`에 대해 선언한 "cho_* 와 엮지 않는다" 경계를 넘는다. →
+`cho_perception/` grouping 신설.
 
-사용자가 "잘 짜져 있나"를 물었고, 읽어보니 제어 법칙과 RT 규율은 강했다 — `readFromRT()`를 구독
-콜백에서 부르면 RealtimeBuffer의 single-RT-reader 계약을 깬다는 걸 찾아내 shadow copy로 바꾼 것,
-매 사이클 재앵커링이 runaway라는 걸 sim에서 재현하고 앵커를 청크 동안 상수로 고정한 것, 포화에
-`√(2·a·dist)` 제동 엔벨로프를 둔 것. 반면 **입력 검증과 스트림 생존성은 비어 있었다.**
+**저장소를 읽고 확인한 것 (설계를 바꾼 것들)**
 
-| 결함 | 내용 |
+| 확인 | 영향 |
 |---|---|
-| ① | `arm_actions`에 `isfinite` 검사가 한 군데도 없음. 모르는 `rotation_type` → `dim=0` → 빈 배열이 크기 검사 통과 → 역순 이터레이터 범위(UB). NaN 하나면 `q_ref_`가 영구 오염(주석이 스스로 인정) |
-| ② | `goal_timeout_sec`(60초)는 **goal** 타임아웃이라 정책이 5초에 죽으면 팔이 동작 중간 자세로 55초 대기 |
-| ③ | 그리퍼가 파싱 루프(non-RT)에서 발사 → "청크 안에 닫으라는 게 있으면 지금 닫는다", EE 도달보다 최대 1 추론주기 빠름 |
-| ④⑤ | 재생 클럭과 상대 앵커가 도착 시각 기준 → 추론 지연만큼 항상 과거 계획을 따르고 과이동 |
-| ⑥ | 위치만 출력 → velocity 모드는 컨트롤러에서 다시 미분, MIT는 `v_des`가 없어 `dq_des = J⁺v_des` 불가 |
+| `PoseTargetBehavior`는 있는데 **publish하는 노드가 repo 전체에 없다**(테스트뿐) | 목표가 "apriltag 노드를 띄운다"가 아니라 "`PoseStamped` 하나를 내보낸다"로 확정 |
+| `cho_robot_config`의 `model.base_frame: world`는 **TF 트리에 없다**. 생성 URDF 루트는 `base → fr3_link0`이고 `world` 링크는 아예 없다(MoveIt launch 전용 값) | tf2 target은 `arm_base_link`. `ee_state_broadcaster.cpp:31`이 `fr3_link0`로 publish하는 것과 일치 |
+| `apriltag_ros` 3.4.0 / `apriltag_msgs`가 **이미 설치돼 있다**. 미설치는 realsense2_camera·image_proc·camera_calibration | 1~3단계를 설치 없이 설계할 수 있었다 |
+| `AprilTagDetection`에 **pose 필드가 없다**(hamming·decision_margin·corners·homography뿐) | 품질은 토픽에서, 자세는 TF에서 — 노드가 둘 다 써야 한다. 그리고 이게 "카메라 프레임을 모른다"를 가능하게 했다 |
+| mujoco/isaac 브링업은 **사전 생성 URDF 파일**을 읽는다 | 손목 장착 시 `create_urdf.sh` 재생성 + `urdf_tests.py`가 따라온다 |
 
-**LeRobot을 코드로 읽은 것이 설계를 바꿨다**
+**사용자가 장착을 미정으로 돌리면서 경계를 그었다.** 그게 가능한지 따져보니 가능했다 —
+`/detections`의 품질 + `lookup_transform(base, tag_<id>, 이미지 stamp)` 조합이면 카메라
+프레임 이름이 노드에 등장하지 않는다. 장착에 의존하는 건 그 TF 체인의 출처 한 줄뿐이다.
 
-사용자가 async_inference 참고를 제안해 로컬 체크아웃(`~/lerobot`)과 업스트림 `main`(2774d9bd)을
-diff했다. `async_inference/`는 import 정리만 있었지만 업스트림엔 **정책 레벨 RTC**(`policies/rtc/`)와
-새 롤아웃 실행기가 들어와 있었고 지원 목록에 groot가 있다 — 우리 네 스택 중 둘에 직접 걸린다.
+**설계 판단 넷**
 
-가져온 것 중 가장 중요한 건 **"컨트롤러 클럭을 에코한다"**는 계약이다. 처음엔 "브릿지가 관측
-캡처 시각을 stamp에 찍는다"고 썼는데, 그건 브릿지 wall-clock이라 이 저장소의 Multi-PC 구성에서
-chrony 없이 틀어진다. LeRobot은 정수 timestep을 에코해 시각 동기를 아예 필요 없게 만든다 —
-같은 원리로 **브릿지가 관측에 쓴 joint state의 stamp를 그대로 복사**하게 했다.
+- **자세는 median이 아니라 medoid.** AprilTag 평면 자세의 2해 모호성 때문에 플립을 가로질러
+  평균내면 *관측된 적 없는* 회전이 나오고 두 해 어느 쪽과도 가깝지 않다. 기본값은 아예 yaw만
+  남기고 top-down으로 접근한다(`top_down_yaw: true`). 위치는 median.
+- **게이트는 발행 *전에* 끝난다.** `PoseTargetBehavior`가 첫 메시지를 latch하므로 나쁜 포즈가
+  토픽에 닿은 시점에 이미 따라간 뒤다. 점수를 붙여 내보내는 선택지가 없다.
+- **`frame_prefix`** — 사용자의 "대수" 질문에서 나왔다. detector 둘을 기본값으로 띄우면 **둘 다
+  `tag_9`를 publish**해서 TF 트리에 부모가 둘인 자식이 생긴다. 에러가 아니라 늦게 도착한 쪽으로
+  간헐 해석되는 형태로 망가진다. detector launch와 소비자 양쪽에 prefix 파라미터를 넣었다.
+- **`tag.frames`를 설정 파일에 쓰지 않는다.** launch가 `tag.ids`에서 생성하고 소비자의
+  `geometry.tag_frame_name()`이 같은 규약을 쓴다 → 손으로 쓴 프레임 문자열이 양쪽에 없다.
 
-바꾼 것: LeRobot은 큐가 곧 클럭(틱당 1 pop)이고 신형 실행기도 **인덱스 기반** 등분 보간이다.
-30 Hz 서보 버스에는 맞지만 우리는 750~1000 Hz 대 30~50 Hz 격자에 지터가 있어 시간 샘플링이
-필요하다. 큐가 비면 무명령으로 두는 것도 안 된다 — 토크 제어 팔은 스스로 버티지 않고, MIT는
-write 누락이 프로토콜 폴트다.
+**"카메라 위치·대수를 task로 다루면 어떤가"에 대한 결론** (상세는 `todo/APRILTAG_TODO.md` §6)
 
-**코어를 어디에 둘지가 측정으로 뒤집혔다**
+절차는 task가 맞다 — hand-eye 캘리브 task(MIT 튜닝 task가 `/mit_tuning` blackboard에 측정값을
+쌓는 선례와 같은 모양), 탐색 task(`Selector(짧은 타임아웃 PoseTarget, 다음 시점)`). 반면
+extrinsic은 TF에, 대수는 launch에 있어야 한다. task가 extrinsic을 들면 모든 task가 같은 숫자를
+다시 적게 되고 — `cho_robot_config`가 존재하는 이유와 같은 실패 양식 — rviz/MoveIt/인식 노드는
+전부 TF를 읽으므로 task가 그것들에 값을 먹일 수도 없다.
 
-계획은 `cho_controller_common/vla`였다. 그런데 그 패키지는 `-Ofast`로 컴파일된다. `-Ofast`는
-`-ffast-math` → `-ffinite-math-only`를 함의하고, g++ 11.4에서 실측하니 **NaN을 담은 벡터를
-all-finite로 보고한다.** 결함 ①을 고치려는 검증기가 그 자리에서 정확히 그 결함을 갖는다.
+**D435 하드웨어 판단**: 컬러는 롤링 셔터, IR은 글로벌 셔터라 **infra1을 기본**으로 했다(장착이
+손목이면 필수, 삼각대여도 손해 없음 — 이미 디바이스에서 rectify됨). 대가 둘: IR 도트 프로젝터를
+꺼야 하고(`emitter_enabled: 0`), 태그를 **레이저 프린터로** 뽑아야 한다 — 일부 잉크젯 블랙은
+근적외선 투과라 눈에는 멀쩡한 태그가 infra1에서 보이지 않는다.
 
-저장소 전체를 훑어 `-Ofast`를 쓰는 패키지가 `cho_controller_common` 하나뿐이고 `allFinite()`
-가드를 가진 패키지들(franka/openarm_mit/hardware)은 전부 기본 최적화라 **기존 가드는 안전함**을
-확인했다. 별도 패키지 `cho_vla_core`로 옮겼고, 부수 이득으로 MIT가 eiquadprog/TSID 스택을
-끌어오는 것도 피했다.
+**lint에서 걸린 것 (관찰)**: ament 기본 설정은 D213(요약을 둘째 줄에)을 강제하는데 이 저장소는
+전부 첫 줄에 쓴다(D212 쪽, ament 규약이 무시하는 코드). 상호배타라 저장소 스타일을 택하고
+`--add-ignore D213`으로 처리했다(python 패키지는 test에서, cmake 패키지는 `ament_pep257()`
+인자로). 나머지 import 순서·줄 길이·인용부호는 코드를 고쳐 기본 설정으로 통과시켰다.
+**별건 관찰**: 같은 명령을 `hansung_scale_driver`에 돌리면 16건이 나온다(대부분 I100).
+CI TEST 목록에 있는 패키지라 확인이 필요하다 — 이번 세션에서 건드리지 않았다.
 
-플래그 상호작용도 실측했다: `-fno-finite-math-only`는 **순서와 무관하게 `-Ofast`를 이긴다.**
-그래서 tripwire 테스트가 지키는 것은 최적화 레벨이 아니라 그 플래그의 존재다 — 플래그를 지우고
-`-Ofast`를 넣으면 실패하고, 플래그가 있으면 `-Ofast`를 뒤에 붙여도 통과하는 것까지 확인했다.
+**검증**: `colcon test` 43개 통과(순수 기하 35 + cmake 패키지 lint 8). 노드 기동 확인 —
+레지스트리에서 `fr3_link0` 해석, 상태 리포트 동작. mock publisher → `ros2 topic echo` 왕복 확인.
+카메라 드라이버 파라미터 이름·실제 검출·launch 실행은 **미검증**(하드웨어 필요).
 
-**MIT 이식은 새 제어법이 아니라 레퍼런스 소스 교체였다**
+**같은 날 오후: apt 설치 + D435 연결 후 실기 검증.** 사용자가 "드라이버는 upstream 그대로 쓰고
+파라미터만 우리 걸로 갈아끼우고 싶다"고 해서, 노드를 직접 띄우던 launch를 **`rs_launch.py`
+include + `config_file`** 방식으로 바꿨다(`bota_ft_sensor`와 같은 배치). 그 과정에서 알게 된 것:
 
-`TaskSpaceImpedanceController`를 상속하고 `write_task_target()` 하나만 override 한다. 베이스
-변경은 최소(`final` 해제, `private`→`protected`, virtual화, `uses_task_space_action()` 신설).
-39 인터페이스 클레임, 세션/ACK/lease/SAFE, return-to-zero 램프, drive-side 임피던스, null-space
-posture, joint-limit 스프링, 마찰 FF, `max_reference_offset`이 전부 그대로 따라온다.
+- `config_file`은 `yaml.safe_load` 결과를 그대로 넘기므로 **평탄한 매핑**이어야 한다.
+  `/**: ros__parameters:` 형태로 쓰면 `'/**'`라는 파라미터 하나가 된다.
+- 노드는 `[launch 인자, config 파일]` 순으로 받고 뒤가 이긴다 → `enable_color`/`enable_infra1`은
+  yaml이 아니라 launch 인자여야 `stream:=`로 바꿀 수 있다.
+- include를 `GroupAction(scoped=True, forwarding=False)`로 감쌌다. rs_launch가 컨텍스트의 모든
+  launch configuration을 자기 목록과 대조해 경고를 찍어서, 감싸지 않으면 우리 인자 때문에
+  **노란 경고 다섯 화면**이 나온다.
 
-베이스가 허용하는 두 가지를 **설정 단계에서 거부**하게 만들었다. `max_reference_offset`은
-파생 기본값(`0.5·torque_limit/kp`)을 쓰지 않고 필수로 했다 — 드라이브가 `kp(q_des−q)`를 이
-컨트롤러가 클램프할 수 있는 지점 뒤에서 더하므로 이것이 임피던스 토크의 유일한 바운드이고,
-운영자가 쓴 goal에 합당한 기본값이 신뢰할 수 없는 정책 출력에는 합당하지 않다. 설정값은
-`min(0.25·torque_limit/kp, 0.15 rad)`: 토크 바운드만으로는 joint 2에 1.5 rad을 허용하는데 그건
-임피던스 오프셋이 아니라 lunge다. `stream_timeout_sec > 0`도 필수로 했다.
+**추측이 틀렸던 파라미터 셋 — 전부 실측으로 교정** (이래서 설치 전 설정은 미검증으로 표시했었다)
 
-**내가 틀렸다가 테스트가 정정한 것 넷**
-
-1. `dim == 0` 가드가 죽은 코드였다. `rotation_dim()`은 잘못된 enum에 0을 주지만
-   `task_waypoint_dim()`이 `3+0=3`을 반환한다. 회전 **블록** 크기를 검사하도록 고쳤다.
-2. `max_task_wrench`는 drive-side에서 무효라도 **항상 필수 검증** 대상이다. 두 config 블록이
-   빼먹어서 실제로 `on_configure`에 실패할 상태였고 CM 픽스처가 잡았다. 같은 종류를 앞으로
-   잡도록 config 블록이 컨트롤러 요구를 만족하는지 검사하는 pytest를 추가했다.
-3. `task_start_time_`을 VLA goal 시작 시 설정하지 않아 `goal_timeout_sec > 0`이면 마지막
-   TaskSpace goal 시점 기준으로 측정됐다.
-4. 테스트가 틀렸던 것 둘: `AngleAxisd` 추출 각도는 [0, π]로 접히는데 무한히 커지는 값과 그대로
-   비교해 seqlock을 오판했고, `SE3::Interpolate`가 **나사 운동** 보간이라 회전이 동반되면
-   translation이 직선 lerp가 아닌 것을 몰랐다(이건 franka 기존 동작이라 코드가 맞다).
-
-**MuJoCo에서 돌렸고, 그것이 단위 테스트로 잡을 수 없는 결함 둘을 잡았다**
-
-프로브(`vla_mit_probe`, 저장소에 남김)가 추론 브릿지처럼 청크를 흘려보내고 팔과 텔레메트리가
-실제로 무엇을 했는지 단정한다. joint space는 q1 −0.0008 → **정확히 +0.3500**, task space는
-TCP x +0.0019 → **+0.0405**(목표 +0.0419, 횡방향 1.6/3.6 mm). 최종 18/18.
-
-첫 실행은 4개가 실패했고 원인이 하나였다. **`resume_on_chunk` 기본값이 틀렸다.** malformed 청크만
-오는 구간은 워치독을 갱신하지 않으니 200 ms 뒤 hold로 갔는데, 기본 false라서 이후 정상 청크가
-와도 running으로 복귀하지 못했다. 즉 hold가 abort까지 사실상 종결이고, 15 Hz BEST_EFFORT에서
-두 개 연속 유실이면 rollout이 끝난다.
-
-내 근거("정책이 왜 멈췄는지 컨트롤러는 모른다")가 틀렸다 — 실제로 죽은 경우는 `hold_timeout`이
-이미 처리한다. latch는 **일시적 갭으로 goal을 죽이는 것**만 추가한다. 그리고 복귀는 계단이
-아니다: hold 진입 시 참조가 released 되고 돌아온 청크는 blend로 splice 된다.
-
-**단위 테스트가 놓친 이유가 중요하다.** `ResumeIsOptIn`이 두 분기를 다 검증하고 있었다 — latch
-동작을 *설계대로* 맞다고 단정한 것이다. 테스트는 내 설계를 검증했고 설계가 틀렸다.
-
-두 번째는 과거 접두사 판정이 `t <= now`였던 것. 도착시각 경로는 `t_obs = arrival`이라 웨이포인트
-0이 정확히 `now`에 놓이고 매 청크에서 하나 버려졌다(수락 15개에 `dropped_past` 정확히 15). 지금
-실행될 웨이포인트는 과거가 아니므로 `t < now`가 맞다. 고친 뒤 0.
-
-**여전히 안 한 것.** real bringup 선택 불가(의도, 이제 결정 가능). OpenArm VLA 행동 트리 없음.
-**실제 정책으로는 미검증** — 프로브는 합성 청크다. 브릿지 넷은 저장소 밖이라 `header.stamp`
-에코가 필요하고 그때까지 `chunk_time_source: arrival`이 기본이다.
-
-
----
-
-**cuRobo / cuMotion을 저장소에서 제거했다.** 전날(아래 § 2026-09-08)에 붙인 GPU 플래닝 경로를
-통째로 되돌린 것이다. 판단 근거는 성능이 아니라 **의존성과 워크스페이스 설정 비용**이다:
-cuRobo는 python3.10 전용 별도 venv(`~/ros2_ws/.venv-curobo`, torch cu128), 커밋할 수 없는
-`COLCON_IGNORE` 마커와 그 생성 스크립트, `isaac_ros_common` shim 패키지, nvblox_msgs 스파스
-체크아웃, 서브모듈 둘을 끌고 온다. 그 전부가 MoveIt 파이프라인 하나를 위한 것이었다. curobo를
-쓸 일이 생기면 MoveIt 플러그인이 아니라 **외부 프로세스로 돌리고 VLA 컨트롤러 쪽으로 명령을
-넣는 편이 간단하다** — 그러면 이 워크스페이스는 curobo를 전혀 알 필요가 없다.
-**MoveIt은 OMPL만 쓴다.**
-
-지운 것: 서브모듈 `extern/curobo`, `extern/isaac_ros_cumotion`(`.gitmodules`에서도 제거),
-`extern/VENDORED_CUROBO.md`, `extern/nvblox_msgs_src`(+ 그 `.gitignore` 규칙),
-`tools/setup_curobo_vendor.sh`, `cho_moveit/cho_moveit_curobo_deps` 패키지,
-`cho_moveit_common/scripts/curobo_robot_config.py`, FR5의 `cumotion_planner.launch.py` /
-`config/fr5.xrdf` / `config/isaac_ros_cumotion_planning.yaml`, `todo/CUROBO_MOVEIT_TODO.md`,
-`todo/curobo_bench/`(벤치 스크립트와 CSV 전부), 그리고 `docs/installation.md`·`README.md`·
-`cho_moveit/README.md`·`extern/README.md`의 해당 절.
-
-지우기만 하면 "왜 없는지"가 사라지므로 **새 상태를 적어 뒀다. 단, 문서마다 성격에 맞는 만큼만.**
-`cho_moveit/README.md`가 정본이다 — 「Planning pipeline: OMPL only」 절에 네 로봇 전부
-`pipelines=['ompl']` 하나만 등록한다는 사실, 브릿지의 `planning_pipeline` 파라미터, GPU 플래너를
-뺀 이유, 나중에 쓸 경우의 외부 프로세스 → `ActionChunk` 경로(미구현)를 모았다. `README.md`는 FR5
-MoveIt 문단에 한 줄. `extern/README.md`에는 「Motion planners」 절로 **규칙만** — 플래너 벤더
-소스를 이 폴더에 두지 않는다는 것과 설정 소유자가 `cho_moveit/`이라는 것. 사용자 지적으로 두 곳을
-되돌렸다: `docs/installation.md`는 **설치할 것이 없으면 절 자체가 없어야** 하므로 넣었던 「MoveIt」
-절을 뺐고, `extern/README.md`에서는 cuRobo 평가·제거 경위를 걷어냈다 — **벤더 정책 문서는 매뉴얼이지
-기록이 아니다.** 경위는 이 로그가 갖는다.
-
-고친 것: FR5 MoveIt 런치 셋(`moveit` / `move_group` / `moveit_rviz`)과
-`cho_bringup_fr5/bringup_gz_moveit.launch.py`에서 `cumotion` 인자와 두 번째 파이프라인 등록을
-없앴다. 액션 브릿지의 `joint_planning_pipeline` / `task_planning_pipeline` 두 파라미터는
-**cuMotion이 조인트 목표를 FK로 EE 포즈로 바꿔버리는 것 때문에만 갈라 놨던 것**이라 단일
-`planning_pipeline`(기본 `ompl`)로 합쳤다. `_move_goal`의 per-request 인자는 남겼다 —
-파이프라인이 요청마다 실린다는 성질 자체는 MoveIt 쪽 사실이고 테스트도 그것을 검증한다.
-
-`~/ros2_ws`에 남아 있던 잔해도 정리했다: `build/isaac_ros_cumotion_{interfaces,python_utils}`,
-`install/isaac_ros_cumotion_python_utils`, 그리고 `install/cho_moveit_common/lib/`에서 끊어진
-`curobo_robot_config.py` 심볼릭 링크.
-
-검증: `cho_moveit_common` 파이테스트 21개 통과(브릿지 19 + 파라미터 2), 세 패키지 재빌드 성공,
-`bringup_gz_moveit.launch.py --show-args`에 `cumotion` 없음, `MoveItConfigsBuilder`가
-`pipeline_names: ['ompl']`로 확인. 아래 § 2026-09-08 기록은 당시의 측정과 판단 그대로 남긴다.
-
-
-### 2026-09-08
-
-cuRobo를 MoveIt 플래너 플러그인으로 붙였다(A안). 커밋 3개: `d28ff9d` 연동,
-`3d7b2d7` 서브모듈+설치문서, `cfd1575` colcon 경계 스크립트화.
-
-**진행 순서와 판단이 뒤집힌 지점**
-
-처음엔 "계획 속도"가 목적이었다. Step 0(설치 없이 OMPL 기준선 측정)에서 계획 시간이 사이클의
-0.1~0.2%(중앙값 5~25 ms, 궤적 5~12초)로 나와 **중단 조건에 걸렸다.** 그래서 "붙일 이유 없다"로
-결론냈는데, 그건 **쉬운 씬만 본 것이었다.** 사용자가 "보통 cuRobo가 더 좋다는 인식이 크다"고
-지적해 어려운 씬을 만들어 재봤고, 거기서 결론이 뒤집혔다(위 §0).
-
-**씬 설계에 다섯 번 실패했고 그 자체가 결과다**
-
-| 시도 | 실패 이유 |
+| | |
 |---|---|
-| 케이지(기둥+벽+슬래브) | 통로를 안 만들고 목표를 불가능하게 만듦. OMPL 시간 불변 |
-| 수직 통로 4종 | home1의 엘보가 `(-0.30,-0.15,0.45)` — 벽 놓은 자리 |
-| 창 뚫린 벽 28/22/18 cm | 목표가 벽 뒤 15 cm면 손목만 아니라 엘보까지 통과해야 함 |
-| 위 열린 통 30~16 cm | 목표 자세의 엘보 위치가 팔 길이(0.425 m)로 도달 불가 |
-| 얇은 판(경로 측정 후 배치) | **성공** — 우회만 강제 |
+| `depth_module.infra_profile` | `'WxHxF'` 형식. rs_launch 기본값이 `'0,0,0'`이라 콤마인 줄 알았는데, `'848,480,30'`은 런타임 거부 후 **조용히 기본값으로 롤백**된다 |
+| `depth_module.emitter_enabled` | **이 장비엔 없다.** 드라이버가 `Projector capacity is overrided and disabled by FW`를 찍고 선언 자체를 안 한다 |
+| `depth_module.exposure` | **double.** upstream이 자기 기본값 `8500`을 int로 넘겨 노드가 거부한다 — 로그의 그 경고는 우리 것이 아니다 |
 
-핵심 원인: **home1은 팔이 작업공간 중앙에 접힌 자세**(수평 반경 0.225 m)라서 근처의 모든
-장애물이 시작 자세와 충돌한다. `upright`(수평 반경 0.120 m)에서만 어려운 씬이 만들어졌다.
-따라서 **이 프로젝트의 표준 시작 자세로는 OMPL이 힘들어하는 씬을 구성할 수 없다.**
-어려운 씬 측정은 시작 자세가 home1이 아니므로 운용 조건 숫자와 섞어 인용하면 안 된다.
+**측정값** (D435 s/n 844212070094, realsense2_camera 4.58.3): `infra1/image_rect_raw` 29.99 Hz
+@480x270, `/detections` 29.95 Hz(매 프레임 소화), `camera_info.frame_id =
+camera_infra1_optical_frame`, 드라이버 TF `camera_link → camera_infra1_optical_frame`
+RPY `[-1.571, 0, -1.571]`, intrinsics `fx=fy=239.96 cx=241.94 cy=138.22`.
 
-**내가 틀렸다가 측정으로 정정한 것 세 개**
+**그리고 하드웨어 문제를 하나 찾았다: USB 2.** 지원 profile 목록이 424x240/480x270뿐인 게
+이상해서 확인해보니 드라이버가 장비를 `RealSense USB2`(USB id `8086:0ad6`)로 보고하고
+`lsusb -t`가 `480M`이다. `짧은 변 px ≈ fx · 태그크기 / 거리`이므로 실측 `fx=240`에서 40 mm 태그 +
+25 px 게이트는 약 0.38 m가 한계다. USB 3이면 `fx≈424`로 약 0.68 m. §0에 액션 아이템으로 올렸다.
 
-1. `FINETUNE_TRAJOPT_FAIL`을 커미셔닝 가속 한계(0.7 rad/s²) 탓으로 봤다. 스윕 결과 가속
-   0.7→2.0, 저크 35→500 모두 무관하고 `trajopt_tsteps` 32→64만이 원인. 계획된 궤적의 실제
-   최대 가속은 0.044로 한계의 6%. 물리 한계는 애초에 구속조건이 아니었다.
-2. "cuMotion이 OMPL보다 16~43배 느리다" — 틀렸다. 244 ms 중 cuRobo는 54 ms.
-3. "cuRobo는 고정 GPU 작업량이라 난이도와 무관하게 상수" — 부정확. 시행당 상수이고 재시도
-   횟수가 난이도에 따라 변한다(같은 씬에서 목표만 바꿔 244→83 ms).
+같은 원인으로 보이는 것 둘 더 — **노드가 `rgb_camera.*` 파라미터를 하나도 선언하지 않는다**
+(color profile도 안 열린다). 그래서 `stream:=color` 경로는 노드는 정상적으로 뜨고
+(`rectify_color` 실행, 토픽 생성, apriltag 구독) **데이터가 흐르지 않는다** — 검증 불가 상태다.
+emitter 옵션이 없는 것도 같은 맥락. `0ad6`은 모델 PID가 아니라 USB 2 모드의 일반 식별자이고
+(`lsusb`가 "RealSense 430"으로 적는 건 usb.ids의 추정), USB 3으로 바꿨는데도 color와 emitter가
+안 나오면 그 모듈은 RGB가 없는 depth 전용(D430)이라는 뜻이 된다. **관찰과 추론을 구분해 둔다:
+관찰은 위 네 가지, 추론은 "USB 2 모드 때문"이다.**
 
-**설계상 중요했던 발견**
+**케이블 교체 후 (같은 날):** `5000M`/bus 4로 올라오고 USB id가 `8086:0ad6` → `8086:0b07`,
+드라이버 device name이 `RealSense USB2` → `RealSense D435`로 바뀌었다. **`0ad6`이 모델 PID가
+아니라 USB 2 모드 식별자라는 추론이 확인됐다.** infra profile에 848x480(90 fps까지)·1280x800이
+생기고 `rgb_camera.*` 22개가 나타났다 — USB 2가 RGB 센서를 통째로 가리고 있었던 것.
+**예측이 절반 틀렸다: emitter는 USB 3에서도 없다.** `Projector capacity is overrided and
+disabled by FW`가 USB 3에서도 찍히니 링크가 아니라 이 개체의 펌웨어 상태다.
 
-cuRobo는 XRDF에서 속도 한계를 읽지 못하고 URDF 값(데이터시트 3.15 rad/s)을 쓴다. 커미셔닝
-상한 1.575는 MoveIt 전용 `joint_limits.yaml`에만 있다. 그대로 두면 스케일 0.25에서
-**0.7875 rad/s** — `joint_limits.yaml`이 기록한 실기 거부값(`ServoJ refused, code 14`)을
-그대로 명령한다. XRDF를 지오메트리 단일 원천으로 두고 `curobo_robot_config.py`가
-`velocity_scale: 0.5`를 주입하는 구조로 처리. 실측 최대 관절 속도 0.097~0.107 rad/s로 확인.
+**링크 안정화까지 두 단계 걸렸다.** 케이블 교체 후에도 8분간 3회 끊겼다:
 
-**설치에서 걸린 함정 (전부 `extern/VENDORED_CUROBO.md`에 기록)**
+    13:48:52  USB 3 up (0b07)
+    13:50:26  disconnect                 <- ~94 s of streaming
+    13:50:50  unable to enumerate USB device
+    13:54:55  USB 3 up (0b07)            <- physical replug
+    13:55:03  disconnect                 <- 8 s
+    13:55:06  USB 3 up (0b07)
+    13:56:34  re-enumerates on bus 3 as 0ad6, USB 3 instance disconnects
 
-setuptools 59(PEP 660 없음) / 시스템 CUDA 13.2 vs torch 12.8 / `warp-lang` 상한 없어 1.17이
-`wp.torch` 제거 → 1.10 고정 / `isaac_ros_common`이 안 쓰는 VPI를 무조건 요구 →
-`cho_moveit_curobo_deps` shim으로 우회(상류 무패치).
+마지막이 핵심 — 장치가 사라진 게 아니라 **USB 2 버스에 `0ad6`으로 재열거**됐다. SuperSpeed만
+실패하고 USB 2 폴백은 동작한 것이고, 그 전에는 폴백까지 실패했다(`error -71`,
+`unable to enumerate`). 다른 컨트롤러의 포트(`2-1`)로 옮겨서 `848x480x30`을 실측할 시간은
+벌었다: width 848, `fx=fy=423.94 cx=427.43 cy=245.69`, 이미지 29.1~30.0 Hz, `/detections`
+**29.996 Hz** — 예측했던 `fx≈424`와 일치. **하지만 그 포트에서도 119초 만에 끊겼다.**
+처음엔 "포트 교체로 해결"이라고 적었다가 곧바로 뒤집었다. 정리하면: 부하 없이도 끊기고(열거
+8초 뒤 drop) 컨트롤러를 바꿔도 끊기므로 케이블 또는 카메라 커넥터가 남는다. USB 2 폴백은
+여러 번 75~90초 무결함으로 안정적이다.
 
-**속도 스케일링 스윕** (별건, 사용자 요청): 0.25→1.0으로 4배 올려도 궤적은 2배만 줄어든다.
-가속 제한 이론과 일치(1.43x vs 1.41x, 2.02x vs 2.00x). `T = A/s + B`에서 B가 1.8~2.0초로,
-스케일을 무한히 올려도 그 아래로 안 내려간다. 바닥을 정하는 건 `max_acceleration: 0.7`이다.
-다만 스케일 0.5는 실기가 거부한 0.7875 rad/s를 명령하므로 **실기에서 쓸 수 없는 이득**이다.
+**프로파일을 config에서 launch 인자로 올렸다**(`profile:=`, 기본 `848x480x30`). config에 두면
+launch 인자를 이길 수 없어(노드가 `[launch args, config file]` 순으로 받고 뒤가 이긴다) 링크에
+따라 바꿀 수가 없다. USB 2 링크에서 848을 요구하면 드라이버가 뜨기 전에 launch가 경고한다
+(실측: 경고 출력 → 드라이버가 `Setting ROS param back to: 480x270x30`). **자동 선택은 하지
+않는다** — 해상도가 바뀌면 intrinsic이 바뀌므로 조용히 바꾸면 캘리브와 픽셀 임계값이 말없이
+무효가 된다. `profile:=480x270x30`은 경고·에러 0, `/detections` 29.997 Hz로 확인.
 
-**참고만 하고 가져오지 않은 것**: `~/sdl_ws/src/sdl_project`. FR5 XRDF의 콜리전 스피어만
-옮겨 적었고(이름이 정확히 일치), cuRobo는 상류에서 새로 클론했다. 그쪽 벤더본의
-`motion_gen.py` 패치(hold_partial_pose 검증 우회)는 의도적으로 배제. 그 저장소는 읽기만 했고
-수정 0건(mtime으로 확인).
+USB 2에서 만들고 USB 3에서 돌리는 건 된다(사용자 계획). 넘어가지 않는 건 **intrinsic 캘리브와
+거기 맞춰 튜닝한 픽셀 임계값**(`min_edge_px`) 둘뿐 — `fx` 239.96 → 423.94, 작업 거리 0.38 → 0.68 m.
+코드·프레임 규약·`objects.yaml`·트리 배선·태그 크기·마운트 extrinsic은 전부 그대로 간다.
+
+**끝까지 실증했다(오후).** 모니터에 띄운 태그로 확인 — D435의 IR 이미저는 IR-cut 필터가 없어
+화면도 그냥 흑백 카메라처럼 본다. `tag36h11 id=9 hamming=0 decision_margin=206`,
+TF `camera_infra1_optical_frame → tag_9 = [-0.117, 0.064, 0.349]`. 임시
+`fr3_link0 → camera_link` static TF를 꽂으니 `cho_object_pose`가
+`/perception/object_pose/cube`를 `fr3_link0` 기준 `[0.404, 0.091, 0.240]`으로 297건 발행했다.
+**게이트 셋이 전부 현장에서 제 역할을 했다**: `edge 25.0 px < 25.0` 거부, 사용자가 카메라를
+손에 들고 있는 동안 `spread 60.3 mm > 10.0` 거부, 정지하자 `spread 1.0 mm over 15 samples`로 발행.
+남은 건 intrinsic 캘리브와 계측 정확도(config 태그 크기가 실제 띄운 것과 맞아야 한다).
+
+**rviz 경로를 패키지에 넣었다**(`rviz:=true` → `apriltag_draw` + `rviz/apriltag.rviz`).
+함정 둘: `apriltag_draw`는 **lazy 구독**이라 `/image_tags`를 누가 구독해야 돌고, 검출 입력
+토픽이 **`tags`**지 `detections`가 아니다. 후자로 remap하면 조용히 아무 일도 안 하고 증상이
+"태그 검출 안 됨"과 구별되지 않는다 — 실제로 여기서 한 번 속았다.
+
+**MuJoCo 통합 테스트: `tag_reach` 2회 SUCCESS.** 시뮬 로봇 + 실제 카메라. 트리 로그가
+`[Detect_Tag] target = [+0.37293, +0.03339, +0.16008] m in 'fr3_link0'` →
+`[Move_To_Tag_Standoff] Action Succeeded!` → `Status.SUCCESS`까지 남긴다. 도달 판정은 액션
+서버의 수렴이고, **TCP 독립 측정은 아직 없다**(재보려던 회차에 카메라가 죽었다).
+
+**테스트가 버그를 하나 잡았다**: `tag_reach`에 컨트롤러 전환이 빠져 있었다. `home_subtree`가
+joint impedance를 켜둔 채 끝나는데 task-space 액션 서버는 자기 컨트롤러가 active여야 답한다.
+`ur/multi_move.py` 패턴대로 검출과 이동 **사이에** 스위치를 넣고(대기 중 팔은 계속 잡힘),
+컨트롤러 이름도 `robot_config['task_space']`에서 가져오게 했다. 순서는 테스트로 고정.
+
+**시간 기준 함정**: MuJoCo 기본 `use_sim_time:=true`면 로봇 TF가 sim clock인데 실제 카메라는
+wall clock이라 이미지 stamp 조회가 extrapolation 에러가 된다. 하이브리드는
+**`use_sim_time:=false`로 시계를 하나로**.
+
+**safe-abort 검증**: 카메라가 죽은 회차에서 검출 15초 타임아웃 → hold 컨트롤러 전환 →
+`Status.FAILURE`. 그냥 죽지 않는다.
+
+**upstream 불안정 둘**: `realsense2_camera_node`가 **실행 중에도** segfault(15:23:58), USB 링크는
+여전히 몇 분 단위로 끊긴다 — 5회 중 2회 실패가 이것 때문이다. 태스크 결함이 아니다.
+
+**태스크 통합: 일반은 `cho_object_pose`, 구체는 태스크.** 사용자 제안이고 동의했다. 파이프라인·
+게이트·프레임 해석은 perception이 갖고, "어느 태그가 무슨 물체이고 어디로 가나"는 태스크가
+갖는다. 갈라 놓은 기준 — 태스크: 물체 테이블 + `min_samples`/`max_position_spread_m`(요구
+정확도) / perception: `max_hamming`·`min_decision_margin`·`min_edge_px`(광학의 함수) /
+어느 쪽도 아님: `base_frame`(`cho_robot_config`에서 읽어 드리프트 차단).
+
+`run_task_manager.launch.py`에 `object_pose_config:=`를 넣었고 **비어 있으면 include 자체를
+안 한다**(실측: `task:=pick_place`에서 `object_pose_node` 0개). 의존은 exec_depend 하나, import
+없음. 첫 소비자는 `tasks/franka/tag_reach.py` — home → `PoseTargetBehavior` → 
+`TaskSpaceActionBehavior(target_pose_key=...)` → home, **트리에 좌표가 한 줄도 없다.** 테이블은
+태그 면 100 mm standoff로 잡았다(캘리브 전이라 스케일 오차를 충돌 아닌 빗나감으로).
+
+부수 수정 하나: compat view `controller_names.load_robot_config`에 `arm_base_link`를 추가했다.
+거기엔 `model`이 없어 `KeyError`가 났는데, 태스크마다 레지스트리를 다시 열거나 프레임을 문자열로
+박는 것보다 낫다.
+
+**린트 진단을 한 번 틀렸다.** `cho_task_manager`에 pep257 위반 102건이 보이길래 "99건이 기존
+문제"라고 했는데, 그 패키지의 `test_pep257.py`는 **명시적 `--ignore` 목록**(D213 포함)을 넘긴다.
+CLI 기본 인자로 돌린 내 관찰이 테스트와 달랐던 것이고, 실제로는 통과 중이었으며 내가 넣은 D301
+하나가 깨뜨린 것이었다. 린터는 **패키지 테스트가 부르는 방식 그대로** 돌려야 한다.
+(hansung_scale_driver 건은 실제 테스트를 돌려서 확인한 것이라 그대로 유효하다.)
+
+**장치 선택은 포트와 무관하다**(사용자 질문). 드라이버는 처음 발견한 RealSense를 잡고, 두 대
+이상이면 `serial_no`(기본 선택지) / `usb_port_id` / `device_type` 중 하나를 config에 넣는다.
+시리얼은 librealsense가 보고하는 값(`844212070094`)이고 커널 USB 디스크립터의
+`SerialNumber`(846623021037)와는 다른 필드다. 파이썬 바인딩(`pyrealsense2`)은 설치돼 있지
+않다 — `ros-humble-librealsense2`는 C++ 라이브러리와 `rs-*` CLI만 준다.
+손목 장착은 이 문제를 악화시키므로(§4④⑧) 브래킷 전에 케이블 경로를 정리할 것.
+
+중간에 시리얼이 바뀐 줄 알고 "다른 개체"로 의심했는데 아니었다 — 커널 USB 디스크립터의
+`SerialNumber`(846623021037)와 librealsense가 보고하는 장치 시리얼(`844212070094`)은 서로 다른
+필드다. 같은 카메라다.
+
+부수 관찰: `apriltag_node`와 `realsense2_camera_node`가 launch 종료 때마다 libc 안에서
+segfault 한다(`journalctl -k`). 종료 경로이고 둘 다 upstream 코드다.
+
+**케이블이냐 포트냐는 sysfs가 답한다.** xHCI는 USB2 버스와 SuperSpeed 버스를 따로 노출하고,
+물리 커넥터가 USB 3이면 두 포트 객체가 `peer` 심볼릭 링크로 연결된다:
+
+    /sys/bus/usb/devices/usb3/3-0:1.0/usb3-port4/peer -> ../../../usb4/4-0:1.0/usb4-port4
+
+카메라가 꽂힌 4번 포트에 짝이 **있다** → 포트는 USB 3 지원. 그런데도 480M으로 올라왔으니
+SuperSpeed 링크가 안 선 것이고, 남는 원인은 **케이블**(또는 접촉)이다. 카메라는 허브를 거치지
+않고 루트 허브 직결이라 중간 변수도 없다. 이 컨트롤러에서 짝이 있는 포트는 2·3·4·9·10번뿐이고
+나머지(1, 5~8, 11~14)는 USB 2 전용이다.
+
+디버깅 중 헛발질 하나: `pkill -f "apriltag.launch.py"`가 **자기 자신의 셸 명령줄까지 매칭해서**
+launch가 시작도 못 하고 죽었다. 같은 명령 안에서 pkill과 launch를 같이 쓰면 안 된다.
+
+**설계 결정 하나 뒤집혔다**: `publish_tf`를 처음에 `false`로 뒀는데 틀렸다. 그건 카메라 **내부**
+체인(`camera_link` → optical frames)이고 apriltag가 태그를 optical frame에 매단다 — 끄면 태그가
+로봇까지 갈 길이 없다. `true`로 바꾸고, 바깥에서 줄 변환은 `… → camera_link` **하나뿐**이라고
+문서에 못박았다. `realsense2_description`으로 optical frame까지 URDF에 넣으면 같은 static
+변환의 퍼블리셔가 둘이 된다.
+
+아직 못 한 것: 인쇄된 태그가 없어 **실제 검출은 확인 못 했다**. intrinsic 캘리브도 미실시.
+
+**Franka `joint_trajectory_controller` 제거.** 이건 이름과 달리 stock JTC가 아니라 joint별
+harmonic(sin/cos) 여기 궤적을 돌리며 로그를 남기는 **일회성 system-identification 컨트롤러**였다.
+어떤 작업 중에 만들어진 것이고 프로젝트 범위에 안 맞는다는 사용자 판단으로 삭제.
+
+지운 곳: 소스/헤더 2개, `CMakeLists.txt`, `cho_controller_franka.xml` 플러그인 선언,
+real·gazebo `controllers.yaml`의 인스턴스 + 파라미터 블록, 두 launch의
+`extra_torque_controllers`, `docs/controllers_and_bringup.md` 표(14 → 13개),
+CLAUDE.md 컨트롤러 목록, `todo/CONTROLLER_STABILITY_TODO.md`의 kd 언더댐핑 항목(함께 무의미해짐).
+
+**남긴 것과 그 이유**: 이름이 비슷한 `moveit_joint_trajectory_controller`는 upstream
+`joint_trajectory_controller/JointTrajectoryController`로, MoveIt 실행 백엔드라 별개다.
+gazebo config에 둘을 구분하려고 달아둔 주석("위쪽 Cho 컨트롤러는 별도의 identification 궤적")도
+이제 가리킬 대상이 없어 정리했다. `cho_bringup_franka/package.xml`의 `joint_trajectory_controller`
+exec_depend도 이쪽 용도라 유지. UR/FR5/OpenArm의 동명 컨트롤러는 전부 stock JTC로 무관.
+
+`cbp cho_controller_franka` 빌드 통과(기존 sign-compare 경고만).
+
+- 2026-09-09 VLA 코어 분리 + OpenArm 컨트롤러 통합 + cuRobo 경로 제거 → docs/sessions/2026-09-09.md
+- 2026-09-08 cuRobo를 MoveIt 플래너 플러그인으로 연동(09-09에 제거) → docs/sessions/2026-09-08.md
