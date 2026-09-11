@@ -1,0 +1,37 @@
+# apriltag_ros (christianrauch) detector parameters.
+# Schema reference: /opt/ros/humble/share/apriltag_ros/cfg/tags_36h11.yaml
+#
+# tag.frames is NOT set here on purpose. The launch file derives it from
+# tag.ids as tag_<id>, which is the same convention cho_object_pose's
+# geometry.tag_frame_name() applies, so the two packages cannot drift apart by
+# way of a hand-edited frame string. Setting tag.frames here would override it.
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    # Fallback edge length for a tag whose id is not listed in tag.ids, in
+    # metres, measured across the BLACK SQUARE. A 1% error here is a 1% range
+    # error, so measure the print with callipers instead of trusting the
+    # nominal size the PDF was generated at.
+    size: 0.040
+    # 0 = reject any tag that needed bit correction. Worth keeping at 0: a
+    # corrected detection is exactly the kind that produces a plausible but
+    # wrong pose, and cho_object_pose's gate cannot tell it apart afterwards.
+    max_hamming: 0
+    # RealSense publishes images BEST_EFFORT. A default (reliable) subscription
+    # would never match, and the node would sit there detecting nothing.
+    qos_profile: sensor_data
+    detector:
+      threads: 2
+      # Upstream defaults this to 2.0, which halves the resolution the quad
+      # detector sees. That is a reasonable trade for large tags and a bad one
+      # for the 30-50 mm tags a wrist camera looks at from 0.3 m.
+      decimate: 1.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    pose_estimation_method: pnp
+    tag:
+      ids: [9]
+      sizes: [0.040]

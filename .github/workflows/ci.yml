@@ -27,7 +27,6 @@ env:
     cho_trajectory_smoother
     cho_controller_common
     cho_controller_ur
-    cho_controller_openarm
     cho_description_franka
     cho_description_fr5
     cho_description_ur
@@ -35,6 +34,8 @@ env:
     cho_robot_config
     cho_control_tools
     cho_task_manager
+    cho_object_pose
+    realsense_apriltag
     hansung_scale_msgs
     hansung_scale_driver
   # cho_description_franka / cho_description_fr5 / cho_description_ur are forks
@@ -48,11 +49,12 @@ env:
     cho_trajectory_smoother
     cho_controller_common
     cho_controller_ur
-    cho_controller_openarm
     cho_description_openarm
     cho_robot_config
     cho_control_tools
     cho_task_manager
+    cho_object_pose
+    realsense_apriltag
     hansung_scale_msgs
     hansung_scale_driver
 

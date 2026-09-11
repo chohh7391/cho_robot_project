@@ -1,0 +1,52 @@
+# D435 settings for AprilTag detection, handed to the stock realsense2_camera
+# launch through its own `config_file` argument. The driver is used exactly as
+# packaged; only these values are ours.
+#
+# SHAPE MATTERS: rs_launch.py loads this with a plain yaml.safe_load and passes
+# the resulting dict straight to the node, so this is a FLAT mapping -- not the
+# usual `/**: ros__parameters:` params-file layout, which would arrive as one
+# parameter literally named '/**'.
+#
+# Every value below was checked on hardware (D435 s/n 844212070094,
+# realsense2_camera 4.58.3) -- see the README for the commands.
+#
+# enable_color / enable_infra1 are deliberately NOT here: the launch's
+# stream:= argument sets them, and a key in this file would win over it
+# (the node gets [launch args, config file] in that order).
+
+# Stream profiles are NOT here. They live on the launch's profile:= argument,
+# because a key in this file would win over it (the node gets [launch args,
+# config file] in that order) and the profile is exactly the thing that has to
+# change with the USB link: 848x480x30 needs USB 3, and over USB 2 the D435
+# offers only 424x240 and 480x270 on infra.
+depth_module.infra1_format: 'Y8'
+
+enable_depth: false
+enable_infra2: false
+
+# Start with auto exposure. If the frames right after a move stop decoding --
+# auto hunting, or motion blur from a long exposure -- pin it instead:
+#   depth_module.enable_auto_exposure: false
+#   depth_module.exposure: 8500.0     # NOTE the .0 -- this one is a double,
+# and upstream's own rs_launch default passes it as an integer, which the node
+# rejects with "invalid type: expected [double] got [integer]". That warning
+# in the log is upstream's, not ours.
+depth_module.enable_auto_exposure: true
+
+# TRUE on purpose. This is the camera's INTERNAL chain,
+# camera_link -> camera_infra1_optical_frame, and apriltag_ros parents every
+# tag to the optical frame (confirmed: camera_info.header.frame_id is
+# camera_infra1_optical_frame). Turn it off and the tags have no path to the
+# robot at all. What you supply from outside is exactly one transform INTO
+# camera_link -- see the README; do not also model the optical frames there.
+publish_tf: true
+
+# NOT SET HERE: depth_module.emitter_enabled.
+# The IR projector must be off when detecting tags on an infra stream, or its
+# dot pattern lands on the tag and the decode fails. On THIS unit that is
+# already permanent and not configurable: the driver logs "Projector capacity
+# is overrided and disabled by FW" and declares no emitter parameter -- on USB
+# 3 as well as USB 2, so it is the camera's firmware, not a link artefact.
+# On a unit where `ros2 param list /camera/camera | grep emitter` does show
+# one, add `depth_module.emitter_enabled: 0` here (0.0 if `ros2 param
+# describe` reports a double).

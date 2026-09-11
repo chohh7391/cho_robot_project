@@ -1,0 +1,33 @@
+# EXAMPLE / DEFAULT TABLE.
+#
+# Which tag marks which object, and where the arm should go relative to it, is
+# task knowledge rather than sensor knowledge, so a real job passes its own
+# file instead: cho_task_manager/config/perception/<task>.yaml, forwarded by
+# run_task_manager.launch.py's object_pose_config:= argument. Leaving every
+# job's objects in here would pile them all into one package that has no
+# reason to know about any of them.
+#
+# This file stays as the documented schema and as what you get when the node
+# is run standalone.
+#
+# The tag's physical SIZE is not here -- it belongs to the detector
+# (realsense_apriltag/config/apriltag_36h11.yaml) and duplicating it would give
+# two numbers that have to agree and no way to notice when they stop.
+#
+# grasp_offset is expressed in the TAG's frame: apriltag puts x-right, y-down,
+# z-out-of-the-tag, so a tag stuck on the top face of a 60 mm cube whose grasp
+# point is 30 mm below the surface is position: [0.0, 0.0, -0.030].
+objects:
+  - name: cube
+    tag_id: 9
+    # topic: defaults to /perception/object_pose/<name>
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    # Keep only the tag's yaw and approach straight down. AprilTag's planar
+    # pose has a two-solution ambiguity that flips the tag normal between
+    # frames; the yaw survives it, the rest does not. Set false only if the
+    # full orientation has been shown to be stable for this tag and distance.
+    top_down_yaw: true
+    # Which tag axis defines the yaw. x is the tag's own right-hand direction.
+    yaw_axis: [1.0, 0.0, 0.0]
