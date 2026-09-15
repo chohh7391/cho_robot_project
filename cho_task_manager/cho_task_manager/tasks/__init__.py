@@ -13,6 +13,9 @@ from cho_task_manager.tasks.franka import (
     create_franka_controller_check_torque_tree,
     create_franka_controller_check_velocity_tree,
 )
+from cho_task_manager.tasks.fr5 import (
+    create_fr5_fjt_handover_tree,
+)
 from cho_task_manager.tasks.openarm import (
     create_openarm_controller_check_torque_tree,
     create_openarm_mit_task_tuning_tree,
@@ -39,6 +42,12 @@ _TASK_REGISTRY = {
         'controller_check_position': create_franka_controller_check_position_tree,
         'controller_check_torque': create_franka_controller_check_torque_tree,
         'controller_check_velocity': create_franka_controller_check_velocity_tree,
+    },
+    'fr5': {
+        # The plan is produced and executed by another workspace; this
+        # tree owns the arm's controller state around it. See
+        # tasks/fr5/fjt_handover.py.
+        'fjt_handover': create_fr5_fjt_handover_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,
