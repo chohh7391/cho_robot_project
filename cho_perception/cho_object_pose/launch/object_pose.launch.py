@@ -1,6 +1,6 @@
 """Run the object-pose node against an already-running detector.
 
-Kept separate from realsense_apriltag's launch so that the perception half can
+Kept separate from the detector launch beside it so that the perception half can
 be restarted, retuned or run against a bag without touching the camera.
 """
 

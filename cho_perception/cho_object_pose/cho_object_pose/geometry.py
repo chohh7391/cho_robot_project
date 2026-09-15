@@ -28,7 +28,7 @@ def tag_frame_name(tag_id, prefix=''):
     """TF frame apriltag_ros is configured to publish for *tag_id*.
 
     The detector's ``tag.frames`` list is derived from the same convention in
-    ``realsense_apriltag/launch/apriltag.launch.py``. Neither package writes a
+    ``launch/apriltag.launch.py``, which calls this function. Nothing writes a
     frame string by hand, so they cannot drift apart.
 
     *prefix* exists for a second camera. Two detector instances left at the

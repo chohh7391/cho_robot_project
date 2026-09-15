@@ -147,10 +147,23 @@ cho_sensor/                  # Sensor stacks; grouping directory, not a package
                              # SELF-CONTAINED: no cho_* dependencies, meant to be
                              # usable as a standalone module. Do not entangle it
                              # with cho_interfaces or the robot verticals.
-  realsense_apriltag/        # D435 + apriltag_ros: includes the stock rs_launch.py
-                             # and hands it our config_file, bota-style. Publishes
-                             # tag_<id> TF frames and /detections, and deliberately
-                             # NO camera->robot transform. cho_* dependencies: none.
+  cho_realsense/             # D435 only. Includes the stock rs_launch.py and hands
+                             # it our config_file, bota-style. No detection, and
+                             # deliberately NO camera->robot transform.
+                             # Two identical D435s are connected: set serial_no.
+  cho_oak/                   # OAK-D Pro W, over the stock depthai camera.launch.py.
+                             # RGBSTEREO so the GLOBAL-SHUTTER mono pair is published
+                             # (the default RGBD gives depth instead), and the IR dot
+                             # projector off or its pattern breaks tag decoding.
+                             # Mono comes out unrectified -- detector needs rectify.
+  cho_camera_calibration/    # Checkerboard target, procedure, and per-camera
+                             # camera_info files + cameras.yaml (model, both serial
+                             # numbers, firmware). Intrinsics belong to a stream
+                             # PROFILE, not a camera. NOTE: realsense2_camera has no
+                             # camera_info_url and no set_camera_info, so a D435
+                             # calibration cannot be fed back without a relay node
+                             # that does not exist yet; depthai and v4l2_camera both
+                             # accept one.
 
 cho_perception/              # Perception that knows a robot; grouping directory
   cho_object_pose/           # tag_<id> TF + decode quality -> a gated PoseStamped in

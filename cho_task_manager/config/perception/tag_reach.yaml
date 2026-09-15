@@ -7,7 +7,7 @@
 # object_pose_config:= and that is what run_task_manager.launch.py forwards.
 #
 # The tag's physical SIZE is NOT here. It belongs to the detector
-# (realsense_apriltag/config/apriltag_36h11.yaml), and duplicating it would
+# (cho_object_pose/config/apriltag_36h11.yaml), and duplicating it would
 # give two numbers that must agree with no way to notice when they stop.
 #
 # `topic` is spelled out rather than left to the default because

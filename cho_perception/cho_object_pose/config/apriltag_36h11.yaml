@@ -1,10 +1,10 @@
 # apriltag_ros (christianrauch) detector parameters.
 # Schema reference: /opt/ros/humble/share/apriltag_ros/cfg/tags_36h11.yaml
 #
-# tag.frames is NOT set here on purpose. The launch file derives it from
-# tag.ids as tag_<id>, which is the same convention cho_object_pose's
-# geometry.tag_frame_name() applies, so the two packages cannot drift apart by
-# way of a hand-edited frame string. Setting tag.frames here would override it.
+# tag.frames is NOT set here on purpose. apriltag.launch.py derives it from
+# tag.ids through geometry.tag_frame_name(), which is the same function the node
+# uses to look the frame up, so no hand-edited frame string exists to go stale.
+# Setting tag.frames here would override it.
 /**:
   ros__parameters:
     image_transport: raw

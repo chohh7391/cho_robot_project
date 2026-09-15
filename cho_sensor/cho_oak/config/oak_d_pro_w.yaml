@@ -1,0 +1,19 @@
+# depthai_ros_driver parameters for the OAK-D Pro W on this bench.
+# Handed to the stock camera.launch.py through its own params_file argument.
+
+/**:
+  ros__parameters:
+    camera:
+      # RGBSTEREO publishes the two mono cameras as separate streams
+      # (/oak/left, /oak/right) alongside RGB. The default RGBD does not: it
+      # gives a depth image instead, and the mono pair is what a tag detector
+      # wants -- they are GLOBAL SHUTTER, the RGB sensor is rolling.
+      i_pipeline_type: RGBSTEREO
+
+      # OFF. This is a Pro: it has an IR dot projector, and the projected
+      # pattern lands on a tag and breaks the decode. Nothing here uses stereo
+      # depth, which is the only thing the pattern helps.
+      i_enable_ir: false
+
+      i_enable_imu: false
+      i_nn_type: none

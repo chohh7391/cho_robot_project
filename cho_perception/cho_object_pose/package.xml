@@ -12,6 +12,10 @@
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>apriltag_msgs</exec_depend>
+  <!-- The detector this package now launches, and the rectifier it can put
+       ahead of it for a stream the camera does not rectify itself. -->
+  <exec_depend>apriltag_ros</exec_depend>
+  <exec_depend>image_proc</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>cho_robot_config</exec_depend>

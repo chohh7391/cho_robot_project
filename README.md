@@ -238,12 +238,15 @@ Record with `ros2 bag record`, then use the plot commands above with
 ## Targets detected at run time
 
 A task's motion target does not have to be written into the tree. An AprilTag can
-supply it: `cho_sensor/realsense_apriltag` runs a RealSense and the detector, and
+supply it: `cho_sensor/cho_realsense` runs the camera, `cho_object_pose` the
+detector and the pose gate, and
 `cho_perception/cho_object_pose` turns a detection into a `PoseStamped` in the
 robot's base frame that a behaviour tree latches and drives to.
 
 ```bash
-ros2 launch realsense_apriltag apriltag.launch.py rviz:=true
+ros2 launch cho_realsense d435.launch.py
+ros2 launch cho_object_pose apriltag.launch.py rviz:=true \
+  image_topic:=/camera/camera/infra1/image_rect_raw
 
 TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_reach.yaml
 ros2 launch cho_task_manager run_task_manager.launch.py task:=tag_reach object_pose_config:=$TABLE

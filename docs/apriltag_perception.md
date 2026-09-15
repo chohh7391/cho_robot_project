@@ -12,7 +12,7 @@ cho_object_pose            ->  /perception/object_pose/<name>  (PoseStamped, bas
 PoseTargetBehavior         ->  blackboard /task/<key>  ->  TaskSpaceActionBehavior
 ```
 
-Two packages: `cho_sensor/realsense_apriltag` (camera and detector; no robot
+Two packages: `cho_sensor/cho_realsense` (the camera alone; no robot
 knowledge, no `cho_*` dependency) and `cho_perception/cho_object_pose` (reads
 `model.arm_base_link` from `cho_robot_config` and publishes in that frame).
 
@@ -20,7 +20,8 @@ knowledge, no `cho_*` dependency) and `cho_perception/cho_object_pose` (reads
 
 ```bash
 # detector; profile:=480x270x30 on a USB 2 link, rviz:=true adds the overlay
-ros2 launch realsense_apriltag apriltag.launch.py
+ros2 launch cho_realsense d435.launch.py
+ros2 launch cho_object_pose apriltag.launch.py image_topic:=/camera/camera/infra1/image_rect_raw
 
 # task + perception together; an empty object_pose_config starts no perception
 TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_reach.yaml
@@ -60,7 +61,7 @@ for one static transform resolve intermittently and without an error.
 | tag id → object, grasp offset, output topic | the task: `cho_task_manager/config/perception/<task>.yaml` |
 | `min_samples`, `max_position_spread_m` — how closely repeats must agree | the task (a coarse pick tolerates what an insertion does not) |
 | `max_hamming`, `min_decision_margin`, `min_edge_px` | `cho_object_pose` (they follow from the optics) |
-| tag family and physical size | the detector: `realsense_apriltag/config/apriltag_36h11.yaml` |
+| tag family and physical size | the detector: `cho_object_pose/config/apriltag_36h11.yaml` |
 | base frame | neither — read from `cho_robot_config` |
 
 `cho_object_pose/config/objects.yaml` is the schema and the standalone default, not
@@ -82,5 +83,5 @@ two-solution ambiguity that flips the tag normal between frames. By default only
 tag's yaw survives (`top_down_yaw`), which the flip does not move.
 
 Detail and the hardware notes are in each package's README:
-[`realsense_apriltag`](../cho_sensor/realsense_apriltag/README.md) and
+[`cho_realsense`](../cho_sensor/cho_realsense/README.md) and
 [`cho_object_pose`](../cho_perception/cho_object_pose/README.md).

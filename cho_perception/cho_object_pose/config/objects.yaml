@@ -11,7 +11,7 @@
 # is run standalone.
 #
 # The tag's physical SIZE is not here -- it belongs to the detector
-# (realsense_apriltag/config/apriltag_36h11.yaml) and duplicating it would give
+# (config/apriltag_36h11.yaml, next to this file) and duplicating it would give
 # two numbers that have to agree and no way to notice when they stop.
 #
 # grasp_offset is expressed in the TAG's frame: apriltag puts x-right, y-down,

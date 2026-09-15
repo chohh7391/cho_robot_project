@@ -3,9 +3,22 @@
 AprilTag detections in, one gated grasp pose per object out, in the robot's base frame.
 
 ```bash
+# detector: point it at any rectified image, from any camera
+ros2 launch cho_object_pose apriltag.launch.py \
+  image_topic:=/camera/camera/infra1/image_rect_raw
+# pose node
 ros2 launch cho_object_pose object_pose.launch.py
 ros2 topic echo /perception/object_pose/cube
 ```
+
+Two launches because they are two jobs: `apriltag.launch.py` configures the
+`apriltag_ros` detector and publishes `/detections` plus a `tag_<id>` TF frame;
+`object_pose.launch.py` turns those into a gated pose in the robot's frame.
+Neither starts a camera — `cho_realsense` and friends do that, which is what
+lets the same detector serve a RealSense, an OAK or a bag.
+
+`rectify:=true` inserts `image_proc` for a stream the camera does not rectify
+itself. A distorted image does not fail, it returns a biased pose.
 
 The output is a plain `geometry_msgs/PoseStamped`, which is exactly what
 `cho_task_manager`'s `PoseTargetBehavior` latches — so driving to a detected object needs no

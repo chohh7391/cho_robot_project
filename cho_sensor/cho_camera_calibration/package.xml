@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cho_camera_calibration</name>
+  <version>0.1.0</version>
+  <description>Intrinsic calibration for the cameras on this bench: the printable target,
+  the procedure, and the resulting camera_info files. One package so that the square size
+  on the printed board and the --square value typed into cameracalibrator cannot drift
+  apart, and so a calibration can be referenced by a package:// URL instead of a path
+  under someone's home directory. Knows nothing about any robot.</description>
+  <maintainer email="chohh7391@gmail.com">chohh7391</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- cameracalibrator. Commissioning, not runtime: it is run by hand, once per
+       camera per stream profile, and nothing here launches it. -->
+  <exec_depend>camera_calibration</exec_depend>
+
+  <test_depend>ament_cmake_flake8</test_depend>
+  <test_depend>ament_cmake_lint_cmake</test_depend>
+  <test_depend>ament_cmake_pep257</test_depend>
+  <test_depend>ament_cmake_xmllint</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

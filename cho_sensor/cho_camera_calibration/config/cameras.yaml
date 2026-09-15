@@ -1,0 +1,35 @@
+# Which camera each calibration file in this directory belongs to.
+#
+# Serial numbers are not interchangeable between tools:
+#   serial      what realsense2_camera's serial_no parameter takes, and what
+#               `rs-enumerate-devices` prints as "Serial Number".
+#   usb_serial  the USB descriptor serial (/sys/bus/usb/devices/*/serial).
+#               On a D4xx this is the ASIC serial and differs from the above.
+#
+# Calibration files are named <model>_<serial>_<WxH>.yaml, serial being
+# whichever of the two identifies the unit for its driver. Two identical D435s
+# are on this bench, so the serial in the name is not optional.
+
+cameras:
+  - model: D435
+    serial: '844212070094'
+    usb_serial: '846623021037'
+    firmware: 5.9.2         # too old to report a USB type; IR emitter is off in FW
+    driver: realsense2_camera
+    calibrations: []
+
+  - model: D435
+    serial: '332322072253'
+    usb_serial: '343743022395'
+    firmware: 5.17.3.10     # may expose depth_module.emitter_enabled; must be 0
+    driver: realsense2_camera
+    calibrations: []
+
+  - model: OAK-D-PRO-W
+    serial: '18443010E18F810E00'   # MXID; depthai selects on it
+    usb_serial: null               # the MyriadX reports none before firmware boot
+    driver: depthai_ros_driver
+    # Intrinsics live in the device EEPROM and the driver publishes them, so
+    # nothing here is ours yet. The wide lens needs rational_polynomial (8
+    # coefficients), not plumb_bob.
+    calibrations: []

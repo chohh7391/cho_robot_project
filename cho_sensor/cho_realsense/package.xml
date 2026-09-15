@@ -1,22 +1,18 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>realsense_apriltag</name>
+  <name>cho_realsense</name>
   <version>0.1.0</version>
-  <description>Launch and configuration that point an Intel RealSense D435 at AprilTags:
-  the camera driver, an optional rectification step, and the apriltag_ros detector. Tag poses
-  come out as TF frames named tag_&lt;id&gt;. This package deliberately knows nothing about the
-  robot - it publishes no transform between the camera and any robot link, so the same
-  configuration serves a wrist-mounted and a tripod-mounted camera.</description>
+  <description>Bring up an Intel RealSense camera: the stock realsense2_camera driver plus the
+  parameters this bench needs. Camera only - nothing here detects anything, so the same launch
+  serves a tag detector, a bag recording or a viewer. Knows nothing about the robot and
+  publishes no transform between the camera and any robot link.</description>
   <maintainer email="chohh7391@gmail.com">chohh7391</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>realsense2_camera</exec_depend>
-  <exec_depend>apriltag_ros</exec_depend>
-  <exec_depend>apriltag_msgs</exec_depend>
-  <exec_depend>image_proc</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

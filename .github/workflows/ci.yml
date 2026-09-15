@@ -35,7 +35,8 @@ env:
     cho_control_tools
     cho_task_manager
     cho_object_pose
-    realsense_apriltag
+    cho_realsense
+    cho_oak
     hansung_scale_msgs
     hansung_scale_driver
   # cho_description_franka / cho_description_fr5 / cho_description_ur are forks
@@ -54,7 +55,8 @@ env:
     cho_control_tools
     cho_task_manager
     cho_object_pose
-    realsense_apriltag
+    cho_realsense
+    cho_oak
     hansung_scale_msgs
     hansung_scale_driver
 

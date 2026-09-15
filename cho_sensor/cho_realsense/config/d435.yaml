@@ -41,12 +41,22 @@ depth_module.enable_auto_exposure: true
 # camera_link -- see the README; do not also model the optical frames there.
 publish_tf: true
 
-# NOT SET HERE: depth_module.emitter_enabled.
-# The IR projector must be off when detecting tags on an infra stream, or its
-# dot pattern lands on the tag and the decode fails. On THIS unit that is
-# already permanent and not configurable: the driver logs "Projector capacity
-# is overrided and disabled by FW" and declares no emitter parameter -- on USB
-# 3 as well as USB 2, so it is the camera's firmware, not a link artefact.
-# On a unit where `ros2 param list /camera/camera | grep emitter` does show
-# one, add `depth_module.emitter_enabled: 0` here (0.0 if `ros2 param
-# describe` reports a double).
+# THE IR PROJECTOR IS ON AND CANNOT BE TURNED OFF FROM ROS ON THESE UNITS.
+# Its dot pattern lands on a tag and punches holes through the black cells, so
+# apriltag decodes nothing on infra1 -- measured on both D435s here.
+#
+# The driver's warning "Projector capacity is overrided and disabled by FW"
+# means the CONTROL is overridden, not that the projector is off. An earlier
+# note in this file read it the other way round; `rs-enumerate-devices -o`
+# settles it:
+#     Emitter Enabled : 0 ... 2, default 1     <- on
+#     Laser Power     : 0 ... 360, default 150
+# librealsense has the option, but realsense2_camera does not declare a
+# parameter for it (`ros2 param list <camera> | grep emitter` is empty), so
+# setting it here would do nothing.
+#
+# Two ways out, both verified or trivial:
+#   - stream:=color. The colour sensor has an IR-cut filter, so the pattern is
+#     invisible there; detection works (decision_margin ~90). Rolling shutter,
+#     which is fine for a fixed mount and not for a wrist.
+#   - tape over the projector window to keep infra1's global shutter.
