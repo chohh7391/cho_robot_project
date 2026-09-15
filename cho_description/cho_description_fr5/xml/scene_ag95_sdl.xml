@@ -1,0 +1,101 @@
+<mujoco model="fr5 sdl cell">
+  <!-- The FR5 + AG-95 in the SDL lab cell, for testing the perception path the
+       physical rig will use: rendered camera -> apriltag_ros -> cho_object_pose
+       -> a robot-frame pose per vessel -> the planner's World State.
+
+       Selected with mujoco_scene:=scene_ag95_sdl.xml on the bringup; the plain
+       scene_ag95.xml stays the default, so nothing that does not ask for the
+       cell pays for it.
+
+       The layout mirrors the Isaac cell one-for-one
+       (isaacsim/scripts/standalone/task.py in sdl_project), because the point
+       of this scene is to exercise the same geometry through a different
+       renderer - a vessel somewhere else here would test a cell that does not
+       exist anywhere:
+
+         table top   z = 0, 1.5 m square, robot base at the origin
+         beaker      (0.49,     0.17475, 0.0675)   0.05 x 0.05 x 0.135
+         flask       (0.48383,  0.33166, 0.06)     0.07 x 0.07 x 0.12
+         tag plate   vessel + (0.15, 0, *), lying on the table
+
+       The vessels are drawn as cylinders because that is their shape; the
+       planner models both as boxes of the footprints above, which is what
+       cuTAMP's ENTITIES table says and is unchanged by anything here.
+
+       THE OBJECTS ARE STATIC. Adding free joints would change nq and invalidate
+       the `home`/`home1` keyframes the bringup selects by name, and the FR5
+       model disables collisions outright (every geom is contype/conaffinity 0,
+       see fr5_ag95.xml) so nothing could be grasped here anyway. This scene
+       tests perception -> World State -> planning -> trajectory execution. It
+       does not test grasping. -->
+
+  <include file="fr5_ag95.xml"/>
+  <include file="scene_common.xml"/>
+
+  <asset>
+    <!-- Rendered by TAMP/tamp/scripts/perception/generate_tag_images.py in sdl_project,
+         which verifies each image decodes back to the id it encodes before
+         writing it. 10 cells across, of which the BLACK SQUARE is 8, so a
+         125 mm plate carries a 100 mm tag.
+
+         100 mm and not the 40 mm the wrist-camera task uses, because this
+         camera is 1.95 m away: at fx = 617 px a 40 mm tag spans 12.6 px, and
+         cho_object_pose rejects anything under a 25 px shortest edge as too
+         far or too oblique. Measured: it rejected both tags at exactly 12.3 and
+         12.7 px. 100 mm gives 31.6 px, which clears the gate with margin. The
+         same arithmetic applies to the physical cell at that standoff. -->
+    <texture type="2d" name="tag36h11_00" file="assets/tags/tag36h11_00.png"/>
+    <texture type="2d" name="tag36h11_01" file="assets/tags/tag36h11_01.png"/>
+    <!-- No specular and no reflectance: a highlight across a tag face is the
+         one lighting artefact that costs the quad detector a corner. -->
+    <material name="tag36h11_00" texture="tag36h11_00" specular="0" shininess="0" reflectance="0"/>
+    <material name="tag36h11_01" texture="tag36h11_01" specular="0" shininess="0" reflectance="0"/>
+    <material name="bench" rgba="0.76 0.76 0.78 1" specular="0.1" shininess="0.1" reflectance="0"/>
+    <material name="glassware" rgba="0.82 0.88 0.92 1" specular="0.3" shininess="0.3" reflectance="0"/>
+  </asset>
+
+  <worldbody>
+    <!-- Table. Top face at z = 0, which is where the vessel heights below are
+         measured from, and 1.5 m square to match the 0.70 m workspace bound the
+         randomizer keeps objects inside. -->
+    <geom name="bench" type="box" pos="0 0 -0.01" size="0.75 0.75 0.01" material="bench"/>
+
+    <!-- Vessels. Half-extents: radius = footprint / 2, half-height = height / 2. -->
+    <geom name="beaker" type="cylinder" pos="0.49 0.17475 0.0675" size="0.025 0.0675"
+          material="glassware"/>
+    <geom name="flask" type="cylinder" pos="0.48383 0.33166 0.06" size="0.035 0.06"
+          material="glassware"/>
+
+    <!-- Tag plates, 125 x 125 x 2 mm, lying flat 0.15 m along +x from their
+         vessel - the same offset the Isaac vessels carry their tag at. Beside
+         the vessel rather than on it so the vessel cannot occlude its own tag:
+         at the camera's 50 deg elevation a 0.135 m beaker casts 0.113 m of
+         shadow, which is shorter than the offset.
+
+         Tag top face at z = 0.002 (plate half-thickness 0.001 on the table
+         top). TAMP/tamp/scripts/perception/check_object_pose.py compares the pose
+         cho_object_pose publishes against exactly these numbers. -->
+    <geom name="beaker_tag" type="box" pos="0.64 0.17475 0.001" size="0.0625 0.0625 0.001"
+          material="tag36h11_00"/>
+    <geom name="flask_tag" type="box" pos="0.63383 0.33166 0.001" size="0.0625 0.0625 0.001"
+          material="tag36h11_01"/>
+
+    <!-- RealSense D435 colour stream, emulated. mujoco_ros2_control registers
+         every camera in the model and derives CameraInfo from fovy and
+         resolution as a distortion-free pinhole: at 640x480 with fovy 42.5 deg
+         (the D435's colour vertical FOV) that gives fx = fy = 617.1 px, against
+         the 617.2 px the real D435 reports at that resolution. So the detector
+         sees the same scale here as it will on the bench, and no rectify hop is
+         needed because the rendered image carries no distortion to remove.
+
+         Pose and aim are the Isaac cell's camera_1: (1.45, 0, 1.55) looking at
+         (0.20, 0, 0.05), i.e. 50.2 deg of elevation. quat is the look-at
+         rotation for MuJoCo's camera convention (-z forward, +y up) and is
+         read straight out of this file by the static TF publisher
+         (TAMP/tamp/scripts/perception/mujoco_camera_tf.py), which converts it to the
+         optical frame the detector reports in - so the two cannot drift. -->
+    <camera name="sdl_cam" pos="1.45 0 1.55"
+            quat="0.664872409 0.240717012 0.240717012 0.664872409"
+            fovy="42.5" resolution="640 480"/>
+  </worldbody>
+</mujoco>

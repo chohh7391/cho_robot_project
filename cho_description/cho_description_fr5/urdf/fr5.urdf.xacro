@@ -16,6 +16,8 @@
   <xacro:arg name="initial_positions_file"
              default="$(find cho_description_fr5)/config/initial_positions.yaml"/>
   <xacro:arg name="mujoco_initial_keyframe" default=""/>
+  <!-- Scene file in cho_description_fr5/xml. Empty = the default for this build. -->
+  <xacro:arg name="mujoco_scene" default=""/>
   <!-- none | ag95. The AG-95 is driven by the robot controller over RS485, so
        it is only commandable on the real (fairino) build. -->
   <xacro:arg name="gripper" default="none"/>
@@ -71,7 +73,8 @@
     gripper_open_on_activate="$(arg gripper_open_on_activate)"
     gripper_apply_config="$(arg gripper_apply_config)"
     gripper_required="$(arg gripper_required)"
-    mujoco_initial_keyframe="$(arg mujoco_initial_keyframe)"/>
+    mujoco_initial_keyframe="$(arg mujoco_initial_keyframe)"
+    mujoco_scene="$(arg mujoco_scene)"/>
 
   <!-- Gazebo (Ignition) ros2_control system plugin. -->
   <xacro:if value="${'$(arg hardware)' == 'gazebo'}">

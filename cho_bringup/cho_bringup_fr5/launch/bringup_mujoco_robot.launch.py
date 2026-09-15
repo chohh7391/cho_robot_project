@@ -107,6 +107,7 @@ def setup_control_environment(context):
     use_sim_time = LaunchConfiguration('use_sim_time')
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
     mujoco_initial_keyframe = LaunchConfiguration('mujoco_initial_keyframe').perform(context)
+    mujoco_scene = LaunchConfiguration('mujoco_scene').perform(context)
     # No connection config file in simulation, so the fallback is 'none': the
     # simulated gripper is opt-in and existing MuJoCo runs are unchanged.
     gripper = launch_utils.resolve_gripper(
@@ -137,6 +138,7 @@ def setup_control_environment(context):
             'hardware': 'mujoco',
             'gripper': gripper,
             'mujoco_initial_keyframe': mujoco_initial_keyframe,
+            'mujoco_scene': mujoco_scene,
         },
     ).toxml()
 
@@ -267,6 +269,16 @@ def generate_launch_description():
                 'MuJoCo keyframe applied before controllers start. The default '
                 'home1 is the canonical planning-safe simulation ready pose; use '
                 'zero explicitly for the legacy all-zero pose.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'mujoco_scene',
+            default_value='',
+            description=(
+                'Scene file in cho_description_fr5/xml to simulate, for a scene '
+                'that adds props around the robot: scene_ag95_sdl.xml is the SDL '
+                'lab cell (vessels, AprilTag plates, a D435-equivalent camera). '
+                'Empty keeps the scene the gripper selection implies.'
             ),
         ),
         DeclareLaunchArgument(

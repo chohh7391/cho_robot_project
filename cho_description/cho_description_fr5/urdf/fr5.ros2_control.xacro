@@ -66,7 +66,7 @@
                       gripper_percent_at_closed:='0' gripper_percent_at_open:='100'
                       gripper_open_on_activate:='false' gripper_apply_config:='false'
                       gripper_required:='false'
-                      mujoco_initial_keyframe:=''">
+                      mujoco_initial_keyframe:='' mujoco_scene:=''">
     <ros2_control name="${name}" type="system">
       <hardware>
         <xacro:if value="${hardware == 'mujoco'}">
@@ -78,7 +78,14 @@
                otherwise the viewer draws a gripper the robot model does not have.
                The two differ only in the tool; cho_robot_config's guard test
                compares their arm joints, limits and actuator gains. -->
-          <param name="mujoco_model">$(find cho_description_fr5)/xml/${'scene_ag95.xml' if gripper == 'ag95' else 'scene.xml'}</param>
+          <!-- mujoco_scene names a scene file in the same directory and wins when
+               it is given, for a scene that adds things around the robot rather
+               than changing it: the SDL lab cell (scene_ag95_sdl.xml) puts the
+               vessels, their AprilTag plates and a camera on the bench so the
+               perception path can be exercised without the physical rig. Empty
+               keeps the gripper-derived default, so a bringup that does not ask
+               for a cell gets exactly what it got before. -->
+          <param name="mujoco_model">$(find cho_description_fr5)/xml/${mujoco_scene if mujoco_scene else ('scene_ag95.xml' if gripper == 'ag95' else 'scene.xml')}</param>
           <xacro:if value="${bool(mujoco_initial_keyframe)}">
             <param name="initial_keyframe">${mujoco_initial_keyframe}</param>
           </xacro:if>
