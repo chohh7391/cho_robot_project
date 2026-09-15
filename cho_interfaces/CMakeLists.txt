@@ -36,6 +36,7 @@ set(ACTION_FILES
   action/JointSpace.action
   action/TaskSpace.action
   action/Gripper.action
+  action/Pour.action
   action/VisionLanguageAction.action
 )
 

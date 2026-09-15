@@ -112,6 +112,9 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
         'task_space': compatibility.get('task_space', controllers['direct_task']),
         'gripper': compatibility.get('gripper', controllers['gripper']),
         'vla': compatibility.get('vla', controllers['vla']),
+        # Present only on a robot that has one (FR5). None elsewhere, which is
+        # how every other optional role here reads.
+        'pour': compatibility.get('pour', controllers.get('pour')),
     }
 
 
@@ -129,7 +132,7 @@ def controller_name_value(controller):
 # interfaces. 'gripper' is deliberately absent: it claims the finger interfaces,
 # so it must stay active across an arm-controller switch.
 _EXCLUSIVE_CONTROLLER_ROLES = ('hold', 'direct_joint', 'direct_task',
-                               'moveit_trajectory', 'vla')
+                               'moveit_trajectory', 'vla', 'pour')
 
 # Prefix of a direct per-controller action server. The registry's action
 # preferences also list robot-scoped MoveIt endpoints
@@ -176,7 +179,7 @@ def exclusive_arm_controllers(robot_config=None) -> List[str]:
 
     # The compatibility view a tree already holds: it carries the
     # compatibility.task_manager overrides, which the raw roles do not.
-    for role in ('joint_space', 'task_space', 'vla'):
+    for role in ('joint_space', 'task_space', 'vla', 'pour'):
         add(robot_config.get(role))
 
     try:

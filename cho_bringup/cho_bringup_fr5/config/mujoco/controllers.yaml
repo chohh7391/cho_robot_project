@@ -14,6 +14,11 @@ controller_manager:
     task_space_ik_controller:
       type: cho_controller_fr5/TaskSpaceIKController
 
+    # Closes the loop on an RS-232 scale, so it is only useful on a bringup that
+    # has one; it is loaded either way and simply never given a goal otherwise.
+    pouring_controller:
+      type: cho_controller_fr5/PouringController
+
     # Only loaded when the description is expanded with gripper:=ag95; without
     # that the gripper joint does not exist and the spawner is skipped.
     gripper_controller:
@@ -117,3 +122,54 @@ task_space_ik_controller:
     recovery_monotonic_tolerance: 0.00001
     recovery_maximum_lateral_displacement: 0.002
     recovery_maximum_orientation_error: 0.01
+
+pouring_controller:
+  ros__parameters:
+    robot_type: fr5
+    bringup_type: mujoco
+    control_mode: position
+    ee_name: wrist3_link
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+    # Where the weight arrives, in grams. A plain Float64 and not the scale
+    # driver's own WeightStamped: the controller should not depend on one
+    # vendor's message to read a number, and the driver stays the self-contained
+    # module cho_sensor/hansung_scale is meant to be. A relay adapts the two.
+    scale_topic: /scale/grams
+    # Stop tilting if the weight goes quiet for this long. A pour with no
+    # feedback is not an adaptive pour, and tilting on the last number heard is
+    # how a vessel empties onto the bench.
+    scale_timeout: 0.5
+    # How long a pour holds still waiting for its FIRST reading. A goal that
+    # arrives before the scale node did is a late scale, not a failed one.
+    scale_startup_grace: 2.0
+    # The law's own sample period. NOT the controller period: the same law runs
+    # in simulation at 25 Hz (sdl_project tamp_server), and a pour reported from
+    # both has to be one controller sampled the same way. Between law samples the
+    # commanded velocity is held, so the command still leaves here at 500 Hz.
+    control_period: 0.04
+    # PD on the weight error, then convolution shaping. Same gains and the same
+    # kernel as the simulated pour; changing one without the other makes the two
+    # different controllers wearing one name.
+    kp: 0.008
+    kd: 0.002
+    kernel_horizon: 2.5
+    shaping_freq: 0.8
+    shaping_decay: 1.2
+    kernel_alpha: 0.15
+    # Wrist angular velocity ceiling. At the law's 25 Hz this caps one step at
+    # 0.02 rad (1.15 deg), which is what keeps the tilt smooth enough not to
+    # slosh.
+    max_tilt_rate: 0.5
+    # Absolute tilt bound from the carried attitude. Well past a normal pour, so
+    # it only fires when the scale never reports what the goal asked for.
+    max_tilt: 2.0
+    # How close to the target counts as poured [g].
+    weight_tolerance: 0.5
+    # Per-cycle command bound, the same one the task-space controller uses.
+    max_delta_q: 0.005

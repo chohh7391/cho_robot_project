@@ -1,0 +1,34 @@
+# Pour until a scale says enough has come out, then return the vessel upright.
+#
+# The controller closes the loop on a weight it reads itself; this goal only
+# says how much, and how carefully. Every bound left at 0 falls back to the
+# controller's configured value, the same convention Gripper.action uses, so a
+# caller that has no opinion about tilt rates does not have to invent one.
+float64 target_grams
+# Wrist angular velocity ceiling [rad/s]. The pour joint is the one whose axis
+# tilts the held vessel, so this is also the vessel's tilt rate.
+float64 max_tilt_rate
+# Absolute bound on the tilt this pour may reach [rad], measured from the
+# attitude the vessel was carried in. It is what stops a pour that the scale
+# never satisfies -- an empty vessel, a blocked spout, a scale that reads zero.
+float64 max_tilt
+# How close to target_grams counts as done [g].
+float64 tolerance
+# Give up after this long [s], counted from the first commanded tilt.
+float64 timeout
+---
+bool is_completed
+# What the scale read when the pour stopped, and how far the vessel had tilted
+# at that moment. Both are measurements, not commands: the executed tilt is the
+# integrated command, which is what the vessel actually saw.
+float64 final_grams
+float64 peak_tilt
+float64 elapsed
+# Empty on success. On failure this says which bound stopped the pour, so an
+# operator can tell "tilted as far as allowed and nothing came out" from "the
+# scale went quiet".
+string message
+---
+float64 current_grams
+float64 tilt
+float64 elapsed

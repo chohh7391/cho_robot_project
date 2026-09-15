@@ -72,6 +72,10 @@ SWITCHABLE_CONTROLLERS = [
     'joint_trajectory_controller',
     'joint_space_position_controller',
     'task_space_ik_controller',
+    # Claims the same command interfaces as the rest, so it has to be in this
+    # list to be spawned (inactive) and therefore switchable. A bringup with no
+    # scale simply never gives it a goal.
+    'pouring_controller',
 ]
 
 # Keys accepted under `fr5.gripper_config` in the config file, with the values

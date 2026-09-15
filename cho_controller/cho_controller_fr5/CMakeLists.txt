@@ -22,6 +22,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
 find_package(cho_interfaces REQUIRED)
 
@@ -29,8 +30,10 @@ add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
     src/joint_space_position_controller.cpp
     src/task_space_ik_controller.cpp
+    src/pouring_controller.cpp
     src/servers/joint_space_action_server.cpp
     src/servers/task_space_action_server.cpp
+    src/servers/pour_action_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include
@@ -46,6 +49,7 @@ ament_target_dependencies(${PROJECT_NAME}
     rclcpp_lifecycle
     realtime_tools
     control_msgs
+    std_msgs
     cho_controller_common
     cho_interfaces
 )
