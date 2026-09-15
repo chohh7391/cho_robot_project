@@ -43,10 +43,42 @@ def seconds_to_duration(seconds):
     return Duration(sec=whole, nanosec=nanos)
 
 
-def build_trajectory(joint_names, times, positions, time_scale=1.0):
-    """Assemble a JointTrajectory from recorded waypoints, stretched by *time_scale*."""
+#: Seconds given to reach the FIRST waypoint of a segment.
+#:
+#: NOT cosmetic, and not the same as the trajectory's own timing. A first point
+#: at ``time_from_start = 0`` tells the controller to be there NOW: there is no
+#: interpolation window, so the command steps from wherever the arm is straight
+#: onto the waypoint, in a single control cycle.
+#:
+#: That step is invisible in MuJoCo, whose config sets ``open_loop_control:
+#: true`` and therefore seeds each trajectory from the last COMMAND (the step is
+#: zero by construction). Real hardware deliberately does not: it seeds from the
+#: MEASURED state, so the standing servo error becomes the step. Measured on the
+#: FR5: homing arrived 0.037 rad out, the replay's first point demanded that back
+#: in one 8 ms cycle -- 4.6 rad/s -- and the robot refused with "axis 2 joint
+#: space command velocity exceeded" while j2 fell 0.1 rad behind a command moving
+#: at 0.121 rad/s and the goal aborted on state tolerance.
+#:
+#: One second turns that same 0.037 rad into 0.037 rad/s, a tenth of the slowest
+#: ceiling this arm is held to, and it stays safe for a start error an order of
+#: magnitude larger. It costs one second per segment.
+DEFAULT_START_DELAY_SEC = 1.0
+
+
+def build_trajectory(joint_names, times, positions, time_scale=1.0,
+                     start_delay=DEFAULT_START_DELAY_SEC):
+    """Assemble a JointTrajectory from recorded waypoints, stretched by *time_scale*.
+
+    *start_delay* shifts every point, so the first one is reachable rather than
+    immediate. See DEFAULT_START_DELAY_SEC for why that is not optional.
+    """
     if time_scale <= 0.0:
         raise TrajectoryRejected('time_scale must be positive (got %r)' % time_scale)
+    if start_delay <= 0.0:
+        raise TrajectoryRejected(
+            'start_delay must be positive (got %r): a first point at t=0 leaves '
+            'the controller no window to reach it from where the arm actually is'
+            % start_delay)
     if len(times) != len(positions):
         raise TrajectoryRejected(
             '%d times for %d waypoints' % (len(times), len(positions)))
@@ -63,7 +95,8 @@ def build_trajectory(joint_names, times, positions, time_scale=1.0):
         point = JointTrajectoryPoint()
         point.positions = [float(value) for value in row]
         # One Duration per point. Never hoist this out of the loop.
-        point.time_from_start = seconds_to_duration(times[index] * time_scale)
+        point.time_from_start = seconds_to_duration(
+            start_delay + times[index] * time_scale)
         traj.points.append(point)
     return traj
 
@@ -122,8 +155,8 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
 
     def __init__(self, name, controller, joint_names, times, positions,
                  time_scale=1.0, position_limits=None, velocity_limits=None,
-                 timeout_margin_sec=15.0):
-        duration = (times[-1] - times[0]) * time_scale
+                 timeout_margin_sec=15.0, start_delay=DEFAULT_START_DELAY_SEC):
+        duration = (times[-1] - times[0]) * time_scale + start_delay
         super().__init__(
             name,
             FollowJointTrajectory,
@@ -134,6 +167,7 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
         self.times = list(times)
         self.positions = [list(row) for row in positions]
         self.time_scale = time_scale
+        self.start_delay = start_delay
         self.position_limits = position_limits or {}
         self.velocity_limits = velocity_limits or {}
         self.rejection = None
@@ -144,7 +178,7 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
         try:
             traj = validate_trajectory(
                 build_trajectory(self.joint_names, self.times, self.positions,
-                                 self.time_scale),
+                                 self.time_scale, self.start_delay),
                 position_limits=self.position_limits,
                 velocity_limits=self.velocity_limits,
             )

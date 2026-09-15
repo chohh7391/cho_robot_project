@@ -524,3 +524,73 @@ def test_the_ready_pose_is_the_registry_pose_not_zero():
     ready = trajectory_replay.ready_pose(_config())
     assert len(ready.position) == 6
     assert any(abs(value) > 1e-9 for value in ready.position)
+
+
+# --- reaching the first waypoint -------------------------------------------
+
+def _first_two_times(traj):
+    def secs(point):
+        return point.time_from_start.sec + point.time_from_start.nanosec * 1e-9
+    return secs(traj.points[0]), secs(traj.points[1])
+
+
+def test_the_first_point_is_reachable_rather_than_immediate():
+    """A first point at t=0 is a command step, not a trajectory.
+
+    It tells the controller to be there NOW, so the command jumps from wherever
+    the arm is onto the waypoint in one control cycle. On the FR5 that turned a
+    0.037 rad homing residual into 4.6 rad/s, the robot refused the servo command
+    with "axis 2 joint space command velocity exceeded", and the goal aborted on
+    state tolerance while the arm trailed a command moving at 0.121 rad/s.
+    """
+    from cho_task_manager.behaviors.action.follow_joint_trajectory import (
+        DEFAULT_START_DELAY_SEC,
+        build_trajectory,
+    )
+    rows = [[0.0] * 6, [0.01] * 6, [0.02] * 6]
+    traj = build_trajectory(['j1', 'j2', 'j3', 'j4', 'j5', 'j6'],
+                            [0.0, 0.1, 0.2], rows)
+
+    first, second = _first_two_times(traj)
+    assert first == pytest.approx(DEFAULT_START_DELAY_SEC)
+    assert first > 0.0
+    # The delay shifts the whole segment; it does not stretch it.
+    assert second - first == pytest.approx(0.1)
+
+
+def test_the_lead_in_is_slow_enough_for_a_realistic_start_error():
+    """It has to absorb the homing residual well under the arm's ceiling."""
+    from cho_task_manager.behaviors.action.follow_joint_trajectory import (
+        DEFAULT_START_DELAY_SEC,
+    )
+    measured_home_residual_rad = 0.037     # what the FR5 actually arrived with
+    ceiling = 1.575 * 0.25                 # joint_limits.yaml * execution scaling
+    assert measured_home_residual_rad / DEFAULT_START_DELAY_SEC < ceiling / 5
+
+
+def test_a_zero_start_delay_is_refused():
+    from cho_task_manager.behaviors.action.follow_joint_trajectory import (
+        TrajectoryRejected,
+        build_trajectory,
+    )
+    with pytest.raises(TrajectoryRejected, match='start_delay'):
+        build_trajectory(['j1', 'j2', 'j3', 'j4', 'j5', 'j6'],
+                         [0.0, 0.1], [[0.0] * 6, [0.01] * 6], start_delay=0.0)
+
+
+def test_every_replayed_segment_gets_the_lead_in(tmp_path):
+    from cho_task_manager.behaviors.action.follow_joint_trajectory import (
+        DEFAULT_START_DELAY_SEC,
+        build_trajectory,
+    )
+    csv_path, meta_path = _write(tmp_path, _ramp(10), {
+        'gripper_events': [{'t_s': 0.45, 'event': 'close'}]})
+    segments = plan_segments(load_recording(csv_path, meta_path))
+
+    moves = [s for s in segments if s.kind == 'move']
+    assert len(moves) == 2
+    for segment in moves:
+        traj = build_trajectory(['j1', 'j2', 'j3', 'j4', 'j5', 'j6'],
+                                segment.times, segment.positions)
+        first, _ = _first_two_times(traj)
+        assert first == pytest.approx(DEFAULT_START_DELAY_SEC)
