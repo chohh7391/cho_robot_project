@@ -56,6 +56,11 @@ def setup_includes(context):
             'controller_name': metadata['hold_controller'],
             'use_sim_time': 'true',
             'mujoco_initial_keyframe': LaunchConfiguration('mujoco_initial_keyframe'),
+            # Forwarded so a MoveIt session can run in the same cell a plain
+            # robot bringup can. Without it this launch always simulated the
+            # bare scene, and a task checked against a cell layout could not
+            # be run through MoveIt at all.
+            'mujoco_scene': LaunchConfiguration('mujoco_scene'),
             # The resolved NAME goes down, not load_gripper: the robot launch
             # would otherwise re-derive the same answer from the same inputs.
             'gripper': gripper,
@@ -104,6 +109,11 @@ def generate_launch_description():
             default_value='home1',
             description='Planning-scene-safe, non-singular MuJoCo bootstrap keyframe for MoveIt',
         ),
+        DeclareLaunchArgument(
+            'mujoco_scene', default_value='',
+            description='Scene file in cho_description_fr5/xml to simulate, as on '
+                        'bringup_mujoco_robot. Empty keeps the scene the gripper '
+                        'selection implies.'),
         DeclareLaunchArgument('floor_frame', default_value='world'),
         DeclareLaunchArgument('floor_size', default_value='4.0,4.0,0.10'),
         DeclareLaunchArgument('floor_position', default_value='0.0,0.0,-0.05'),

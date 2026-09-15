@@ -8,6 +8,7 @@ request_adapters: >-
   default_planner_request_adapters/FixStartStatePathConstraints
 start_state_max_bounds_error: 0.1
 
+
 planner_configs:
   RRTConnectkConfigDefault:
     type: geometric::RRTConnect
@@ -23,7 +24,24 @@ planner_configs:
 
 fr5_arm:
   default_planner_config: RRTConnectkConfigDefault
-  longest_valid_segment_fraction: 0.005
+  # How finely OMPL checks a motion between two states for collision, as a
+  # fraction of the state space's extent -- which for this arm is ~14.8 rad, so
+  # this number is much coarser than it looks:
+  #
+  #   0.005 -> a collision check every ~0.074 rad
+  #   0.001 -> a collision check every ~0.015 rad
+  #
+  # At 0.005 the checker steps straight over a thin self-collision. Measured:
+  # homing to a recorded start pose, RRTConnect returned a path whose state 21
+  # of 99 had 'gripper_base_link' inside 'upperarm_link'; the pipeline's own
+  # post-check caught it and move_group refused its own plan with
+  # INVALID_MOTION_PLAN, every run, at the same index. The colliding state sits
+  # 0.22 rad (j4) and 0.25 rad (j5) off the straight line between the two
+  # endpoints, so it is the planner's route rather than any post-processing
+  # shortcut -- and the straight line itself is collision-free at all 101
+  # sampled points by /check_state_validity, so nothing was wrong with the
+  # endpoints either.
+  longest_valid_segment_fraction: 0.001
   planner_configs:
     - RRTConnectkConfigDefault
     - RRTstarkConfigDefault
