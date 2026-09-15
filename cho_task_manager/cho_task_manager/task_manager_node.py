@@ -33,6 +33,24 @@ def main():
     node.declare_parameter("probe_translation", [0.0, 0.0, 0.0])
     node.declare_parameter("probe_duration", 0.0)
     node.declare_parameter("probe_return", True)
+    # Recorded-trajectory replay. Paths rather than contents: a recording is an
+    # artefact produced elsewhere, and the layout file is the cell's own
+    # description of itself, which the replay checks the recording against and
+    # REFUSES on a mismatch. Empty means "not a replay task"; the replay tree
+    # raises a clear error if it is selected without them.
+    node.declare_parameter("replay_trajectory", "")
+    node.declare_parameter("replay_meta", "")
+    node.declare_parameter("replay_layout", "")
+    # Fraction of the recorded clock to replay at. 0.0 means "use the task's own
+    # default", which is deliberately conservative: a first replay should be
+    # slow, and these recordings are timed for a simulator, not for this arm.
+    node.declare_parameter("replay_speed_scale", 0.0)
+    # How the arm reaches the recording's start pose: "direct" interpolates
+    # there through the hold controller and checks nothing, "moveit" plans it
+    # and needs move_group plus the MoveIt bridge running. Empty keeps the
+    # task default (direct), which is right for a simulator with no
+    # collisions to check.
+    node.declare_parameter("home_via", "")
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
@@ -69,6 +87,15 @@ def main():
     if control_mode:
         robot_config['control_mode'] = control_mode
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
+
+    for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via"):
+        value = node.get_parameter(key).get_parameter_value().string_value
+        if value:
+            robot_config[key] = value
+    replay_speed_scale = node.get_parameter(
+        "replay_speed_scale").get_parameter_value().double_value
+    if replay_speed_scale > 0.0:
+        robot_config["replay_speed_scale"] = replay_speed_scale
 
     try:
         root = build_task_tree(task, robot_config)

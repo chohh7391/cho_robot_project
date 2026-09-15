@@ -24,8 +24,20 @@ class JointSpaceActionBehavior(BaseActionBehavior):
         controller_name: str = ControllerNames.JOINT_QP,
         target_joints_key: str = None,
         blackboard_namespace: str = TASK_NAMESPACE,
+        action_name: str = None,
+        timeout_sec: float = 30.0,
     ):
-        super().__init__(name, JointSpace, controller_action_name(controller_name))
+        # `action_name` targets an endpoint that is not a controller's own. The
+        # MoveIt bridge serves this SAME JointSpace action at
+        # /<robot>/controller_action_server/moveit_joint, and a goal sent there
+        # is planned and collision-checked rather than interpolated straight --
+        # which is the whole difference between the two ways of going home.
+        # Left unset, the name is assembled from the controller, which is right
+        # for every direct controller action.
+        super().__init__(
+            name, JointSpace,
+            action_name or controller_action_name(controller_name),
+            timeout_sec=timeout_sec)
         if (target_joints is None) == (target_joints_key is None):
             raise ValueError(
                 f"[{name}] give exactly one of target_joints (a literal, fixed "

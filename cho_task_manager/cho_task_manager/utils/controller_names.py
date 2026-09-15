@@ -273,6 +273,18 @@ def controller_action_name(controller):
     return f'{ACTION_SERVER_NAMESPACE}/{controller_name_value(controller)}'
 
 
+def follow_joint_trajectory_action_name(controller):
+    """The stock FollowJointTrajectory endpoint of a trajectory controller.
+
+    NOT under ACTION_SERVER_NAMESPACE: this endpoint is published by
+    joint_trajectory_controller itself rather than by a cho action server, so it
+    lives under the controller's own name. MoveIt's execution config points at
+    the same endpoint (cho_moveit_<robot>/config/moveit_controllers.yaml), which
+    is exactly why only one consumer may own the arm at a time.
+    """
+    return f'/{controller_name_value(controller)}/follow_joint_trajectory'
+
+
 def _config_controller_names() -> List[str]:
     """All non-null controller names referenced by any robot config yaml."""
     names: List[str] = []
@@ -290,11 +302,90 @@ def _config_controller_names() -> List[str]:
     return names
 
 
+def moveit_joint_action_name(robot_config) -> str:
+    """The MoveIt plan-and-execute joint action for this robot.
+
+    Read from ``actions.preferences.joint`` rather than assembled here: the
+    registry VALIDATES that the first joint preference is exactly
+    ``/<robot>/controller_action_server/moveit_joint`` (cho_robot_config
+    registry.py), so this cannot drift from the name moveit_action_bridge.py
+    actually serves.
+
+    It is served by that bridge, not by a controller -- MoveIt executes through
+    ``controllers.moveit_trajectory``, so that controller must be ACTIVE for a
+    goal sent here to move anything.
+    """
+    registry = load_registry_config(
+        robot_config['robot_type'], robot_config.get('profile', 'single'))
+    preferences = ((registry.get('actions') or {}).get('preferences') or {}).get('joint') or []
+    if not preferences:
+        raise ValueError(
+            "robot_type '%s' declares no actions.preferences.joint, so it has "
+            'no MoveIt joint action to home through' % robot_config['robot_type'])
+    return preferences[0]
+
+
+def _preference_action_names() -> List[str]:
+    """Every absolute action name any robot config lists as a preference.
+
+    These are the endpoints served by nodes rather than by controllers -- the
+    MoveIt bridge's `moveit_joint` / `moveit_task` -- so they do not come out of
+    the controller roles, and the registry has already validated their shape.
+    """
+    names: List[str] = []
+    for robot_type in available_robot_types():
+        for profile in available_profiles(robot_type):
+            try:
+                registry = load_registry_config(robot_type, profile)
+            except (ValueError, KeyError):
+                continue
+            preferences = (registry.get('actions') or {}).get('preferences') or {}
+            for space in ('joint', 'task', 'gripper'):
+                for name in preferences.get(space) or []:
+                    if name not in names:
+                        names.append(name)
+    return names
+
+
+def _trajectory_controller_names() -> List[str]:
+    """Every robot's ``controllers.moveit_trajectory``, from the raw registry.
+
+    Read from the registry rather than from the compatibility view, which does
+    not carry this role: the view exposes the roles a task tree commands
+    directly (joint_space, task_space, gripper, vla, pour), and the trajectory
+    controller is normally driven by MoveIt or by an external executor instead.
+    """
+    names: List[str] = []
+    for robot_type in available_robot_types():
+        for profile in available_profiles(robot_type):
+            try:
+                registry = load_registry_config(robot_type, profile)
+            except (ValueError, KeyError):
+                continue
+            controller = (registry.get('controllers') or {}).get('moveit_trajectory')
+            if controller and controller not in names:
+                names.append(controller)
+    return names
+
+
 def valid_controller_action_names() -> List[str]:
-    """Action names accepted by BaseActionBehavior (enum + all robot configs)."""
+    """Action names accepted by BaseActionBehavior (enum + all robot configs).
+
+    Includes each trajectory controller's own FollowJointTrajectory endpoint, so
+    a behaviour that replays a recorded trajectory goes through the same name
+    check as every other action behaviour instead of around it.
+    """
     names = [controller_action_name(c) for c in ControllerNames]
     for controller in _config_controller_names():
-        action_name = controller_action_name(controller)
+        for action_name in (controller_action_name(controller),
+                            follow_joint_trajectory_action_name(controller)):
+            if action_name not in names:
+                names.append(action_name)
+    for controller in _trajectory_controller_names():
+        action_name = follow_joint_trajectory_action_name(controller)
+        if action_name not in names:
+            names.append(action_name)
+    for action_name in _preference_action_names():
         if action_name not in names:
             names.append(action_name)
     return names

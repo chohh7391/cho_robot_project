@@ -15,6 +15,8 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config', 'perception'),
             glob('config/perception/*.yaml')),
+        (os.path.join('share', package_name, 'config', 'replay'),
+            glob('config/replay/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

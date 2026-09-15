@@ -1,0 +1,23 @@
+# What the MuJoCo SDL cell actually contains, for the trajectory-replay gate.
+#
+# A replay is position control that senses nothing, so the objects have to be
+# where the recording assumes or the arm goes to the wrong place anyway. This
+# file is how the cell declares its own layout; `trajectory_replay` compares it
+# against the recording's `layout_the_trajectory_assumes` and REFUSES on a
+# mismatch. Nothing here is perceived - it is a description of a cell someone
+# set up, and it has to be kept in step with the scene it describes.
+#
+# This one describes cho_description_fr5/xml/scene_ag95_sdl.xml, whose vessel
+# positions are the Isaac cell's fixed ones (isaacsim/scripts/standalone/task.py
+# in sdl_project). A recording made under position RANDOMIZATION will not match
+# it - that is the gate working, not a bug. Generate the matching scene and a
+# layout file beside it for such a recording.
+#
+# yaw_deg is OMITTED for the vessels on purpose: both are round, drawn as
+# cylinders and modelled by the planner as square footprints, so they have no
+# yaw to match. An object whose orientation does matter must declare one.
+layout:
+  beaker:
+    xy: [0.49, 0.17475]
+  flask:
+    xy: [0.48383, 0.33166]

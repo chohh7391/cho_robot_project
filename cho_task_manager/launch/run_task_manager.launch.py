@@ -41,6 +41,33 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'probe_return', default_value='true',
             description='Run the reverse probe so the arm ends where it started.'),
+        # ---- recorded-trajectory replay (fr5 trajectory_replay) ----
+        # A recording is an artefact produced elsewhere, so these are paths.
+        # replay_layout is the CELL's own description of itself: the replay
+        # compares the recording's assumed layout against it and refuses to run
+        # when they disagree, because a blind replay against a cell laid out
+        # differently puts the arm somewhere nobody chose.
+        DeclareLaunchArgument(
+            'replay_trajectory', default_value='',
+            description='Waypoint CSV to replay (t_s, j1..j6, operation). '
+                        'Empty for any task that is not a replay.'),
+        DeclareLaunchArgument(
+            'replay_meta', default_value='',
+            description='Recording meta JSON. Empty derives it from the CSV name '
+                        '(_waypoints.csv -> _meta.json).'),
+        DeclareLaunchArgument(
+            'replay_layout', default_value='',
+            description='Cell layout YAML the recording is checked against (see '
+                        'cho_task_manager/config/replay/).'),
+        DeclareLaunchArgument(
+            'home_via', default_value='',
+            description='How the arm reaches the start pose: direct (interpolate, '
+                        'no collision checking) or moveit (planned; needs move_group '
+                        'and the MoveIt bridge). Empty keeps the task default, direct.'),
+        DeclareLaunchArgument(
+            'replay_speed_scale', default_value='0.0',
+            description='Fraction of the recorded clock to replay at; 0 keeps the '
+                        "task's own conservative default."),
         # ---- perception, when the task needs a detected target ----
         # cho_object_pose is generic: it owns the pipeline, the gates and the
         # frame resolution, and knows nothing about any particular job. WHICH
@@ -91,6 +118,11 @@ def generate_launch_description():
                     "[float(v) for v in ", LaunchConfiguration('probe_translation'), "]"]),
                 'probe_duration': LaunchConfiguration('probe_duration'),
                 'probe_return': LaunchConfiguration('probe_return'),
+                'replay_trajectory': LaunchConfiguration('replay_trajectory'),
+                'replay_meta': LaunchConfiguration('replay_meta'),
+                'replay_layout': LaunchConfiguration('replay_layout'),
+                'replay_speed_scale': LaunchConfiguration('replay_speed_scale'),
+                'home_via': LaunchConfiguration('home_via'),
             }]
         )
     ])

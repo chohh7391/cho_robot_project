@@ -15,6 +15,7 @@ from cho_task_manager.tasks.franka import (
 )
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
+    create_fr5_trajectory_replay_tree,
 )
 from cho_task_manager.tasks.openarm import (
     create_openarm_controller_check_torque_tree,
@@ -48,6 +49,10 @@ _TASK_REGISTRY = {
         # tree owns the arm's controller state around it. See
         # tasks/fr5/fjt_handover.py.
         'fjt_handover': create_fr5_fjt_handover_tree,
+        # Replays a trajectory recorded in a simulator: no planning, no
+        # perception, and a layout gate that refuses a cell laid out
+        # differently. See tasks/fr5/trajectory_replay.py.
+        'trajectory_replay': create_fr5_trajectory_replay_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,
