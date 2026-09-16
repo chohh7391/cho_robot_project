@@ -51,7 +51,28 @@ gripper_controller:
     # With the target commanded outright the stall detector's lag condition is
     # true from the first cycle, so give the 485 bus and the jaws time to start
     # moving before a lack of motion is allowed to mean anything.
-    stall_grace: 0.5
+    #
+    # 1.2 s, not 0.5, because of what the stroke register does after a
+    # MoveGripper: it reports a fixed wrong value for 0.83 s (measured three
+    # times: 0.83, 0.83, 0.85) before it starts tracking. The driver holds the
+    # pre-command stroke across that window rather than publish the wrong one --
+    # and a held value is exactly what a stalled finger looks like. At 0.5 the
+    # detector armed inside that window, called the hold a stall, and finished
+    # the grasp in 0.9 s while the jaws had 2 s of travel left; the tree then
+    # started the next trajectory on top of a moving gripper, which this robot
+    # will not run at the same time as the arm, and the arm stood frozen for
+    # 5.7 s while its reference ran away into a tolerance abort.
+    #
+    # 1.2 s narrows that window without closing it, and it cannot close it: the
+    # 0.83 s is counted from when the command reaches the ROBOT, while this is
+    # counted from when the controller sets the target, and the gap between them
+    # is one MoveGripper call -- measured anywhere from 22 ms to 2068 ms. No
+    # fixed value covers that. What actually keeps the arm off a moving gripper
+    # is the settle wait in the replay tree (GRIPPER_SETTLE_SEC); this only stops
+    # the detector from firing in the first moments, when it has nothing to go
+    # on. The exact fix is for the gripper's own motion-done register to gate the
+    # action, which needs a state interface that does not exist yet.
+    stall_grace: 1.2
     # Stroke feedback is an integer percent (~0.95 mm of width), so the
     # differenced rate reads zero for a few cycles at a time even mid-stroke.
     # A longer dwell keeps that quantisation from looking like a stall.

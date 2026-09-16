@@ -13,20 +13,29 @@ follows from that being POSITION CONTROL THAT SENSES NOTHING:
 2. **The arm is taken to the recording's own start pose, slowly.** That first
    waypoint is not a neutral pose, and starting a replay from somewhere else
    makes the first segment a lunge -- on seed 5 that is 2.99 rad (171 deg) on
-   j5 alone. It is NOT where the arm is left afterwards: finishing returns it
-   to the robot's canonical ready pose, because the start pose belongs to one
-   trial rather than to the arm. ``home_via`` chooses how the move is made:
+   j5 alone. Finishing returns the arm to that same pose, so a second run of
+   the same recording approaches from millimetres away rather than repeating
+   the swing. ``home_via`` chooses how the move is made:
 
-   * ``direct`` (the default) interpolates straight there through the hold
-     controller's own joint action. Nothing checks for collisions on the way.
-     Right for MuJoCo, where every geom in the FR5 model is
-     ``contype/conaffinity 0`` and there is nothing to collide with anyway.
-   * ``moveit`` plans the move instead, through the MoveIt bridge's
-     ``moveit_joint`` action, so the path to the start pose is
-     collision-checked. Use it on hardware, where the arm starts from wherever
-     the operator left it. It needs ``move_group`` and the bridge running
-     (``bringup_mujoco_moveit.launch.py`` / the real equivalent), which is why
-     it is not the default.
+   * ``moveit`` (the default) plans the move through the MoveIt bridge's
+     ``moveit_joint`` action, so the path to the start pose is collision-checked
+     and the motion is executed by the trajectory controller, which decides it
+     has arrived by its own goal tolerance. It needs ``move_group`` and the
+     bridge running -- ``bringup_real_moveit.launch.py``, or the MuJoCo/Gazebo/
+     Isaac equivalent -- so a bringup without MoveIt has to pass
+     ``home_via:=direct``.
+   * ``direct`` interpolates straight there through the hold controller's own
+     joint action. Nothing checks for collisions on the way, so the arm goes
+     wherever the straight line in joint space goes. Right for MuJoCo, where
+     every geom in the FR5 model is ``contype/conaffinity 0`` and there is
+     nothing to collide with, and fine on hardware when the arm already sits
+     near the start pose. It also calls the move done once the six-joint error
+     norm is under 0.05 rad, which on a long move it reaches by running out of
+     duration rather than by converging: measured on the FR5, homing that
+     started far from the pose finished 0.0494 and 0.0497 rad out, against
+     0.0001 when it started near. That residual is taken up by the next
+     segment's lead-in, so the replay starts by moving the arm a little in the
+     direction it is about to reverse out of.
 
    MoveIt executes through the SAME ``joint_trajectory_controller`` the replay
    uses, so the ``moveit`` variant does one controller switch fewer, not more:
@@ -107,7 +116,7 @@ HOME_DURATION_SEC = 12.0
 HOME_VIA_DIRECT = 'direct'
 HOME_VIA_MOVEIT = 'moveit'
 HOME_VIA_CHOICES = (HOME_VIA_DIRECT, HOME_VIA_MOVEIT)
-DEFAULT_HOME_VIA = HOME_VIA_DIRECT
+DEFAULT_HOME_VIA = HOME_VIA_MOVEIT
 
 #: Extra seconds a MoveIt home is given on top of its execution time. The bridge
 #: answers only once execution finished, and planning happens before any of it.
@@ -117,6 +126,27 @@ MOVEIT_PLANNING_MARGIN_SEC = 30.0
 #: conservative: the recordings this replays were timed by a planner for a
 #: simulator, and 1.0 has been measured above this arm's commissioning ceiling.
 DEFAULT_SPEED_SCALE = 0.25
+
+#: Seconds the tree stands still after a gripper event before moving the arm.
+#:
+#: The FR5 will not run the gripper and the arm at once. It accepts the servo
+#: stream while the jaws move and executes almost none of it, so the trajectory
+#: controller's reference -- which advances on the wall clock -- walks away from
+#: an arm that is standing still, and the goal aborts on state tolerance once the
+#: gap passes 0.1 rad. Measured on the real robot: 5.7 s of frozen arm at the
+#: grasp, every time.
+#:
+#: Waiting for the gripper's own action is not enough. It reports success while
+#: the jaws are still travelling, because the stroke register it judges by
+#: reports a fixed wrong value for about 0.8 s after each command. From the
+#: action returning to the jaws actually stopping measured 2.05 s and 2.62 s.
+#:
+#: So this is deliberately over-provisioned rather than tuned: it only has to
+#: exceed the jaw travel, which is bounded (a full stroke is ~2.6 s), and paying
+#: a few seconds twice in a 150 s replay is cheap next to an aborted run. The
+#: exact fix is for the gripper's own "motion done" register to gate its action;
+#: until that exists this is the honest substitute.
+GRIPPER_SETTLE_SEC = 4.0
 
 #: Velocity scaling the ceiling check is applied at, from the registry's
 #: moveit.execution entry - the same fraction MoveIt executes at, so a replay
@@ -136,17 +166,6 @@ FR5_POSITION_LIMITS = {
     'j5': (-3.0543, 3.0543),
     'j6': (-3.0543, 3.0543),
 }
-
-
-def ready_pose(robot_config):
-    """The robot's canonical ready pose, as a JointState.
-
-    Delegated to fjt_handover rather than re-derived: it is the same registry
-    entry for the same reason -- home '0' is all-zero, puts the wrist at the
-    floor, and the registry records it as diagnostic-only.
-    """
-    from cho_task_manager.tasks.fr5.fjt_handover import home_joint_state
-    return home_joint_state(robot_config)
 
 
 def replay_controller(robot_config) -> str:
@@ -285,15 +304,13 @@ def create_fr5_trajectory_replay_tree(robot_config=None) -> py_trees.behaviour.B
         segments, controller, joint_names, time_scale, limits,
         velocity_scaling(robot_config)))
 
-    # Finishing goes to the ROBOT's canonical ready pose, not back to the
-    # recording's start. The start pose belongs to one trial -- it is wherever
-    # that trajectory happened to begin, often low over the bench and deep in
-    # the workspace -- whereas the registry's home is the pose this arm is meant
-    # to be left in between sessions, and the pose the next task will assume it
-    # starts from. Same pose fjt_handover returns to, for the same reason.
-    finish_seq = _home_block(robot_config, ready_pose(robot_config), home_via,
-                             hold, controller, name='4_Finish', suffix='_Final',
-                             park=True)
+    # Finishing returns to the recording's OWN start pose, the same one
+    # 1_Initialize goes to. That leaves the cell as the next run of this
+    # recording wants to find it: the following replay's approach becomes a
+    # few milliradians instead of the 2.99 rad (171 deg on j5) swing from the
+    # registry's ready pose, which is the motion worth not repeating at a rig.
+    finish_seq = _home_block(robot_config, home, home_via, hold, controller,
+                             name='4_Finish', suffix='_Final', park=True)
 
     mission.add_children([init_seq, handover_seq, replay_seq, finish_seq])
 
@@ -367,7 +384,8 @@ def _home_block(robot_config, home, home_via, hold, controller, name, suffix, pa
     return sequence
 
 
-def _replay_children(segments, controller, joint_names, time_scale, limits, scaling):
+def _replay_children(segments, controller, joint_names, time_scale, limits, scaling,
+                     settle_sec=GRIPPER_SETTLE_SEC):
     """One behaviour per segment, in recorded order."""
     children = []
     for index, segment in enumerate(segments):
@@ -377,6 +395,9 @@ def _replay_children(segments, controller, joint_names, time_scale, limits, scal
                     index, 'Close' if segment.grasp else 'Open', segment.operation or 'seg'),
                 grasp=segment.grasp,
             ))
+            # Stand still until the jaws really have. See GRIPPER_SETTLE_SEC.
+            children.append(py_trees.timers.Timer(
+                name='%d_Gripper_Settle' % index, duration=settle_sec))
             continue
         children.append(FollowJointTrajectoryBehavior(
             name='%d_Replay_%s' % (index, segment.operation or 'move'),

@@ -232,8 +232,23 @@ def test_the_tree_puts_a_gripper_behaviour_at_the_event(tmp_path):
     tree = build_task_tree('trajectory_replay', config)
     replay = [node for node in tree.iterate() if node.name == '3_Replay'][0]
     kinds = [child.name for child in replay.children]
-    assert len(kinds) == 3
+    assert len(kinds) == 4
     assert 'Gripper_Close' in kinds[1]
+    # The wait belongs BETWEEN the grasp and the next trajectory, which is the
+    # whole point of it: the FR5 executes almost none of the servo stream while
+    # its jaws are moving, so an arm segment started on top of a grasp stands
+    # still while its reference walks away into a tolerance abort.
+    assert 'Gripper_Settle' in kinds[2]
+    assert 'Replay' in kinds[3]
+
+
+def test_the_gripper_settle_wait_outlasts_a_full_jaw_stroke():
+    """A full open or close measured ~2.6 s on the FR5; the wait must exceed it.
+
+    Sized rather than tuned: it only has to outlast what the jaws can take, and
+    it is paid twice in a replay of several minutes.
+    """
+    assert trajectory_replay.GRIPPER_SETTLE_SEC > 2.6
 
 
 def test_an_unknown_gripper_event_is_refused(tmp_path):
@@ -393,14 +408,20 @@ def _replay_config(tmp_path, **extra):
     return config
 
 
-def test_the_default_home_is_direct_and_needs_no_moveit():
-    # MuJoCo has no collisions to check (every FR5 geom is contype 0), so
-    # starting move_group for it would be a dependency paid for nothing.
-    assert trajectory_replay.DEFAULT_HOME_VIA == 'direct'
+def test_the_default_home_plans_rather_than_interpolates():
+    """The arm starts wherever the last run left it, so the default checks.
+
+    The direct path also calls the move done at a six-joint error norm of
+    0.05 rad, which a long move reaches by running out of duration rather than
+    by converging: on the FR5 it finished 0.049 rad out whenever it started far
+    from the pose, and the replay aborted seconds later every time.
+    """
+    assert trajectory_replay.DEFAULT_HOME_VIA == 'moveit'
 
 
 def test_a_direct_home_uses_the_hold_controllers_own_action(tmp_path):
-    tree = build_task_tree('trajectory_replay', _replay_config(tmp_path))
+    tree = build_task_tree(
+        'trajectory_replay', _replay_config(tmp_path, home_via='direct'))
     names = {node.name for node in tree.iterate()}
 
     assert 'Go_Home' in names
@@ -428,7 +449,8 @@ def test_a_moveit_home_does_one_switch_fewer(tmp_path):
     The direct path homes on the hold controller and must then hand the arm
     over; the MoveIt path hands it over once and keeps it.
     """
-    direct = build_task_tree('trajectory_replay', _replay_config(tmp_path))
+    direct = build_task_tree(
+        'trajectory_replay', _replay_config(tmp_path, home_via='direct'))
     moveit = build_task_tree(
         'trajectory_replay', _replay_config(tmp_path, home_via='moveit'))
 
@@ -478,34 +500,31 @@ def _home_targets(tree):
             if node.name.startswith('Go_Home')}
 
 
-def test_it_starts_at_the_recordings_pose_and_ends_at_the_robots(tmp_path):
-    """The two homes are different poses, and deliberately so.
+def test_it_both_starts_and_ends_at_the_recordings_own_pose(tmp_path):
+    """Finishing returns to where the recording begins, not to a neutral pose.
 
-    Going to the recording's start is what makes the first replayed segment not
-    a lunge. Coming back to it would leave the arm wherever one trial happened
-    to begin -- often low over the bench -- instead of the pose the arm is meant
-    to be left in and the next task will assume.
+    Going there first is what keeps the opening segment from being a lunge --
+    2.99 rad on j5 for seed 5. Ending there too means a second run of the same
+    recording approaches from millimetres away instead of repeating that swing,
+    which is the motion worth not doing twice at a rig.
     """
-    csv_path, meta_path = _write(tmp_path, _ramp(20), {
-        'home_arm_rad': [0.106, -0.9425, -2.1747, -1.6448, 1.4143, -0.0407]})
+    home = [0.106, -0.9425, -2.1747, -1.6448, 1.4143, -0.0407]
+    csv_path, meta_path = _write(tmp_path, _ramp(20), {'home_arm_rad': home})
     layout = _layout_file(tmp_path, {
         'beaker': {'xy': [0.48, 0.13]}, 'flask': {'xy': [0.53, 0.35]}})
     config = _config()
     config.update({'replay_trajectory': csv_path, 'replay_meta': meta_path,
-                   'replay_layout': layout})
+                   'replay_layout': layout, 'home_via': 'direct'})
 
     targets = _home_targets(build_task_tree('trajectory_replay', config))
-    ready = list(trajectory_replay.ready_pose(config).position)
 
-    assert targets['Go_Home'] == pytest.approx(
-        [0.106, -0.9425, -2.1747, -1.6448, 1.4143, -0.0407])
-    assert targets['Go_Home_Final'] == pytest.approx(ready)
-    assert targets['Go_Home'] != pytest.approx(targets['Go_Home_Final'])
+    assert targets['Go_Home'] == pytest.approx(home)
+    assert targets['Go_Home_Final'] == pytest.approx(home)
 
 
-def test_the_moveit_path_ends_at_the_robots_pose_too(tmp_path):
-    csv_path, meta_path = _write(tmp_path, _ramp(20), {
-        'home_arm_rad': [0.106, -0.9425, -2.1747, -1.6448, 1.4143, -0.0407]})
+def test_the_moveit_path_ends_at_the_recordings_pose_too(tmp_path):
+    home = [0.106, -0.9425, -2.1747, -1.6448, 1.4143, -0.0407]
+    csv_path, meta_path = _write(tmp_path, _ramp(20), {'home_arm_rad': home})
     layout = _layout_file(tmp_path, {
         'beaker': {'xy': [0.48, 0.13]}, 'flask': {'xy': [0.53, 0.35]}})
     config = _config()
@@ -513,20 +532,25 @@ def test_the_moveit_path_ends_at_the_robots_pose_too(tmp_path):
                    'replay_layout': layout, 'home_via': 'moveit'})
 
     targets = _home_targets(build_task_tree('trajectory_replay', config))
-    ready = list(trajectory_replay.ready_pose(config).position)
 
-    assert targets['Go_Home_MoveIt_Final'] == pytest.approx(ready)
-
-
-def test_the_ready_pose_is_the_registry_pose_not_zero():
-    # home '0' is all-zero and recorded as diagnostic-only: it puts the wrist at
-    # the floor and j5 = 0 is a wrist singularity.
-    ready = trajectory_replay.ready_pose(_config())
-    assert len(ready.position) == 6
-    assert any(abs(value) > 1e-9 for value in ready.position)
+    assert targets['Go_Home_MoveIt'] == pytest.approx(home)
+    assert targets['Go_Home_MoveIt_Final'] == pytest.approx(home)
 
 
-# --- reaching the first waypoint -------------------------------------------
+def test_the_arm_is_still_parked_on_the_hold_controller_at_the_end(tmp_path):
+    # Where it ends up is one question; what is holding it is another. Ending a
+    # session on the controller an external executor was driving is how an arm
+    # is left unattended under a live goal.
+    csv_path, meta_path = _write(tmp_path, _ramp(20))
+    layout = _layout_file(tmp_path, {
+        'beaker': {'xy': [0.48, 0.13]}, 'flask': {'xy': [0.53, 0.35]}})
+    config = _config()
+    config.update({'replay_trajectory': csv_path, 'replay_meta': meta_path,
+                   'replay_layout': layout, 'home_via': 'moveit'})
+
+    names = {n.name for n in build_task_tree('trajectory_replay', config).iterate()}
+    assert 'Park_On_joint_space_position_controller_Final' in names
+
 
 def _first_two_times(traj):
     def secs(point):
