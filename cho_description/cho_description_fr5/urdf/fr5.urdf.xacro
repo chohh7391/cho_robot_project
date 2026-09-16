@@ -30,6 +30,8 @@
   <xacro:arg name="gripper_softversion" default="0"/>
   <xacro:arg name="gripper_bus" default="1"/>
   <xacro:arg name="gripper_index" default="1"/>
+  <!-- Serialise the driver's SDK calls. See fr5.ros2_control.xacro. -->
+  <xacro:arg name="sdk_serialise" default="false"/>
   <xacro:arg name="gripper_speed_percent" default="30"/>
   <xacro:arg name="gripper_force_percent" default="30"/>
   <xacro:arg name="gripper_percent_at_closed" default="0"/>
@@ -66,6 +68,7 @@
     gripper_softversion="$(arg gripper_softversion)"
     gripper_bus="$(arg gripper_bus)"
     gripper_index="$(arg gripper_index)"
+    sdk_serialise="$(arg sdk_serialise)"
     gripper_speed_percent="$(arg gripper_speed_percent)"
     gripper_force_percent="$(arg gripper_force_percent)"
     gripper_percent_at_closed="$(arg gripper_percent_at_closed)"

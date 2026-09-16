@@ -65,7 +65,7 @@
                       gripper_speed_percent:='30' gripper_force_percent:='30'
                       gripper_percent_at_closed:='0' gripper_percent_at_open:='100'
                       gripper_open_on_activate:='false' gripper_apply_config:='false'
-                      gripper_required:='false'
+                      gripper_required:='false' sdk_serialise:='true'
                       mujoco_initial_keyframe:='' mujoco_scene:=''">
     <ros2_control name="${name}" type="system">
       <hardware>
@@ -110,6 +110,17 @@
                robot_ip from this hardware parameter (upstream hardcodes it). -->
           <plugin>fairino_hardware/FairinoHardwareInterface</plugin>
           <param name="robot_ip">${robot_ip}</param>
+          <!-- Whether the driver serialises its SDK calls. On by default: one
+               FRRobot is one socket and the SDK does not lock it, so a gripper
+               command issued from its own thread can lose its reply to the arm's
+               125 Hz traffic and never return. Off is for measuring what that
+               lock costs the servo stream, which cannot be done any other way. -->
+          <xacro:if value="${sdk_serialise}">
+            <param name="sdk_serialise">true</param>
+          </xacro:if>
+          <xacro:unless value="${sdk_serialise}">
+            <param name="sdk_serialise">false</param>
+          </xacro:unless>
           <xacro:if value="${gripper == 'ag95'}">
             <!-- Naming this joint is what switches the hardware's gripper
                  support on. Everything else comes from fr5.config.yaml, which
