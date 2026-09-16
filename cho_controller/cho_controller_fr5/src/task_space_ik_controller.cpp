@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
+#include <vector>
 
 namespace cho_controller {
 namespace fr5 {
@@ -28,6 +30,13 @@ CallbackReturn TaskSpaceIKController::on_init()
         auto_declare<double>("max_delta_q", 0.02);
         auto_declare<bool>("enforce_workspace_floor", true);
         auto_declare<double>("minimum_ee_height", 0.15);
+        // The volume bolted to the flange, as an axis-aligned box in the EE
+        // frame, and the height its lowest corner must clear. Empty means no
+        // tool, which is the old behaviour exactly -- so a bringup that says
+        // nothing is guarded exactly as it was before this existed.
+        auto_declare<std::vector<double>>("tool_envelope_min", {});
+        auto_declare<std::vector<double>>("tool_envelope_max", {});
+        auto_declare<double>("minimum_tool_height", 0.0);
         auto_declare<double>("workspace_floor_tolerance", 1e-4);
         auto_declare<double>("recovery_minimum_height_gain", 0.01);
         auto_declare<double>("recovery_monotonic_tolerance", 1e-5);
@@ -47,6 +56,9 @@ CallbackReturn TaskSpaceIKController::on_configure(
         return CallbackReturn::FAILURE;
     }
     if (FR5BaseController::on_configure(previous_state) != CallbackReturn::SUCCESS) {
+        return CallbackReturn::FAILURE;
+    }
+    if (!build_tool_envelope()) {
         return CallbackReturn::FAILURE;
     }
     action_server_ = std::make_shared<FR5TaskSpaceActionServer>(
@@ -145,12 +157,16 @@ controller_interface::return_type TaskSpaceIKController::update(
         // one-cycle unsafe command. At the zero spawn pose this also directs users
         // away from task-space control at the wrist singularity.
         if (enforce_workspace_floor_) {
-            const double measured_height = state_.H_ee.translation().z();
-            const double reference_height = H_ref.translation().z();
-            const double goal_height = state_.H_ee_ref.translation().z();
-            const double accepted_floor = minimum_ee_height_ - workspace_floor_tolerance_;
+            // Margins, not heights: floor_margin() already folds in whichever
+            // of the two floors -- the EE frame's or the carried tool's -- this
+            // pose is closest to breaking, so every test below reads the same
+            // whether or not a gripper is bolted on.
+            const double measured_margin = floor_margin(state_.H_ee);
+            const double reference_margin = floor_margin(H_ref);
+            const double goal_margin = floor_margin(state_.H_ee_ref);
+            const double accepted_margin = -workspace_floor_tolerance_;
             const bool starts_below_floor =
-                measured_height < accepted_floor || reference_height < accepted_floor;
+                measured_margin < accepted_margin || reference_margin < accepted_margin;
 
             // A robot spawned below the configured workspace plane must still have
             // one safe way out. On the first cycle of a new goal, allow only a
@@ -158,10 +174,10 @@ controller_interface::return_type TaskSpaceIKController::update(
             // constrained monotonically below, so this exception cannot be used
             // for horizontal/downward motion near the physical floor.
             if (!prev_running_ && starts_below_floor) {
-                const double recovery_start = std::max(measured_height, reference_height);
-                const bool reaches_safe_height = goal_height >= accepted_floor;
+                const double recovery_start = std::max(measured_margin, reference_margin);
+                const bool reaches_safe_height = goal_margin >= accepted_margin;
                 const bool meaningfully_upward =
-                    goal_height >= recovery_start + recovery_minimum_height_gain_;
+                    goal_margin >= recovery_start + recovery_minimum_height_gain_;
                 const Eigen::Vector2d lateral_delta =
                     state_.H_ee_ref.translation().head<2>() - H_ref.translation().head<2>();
                 const double orientation_error = pinocchio::log3(
@@ -176,22 +192,33 @@ controller_interface::return_type TaskSpaceIKController::update(
                     floor_recovery_start_rotation_ = H_ref.rotation();
                     RCLCPP_WARN(
                         get_node()->get_logger(),
-                        "workspace floor guard: allowing upward recovery from %.6f m "
-                        "to %.6f m (minimum %.6f m)",
-                        recovery_start, goal_height, minimum_ee_height_);
+                        "workspace floor guard: allowing upward recovery, margin "
+                        "%.6f m -> %.6f m above the floor it is closest to",
+                        recovery_start, goal_margin);
                 }
             }
 
             const bool recovery_rejected = starts_below_floor && !floor_recovery_active_;
             const bool ordinary_goal_unsafe =
-                !floor_recovery_active_ && goal_height < accepted_floor;
+                !floor_recovery_active_ && goal_margin < accepted_margin;
             if (recovery_rejected || ordinary_goal_unsafe) {
                 std::ostringstream reason;
-                reason << "workspace floor guard rejected non-upward recovery: "
-                       << "measured/reference/goal EE heights="
-                       << measured_height << "/" << reference_height << "/" << goal_height
-                       << " m, required target >= " << minimum_ee_height_
-                       << " m and upward gain >= " << recovery_minimum_height_gain_
+                // Two different refusals reach here and they are not the same
+                // event: one is a goal sent from a pose already under a floor
+                // that does not climb out, the other an ordinary goal from a
+                // safe pose that would go under. Saying "recovery" for both
+                // sends the reader looking for a recovery that never started.
+                reason << (recovery_rejected
+                               ? "workspace floor guard rejected non-upward recovery: "
+                               : "workspace floor guard refused the goal: ")
+                       << "measured/reference/goal margins="
+                       << measured_margin << "/" << reference_margin << "/" << goal_margin
+                       << " m above the floor each is closest to (goal EE height="
+                       << state_.H_ee_ref.translation().z() << " m over "
+                       << minimum_ee_height_ << " m, goal tool low point="
+                       << lowest_tool_point(state_.H_ee_ref) << " m over "
+                       << minimum_tool_height_
+                       << " m), required upward gain >= " << recovery_minimum_height_gain_
                        << " m; lateral/orientation change must be <= "
                        << recovery_maximum_lateral_displacement_ << " m/"
                        << recovery_maximum_orientation_error_ << " rad. Command a "
@@ -272,10 +299,10 @@ controller_interface::return_type TaskSpaceIKController::update(
                                "holding the last finite command");
                 return controller_interface::return_type::OK;
             }
-            const double candidate_height = H_candidate.translation().z();
-            const double accepted_floor = minimum_ee_height_ - workspace_floor_tolerance_;
+            const double candidate_margin = floor_margin(H_candidate);
+            const double accepted_margin = -workspace_floor_tolerance_;
             const bool recovery_descends = floor_recovery_active_ &&
-                candidate_height < floor_recovery_high_water_ - recovery_monotonic_tolerance_;
+                candidate_margin < floor_recovery_high_water_ - recovery_monotonic_tolerance_;
             const double recovery_lateral_deviation = floor_recovery_active_ ?
                 (H_candidate.translation().head<2>() - floor_recovery_start_xy_).norm() : 0.0;
             const double recovery_orientation_deviation = floor_recovery_active_ ?
@@ -285,13 +312,13 @@ controller_interface::return_type TaskSpaceIKController::update(
                 (recovery_lateral_deviation > recovery_maximum_lateral_displacement_ ||
                  recovery_orientation_deviation > recovery_maximum_orientation_error_);
             const bool ordinary_crosses_floor = !floor_recovery_active_ &&
-                candidate_height < accepted_floor;
+                candidate_margin < accepted_margin;
             if (recovery_descends || recovery_leaves_vertical_path || ordinary_crosses_floor) {
                 std::ostringstream reason;
                 if (recovery_descends) {
-                    reason << "workspace floor guard aborted upward recovery: next EE height="
-                           << candidate_height << " m would descend from reference height="
-                           << floor_recovery_high_water_ << " m (high-water tolerance "
+                    reason << "workspace floor guard aborted upward recovery: next margin="
+                           << candidate_margin << " m would descend from high water="
+                           << floor_recovery_high_water_ << " m (tolerance "
                            << recovery_monotonic_tolerance_ << " m). Holding the last command.";
                 } else if (recovery_leaves_vertical_path) {
                     reason << "workspace floor guard aborted upward recovery: candidate "
@@ -301,15 +328,18 @@ controller_interface::return_type TaskSpaceIKController::update(
                            << recovery_maximum_orientation_error_
                            << " rad. Holding the last command.";
                 } else {
-                    reason << "workspace floor guard: next EE height="
-                           << candidate_height << " m would cross minimum "
-                           << minimum_ee_height_ << " m. Holding the last safe command; "
-                              "use joint-space `home 1` to recover.";
+                    reason << "workspace floor guard: next step would cross a floor by "
+                           << -candidate_margin << " m (EE height="
+                           << H_candidate.translation().z() << " m over "
+                           << minimum_ee_height_ << " m, tool low point="
+                           << lowest_tool_point(H_candidate) << " m over "
+                           << minimum_tool_height_ << " m). Holding the last safe "
+                              "command; use joint-space `home 1` to recover.";
                 }
                 action_server_->abort_active_goal(reason.str());
                 floor_recovery_active_ = false;
             } else if (floor_recovery_active_ &&
-                       candidate_height < floor_recovery_high_water_) {
+                       candidate_margin < floor_recovery_high_water_) {
                 // Numerical noise within tolerance is held, never committed. This
                 // prevents a per-cycle tolerance from accumulating into descent.
                 q_candidate = q_ref_;
@@ -317,7 +347,7 @@ controller_interface::return_type TaskSpaceIKController::update(
                 q_ref_ = q_candidate;
                 if (floor_recovery_active_) {
                     floor_recovery_high_water_ =
-                        std::max(floor_recovery_high_water_, candidate_height);
+                        std::max(floor_recovery_high_water_, candidate_margin);
                 }
             }
         } else {
@@ -342,6 +372,117 @@ controller_interface::return_type TaskSpaceIKController::update(
     return controller_interface::return_type::OK;
 }
 
+bool TaskSpaceIKController::build_tool_envelope()
+{
+    // Runs AFTER FR5BaseController::on_configure, never from assign_parameters:
+    // it reads ee_name_, model_ and ee_id_, and the base builds all three. Called
+    // any earlier it would silently see an empty model, report no carried frames,
+    // and so never raise the one warning it exists to raise.
+    const auto & envelope_min = tool_envelope_min_;
+    const auto & envelope_max = tool_envelope_max_;
+    has_tool_envelope_ = false;
+    if (envelope_min.empty() && envelope_max.empty()) {
+        // No tool declared. Warn if the description says otherwise, because
+        // this is the combination that hurts: a gripper on the flange that the
+        // guard cannot see, which is how a legal wrist height puts the jaws
+        // under the table.
+        const std::size_t carried = count_frames_below_ee();
+        if (carried > 0) {
+            RCLCPP_WARN(
+                get_node()->get_logger(),
+                "%zu frame(s) are attached below '%s' but no tool_envelope_min/max "
+                "is configured, so the workspace floor guard is checking the bare "
+                "flange. Whatever is bolted on is invisible to it -- declare the "
+                "envelope in this controller's parameters.",
+                carried, ee_name_.c_str());
+        }
+        return true;
+    }
+    if (envelope_min.size() != 3 || envelope_max.size() != 3) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+            "tool_envelope_min and tool_envelope_max must each hold 3 values "
+            "(got %zu and %zu), or both be empty for no tool",
+            envelope_min.size(), envelope_max.size());
+        return false;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(envelope_min[axis]) || !std::isfinite(envelope_max[axis]) ||
+            envelope_min[axis] > envelope_max[axis]) {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                "tool_envelope axis %d is not a finite interval: [%f, %f]",
+                axis, envelope_min[axis], envelope_max[axis]);
+            return false;
+        }
+    }
+    if (!std::isfinite(minimum_tool_height_)) {
+        RCLCPP_ERROR(get_node()->get_logger(), "minimum_tool_height must be finite");
+        return false;
+    }
+
+    int corner = 0;
+    for (const double x : {envelope_min[0], envelope_max[0]}) {
+        for (const double y : {envelope_min[1], envelope_max[1]}) {
+            for (const double z : {envelope_min[2], envelope_max[2]}) {
+                tool_corners_.col(corner++) = Eigen::Vector3d(x, y, z);
+            }
+        }
+    }
+    has_tool_envelope_ = true;
+    RCLCPP_INFO(get_node()->get_logger(),
+        "Workspace floor guard: '%s' above %.4f m, and the tool envelope "
+        "x[%.4f, %.4f] y[%.4f, %.4f] z[%.4f, %.4f] in that frame above %.4f m. "
+        "The tool reaches %.4f m past the frame.",
+        ee_name_.c_str(), minimum_ee_height_,
+        envelope_min[0], envelope_max[0], envelope_min[1], envelope_max[1],
+        envelope_min[2], envelope_max[2], minimum_tool_height_, envelope_max[2]);
+    return true;
+}
+
+std::size_t TaskSpaceIKController::count_frames_below_ee() const
+{
+    // Frames whose parent joint is the one the EE frame hangs off. Anything
+    // bolted to the flange by a fixed joint lands here, which is enough to
+    // notice a gripper; it is not a measure of how far it reaches, and is used
+    // only to decide whether to warn.
+    const auto & ee_frame = model_.frames[ee_id_];
+    std::size_t carried = 0;
+    for (pinocchio::FrameIndex index = 0; index < model_.frames.size(); ++index) {
+        if (index == ee_id_) {
+            continue;
+        }
+        const auto & frame = model_.frames[index];
+        if (frame.parentJoint != ee_frame.parentJoint || frame.type != pinocchio::BODY) {
+            continue;
+        }
+        ++carried;
+    }
+    return carried;
+}
+
+double TaskSpaceIKController::lowest_tool_point(const pinocchio::SE3 & pose) const
+{
+    if (!has_tool_envelope_) {
+        return pose.translation().z();
+    }
+    // Only the world z of each corner is wanted, so only the third row of the
+    // rotation is touched: eight dot products, not eight 3x3 products.
+    double lowest = std::numeric_limits<double>::infinity();
+    const Eigen::Vector3d z_row = pose.rotation().row(2).transpose();
+    for (int corner = 0; corner < tool_corners_.cols(); ++corner) {
+        lowest = std::min(lowest, z_row.dot(tool_corners_.col(corner)));
+    }
+    return lowest + pose.translation().z();
+}
+
+double TaskSpaceIKController::floor_margin(const pinocchio::SE3 & pose) const
+{
+    const double ee_margin = pose.translation().z() - minimum_ee_height_;
+    if (!has_tool_envelope_) {
+        return ee_margin;
+    }
+    return std::min(ee_margin, lowest_tool_point(pose) - minimum_tool_height_);
+}
+
 bool TaskSpaceIKController::assign_parameters()
 {
     lambda_ = get_node()->get_parameter("lambda").as_double();
@@ -349,6 +490,9 @@ bool TaskSpaceIKController::assign_parameters()
     enforce_workspace_floor_ =
         get_node()->get_parameter("enforce_workspace_floor").as_bool();
     minimum_ee_height_ = get_node()->get_parameter("minimum_ee_height").as_double();
+    minimum_tool_height_ = get_node()->get_parameter("minimum_tool_height").as_double();
+    tool_envelope_min_ = get_node()->get_parameter("tool_envelope_min").as_double_array();
+    tool_envelope_max_ = get_node()->get_parameter("tool_envelope_max").as_double_array();
     workspace_floor_tolerance_ =
         get_node()->get_parameter("workspace_floor_tolerance").as_double();
     recovery_minimum_height_gain_ =

@@ -61,7 +61,7 @@ SWITCHABLE_CONTROLLERS = [
 ]
 
 
-def create_runtime_controller_params(ee_name, bringup_type):
+def create_runtime_controller_params(ee_name, bringup_type, gripper='none'):
     runtime_dir = os.environ.get('ROS_HOME') or os.path.join(os.path.expanduser('~'), '.ros')
     os.makedirs(runtime_dir, exist_ok=True)
     fd, runtime_path = tempfile.mkstemp(
@@ -78,11 +78,15 @@ def create_runtime_controller_params(ee_name, bringup_type):
                 },
             },
             'task_space_ik_controller': {
-                'ros__parameters': {
-                    'bringup_type': bringup_type,
-                    'control_mode': 'position',
-                    'ee_name': ee_name,
-                },
+                'ros__parameters': dict(
+                    bringup_type=bringup_type,
+                    control_mode='position',
+                    ee_name=ee_name,
+                    # What is bolted to the flange, so the workspace floor guard
+                    # measures the thing that actually reaches the bench rather
+                    # than the flange above it. Absent for a bare one.
+                    **launch_utils.tool_envelope_parameters(gripper),
+                ),
             },
         },
     }
@@ -127,7 +131,7 @@ def setup_control_environment(context):
 
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
-    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
+    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type, gripper)
 
     # fr5.urdf.xacro carries a `hardware` xacro arg so the same file can emit the
     # MuJoCo, Isaac, Gazebo, mock or real ros2_control block. Expand it here with

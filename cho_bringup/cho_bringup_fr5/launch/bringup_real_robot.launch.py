@@ -98,7 +98,7 @@ GRIPPER_CONFIG_DEFAULTS = {
 }
 
 
-def create_runtime_controller_params(ee_name, bringup_type):
+def create_runtime_controller_params(ee_name, bringup_type, gripper='none'):
     runtime_dir = os.environ.get('ROS_HOME') or os.path.join(os.path.expanduser('~'), '.ros')
     os.makedirs(runtime_dir, exist_ok=True)
     fd, runtime_path = tempfile.mkstemp(
@@ -115,11 +115,15 @@ def create_runtime_controller_params(ee_name, bringup_type):
                 },
             },
             'task_space_ik_controller': {
-                'ros__parameters': {
-                    'bringup_type': bringup_type,
-                    'control_mode': 'position',
-                    'ee_name': ee_name,
-                },
+                'ros__parameters': dict(
+                    bringup_type=bringup_type,
+                    control_mode='position',
+                    ee_name=ee_name,
+                    # What is bolted to the flange, so the workspace floor guard
+                    # measures the thing that actually reaches the bench rather
+                    # than the flange above it. Absent for a bare one.
+                    **launch_utils.tool_envelope_parameters(gripper),
+                ),
             },
         },
     }
@@ -189,7 +193,7 @@ def setup_control_environment(context):
 
     urdf_path = os.path.join(fr5_desc, 'urdf', 'fr5.urdf.xacro')
     controllers_file = os.path.join(bringup, 'config', 'real', 'controllers.yaml')
-    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
+    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type, gripper)
 
     robot_description = {
         'robot_description': xacro.process_file(

@@ -23,6 +23,48 @@ GRIPPERS = ('none', 'ag95')
 # The FR5's only gripper, so the boolean `load_gripper` spelling is unambiguous.
 DEFAULT_GRIPPER = 'ag95'
 
+#: What each gripper occupies below the flange, and how far its lowest point
+#: must stay above the bench, for task_space_ik_controller's workspace floor
+#: guard. The guard checks `ee_name` against `minimum_ee_height`, and that alone
+#: is a floor for a BARE flange: the AG-95 hangs 0.3008 m below wrist3_link, so a
+#: wrist sitting legally at 0.15 m puts the jaws 0.15 m under the bench.
+#:
+#: The box is the union of the gripper's three collision elements from
+#: cho_description_fr5/urdf/fr5_macro.xacro, in the wrist3_link frame, with the
+#: jaws fully open (the widest they get):
+#:
+#:     base_link.stl     x +-0.0465  y +-0.0335  z 0.0965 .. 0.1050
+#:     gripper_body.stl  x +-0.0635  y +-0.0254  z 0.1050 .. 0.2345
+#:     jaw sweep box     x +-0.0841  y +-0.0254  z 0.1904 .. 0.3008
+#:
+#: The bench top is z = 0 (cho_moveit_fr5/config/planning_scene.yaml puts the
+#: floor box's top face there), so 0.02 m leaves 2 cm over it.
+#:
+#: This lives here rather than in a controllers.yaml because controllers.yaml is
+#: per BRINGUP TYPE while the gripper is a per-run launch argument: the real and
+#: MuJoCo bringups both run with and without one. Recompute the box with
+#: `ros2 run cho_control_tools task_space_probe`, which prints the same envelope
+#: from the running description, and widen rather than narrow it -- a box that
+#: encloses the tool can refuse a pose the real gripper would have cleared, but
+#: it cannot pass one it would have hit.
+TOOL_ENVELOPES = {
+    'ag95': {
+        'tool_envelope_min': [-0.0841, -0.0335, 0.0965],
+        'tool_envelope_max': [0.0841, 0.0335, 0.3008],
+        'minimum_tool_height': 0.02,
+    },
+}
+
+
+def tool_envelope_parameters(gripper):
+    """Floor-guard parameters for *gripper*, or an empty dict for a bare flange.
+
+    Empty is not "unset": task_space_ik_controller reads an absent envelope as
+    no tool and guards the flange exactly as it did before envelopes existed.
+    """
+    return dict(TOOL_ENVELOPES.get(gripper, {}))
+
+
 _TRUE = ('true', '1', 'yes', 'on')
 _FALSE = ('false', '0', 'no', 'off')
 _DEFER = ('', 'config')
