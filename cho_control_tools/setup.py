@@ -39,6 +39,7 @@ setup(
             'vla_mit_probe = cho_control_tools.vla.mit_probe:main',
             'vla_task_probe = cho_control_tools.vla.task_probe:main',
             'gravity_compensation_sweep = cho_control_tools.diagnostics.gravity_compensation_sweep:main',
+            'trajectory_tracking_log = cho_control_tools.diagnostics.trajectory_tracking_log:main',
             'openarm_task_goal = cho_control_tools.openarm_task.goal:main',
             'openarm_task_tour = cho_control_tools.openarm_task.tour:main',
             'plot_joint_pos_log = cho_control_tools.plotting.joint_pos_log:main',
