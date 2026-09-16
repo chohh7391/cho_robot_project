@@ -73,6 +73,15 @@ private:
   double _jnt_torque_state[6];
   int _control_mode;
   std::string _controller_ip = CONTROLLER_IP_ADDRESS;
+  // The controller's GLOBAL SPEED override, applied on top of every command.
+  //
+  // 100 means "execute what you are told", which is the only sane default for a
+  // driver: the trajectories reaching it are already scaled, and a second
+  // invisible factor underneath turns that into a number nobody chose. Upstream
+  // never sets it, so whatever the teach pendant was left on carried into every
+  // run -- found at 1%, where the arm executed a few percent of its commanded
+  // travel, juddered, and aborted every goal on tracking error.
+  int _global_speed_percent = 100;
   std::unique_ptr<FRRobot> _ptr_robot;
 
   // cho patch (A3-gripper): an optional RS485 gripper hanging off the robot

@@ -51,6 +51,7 @@ hardware_interface::CallbackReturn FairinoHardwareInterface::on_init(const hardw
     };
     _gripper_index = read_param("gripper_index", 1);
     _gripper_joint_at_open = read_param("gripper_joint_at_open", 0.0475);
+    _global_speed_percent = read_param("global_speed_percent", 100);
     _gripper_speed_percent = read_param("gripper_speed_percent", 50);
     _gripper_force_percent = read_param("gripper_force_percent", 30);
     _gripper_company = read_param("gripper_company", 4);
@@ -572,6 +573,103 @@ hardware_interface::CallbackReturn FairinoHardwareInterface::on_activate(const r
                      _controller_ip.c_str(), returncode, connect_attempts);
         return hardware_interface::CallbackReturn::ERROR;
     }
+    // cho patch: clear the error state before doing anything else.
+    //
+    // Unconditional on purpose. The controller latches faults -- an axis speed
+    // limit, a gripper motion timeout -- and refuses ServoJ until they are
+    // cleared; upstream never calls ResetAllError, so a fault survived every
+    // bringup and the only way back was a power cycle of the robot. Nor can the
+    // call be made conditional on GetRobotErrorCode: that returned 0/0 on a
+    // robot whose own RTDE package was reporting main=1 sub=24 at the same
+    // moment, so the two disagree and only one of them is worth trusting to say
+    // "nothing to do".
+    //
+    // Reported before and after rather than done quietly: an error that comes
+    // straight back is a real fault, and hiding that would be worse than the
+    // power cycle this replaces.
+    {
+        int before_main = 0, before_sub = 0, after_main = 0, after_sub = 0;
+        _ptr_robot->GetRobotErrorCode(&before_main, &before_sub);
+        const errno_t resetcode = _ptr_robot->ResetAllError();
+        _ptr_robot->GetRobotErrorCode(&after_main, &after_sub);
+        if (after_main == 0 && after_sub == 0) {
+            RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
+                        "ResetAllError: code %d, robot error main=%d sub=%d -> %d/%d.",
+                        resetcode, before_main, before_sub, after_main, after_sub);
+        } else {
+            RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
+                         "ResetAllError returned %d and the robot STILL reports main=%d "
+                         "sub=%d. This one does not clear from software -- check the teach "
+                         "pendant, and expect ServoJ to be refused until it does.",
+                         resetcode, after_main, after_sub);
+        }
+    }
+
+    // cho patch: say what the robot IS before using it -- and put it back in
+    // AUTO if it is not.
+    //
+    // Upstream reports the robot's mode only when a ServoJ is refused, which is
+    // far too late. A robot left in MANUAL mode accepts the stream and executes
+    // a few percent of it: measured, all six joints moved 4-8% of their
+    // commanded travel while ServoJ kept returning 0, so the arm juddered, the
+    // tracking error ran away and the goal aborted on state tolerance with
+    // nothing in any log to say why. Several runs were lost to that before the
+    // mode was spotted in a line printed for another reason.
+    //
+    // Mode(0) rather than only complaining, because on this rig the pendant
+    // could not switch it back.
+    {
+        ROBOT_STATE_PKG pkg = {};
+        if (_ptr_robot->GetRobotRealTimeState(&pkg) == 0) {
+            RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
+                        "Robot: mode=%u (%s), state=%u (1 stop, 2 run, 3 pause, 4 drag).",
+                        static_cast<unsigned>(pkg.robot_mode),
+                        pkg.robot_mode != 0 ? "MANUAL" : "auto",
+                        static_cast<unsigned>(pkg.robot_state));
+            if (pkg.robot_mode != 0) {
+                RCLCPP_WARN(rclcpp::get_logger("FairinoHardwareInterface"),
+                            "The robot is in MANUAL mode, where it executes only a fraction "
+                            "of what it is commanded. Switching to AUTO.");
+                const errno_t modecode = _ptr_robot->Mode(0);
+                rclcpp::sleep_for(500ms);
+                ROBOT_STATE_PKG after = {};
+                _ptr_robot->GetRobotRealTimeState(&after);
+                if (modecode == 0 && after.robot_mode == 0) {
+                    RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
+                                "Robot is now in AUTO mode.");
+                } else {
+                    RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
+                                 "Mode(0) returned %d and the robot still reports mode=%u. "
+                                 "Set AUTO on the teach pendant before running anything: in "
+                                 "MANUAL the arm will judder and every goal will abort.",
+                                 modecode, static_cast<unsigned>(after.robot_mode));
+                }
+            }
+        }
+    }
+
+    // cho patch: set the global speed override explicitly.
+    //
+    // It multiplies everything the robot executes and it is NOT in the state
+    // package, so it cannot be read back -- it can only be set. Leaving it alone
+    // means inheriting whatever the pendant last had, which is how a run ended
+    // up executing at 1%: the arm moved 4-8% of its commanded travel on all six
+    // joints, ServoJ returned 0 throughout, and every goal aborted on tracking
+    // error with no log line naming the cause.
+    {
+        const errno_t speedcode = _ptr_robot->SetSpeed(_global_speed_percent);
+        if (speedcode == 0) {
+            RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
+                        "Global speed override set to %d%%.", _global_speed_percent);
+        } else {
+            RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
+                         "SetSpeed(%d) failed with code %d. The robot keeps whatever the "
+                         "pendant last set, which scales every commanded motion -- check it "
+                         "there before trusting any tracking number.",
+                         _global_speed_percent, speedcode);
+        }
+    }
+
     //做第一步的工作，读取当前状态数据
     JointPos jntpos;
     returncode = _ptr_robot->GetActualJointPosDegree(0,&jntpos);
