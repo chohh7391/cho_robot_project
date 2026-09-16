@@ -44,16 +44,26 @@ fr5:
     # /joint_states. Swap the two for a gripper wired the other way.
     percent_at_closed: 0
     percent_at_open: 100
-    # Open the jaws once on hardware activation. FALSE by default, and not for
-    # want of trying: activating this gripper moves the jaws on its own - a
-    # closed one came back open and an open one came back closed, so the reset
-    # appears to drive to the opposite end and re-reference the stroke there -
-    # and the percentage it reports right afterwards cannot be squared with what
-    # the jaws are doing. Commanding an open on top of that gave a gripper that
-    # CLOSED at bringup. To start from a known opening, send a Gripper action
-    # after bringup instead; that path is verified:
-    #   ros2 run cho_control_tools fr5_action_client   ->  grasp 0
-    open_on_activate: false
+    # Open the jaws once on hardware activation, so a bringup always starts from
+    # a known opening rather than from wherever the last run stopped.
+    #
+    # This was false for a long time, and for a real reason: activating this
+    # gripper moves the jaws on its own -- a closed one came back open and an
+    # open one came back closed -- and the stroke percentage it reported right
+    # afterwards could not be squared with what the jaws were doing. Commanding
+    # an open on top of that produced a gripper that CLOSED at bringup.
+    #
+    # That is understood now, and it was never this flag. For roughly 0.8 s after
+    # any gripper command the controller's stroke register reports a fixed wrong
+    # value; publishing it made cho_controller_gripper seed a closed gripper and
+    # command a close nobody asked for. The driver now takes the stroke out of
+    # band with GetGripperCurPosition, which is right when the RTDE package is
+    # not, and holds it until the package agrees again.
+    #
+    # Verified both directions on the FR5 (2026-09-16): from closed, activation
+    # opened the jaws and both sources then read 100%; from open, the jaws stayed
+    # put and the controller issued no command at all.
+    open_on_activate: true
     # Whether a gripper that will not come up should take the whole bringup with
     # it. False by default, because a refused hardware activation makes
     # ros2_control_node throw and abort - one 485 hiccup on an accessory would
