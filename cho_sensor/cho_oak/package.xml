@@ -13,6 +13,10 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>depthai_ros_driver</exec_depend>
+  <!-- The camera's own mesh and the oak_model_origin frame it is drawn at.
+       The driver already pulls this in; declaring it makes the rviz display
+       that names the mesh a stated dependency rather than a lucky one. -->
+  <exec_depend>depthai_descriptions</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
