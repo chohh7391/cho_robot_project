@@ -28,6 +28,7 @@ launch that starts the detectors, so the prefixes cannot drift apart.
 """
 
 from collections import deque
+import threading
 
 from apriltag_msgs.msg import AprilTagDetectionArray
 from cho_object_pose import geometry
@@ -121,6 +122,18 @@ class ObjectPoseNode(Node):
             min_edge_px=float(self.get_parameter('min_edge_px').value))
 
         self._samples = {spec.name: deque() for spec in self._specs}
+        # ONE LOCK OVER THE AGGREGATION WINDOW, and it is not optional. The
+        # detection subscriptions share a ReentrantCallbackGroup on a
+        # MultiThreadedExecutor, so two cameras' callbacks genuinely run at the
+        # same time -- that is what makes the fusion prompt rather than
+        # round-robin. They then meet in this one dict: one thread appends
+        # while the other iterates the same deque, and Python raises
+        # "deque mutated during iteration" and takes the node down.
+        #
+        # Measured: it killed a two-camera run after ~20 minutes. With a single
+        # camera there was only ever one callback thread, which is why nothing
+        # here needed a lock before.
+        self._lock = threading.Lock()
         self._status = {spec.name: 'no detection yet' for spec in self._specs}
         # Why each camera contributed nothing, kept per camera. Collapsing this
         # into one string would let the last detection callback to run erase the
@@ -236,6 +249,7 @@ class ObjectPoseNode(Node):
         # priority over the sample-count status: 'no TF' and '2/5 samples' have
         # entirely different fixes and the first one explains the second.
         blocked = {spec.name: 'tag not in frame' for spec in self._specs}
+        accepted = []
 
         for detection in msg.detections:
             spec = self._by_tag.get(detection.id)
@@ -252,11 +266,17 @@ class ObjectPoseNode(Node):
                 blocked[spec.name] = failure
                 continue
             blocked[spec.name] = None
-            self._samples[spec.name].append(sample)
+            accepted.append((spec.name, sample))
 
-        for spec in self._specs:
-            self._camera_status[spec.name][camera.name] = blocked[spec.name] or 'ok'
-            self._evaluate(spec, seconds, msg.header.stamp)
+        # The TF lookups above are deliberately outside the lock: each one can
+        # block for tf_timeout, and serialising two cameras on each other's TF
+        # waits would undo the point of running them concurrently.
+        with self._lock:
+            for name, sample in accepted:
+                self._samples[name].append(sample)
+            for spec in self._specs:
+                self._camera_status[spec.name][camera.name] = blocked[spec.name] or 'ok'
+                self._evaluate(spec, seconds, msg.header.stamp)
 
     def _lookup(self, spec, camera, stamp, seconds):
         """(sample, None) for the tag pose in the base frame, else (None, reason).
@@ -484,12 +504,17 @@ class ObjectPoseNode(Node):
         says WHICH camera is the quiet one, which is the first thing anyone
         asks.
         """
-        for spec in self._specs:
-            cameras = ', '.join(f'{name}: {reason}'
-                                for name, reason in self._camera_status[spec.name].items())
+        with self._lock:
+            lines = [(spec.name,
+                      self._status[spec.name],
+                      self._published[spec.name],
+                      dict(self._camera_status[spec.name]))
+                     for spec in self._specs]
+        for name, status, published, status_by_camera in lines:
+            cameras = ', '.join(f'{camera}: {reason}'
+                                for camera, reason in status_by_camera.items())
             self.get_logger().info(
-                f'[{spec.name}] {self._status[spec.name]} '
-                f'({self._published[spec.name]} published) | {cameras}')
+                f'[{name}] {status} ({published} published) | {cameras}')
 
 
 def main(args=None):
