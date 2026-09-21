@@ -1,0 +1,82 @@
+# Object table for the SIMULATED SDL cell, not the physical bench.
+#
+# The bench's table is config/perception/vessel_detect.yaml and the two differ
+# in every number that describes a tag, because the cell is not a copy of the
+# bench -- it mirrors the Isaac cell instead
+# (cho_description_fr5/xml/scene_ag95_sdl.xml):
+#
+#                         bench (vessel_detect)   cell (this file)
+#   tag size              39 mm                   100 mm
+#   tag offset from       70 / 90 mm              150 mm
+#     its vessel
+#
+# The 100 mm tag is not a nicety. The cell's standing camera is 1.95 m away at
+# fx 617 px, where a 39 mm tag spans 12.6 px against cho_object_pose's 25 px
+# floor -- that scene's own comment records it being rejected at exactly 12.3
+# and 12.7 px. 100 mm gives 31.6 px, which clears.
+#
+# `topic` is spelled out because cho_task_manager/tasks/fr5/common.py names it
+# there, and the FR5 trees join on those names.
+#
+# ------------------------------------------------------------------ offsets
+#
+# The tag lies FLAT on the table 0.15 m along +x from its vessel, so the offset
+# that gets from the tag back to the vessel is -0.150 in the tag's own frame
+# (which for a flat tag under `pose_estimation_method: pnp` is x-right,
+# y-up-as-printed, z out of the face). The published pose should therefore land
+# on the vessel's xy at a 150 mm standoff:
+#
+#   beaker  tag (0.640, 0.175)  -> pose (0.490, 0.175, 0.136)
+#   flask   tag (0.634, 0.332)  -> pose (0.484, 0.332, 0.136)
+#
+# and those xy are exactly config/replay/mujoco_sdl_cell.yaml's, which is what
+# makes a run checkable without a ruler: if a published pose is 150 mm out in
+# x, this offset has the wrong sign.
+#
+# ------------------------------------------------------------------- shapes
+#
+# DISPLAY ONLY, and here they earn their keep: rviz draws the robot model, TF
+# and these markers, but NOT the MuJoCo bench -- so the marker is the only
+# thing in that window that says where the pipeline thinks the glassware is.
+# Seeing it land on the arm's reach, at the right height, is the check this
+# cell exists to make easy.
+#
+# Sizes are the scene's own cylinder geoms (beaker r 0.025 h 0.135, flask
+# r 0.035 h 0.12) as bounding boxes. `origin` is where the body's CENTRE sits
+# relative to the PUBLISHED pose, which is the 150 mm standoff above the tag
+# face at z = 0.002: beaker 0.0675 - 0.152 = -0.0845, flask 0.06 - 0.152 =
+# -0.092.
+objects:
+  - name: beaker
+    tag_id: 0
+    tag_size: 0.100
+    topic: /perception/object_pose/beaker
+    grasp_offset:
+      position: [-0.150, 0.0, 0.150]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    # The tag's full orientation is not trusted here either, and for the same
+    # reason: the planar-pose ambiguity flips the normal between frames. A
+    # rendered tag is cleaner than a real one but the ambiguity is geometric,
+    # not photometric, so it does not go away in simulation.
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    shape:
+      type: cylinder
+      size: [0.050, 0.050, 0.135]
+      origin: [0.0, 0.0, -0.0845]
+      color: [0.2, 0.7, 1.0, 0.65]
+
+  - name: flask
+    tag_id: 1
+    tag_size: 0.100
+    topic: /perception/object_pose/flask
+    grasp_offset:
+      position: [-0.150, 0.0, 0.150]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    shape:
+      type: cylinder
+      size: [0.070, 0.070, 0.120]
+      origin: [0.0, 0.0, -0.092]
+      color: [1.0, 0.6, 0.2, 0.65]

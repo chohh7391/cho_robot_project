@@ -1,0 +1,49 @@
+# Where the SIMULATED cell's cameras are, for the same static publisher the
+# real bench uses:
+#
+#   ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py \
+#       extrinsics_config:=$(ros2 pkg prefix --share cho_bringup_fr5)/config/mujoco/camera_extrinsics.yaml
+#
+# The real bench's file (config/real/camera_extrinsics.yaml) is a MEASUREMENT
+# and the one number nothing else checks. This one is not a measurement at all:
+# every pose here is DERIVED from the MJCF the simulator is running, so the
+# only way it can be wrong is by being out of step with that file. It is here,
+# beside the real one, because it answers the same question for the same cell.
+#
+# ------------------------------------------------------- the two conventions
+#
+# `child_frame` is the frame apriltag_ros reports a tag in, which is the
+# `frame_id` on the image it consumed -- mujoco_ros2_control names that
+# `<camera name>_frame`. That frame has to be an OPTICAL frame: +z forward,
+# +x right, +y down, because that is what the detector's pose estimate is
+# expressed in.
+#
+# MuJoCo's camera convention is different: -z forward, +y up. So each
+# quaternion below is the MJCF camera's own orientation composed with Rx(pi),
+# which is exactly the standard camera_link -> camera_optical_frame rotation.
+# Getting this wrong does not fail: it publishes tag poses rotated by 180
+# degrees, which reads as a bench mounted upside down.
+transforms:
+  # The standing observer. Fixed to the world, so it hangs off the robot's base
+  # rather than off a link. MJCF: pos 1.45 0 1.55, quat (w x y z)
+  # 0.664872409 0.240717012 0.240717012 0.664872409 in
+  # cho_description_fr5/xml/scene_ag95_sdl.xml. Its optical axis crosses the
+  # bench plane at about (0.16, 0), which is the aim point that scene states.
+  - name: sdl_cam
+    parent_frame: base_link
+    child_frame: sdl_cam_frame
+    xyz: [1.45, 0.0, 1.55]
+    quaternion: [-0.664872, -0.664872, 0.240717, 0.240717]
+
+  # The recovery instrument, riding the wrist. Same mount as the real D435 --
+  # cho_description_fr5/xml/fr5_ag95.xml's `wrist_cam` carries the measured
+  # extrinsic from config/real/camera_extrinsics.yaml -- so a sweep waypoint
+  # solved against the real mount aims at the same thing here.
+  #
+  # The robot has to be running for this one to resolve, since wrist3_link is
+  # the arm's own FK.
+  - name: wrist_cam
+    parent_frame: wrist3_link
+    child_frame: wrist_cam_frame
+    xyz: [-0.02545, -0.06255, 0.15598]
+    quaternion: [0.095481, 0.115647, 0.691874, 0.706272]

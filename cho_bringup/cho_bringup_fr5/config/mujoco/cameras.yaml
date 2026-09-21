@@ -1,0 +1,49 @@
+# The SIMULATED cell's two cameras, for cho_object_pose.
+#
+# Same schema and same job as cho_object_pose/config/cameras.yaml, which
+# describes the physical bench. This one describes the MuJoCo cell, and it
+# lives here rather than there because everything else about that cell is here
+# too: the scene selection, the extrinsics beside this file, and the bringup
+# that starts it. cho_object_pose stays a package that knows no bench.
+#
+# Nothing starts the cameras: mujoco_ros2_control registers every camera in
+# cho_description_fr5/xml/fr5_ag95.xml plus the scene and renders them, so the
+# image topics below exist as soon as the bringup is up. What DOES have to be
+# started is the extrinsics, or neither tag can be put in the robot's frame:
+#
+#   ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py \
+#       mujoco_scene:=scene_ag95_sdl.xml controller_name:=joint_space_position_controller
+#   ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py \
+#       extrinsics_config:=<this directory>/camera_extrinsics.yaml
+#   ros2 launch cho_object_pose detectors.launch.py cameras_config:=<this file> \
+#       objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/mujoco_sdl_cell.yaml
+#
+# use_sim_time:=true on everything downstream. The pose node measures every
+# visibility age as its own clock minus an image stamp, and it says so loudly
+# when the two disagree.
+cameras:
+  # The recovery instrument, riding the wrist. Same role and same priority
+  # split as the physical bench's wrist D435: a close view REPLACES the
+  # standing camera's rather than being medianed into it.
+  #
+  # mujoco_ros2_control publishes an undistorted pinhole render, so there is
+  # nothing to rectify -- rectify: false here is a statement about the
+  # simulator, not a copy of the bench's setting.
+  - name: wrist_cam
+    image_topic: /wrist_cam/color
+    camera_info_topic: /wrist_cam/camera_info
+    rectify: false
+    frame_prefix: wrist_
+    detections_topic: /wrist_cam/detections
+    priority: 10
+
+  # The standing observer: fixed to the world, 1.95 m out at 50 degrees of
+  # elevation, which is why its tags are 100 mm and not the 39 mm the bench
+  # uses. See cho_description_fr5/xml/scene_ag95_sdl.xml.
+  - name: sdl_cam
+    image_topic: /sdl_cam/color
+    camera_info_topic: /sdl_cam/camera_info
+    rectify: false
+    frame_prefix: sdl_
+    detections_topic: /sdl_cam/detections
+    priority: 0

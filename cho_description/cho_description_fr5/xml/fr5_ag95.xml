@@ -63,6 +63,42 @@
                 <joint name="j6" pos="0 0 0" axis="0 0 1" range="-3.0543 3.0543"/>
                 <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist3_link"/>
                 <site name="attachment_site" pos="0 0 0.1"/>
+
+                <!-- Wrist camera, emulated. THE RECOVERY INSTRUMENT: when the
+                     standing camera loses a vessel behind the arm,
+                     cho_task_manager's occlusion_recovery sweeps this one over
+                     the bench until the tag decodes well enough.
+
+                     POSE AND AIM ARE THE MEASURED MOUNT, converted rather than
+                     re-invented: cho_bringup_fr5/config/real/camera_extrinsics.yaml
+                     gives wrist3_link -> wrist_link as the RealSense
+                     camera_link convention (+x forward, +y left, +z up), and
+                     MuJoCo's camera convention is -z forward, +y up. The quat
+                     here is that extrinsic composed with the rotation between
+                     the two, so the simulated camera sits exactly where the
+                     real one is bolted and the sweep waypoints solved against
+                     the extrinsic aim at the same thing here as on the bench.
+                     cho_bringup_fr5/config/mujoco/camera_extrinsics.yaml
+                     publishes the matching optical frame; the two are derived
+                     from the same numbers, so re-derive both if the mount moves.
+
+                     fovy 58 is the D435's depth/IR vertical field, and at
+                     848x480 mujoco_ros2_control's pinhole gives
+                     fy = (1/tan(29 deg)) * 240 = 433 px against the real
+                     stream's ~447. Close enough that a tag spans the same
+                     number of pixels here as it will on the bench, which is
+                     what min_edge_px and the sweep's decode threshold read.
+
+                     IT RENDERS ON EVERY SCENE THAT INCLUDES THIS FILE, because
+                     mujoco_ros2_control registers every camera in the model.
+                     That is one extra 848x480 render per frame for a run that
+                     does not want it. It lives here rather than in the cell
+                     scene because it is bolted to the robot, not to the bench,
+                     and a camera that appeared only in one scene would have the
+                     arm carrying nothing in all the others. -->
+                <camera name="wrist_cam" pos="-0.02545 -0.06255 0.15598"
+                        quat="0.095480 -0.706281 -0.691878 0.115650"
+                        fovy="58" resolution="848 480"/>
                 <!-- AG-95 finger, KINEMATIC ONLY. One slide joint at the tool
                      point, mirroring the URDF's gripper_finger_joint: axis along
                      tool y, 0 closed to 0.0475 fully open (half of the 95 mm

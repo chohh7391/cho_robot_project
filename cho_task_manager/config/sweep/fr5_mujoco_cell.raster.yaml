@@ -1,0 +1,149 @@
+# What the SIMULATED SDL cell's recovery raster is. The joint configurations
+# the tree actually reads are SOLVED from this file:
+#
+#   python3 scripts/solve_sweep_raster.py config/sweep/fr5_mujoco_cell.raster.yaml \
+#       --out config/sweep/fr5_mujoco_cell.yaml
+#
+# The bench's own spec is fr5_bench.raster.yaml. The two differ in exactly one
+# thing that matters -- WHERE THE TAGS ARE -- and that difference is enough to
+# change which cells are reachable: the cell's tags stand 150 mm from their
+# vessels instead of 70, which puts the far row of the raster 150 mm further
+# from the robot. The solver drops what it cannot reach and names it in the
+# generated file rather than quietly substituting something nearby.
+#
+# Edit here, re-solve, commit both. Adjusting a joint angle in the generated
+# file directly is the one thing not to do: the waypoints have to stay in one
+# IK branch, and a hand-nudged one silently leaves it.
+
+# The pattern, in prose, for the file this generates.
+header: |
+  A boustrophedon raster with the tool at a fixed tilt: rows at constant x
+  swept FAR TO NEAR, each row traversed in y with the direction alternating,
+  repeated at a second, lower height.
+
+  THE SPACING IS NOT A COVERAGE SPACING. The textbook boustrophedon rule is
+  stripe = footprint x (1 - overlap), and here that gives a single cell -- a
+  D435's infra stream already sees about 1.04 x 0.59 m at 0.55 m, which covers
+  the whole area of interest from one viewpoint. Coverage is not what the
+  motion buys. It buys PARALLAX: a different line of sight to the same tag,
+  which is the only thing that helps when something is standing in the way.
+
+  The tool tilt is the cheaper half of the same idea. It costs nothing in
+  reachability -- one fixed orientation per row is one IK branch -- and a tag
+  viewed at normal incidence is the WORST case for AprilTag's planar pose,
+  whose two-solution ambiguity is strongest there. Reversing the tilt per row
+  gives the raster two viewing directions instead of one, for free; it follows
+  the direction of travel, so it alternates with the boustrophedon.
+
+  The sweep STOPS at the first viewpoint whose decode clears
+  min_decision_margin, so the full raster only runs when the object genuinely
+  cannot be found -- and then it has tried everywhere.
+
+# The bench plane the tag lies in, and the arm that looks at it.
+bench_z_m: -0.014
+
+robot:
+  # Named the way a launch file names it, resolved through the ament index.
+  package: cho_description_fr5
+  xacro: urdf/fr5.urdf.xacro
+  xacro_args:
+    hardware: mock
+    gripper: ag95
+  arm_dof: 6
+  # cho_robot_config/config/fr5.yaml poses.home['1'] -- where the tree enters a
+  # sweep from, and what the first waypoint's duration is sized against.
+  home: [0.0, -0.7853981634, -1.5707963268, 0.7853981634, -1.5707963268, 0.0]
+
+camera:
+  # THE REAL BENCH'S MOUNT, on purpose. cho_description_fr5/xml/fr5_ag95.xml
+  # puts the simulated wrist camera at exactly this extrinsic -- that is what
+  # makes the simulator a test of the bench's geometry rather than of its own --
+  # so solving against the measured file keeps one number in one place.
+  package: cho_bringup_fr5
+  extrinsics: config/real/camera_extrinsics.yaml
+  name: wrist
+
+raster:
+  # Half-width of the area swept, about the tag. At the high pass this
+  # subtends about 15 degrees of viewing direction, which is the parallax the
+  # motion is for.
+  extent_m: 0.15
+  columns: 3
+  # Off vertical. Enough to get the tag off normal incidence -- which is where
+  # AprilTag's planar pose is weakest -- and bounded from above by the FIELD OF
+  # VIEW rather than by taste: the solver leaves the image roll free (it is a
+  # 5-DOF task, which is what keeps the IK well conditioned), so the angle that
+  # is guaranteed to be in frame is the SHORTER one, the D435 infra stream's
+  # 58 deg vertical. Half of that is 29, and tilting by t leaves 29 - t degrees
+  # for the tag to be off centre: at 15 deg that is 14, which at the survey
+  # height covers a tag 0.13 m from where the raster cell is pointed. At 20 deg
+  # it would be 9, and the corner cells would be looking past the tag.
+  tilt_deg: 15.0
+  # The first waypoint is a 3 rad swing from the home pose, not a raster step.
+  # This cell commissions at 0.394 rad/s (cho_moveit_fr5/config/joint_limits.yaml).
+  approach_duration_s: 12.0
+  passes:
+    # The SEARCH pass: high, so one viewpoint already covers the area, and the
+    # nine cells are there for the nine lines of sight rather than for coverage.
+    - name: survey
+      height_m: 0.55
+      rows: 3
+      duration_s: 3.0
+    # The RESOLUTION pass: lower, for pixels. One row, not nine cells, because
+    # by this point the search pass has already established whether the tag can
+    # be seen from anywhere at all -- and if it could not, more cells at a
+    # smaller footprint will not change that.
+    - name: close
+      height_m: 0.40
+      rows: 1
+      duration_s: 3.0
+
+# What a solved waypoint has to satisfy to be kept. A cell that fails every one
+# of these is dropped from the raster and named in the generated file, rather
+# than being quietly replaced by something nearby.
+checks:
+  max_position_error_m: 0.005
+  max_axis_error_deg: 1.0
+  min_joint_margin_rad: 0.30
+  max_condition: 45.0
+  # Over the BENCH, not the base. There is other glassware down there -- the
+  # tallest vessel is about 85 mm -- and the arm passes over the cell rather
+  # than through it.
+  min_tool_over_bench_m: 0.25
+  min_arm_over_bench_m: 0.12
+  # Between consecutive waypoints. A raster that flipped elbow-up to elbow-down
+  # between two cells would swing the arm through space nothing has checked.
+  max_step_rad: 1.0
+  tool_frames: [tool_tcp, gripper_base_link, gripper_finger_link, wrist3_link]
+  arm_frames: [upperarm_link, forearm_link, wrist1_link, wrist2_link]
+
+solver:
+  tries: 120
+
+# Carried through to the generated file unchanged.
+defaults:
+  recovery_camera: wrist
+  waypoint_duration: 3.0
+  dwell_sec: 1.5
+  # MUCH HIGHER THAN THE BENCH'S 55, and it is not a tightening of the same
+  # requirement. A rendered tag has no sensor noise and no motion blur, and this
+  # cell's tag is 100 mm rather than 39: the standing camera already returns
+  # margins over 200 here, where the real bench measured 66-68 close up. A
+  # threshold of 55 would be met by the very first waypoint and the raster would
+  # never be exercised, which is the one thing this cell is for. THIS NUMBER IS
+  # NOT TRANSFERABLE to the bench, and neither is a margin measured here.
+  min_decision_margin: 300.0
+  # The whole raster, moves included: 12 s of approach plus eleven 3 s steps
+  # plus twelve 1.5 s dwells is about 63 s, so this is a factor of two of slack
+  # for a detection pipeline that is lagging.
+  timeout_sec: 150.0
+
+objects:
+  # The TAG, not the vessel. Here the tag is a 125 mm plate lying 0.15 m along
+  # +x from its vessel -- cho_description_fr5/xml/scene_ag95_sdl.xml's
+  # beaker_tag and flask_tag geoms, and the same 0.150 the cell's object table
+  # (config/perception/mujoco_sdl_cell.yaml) offsets back by.
+  - object: beaker
+    tag_xy: [0.640, 0.17475]
+  - object: flask
+    tag_xy: [0.63383, 0.33166]
