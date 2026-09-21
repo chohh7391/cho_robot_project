@@ -10,16 +10,36 @@
 # This file stays as the documented schema and as what you get when the node
 # is run standalone.
 #
-# The tag's physical SIZE is not here -- it belongs to the detector
-# (config/apriltag_36h11.yaml, next to this file) and duplicating it would give
-# two numbers that have to agree and no way to notice when they stop.
+# The tag's ID and its printed SIZE are both here, and the DETECTOR IS STARTED
+# FROM THIS FILE: `apriltag.launch.py objects_config:=<this>` derives tag.ids,
+# tag.sizes and tag.frames from it. Which tags a job prints, and how big, is
+# the job's business; what stays in config/apriltag_36h11.yaml is what follows
+# the lens and the decoder -- family, decimate, max_hamming, qos_profile.
 #
-# grasp_offset is expressed in the TAG's frame: apriltag puts x-right, y-down,
-# z-out-of-the-tag, so a tag stuck on the top face of a 60 mm cube whose grasp
-# point is 30 mm below the surface is position: [0.0, 0.0, -0.030].
+# `tag_size` is the BLACK SQUARE edge in METRES, not the paper and not the
+# white quiet zone: a 39 mm tag is 0.039. Measure the print with callipers -- a
+# 1% error is a 1% range error, and a tag detected at the wrong edge length
+# returns a confident, wrong distance that nothing downstream can see. Omitting
+# it falls back to the detector's own `size`.
+#
+# grasp_offset is expressed in the TAG's frame. With the detector's configured
+# `pose_estimation_method: pnp` that frame is x-right, y-up, z-out-of-the-tag,
+# as printed -- so a tag stuck on the top face of a 60 mm cube whose grasp point
+# is 30 mm below the surface is position: [0.0, 0.0, -0.030], and a tag on a
+# stalk 70 mm below its object as printed is [0.0, 0.070, 0.0].
+#
+# The same apriltag_ros also offers `homography`, whose frame is NOT the same
+# one: it swaps x and y. Changing that parameter silently rotates every offset
+# in every table by 90 degrees, so check it before believing an axis.
+#
+# With top_down_yaw (the default) the offset is composed in the tag's yaw taken
+# alone -- base z stays up and the yaw is NOT folded -- so +z is above a flat
+# tag and a sideways offset points where the tag actually faces. See
+# geometry.compose for why neither of those may use the grasp orientation.
 objects:
   - name: cube
     tag_id: 9
+    tag_size: 0.040
     # topic: defaults to /perception/object_pose/<name>
     grasp_offset:
       position: [0.0, 0.0, 0.0]

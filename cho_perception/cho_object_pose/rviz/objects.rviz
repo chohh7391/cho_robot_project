@@ -1,0 +1,136 @@
+# The detected objects next to the robot that is going to reach for them, and
+# the cameras that found them.
+#
+# The RobotModel comes from /robot_description, which the BRINGUP publishes --
+# this file only displays it, so start the robot first or that one display stays
+# empty while everything else works. If the ARM is missing while a camera body
+# appears in its place, something else is publishing on that same topic: the
+# depthai driver does, and cho_oak's launch remaps it away for exactly this
+# reason.
+#
+# The Objects display carries the camera bodies too, in its own `cameras`
+# namespace -- they are markers on the same topic, parented to each camera's TF
+# frame. A camera drawn somewhere the real one plainly is not is a wrong
+# extrinsic, which is the one number here that nothing else checks.
+#
+# Fixed Frame is the FR5's base_link. On another robot set it to that robot's
+# model.arm_base_link (cho_robot_config), which is the frame the object poses
+# are published in.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Objects1
+        - /TF1
+      Splitter Ratio: 0.5
+    Tree Height: 600
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Alpha: 0.3
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Alpha: 1
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Objects
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Value: /perception/object_markers
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    # Where the arm is actually sent: the standoff above each object, which is
+    # NOT where the object body is drawn. Seeing both at once is the point.
+    - Class: rviz_default_plugins/Pose
+      Name: Beaker target
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.08
+      Axes Radius: 0.006
+      Topic:
+        Value: /perception/object_pose/beaker
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Pose
+      Name: Flask target
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.08
+      Axes Radius: 0.006
+      Topic:
+        Value: /perception/object_pose/flask
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    # Every camera's own tag frames, so a disagreement between them is visible
+    # as three sets of axes that do not coincide -- which is what a bad
+    # extrinsic calibration looks like before the spread gate reports it.
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Marker Scale: 0.1
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Update Interval: 0
+      Frame Timeout: 5
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      # Looking down on the bench from behind the arm: the robot at the
+      # origin, the vessels out at +x, and enough height to see both.
+      Distance: 2.2
+      Focal Point:
+        X: 0.25
+        Y: 0
+        Z: 0.1
+      Pitch: 0.75
+      Yaw: 3.9
+      Near Clip Distance: 0.01
+      Target Frame: <Fixed Frame>
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1400
+  Hide Left Dock: false
+  Hide Right Dock: true
+  QMainWindow State: ""

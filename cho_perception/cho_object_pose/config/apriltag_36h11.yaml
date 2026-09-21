@@ -32,6 +32,15 @@
       sharpening: 0.25
       debug: false
     pose_estimation_method: pnp
+    # STANDALONE DEFAULT ONLY. A task passes its own object table with
+    # objects_config:= and the launch derives tag.ids, tag.sizes and tag.frames
+    # from THAT -- which tags a job prints, and how big, follows the job, not
+    # the lens. Leaving every job's ids here would pile them all into a package
+    # that has no reason to know about any of them, and would make adding an
+    # object to a task an edit in two repositories' worth of files.
+    #
+    # ids and sizes are parallel lists; an id with no size falls back to `size`
+    # above.
     tag:
       ids: [9]
       sizes: [0.040]

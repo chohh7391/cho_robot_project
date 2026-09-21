@@ -1,0 +1,88 @@
+# The cameras watching the bench, and how each one's detections are kept apart.
+#
+# Read by TWO things, which is why it is a file and not a set of launch
+# arguments: `launch/detectors.launch.py` starts one detector per entry, and
+# `object_pose_node` subscribes to every entry's detections topic and looks up
+# that entry's tag frames. Two lists of three cameras would drift; this cannot.
+#
+# `frame_prefix` is the field that has to be right. Two detectors left at the
+# default would both publish `tag_0`, and one TF child would gain two parents --
+# no error, just transforms that intermittently resolve through the wrong
+# camera. The parser rejects duplicates for that reason.
+#
+# Fusing them is what buys the accuracy: every camera's view of a tag lands in
+# the same aggregation window, so the published position is the MEDIAN across
+# all of them and one camera's bad view is outvoted rather than believed. It
+# also turns `max_position_spread_m` into a check on the extrinsics -- three
+# cameras that disagree by more than the gate publish nothing, which is the
+# honest answer when nobody knows where the cameras are.
+#
+# This file does NOT start the cameras themselves. `cho_realsense` and
+# `cho_oak` do that, and the image topics below are what they publish:
+#
+#   ros2 launch cho_oak       oak.launch.py  name:=oak
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_left  camera_name:=rs_left  serial_no:=_<serial>
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_right camera_name:=rs_right serial_no:=_<serial>
+#
+# The two D435 serials are in cho_camera_calibration/config/cameras.yaml. SET
+# THEM: an empty serial opens whichever unit the driver finds first, so with two
+# on the bench which one you got -- and therefore which calibration applies --
+# is undefined.
+cameras:
+  # THE TWO CAMERAS HAVE DIFFERENT JOBS, and it is worth knowing which:
+  #
+  #   oak    the standing observer. Wide, far, always looking -- this is what
+  #          locates the vessels when nothing is in the way.
+  #   wrist  the recovery instrument. When the arm occludes something the OAK
+  #          needs, the planner sweeps the wrist over it from above and the
+  #          close view updates that object's pose.
+  #
+  # They are therefore NOT redundant views of one scene, which matters for the
+  # aggregation: the node medians every camera's samples together, so while both
+  # can see a tag the far, coarse view is pulled into the same estimate as the
+  # near, precise one. That is fine when they agree (and max_position_spread_m
+  # refuses them when they do not), but if a recovery sweep is supposed to
+  # OVERRIDE rather than average with the standing view, that is a change to the
+  # aggregation and not something this file can express.
+
+  # Wrist-mounted D435, eye-in-hand. Its transform comes from the ROBOT's TF
+  # (wrist3_link -> wrist_link), not from a static publisher, because it moves
+  # with the arm -- so the robot bringup has to be running for this one to
+  # resolve. infra1 is global shutter, which is the reason a wrist mount uses
+  # it rather than the rolling-shutter colour stream.
+  - name: wrist
+    image_topic: /wrist/wrist/infra1/image_rect_raw
+    rectify: false
+    frame_prefix: wrist_
+    detections_topic: /wrist/detections
+    # Drawn at the driver's own camera_link, with the mounting pose copied
+    # verbatim out of realsense2_description/urdf/_d435.urdf.xacro:
+    #   xyz  d435_zero_depth_to_glass + d435_glass_to_front, -d435_cam_depth_py, 0
+    #   rpy  pi/2 0 pi/2
+    # Needs the mesh package, which is NOT pulled in by the driver:
+    #   sudo apt install ros-humble-realsense2-description
+    # Without it rviz logs that it cannot load the resource and draws nothing;
+    # everything else keeps working.
+    visual:
+      frame: wrist_link
+      mesh: package://realsense2_description/meshes/d435.dae
+      xyz: [0.0043, -0.0175, 0.0]
+      rpy: [1.5708, 0.0, 1.5708]
+
+  # OAK-D Pro W, eye-to-hand. The driver rectifies RGB only and the wide lens is
+  # an eight-coefficient rational_polynomial, so the mono stream needs image_proc
+  # ahead of the detector -- that is what rectify: true inserts.
+  - name: oak
+    image_topic: /oak/left/image_raw
+    rectify: true
+    frame_prefix: oak_
+    detections_topic: /oak/detections
+    # `oak_model_origin` is the frame depthai_descriptions puts this very mesh
+    # at, already rotated there (rpy 1.5708 0 1.5708 off the base frame), so
+    # the offset here is zero. The driver publishes the frame; the mesh ships
+    # with depthai_descriptions, which the OAK stack already depends on.
+    visual:
+      frame: oak_model_origin
+      mesh: package://depthai_descriptions/urdf/models/OAK-D-PRO-W.stl
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]

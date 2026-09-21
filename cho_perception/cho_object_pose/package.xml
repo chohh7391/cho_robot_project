@@ -17,6 +17,9 @@
   <exec_depend>apriltag_ros</exec_depend>
   <exec_depend>image_proc</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <!-- The object bodies drawn at each published pose, so an operator can see
+       what the pipeline thinks it found next to the robot model in rviz. -->
+  <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>cho_robot_config</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
