@@ -17,6 +17,11 @@ setup(
             glob('config/perception/*.yaml')),
         (os.path.join('share', package_name, 'config', 'replay'),
             glob('config/replay/*.yaml')),
+        # Display meshes for the bench's glassware, named by config/perception
+        # as package://cho_task_manager/meshes/<file>. rviz resolves that
+        # through the ament index, so they have to be installed, not just
+        # present in the source tree.
+        (os.path.join('share', package_name, 'meshes'), glob('meshes/*.stl')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

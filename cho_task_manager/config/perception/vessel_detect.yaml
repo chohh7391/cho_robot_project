@@ -1,0 +1,132 @@
+# Object table for the FR5 bench: a beaker and a flask, each marked by an
+# AprilTag on a stalk BESIDE it rather than on it.
+#
+# Read by `vessel_detect` (which only latches the poses) and by
+# `perceived_replay` (which checks a recording's assumed layout against
+# them). One file for one bench: two copies would be two places that have
+# to agree about which tag is the beaker.
+#
+# Task knowledge, not sensor knowledge -- which tag marks what, and where the
+# arm should go relative to it, changes with the bench. The generic pipeline
+# that consumes this lives in cho_object_pose, whose own config/objects.yaml is
+# only the schema and the standalone default.
+#
+# The tag's ID and its printed SIZE are both here, and the detector is started
+# FROM this file: `apriltag.launch.py objects_config:=<this>` derives tag.ids,
+# tag.sizes and tag.frames from it. Which tags a job prints, and how big, is
+# the job's business -- keeping them in cho_object_pose would pile every job's
+# ids into a package that has no reason to know about any of them, and adding
+# an object here would silently do nothing until someone also edited that file.
+#
+# `tag_size` is the BLACK SQUARE edge in metres, not the paper and not the
+# white quiet zone. Measure the print with callipers: a 1% error is a 1% range
+# error, and nothing downstream can see it -- a tag detected at the wrong edge
+# length returns a confident, wrong distance.
+#
+# What stays with the detector is what follows the lens and the decoder:
+# family, decimate, max_hamming, min_decision_margin, min_edge_px.
+#
+# `topic` is spelled out rather than left to the default because
+# tasks/fr5/common.py names it there; test_fr5_vessel_detect.py asserts the
+# two still match.
+#
+# ---------------------------------------------------------------- the offset
+#
+# The tag does not sit on the vessel. It stands off to one side on a short
+# stalk, so the offset is mostly SIDEWAYS -- and a sideways offset only means
+# anything if the direction is right:
+#
+#   +x  the tag's own right, as printed     <- vessel is at -x (the stalk side)
+#   +y  the tag's own up, as printed
+#   +z  out of the tag face; for a tag lying flat on the bench, up
+#
+# That is the frame with `pose_estimation_method: pnp`, which is what the
+# detector config selects. (The same apriltag_ros offers `homography`, whose
+# frame is NOT the same one -- x and y are swapped. Changing that parameter
+# silently rotates every offset here by 90 degrees.)
+#
+# MEASURED AT THE BENCH 2026-09-17: the vessels sit a quarter turn about the
+# tag's z from where this file first assumed, so the offsets below are the
+# earlier -y ones turned by -90 degrees, which sends (0, -d) to (-d, 0). The
+# distances did not change; only which way round the stalk points did.
+#
+# Check the direction again after any reprint -- the sign turns on how the tags
+# were stuck on:
+#
+#   ros2 run tf2_ros tf2_echo tag_0 tag_1      # the two tags' relative heading
+#   rviz2  -> TF, tag_0 axes: red +x, green +y
+#
+# If the published pose lands on the far side of the tag from the vessel, the
+# tags are mounted a half turn from what is assumed here: flip the sign of the
+# x component of BOTH offsets. Nothing else changes.
+#
+# ------------------------------------------------------------------- shapes
+#
+# `shape` is DISPLAY ONLY -- cho_object_pose draws it at the detected pose so
+# an operator can see the vessel next to the robot model in rviz. Nothing in
+# the control path reads it, so a wrong dimension here is cosmetic; measure the
+# real ones anyway, because a marker that does not match the glass in front of
+# you is worse than none.
+#
+# `origin` is where the body's CENTRE sits relative to the PUBLISHED pose. The
+# published pose is the standoff the arm drives to, so the body is below it:
+#   origin z = (half the vessel's height) - (the standoff z above)
+#
+# The z component is a STANDOFF, not a grasp. It is measured from the bench
+# plane the tags lie in, so it has to clear the vessel itself (a 100 ml beaker
+# is about 70 mm tall) plus whatever the FR5 is carrying. The arm stops there;
+# descending into a vessel is a separate, later decision, and doing it before
+# the intrinsics are calibrated would be driving to a number nobody has
+# checked against a ruler.
+objects:
+  - name: beaker
+    # Confirmed on the bench 2026-09-16: tag id 0 decodes at hamming 0,
+    # decision_margin 66-68 on the D435's infra1 stream.
+    tag_id: 0
+    tag_size: 0.039
+    topic: /perception/object_pose/beaker
+    grasp_offset:
+      # 70 mm from the tag to the beaker's centre, along the stalk.
+      position: [-0.070, 0.0, 0.150]
+      # Identity: top_down_yaw below already produces the tool-down approach.
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    # Keep the tag's yaw, approach straight down. AprilTag's planar pose has a
+    # two-solution ambiguity that flips the tag normal between frames; the yaw
+    # survives it, the rest does not. It is also what keeps this offset honest:
+    # the tag normal is exactly the part of the pose that is not trusted, and
+    # the yaw-only frame does not carry it.
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    shape:
+      type: mesh
+      resource: package://cho_task_manager/meshes/beaker.stl
+      # 100 ml beaker: about 50 mm across, 70 mm tall. MEASURE YOURS.
+      # `size` is the bounding box the mesh is drawn at, exactly as it is for a
+      # cylinder -- meshes/usd_to_stl.py normalises the file to a unit box so
+      # that stays true.
+      size: [0.050, 0.050, 0.070]
+      # 35 mm (half its height) - 150 mm (the standoff) = -115 mm.
+      origin: [0.0, 0.0, -0.115]
+      color: [0.2, 0.7, 1.0, 0.65]
+
+  - name: flask
+    # NOT yet confirmed: this tag has never been in the camera's field of view.
+    # Point a camera at it and read the id off `ros2 topic echo /detections`.
+    tag_id: 1
+    tag_size: 0.039
+    topic: /perception/object_pose/flask
+    grasp_offset:
+      # 90 mm: the flask's stalk is longer than the beaker's.
+      position: [-0.090, 0.0, 0.150]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    shape:
+      type: mesh
+      resource: package://cho_task_manager/meshes/flask.stl
+      # The mesh is a conical (Erlenmeyer) flask and its box includes the
+      # neck, so this is the whole glass, not the body. MEASURE YOURS.
+      size: [0.085, 0.085, 0.085]
+      # 42.5 mm (half its height) - 150 mm (the standoff) = -107.5 mm.
+      origin: [0.0, 0.0, -0.1075]
+      color: [1.0, 0.6, 0.2, 0.65]

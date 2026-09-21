@@ -51,6 +51,12 @@ def main():
     # task default (direct), which is right for a simulator with no
     # collisions to check.
     node.declare_parameter("home_via", "")
+    # Vessels the perceived replay keeps a camera on while the arm runs, as a
+    # space- or comma-separated list. Empty means no watchdog, which is the
+    # default on purpose: a transfer recording MOVES a vessel, and a monitor
+    # that did not know which one is being carried would abort the run it
+    # exists to protect. Name the ones that should stay put.
+    node.declare_parameter("replay_watch", "")
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
@@ -88,7 +94,8 @@ def main():
         robot_config['control_mode'] = control_mode
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
-    for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via"):
+    for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via",
+                "replay_watch"):
         value = node.get_parameter(key).get_parameter_value().string_value
         if value:
             robot_config[key] = value

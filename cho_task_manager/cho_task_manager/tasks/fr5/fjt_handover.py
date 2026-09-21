@@ -41,17 +41,10 @@ from cho_task_manager.behaviors.service import (
 )
 from cho_task_manager.behaviors.topic import ExternalSessionBehavior
 from cho_task_manager.subtrees import guarded_mission, home_subtree
+# The FR5-wide control mode and the registry ready pose, shared with the other
+# fr5 trees so they cannot disagree about either.
+from cho_task_manager.tasks.fr5.common import CONTROL_MODE, home_joint_state
 from cho_task_manager.utils.controller_names import load_robot_config
-from cho_task_manager.utils.msg_utils import make_joint_state
-
-# Every FR5 bringup hard-codes control_mode 'position' (cho_bringup_fr5), and
-# that is also the only mode fr5.yaml declares a hold controller for.
-CONTROL_MODE = 'position'
-
-# The registry's canonical ready pose, keyed the same way the action client and
-# the MoveIt SRDF key it. Not 'home 0': that puts the wrist at the floor and is
-# recorded as diagnostic-only.
-HOME_POSE_KEY = '1'
 
 # Slower than the simulation trees' 3 s. This is the first motion of a real
 # session and it starts from wherever the operator left the arm.
@@ -74,18 +67,6 @@ def handover_controller(robot_config) -> str:
             'controllers.moveit_trajectory, so there is no trajectory '
             'controller to hand the arm to')
     return controller
-
-
-def home_joint_state(robot_config):
-    """The registry's canonical ready pose as a JointState."""
-    registry = load_registry_config(
-        robot_config['robot_type'], robot_config.get('profile', 'single'))
-    poses = registry.get('poses', {}).get('home', {})
-    if HOME_POSE_KEY not in poses:
-        raise ValueError(
-            f"robot_type '{robot_config['robot_type']}' has no home pose "
-            f"'{HOME_POSE_KEY}' in its registry entry")
-    return make_joint_state(poses[HOME_POSE_KEY])
 
 
 def create_fr5_fjt_handover_tree(robot_config=None) -> py_trees.behaviour.Behaviour:

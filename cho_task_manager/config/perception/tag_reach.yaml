@@ -6,9 +6,11 @@
 # config/objects.yaml is only an example -- a task passes its own table with
 # object_pose_config:= and that is what run_task_manager.launch.py forwards.
 #
-# The tag's physical SIZE is NOT here. It belongs to the detector
-# (cho_object_pose/config/apriltag_36h11.yaml), and duplicating it would
-# give two numbers that must agree with no way to notice when they stop.
+# The tag's printed SIZE is here, and the detector is started FROM this file:
+# `apriltag.launch.py objects_config:=<this>` derives tag.ids, tag.sizes and
+# tag.frames from it. `tag_size` is the BLACK SQUARE edge in metres -- a 1%
+# error is a 1% range error. What stays with the detector is what follows the
+# lens and the decoder: family, decimate, max_hamming.
 #
 # `topic` is spelled out rather than left to the default because
 # tasks/franka/tag_reach.py subscribes to it by name; test_tag_reach.py asserts
@@ -16,6 +18,9 @@
 objects:
   - name: target
     tag_id: 9
+    # Never measured with callipers; this is the detector's old default, kept
+    # so the franka task behaves exactly as it did.
+    tag_size: 0.040
     topic: /perception/object_pose/target
 
     # A STANDOFF, not a grasp. The offset is expressed in the tag's own frame,

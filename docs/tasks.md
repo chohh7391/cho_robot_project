@@ -19,10 +19,13 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 | arg | default | description |
 | --- | --- | --- |
 | `task` | `pick_place` | task name (must exist for the given `robot_type`) |
-| `robot_type` | `franka` | `franka`, `ur5e` or `openarm` |
+| `robot_type` | `franka` | `franka`, `fr5`, `ur5e` or `openarm` |
 | `arm` | `single` | arm profile; `left` / `right` select the per-arm controller names of a bimanual build |
 | `control_mode` | *(empty)* | `position`, `velocity` or `torque`. Empty keeps the mode the task itself is written for; set it only when the bringup was started in a different one. See below. |
 | `use_sim_time` | `false` | set `true` when running against a simulator |
+| `object_pose_config` | *(empty)* | task-owned object table; empty starts no perception node at all |
+| `object_pose_cameras_config` | *(empty)* | camera table to fuse (`cho_object_pose/config/cameras.yaml`); empty runs the single-camera path — one detector on `/detections`, unprefixed `tag_<id>` frames |
+| `replay_watch` | *(empty)* | `perceived_replay` only: vessels a camera watches while the arm runs |
 | `debug_tree` | `true` | print the unicode tree on every tick |
 | `print_tree` | `true` | print the final tree snapshot when the task finishes |
 
@@ -217,6 +220,52 @@ a rebuild or before real experiments.
 | `pick_place` | pick & place with the Robotiq 2F-85 | **`load_gripper:=true`** (it opens/closes the gripper) |
 | `multi_move` | visits several absolute task-space waypoints | any UR bringup, no gripper needed |
 
+## FR5 tasks
+
+| task | what it does | required bringup |
+| --- | --- | --- |
+| `fjt_handover` | homes, hands the arm to the trajectory controller for an external executor, supervises, takes it back | `controller_name:=joint_trajectory_controller` |
+| `trajectory_replay` | replays a recorded waypoint CSV; refuses a cell that does not match the declared layout | same, plus `replay_trajectory:=` and `replay_layout:=` |
+| `perceived_replay` | the same replay, gated on what the cameras measure instead of a declared layout, optionally watched while it runs | same, plus `object_pose_config:=` and a running detector stack |
+| `vessel_detect` | latches the beaker's and the flask's detected poses. **Commands nothing** — no controller switch, no motion, no bringup needed | `object_pose_config:=` and a running detector stack |
+
+Every FR5 bringup is `control_mode:=position`, which is also the only mode
+`fr5.yaml` declares a hold controller for.
+
+The two perception tasks need the camera stack up — see
+[AprilTag targets](apriltag_perception.md) for the camera bringup and the
+transforms you have to supply.
+
+`vessel_detect` is where a bench is commissioned, and it is deliberately inert:
+it switches no controller and sends no goal, so it needs no bringup and cannot
+move anything. What it proves is the consumer's half of the contract, which is
+where a perception setup actually fails — the pose has to arrive **in the
+robot's base frame** (nothing transforms frames, so a camera-frame pose fails
+here rather than being driven to later), within the timeout from a cold start,
+and under the blackboard key a motion leaf would read. A pass means a motion
+task would have worked; a failure says which of the three it was.
+
+`perceived_replay` is `trajectory_replay` with that measurement used as the
+gate. The motion is imported from `trajectory_replay` unchanged — the same
+start-pose move, segments, gripper settle and ceilings — and what this tree adds
+is:
+
+| | |
+| --- | --- |
+| `replay_layout` | now **optional**. Given, the build-time gate still runs first, which refuses before a node is spun up. Omitted, the cameras are the gate. |
+| the measured check | runs after the home move and before the handover, so a refusal lands while the arm is still held |
+| unverified objects | an object the recording assumes that no camera tracks is named in the log, not silently passed |
+| `replay_watch` | names vessels a camera keeps watching during the replay; one that moves fails the mission branch and the standard abort takes the arm to its hold controller |
+
+`replay_watch` is empty by default and has to name objects explicitly, because a
+transfer recording **moves a vessel on purpose** — a watchdog that did not know
+which one is being carried would abort the run it exists to protect. Name the
+ones that should stay put (`replay_watch:=flask`).
+
+It does not re-aim the trajectory at where a vessel actually is. The waypoints
+are replayed exactly as recorded; the measurement only decides whether they may
+be replayed at all.
+
 ## OpenArm tasks
 
 | task | what it does | required bringup |
@@ -243,4 +292,16 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=controller_check_t
 
 # UR5e pick & place (bringup with load_gripper:=true)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_type:=ur5e use_sim_time:=true
+
+# FR5 perception commissioning: no robot, nothing moves
+TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
+ros2 launch cho_task_manager run_task_manager.launch.py task:=vessel_detect robot_type:=fr5 \
+  object_pose_config:=$TABLE
+
+# FR5 replay, gated on what three cameras measure, watching the flask while it runs
+CAMERAS=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
+TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
+ros2 launch cho_task_manager run_task_manager.launch.py task:=perceived_replay robot_type:=fr5 \
+  replay_trajectory:=/path/to/transfer_seed5_waypoints.csv \
+  object_pose_config:=$TABLE object_pose_cameras_config:=$CAMERAS replay_watch:=flask
 ```

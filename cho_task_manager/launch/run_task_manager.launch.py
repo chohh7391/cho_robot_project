@@ -68,6 +68,13 @@ def generate_launch_description():
             'replay_speed_scale', default_value='0.0',
             description='Fraction of the recorded clock to replay at; 0 keeps the '
                         "task's own conservative default."),
+        DeclareLaunchArgument(
+            'replay_watch', default_value='',
+            description='perceived_replay only: vessels a camera watches while the arm '
+                        'runs, comma- or space-separated (e.g. "flask"). Empty means no '
+                        'watchdog. Name only vessels that should STAY PUT -- a transfer '
+                        'recording moves one on purpose, and watching that one aborts a '
+                        'good run.'),
         # ---- perception, when the task needs a detected target ----
         # cho_object_pose is generic: it owns the pipeline, the gates and the
         # frame resolution, and knows nothing about any particular job. WHICH
@@ -89,6 +96,20 @@ def generate_launch_description():
         # min_edge_px follow from the optics and stay with cho_object_pose.
         DeclareLaunchArgument('object_pose_min_samples', default_value='5'),
         DeclareLaunchArgument('object_pose_max_spread_m', default_value='0.01'),
+        # How many cameras there are, and where their detections come out, is
+        # bench topology rather than task knowledge, so it is a file owned by
+        # cho_object_pose and this only forwards the path. Empty keeps the
+        # single-camera behaviour: one detector on /detections, no prefix.
+        DeclareLaunchArgument(
+            'object_pose_cameras_config', default_value='',
+            description='Camera table to fuse (cho_object_pose/config/cameras.yaml). It '
+                        'MUST be the same file detectors.launch.py was given, or the pose '
+                        'node looks up tag frames no detector publishes.'),
+        DeclareLaunchArgument(
+            'object_pose_min_cameras', default_value='1',
+            description='How many different cameras must agree before a pose is '
+                        'published. Raising it above 1 makes the spread gate a check on '
+                        'the extrinsics, not just on the noise.'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([
                 FindPackageShare('cho_object_pose'), 'launch', 'object_pose.launch.py'])),
@@ -97,7 +118,9 @@ def generate_launch_description():
             launch_arguments={
                 'robot_type': LaunchConfiguration('robot_type'),
                 'objects_config': LaunchConfiguration('object_pose_config'),
+                'cameras_config': LaunchConfiguration('object_pose_cameras_config'),
                 'min_samples': LaunchConfiguration('object_pose_min_samples'),
+                'min_cameras': LaunchConfiguration('object_pose_min_cameras'),
                 'max_position_spread_m': LaunchConfiguration('object_pose_max_spread_m'),
             }.items(),
         ),
@@ -123,6 +146,7 @@ def generate_launch_description():
                 'replay_layout': LaunchConfiguration('replay_layout'),
                 'replay_speed_scale': LaunchConfiguration('replay_speed_scale'),
                 'home_via': LaunchConfiguration('home_via'),
+                'replay_watch': LaunchConfiguration('replay_watch'),
             }]
         )
     ])

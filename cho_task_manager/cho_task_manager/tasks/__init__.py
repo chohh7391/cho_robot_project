@@ -15,7 +15,9 @@ from cho_task_manager.tasks.franka import (
 )
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
+    create_fr5_perceived_replay_tree,
     create_fr5_trajectory_replay_tree,
+    create_fr5_vessel_detect_tree,
 )
 from cho_task_manager.tasks.openarm import (
     create_openarm_controller_check_torque_tree,
@@ -53,6 +55,14 @@ _TASK_REGISTRY = {
         # perception, and a layout gate that refuses a cell laid out
         # differently. See tasks/fr5/trajectory_replay.py.
         'trajectory_replay': create_fr5_trajectory_replay_tree,
+        # The same replay, with the cameras checking the cell it assumes
+        # instead of a layout file kept in step by hand -- and optionally
+        # watching it while the arm runs. See tasks/fr5/perceived_replay.py.
+        'perceived_replay': create_fr5_perceived_replay_tree,
+        # Perception only: latches the beaker's and the flask's detected
+        # poses and moves nothing, so a camera setup can be commissioned with
+        # no bringup running. See tasks/fr5/vessel_detect.py.
+        'vessel_detect': create_fr5_vessel_detect_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,
