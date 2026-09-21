@@ -91,6 +91,22 @@ def quat_from_yaw(yaw):
     return np.array([0.0, 0.0, math.sin(0.5 * yaw), math.cos(0.5 * yaw)])
 
 
+def quat_from_rpy(roll, pitch, yaw):
+    """Rotation from fixed-axis roll-pitch-yaw, the convention a URDF origin uses.
+
+    Here so that a mounting pose copied out of a vendor's xacro can be written
+    in a config the way it is written there, rather than as a quaternion nobody
+    can check against the datasheet.
+    """
+    cr, sr = math.cos(0.5 * roll), math.sin(0.5 * roll)
+    cp, sp = math.cos(0.5 * pitch), math.sin(0.5 * pitch)
+    cy, sy = math.cos(0.5 * yaw), math.sin(0.5 * yaw)
+    return np.array([sr * cp * cy - cr * sp * sy,
+                     cr * sp * cy + sr * cp * sy,
+                     cr * cp * sy - sr * sp * cy,
+                     cr * cp * cy + sr * sp * sy])
+
+
 # --------------------------------------------------------------- decode gate
 
 QualityGate = namedtuple('QualityGate', 'max_hamming min_decision_margin min_edge_px')
@@ -164,10 +180,29 @@ def aggregate_samples(positions, orientations):
 
 # ------------------------------------------------------------------ composing
 
-def compose(position, orientation, offset_position, offset_orientation):
-    """Apply a tag-frame offset to a tag pose: T_base_grasp = T_base_tag * T_tag_grasp."""
+def compose(position, orientation, offset_position, offset_orientation, offset_frame=None):
+    """Apply a tag-frame offset to a tag pose: T_base_grasp = T_base_tag * T_tag_grasp.
+
+    *offset_frame* rotates the POSITION offset when the published orientation
+    is not the frame the offset was written in. It defaults to *orientation*,
+    which is the plain tag-frame case.
+
+    It exists because a top-down grasp orientation is not that frame. Two
+    things are done to it that must not reach an offset:
+
+    * the yaw is FOLDED (a half turn is the same grasp for a parallel gripper),
+      so an in-plane offset -- a tag on a stalk beside the vessel it marks --
+      comes out pointing 180 degrees wrong for half of the tag headings, with
+      nothing in the config able to tell the two cases apart;
+    * the tool is flipped to point down (Rx(pi)), so an offset written as
+      "100 mm off the tag face" would be applied 100 mm BELOW it.
+
+    Passing the tag's own unfolded heading as *offset_frame* keeps the offset
+    meaning what the object tables say it means.
+    """
     orientation = quat_normalize(orientation)
-    moved = np.asarray(position, dtype=float) + quat_rotate(orientation, offset_position)
+    frame = orientation if offset_frame is None else quat_normalize(offset_frame)
+    moved = np.asarray(position, dtype=float) + quat_rotate(frame, offset_position)
     return moved, quat_normalize(quat_multiply(orientation, offset_orientation))
 
 
@@ -195,11 +230,46 @@ def top_down_from_yaw_axis(orientation, yaw_axis=(1.0, 0.0, 0.0), min_planar_nor
     projection on the base xy-plane to define a yaw at all -- a tag seen almost
     edge-on. The caller must treat that as a rejection, not as zero yaw.
     """
+    yaw = tag_yaw(orientation, yaw_axis, min_planar_norm)
+    if yaw is None:
+        return None
+    return top_down_from_yaw(yaw, fold=fold)
+
+
+def tag_yaw(orientation, yaw_axis=(1.0, 0.0, 0.0), min_planar_norm=0.2):
+    """Heading of the tag's *yaw_axis* in the base xy-plane, or None.
+
+    UNFOLDED, i.e. the full (-pi, pi] heading. That is the difference that
+    matters to an offset: ``fold_yaw`` throws away which of two opposite
+    directions the tag is actually facing, which is exactly the information an
+    in-plane offset is made of. A grasp orientation may fold it; an offset
+    frame may not. See :func:`compose`.
+
+    None when *yaw_axis* points too close to vertical for its projection to
+    define a heading at all -- a tag seen almost edge-on. The caller must treat
+    that as a rejection, not as zero yaw.
+    """
     axis_in_base = quat_rotate(quat_normalize(orientation), yaw_axis)
     planar = axis_in_base[:2]
     if float(np.linalg.norm(planar)) < min_planar_norm:
         return None
-    yaw = math.atan2(float(planar[1]), float(planar[0]))
-    if fold:
-        yaw = fold_yaw(yaw)
-    return quat_multiply(quat_from_yaw(yaw), TOP_DOWN)
+    return math.atan2(float(planar[1]), float(planar[0]))
+
+
+def top_down_from_yaw(yaw, fold=True):
+    """Tool-down orientation carrying *yaw*, folded unless told otherwise."""
+    return quat_multiply(quat_from_yaw(fold_yaw(yaw) if fold else yaw), TOP_DOWN)
+
+
+def offset_frame_from_yaw(yaw):
+    """Base-aligned frame carrying *yaw*: the frame a tag-frame offset is in.
+
+    x along the tag's yaw axis projected on the base plane, z along base +z --
+    so for a tag lying flat this IS the tag's own frame, and an offset's +z is
+    above the tag rather than below it.
+
+    Deliberately not the grasp orientation, and deliberately built from an
+    unfolded yaw: see :func:`compose` for what each of those would do to an
+    offset.
+    """
+    return quat_from_yaw(yaw)

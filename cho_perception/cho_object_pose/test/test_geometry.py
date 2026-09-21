@@ -138,3 +138,102 @@ def test_an_edge_on_tag_has_no_definable_yaw():
     # plane is zero, so there is no yaw to keep. None, not zero.
     edge_on = np.array([0.0, math.sin(math.pi / 4.0), 0.0, math.cos(math.pi / 4.0)])
     assert geometry.top_down_from_yaw_axis(edge_on) is None
+
+
+# ------------------------------------------- the frame an offset is written in
+
+def test_an_in_plane_offset_survives_the_grasp_yaw_fold():
+    # The case a tag on a stalk beside its object is made of. The tag lies flat
+    # and faces 150 deg, which fold_yaw maps to -30 -- so the GRASP yaw and the
+    # tag's real heading differ by half a turn. An offset rotated by the grasp
+    # yaw would land on the opposite side of the tag, 2 * 70 mm from the object
+    # it was supposed to point at.
+    tag = rz(math.radians(150.0))
+    offset = [0.0, -0.070, 0.0]
+    yaw = geometry.tag_yaw(tag)
+
+    position, _ = geometry.compose(
+        [0.0, 0.0, 0.0], geometry.top_down_from_yaw(yaw), offset, [0.0, 0.0, 0.0, 1.0],
+        offset_frame=geometry.offset_frame_from_yaw(yaw))
+
+    expected, _ = geometry.compose([0.0, 0.0, 0.0], tag, offset, [0.0, 0.0, 0.0, 1.0])
+    assert np.allclose(position, expected, atol=1e-12)
+    assert np.linalg.norm(position) == pytest.approx(0.070)
+
+
+def test_a_standoff_offset_is_above_the_tag_not_below_it():
+    # +z in a flat tag's frame is up. Composed against the tool-down grasp
+    # orientation instead -- which carries Rx(pi) -- the same number would put
+    # the standoff 100 mm INTO the table.
+    yaw = geometry.tag_yaw(rz(0.0))
+    position, _ = geometry.compose(
+        [0.4, 0.0, 0.2], geometry.top_down_from_yaw(yaw), [0.0, 0.0, 0.100],
+        [0.0, 0.0, 0.0, 1.0], offset_frame=geometry.offset_frame_from_yaw(yaw))
+    assert position[2] == pytest.approx(0.300)
+
+
+def test_the_offset_frame_does_not_touch_the_published_orientation():
+    # Only the position offset is rotated by it. The grasp orientation stays
+    # the folded, tool-down one the gripper is driven to.
+    yaw = geometry.tag_yaw(rz(math.radians(150.0)))
+    grasp = geometry.top_down_from_yaw(yaw)
+    _, orientation = geometry.compose(
+        [0.0, 0.0, 0.0], grasp, [0.0, -0.070, 0.0], [0.0, 0.0, 0.0, 1.0],
+        offset_frame=geometry.offset_frame_from_yaw(yaw))
+    assert geometry.quat_angle(orientation, grasp) < 1e-12
+
+
+def test_compose_without_an_offset_frame_is_unchanged():
+    plain = geometry.compose(
+        [1.0, 0.0, 0.0], rz(math.pi / 2.0), [0.1, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+    explicit = geometry.compose(
+        [1.0, 0.0, 0.0], rz(math.pi / 2.0), [0.1, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+        offset_frame=rz(math.pi / 2.0))
+    assert np.allclose(plain[0], explicit[0], atol=1e-12)
+
+
+def test_tag_yaw_keeps_the_half_turn_the_grasp_yaw_folds_away():
+    assert geometry.tag_yaw(rz(math.radians(150.0))) == pytest.approx(math.radians(150.0))
+    assert geometry.fold_yaw(geometry.tag_yaw(rz(math.radians(150.0)))) == \
+        pytest.approx(math.radians(-30.0))
+
+
+def test_tag_yaw_rejects_an_edge_on_tag_the_same_way():
+    edge_on = np.array([0.0, math.sin(math.pi / 4.0), 0.0, math.cos(math.pi / 4.0)])
+    assert geometry.tag_yaw(edge_on) is None
+    assert geometry.top_down_from_yaw_axis(edge_on) is None
+
+
+def test_the_offset_frame_leaves_base_z_alone():
+    # Its whole job is to carry the tag's heading and nothing else: a tilt of
+    # the tag normal must not tilt the offset, because the normal is the part
+    # of the tag's pose that is not trusted.
+    frame = geometry.offset_frame_from_yaw(math.radians(37.0))
+    assert np.allclose(geometry.quat_rotate(frame, [0.0, 0.0, 1.0]), [0.0, 0.0, 1.0],
+                       atol=1e-12)
+
+
+def test_quat_from_rpy_matches_the_urdf_convention():
+    """Fixed-axis roll-pitch-yaw, the order a URDF origin's rpy is applied in."""
+    half = math.pi / 2
+    # The D435's mesh mounting, rpy "pi/2 0 pi/2": the mesh's +x ends up along
+    # the camera frame's +y and its +z along +x.
+    q = geometry.quat_from_rpy(half, 0.0, half)
+    assert np.allclose(geometry.quat_rotate(q, [1.0, 0.0, 0.0]), [0.0, 1.0, 0.0], atol=1e-9)
+    assert np.allclose(geometry.quat_rotate(q, [0.0, 0.0, 1.0]), [1.0, 0.0, 0.0], atol=1e-9)
+    # A pure yaw has to agree with the yaw-only helper, or the two disagree
+    # about which way an offset points.
+    for yaw in (-2.0, -0.3, 0.0, 1.1, 3.0):
+        assert np.allclose(geometry.quat_from_rpy(0.0, 0.0, yaw),
+                           geometry.quat_from_yaw(yaw), atol=1e-12)
+
+
+def test_a_quarter_turn_about_z_moves_a_sideways_offset_to_the_next_axis():
+    """The bench's -90 degree correction, as the object table applies it.
+
+    The vessels turned out to sit a quarter turn about the tag's z from the
+    first assumption, and this is the whole of that change: (0, -d) -> (-d, 0).
+    """
+    offset = np.array([0.0, -0.070, 0.150])
+    turned = geometry.quat_rotate(geometry.quat_from_rpy(0.0, 0.0, -math.pi / 2), offset)
+    assert np.allclose(turned, [-0.070, 0.0, 0.150], atol=1e-12)
