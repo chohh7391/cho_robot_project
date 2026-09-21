@@ -14,7 +14,12 @@ cameras:
   - model: D435
     serial: '844212070094'
     usb_serial: '846623021037'
-    firmware: 5.9.2         # too old to report a USB type; IR emitter is off in FW
+    firmware: 5.9.2         # too old to report a USB type. Declares NO emitter
+                            # parameter, and its projector is ON with no way to
+                            # turn it off from ROS -- an earlier note here said
+                            # "off in FW", which is the misreading of "disabled
+                            # by FW" (that means the CONTROL is disabled).
+                            # Tape the projector window to use infra1.
     driver: realsense2_camera
     calibrations: []
 

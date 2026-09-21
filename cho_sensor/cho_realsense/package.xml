@@ -13,6 +13,10 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>realsense2_camera</exec_depend>
+  <!-- The camera's own mesh, for drawing it in rviz. NOT pulled in by the
+       driver, and not needed to run one: without it rviz logs that it cannot
+       load the resource and the camera is simply not drawn. -->
+  <exec_depend>realsense2_description</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
