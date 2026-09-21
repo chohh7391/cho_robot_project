@@ -68,6 +68,29 @@ is the one error the pose numbers cannot show. The meshes come from
 sudo apt install ros-humble-realsense2-description   # not pulled in by the driver
 ```
 
+### Where the cameras are
+
+Each camera needs one transform into the robot, into that camera's **own root
+frame** — never an optical frame, because both drivers publish their internal
+chain themselves and a second parent for one of those frames resolves through
+whichever arrived last.
+
+For the FR5 bench those are measured and kept in
+`cho_bringup_fr5/config/real/camera_extrinsics.yaml`, with what checked each
+one written beside it:
+
+```bash
+ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py   # after the robot
+```
+
+It is separate from the robot bringup on purpose — a replay wants the arm
+without the cameras, and a moved tripod should not mean power-cycling the FR5 —
+but it goes *after* it, because the wrist entry hangs off `wrist3_link`.
+
+This is the one number in the stack that nothing at runtime checks: a wrong
+extrinsic gives a confident, wrong object pose, with no gate, residual or log
+line to show it. Re-measure after anything moves.
+
 **The depthai driver publishes its own `/robot_description`.** Beside a robot
 bringup that is two publishers on one topic, and rviz's RobotModel keeps
 whichever arrived last — the arm vanishes and a camera appears in its place,

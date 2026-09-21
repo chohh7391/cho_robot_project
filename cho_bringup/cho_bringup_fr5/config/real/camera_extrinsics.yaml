@@ -1,0 +1,88 @@
+# Where each camera sits relative to the FR5, as measured at the bench.
+#
+# THIS IS THE ONE NUMBER NOTHING ELSE CHECKS. Every object pose the perception
+# stack publishes is downstream of it, and a wrong extrinsic produces a
+# confident, wrong pose -- there is no gate, no residual and no log line that
+# shows it. Re-measure after anything moves, and record what the check said.
+#
+# It lives HERE, in the cell's bringup, on purpose:
+#
+#   cho_realsense / cho_oak  are camera drivers. They know nothing about a
+#                            robot and publish no transform into one, which is
+#                            what lets the same launch serve a bag recording.
+#   cho_object_pose          consumes the transform and never names one. It
+#                            looks up base_link <- <prefix>tag_<id> and does
+#                            not care how that chain was built.
+#
+# So the only place that knows both a robot and a camera is the bringup for the
+# cell they share. Moving the tripod is an edit here and nowhere else.
+#
+# ------------------------------------------------------------------- frames
+#
+# `child_frame` is each driver's OWN ROOT, never an optical frame. Both drivers
+# publish their internal chain from their own description (`publish_tf: true`
+# on the D435; depthai always), so supplying anything below the root would give
+# one frame two parents -- not an error, just transforms that resolve through
+# whichever arrived last.
+#
+#   D435   camera_link, named by `camera_name:=` -> `wrist_link` here
+#   OAK    `oak-d-base-frame`, the driver's `parent_frame:=` default
+#
+# --------------------------------------------------------------- how to redo
+#
+# Put a tag of known size at a SURVEYED point in the robot's base frame, read
+# base_link <- <prefix>tag_<id>, and solve for the camera. One tag is enough
+# for an eye-to-hand camera and is what was done for the OAK below. It makes
+# that tag's own residual meaningless (it is fitted), so the checks that count
+# are the ones on OTHER tags -- see each entry.
+transforms:
+  # ------------------------------------------------------------------ wrist
+  # Eye-in-hand: the D435 rides the wrist, so its transform hangs off
+  # `wrist3_link` and the robot's FK carries it. The bringup must therefore be
+  # running for any wrist detection to resolve into the base frame.
+  #
+  # MEASURED FROM THE MOUNT, not solved from a tag: the arm was posed twice by
+  # hand and the two solutions averaged. Checked afterwards against the
+  # surveyed tag 3 at (0.300, 0.000, -0.014): the wrist put it 7.4 mm away,
+  # which is the size expected from averaging two hand-set poses and is the
+  # honest accuracy of this entry.
+  #
+  # A proper AX=ZB hand-eye solve over a dozen poses would do better. It was
+  # not worth it for a camera whose job is a close-up recovery sweep, where
+  # 7 mm at 200 mm range is already inside the approach tolerance.
+  - name: wrist
+    parent_frame: wrist3_link
+    child_frame: wrist_link
+    xyz: [-0.02545, -0.06255, 0.15598]
+    # x, y, z, w -- the order geometry_msgs uses, NOT the w-first order some
+    # CAD tools print.
+    quaternion: [0.804637, 0.002884, 0.593509, 0.017283]
+
+  # -------------------------------------------------------------------- oak
+  # Eye-to-hand: the OAK stands beside the bench and does not move, so this is
+  # a bench-layout number. IT IS WRONG THE MOMENT THE TRIPOD IS NUDGED, and
+  # nothing will say so.
+  #
+  # SOLVED FROM ONE TAG: id 3, 39 mm, surveyed at (0.300, 0.000, -0.014) in the
+  # base frame. Three checks, of which only the last two mean anything:
+  #
+  #   tag 3 lands 0.2 mm from the surveyed point -- BY CONSTRUCTION. It is the
+  #     tag that was fitted, so this number is not evidence of anything.
+  #   tag 1 comes out at z = -14.1 mm against the same bench plane's -14.0 mm.
+  #     Its z was never fitted and both tags lie on the same aluminium
+  #     extrusion, so 0.1 mm is a genuine, independent check on roll and pitch.
+  #   the WRIST, through a completely separate chain (measured mount + FK),
+  #     agrees on tag 3 to 7.3 mm. Given the wrist's own 7.4 mm above, that
+  #     residual is the wrist's, not this entry's.
+  #
+  # Jitter with the arm still: 0.55 mm over ~800 samples.
+  #
+  # What none of that proves is the ABSOLUTE position against the robot --
+  # everything here is referenced to the surveyed tag, so an error in that
+  # survey moves everything together and no check above can see it. Closing
+  # that needs the TCP touched to a known point and compared against FK.
+  - name: oak
+    parent_frame: base_link
+    child_frame: oak-d-base-frame
+    xyz: [0.41984, 0.15200, 0.37690]
+    quaternion: [0.535050, 0.124190, -0.795538, 0.255767]
