@@ -15,6 +15,7 @@ from cho_task_manager.tasks.franka import (
 )
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
+    create_fr5_occlusion_recovery_tree,
     create_fr5_perceived_replay_tree,
     create_fr5_trajectory_replay_tree,
     create_fr5_vessel_detect_tree,
@@ -63,6 +64,10 @@ _TASK_REGISTRY = {
         # poses and moves nothing, so a camera setup can be commissioned with
         # no bringup running. See tasks/fr5/vessel_detect.py.
         'vessel_detect': create_fr5_vessel_detect_tree,
+        # The same latching, but it goes and LOOKS with the wrist camera at
+        # any vessel the standing camera cannot currently see. See
+        # tasks/fr5/occlusion_recovery.py.
+        'occlusion_recovery': create_fr5_occlusion_recovery_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,

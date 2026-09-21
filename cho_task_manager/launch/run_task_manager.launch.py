@@ -105,6 +105,22 @@ def generate_launch_description():
             description='Camera table to fuse (cho_object_pose/config/cameras.yaml). It '
                         'MUST be the same file detectors.launch.py was given, or the pose '
                         'node looks up tag frames no detector publishes.'),
+        # ---- occlusion recovery (fr5 occlusion_recovery) ----
+        # WHERE to sweep is a bench's business: which joint configurations put
+        # the wrist camera over a beaker depends on where the beaker stands and
+        # which arm is holding the camera. WHETHER to sweep is decided at run
+        # time from what cho_object_pose publishes, so nothing here says it.
+        DeclareLaunchArgument(
+            'sweep_config', default_value='',
+            description='Sweep table for occlusion_recovery: the joint configurations '
+                        'that look at each object with the recovery camera (see '
+                        'cho_task_manager/config/sweep/). Empty for any task that does '
+                        'not recover.'),
+        DeclareLaunchArgument(
+            'visibility_topic', default_value='',
+            description="Where cho_object_pose says what each camera can see. Empty "
+                        "keeps its default, /perception/object_visibility. Set it only "
+                        'if the pose node was started with a different one.'),
         DeclareLaunchArgument(
             'object_pose_min_cameras', default_value='1',
             description='How many different cameras must agree before a pose is '
@@ -116,6 +132,11 @@ def generate_launch_description():
             condition=IfCondition(PythonExpression([
                 "'", LaunchConfiguration('object_pose_config'), "' != ''"])),
             launch_arguments={
+                # The pose node measures every visibility age as its own clock
+                # minus an image stamp, so it has to be on the same clock as
+                # the drivers and the bringup -- which is the same clock this
+                # task manager is on.
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'robot_type': LaunchConfiguration('robot_type'),
                 'objects_config': LaunchConfiguration('object_pose_config'),
                 'cameras_config': LaunchConfiguration('object_pose_cameras_config'),
@@ -147,6 +168,8 @@ def generate_launch_description():
                 'replay_speed_scale': LaunchConfiguration('replay_speed_scale'),
                 'home_via': LaunchConfiguration('home_via'),
                 'replay_watch': LaunchConfiguration('replay_watch'),
+                'sweep_config': LaunchConfiguration('sweep_config'),
+                'visibility_topic': LaunchConfiguration('visibility_topic'),
             }]
         )
     ])

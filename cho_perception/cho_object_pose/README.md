@@ -189,12 +189,84 @@ anyone asks:
 
 ```text
 [beaker] publishing, spread 3.7 mm over 27 samples from 3 camera(s) (168 published)
-         | oak: ok, rs_left: ok, rs_right: rejected: decision_margin 21.4 < 35.0
+         | oak: ok [margin 51, edge 33px] (0.03s ago), rs_left: ok [margin 48, edge 31px] (0.04s ago),
+           rs_right: rejected: decision_margin 21.4 < 35.0 [margin 21, edge 29px] (0.03s ago)
 ```
 
 Each camera still needs its own transform into the robot — one
 `static_transform_publisher` per camera, into that camera's own root frame. This
 node never names any of them.
+
+## One camera can override another
+
+`priority` (an integer, default 0) changes what the node *does* with a camera
+rather than where it finds it. Equal priorities are fused as above. A **higher**
+one **replaces** the lower ones' samples, for the objects it can currently see
+and only for those:
+
+```yaml
+  - name: wrist            # eye-in-hand, 200 mm away when it looks
+    priority: 10
+  - name: oak              # standing observer, a metre off
+    priority: 0
+```
+
+The case it exists for is a recovery sweep. A close-up view and a metre-away
+view are not two measurements of one quantity: median them and the result is a
+pose neither camera saw, or the spread gate refuses them both during exactly
+the sweep that was meant to fix things.
+
+- **Self-clearing, with no lifetime of its own.** Suppression is decided by
+  what is *in the aggregation window*, so a camera that sees nothing suppresses
+  nothing. When the arm leaves the viewpoint the close-up samples age out after
+  `window_sec` and the standing camera is believed again. A recovered pose is
+  therefore exactly as long-lived as any other; whatever needs it latches it.
+- **`min_cameras` is not applied while an override is in force.** Requiring
+  several cameras to agree and declaring one of them authoritative are
+  contradictory, and with both the recovery camera would suppress the others
+  and then fail its own quorum. `min_samples` and `max_position_spread_m` still
+  apply, within the winning camera's own samples. The trade is named in the
+  object's status and in `override_camera` on the topic below — not made
+  quietly.
+- **That camera's extrinsic becomes load-bearing** rather than a cross-check.
+
+## What each camera can see, on a topic
+
+`/perception/object_visibility`
+(`cho_interfaces/ObjectVisibilityArray`, 5 Hz) carries the same per-camera
+reasons the report logs, in a form a behaviour tree can branch on. It is the
+seam an occlusion recovery needs: "the beaker is not in the OAK's frame" is a
+fact only this node has, and a log line is not readable by a task.
+
+```text
+name: beaker
+publishing: false          # a pose went out within the last window
+override_camera: ''        # non-empty while one camera is suppressing others
+status: '2/5 samples in the last 0.50s'
+cameras:
+  - camera: oak
+    state: 2               # STATE_NOT_IN_FRAME — occluded, or out of view
+    detail: ''
+    age_sec: 0.03          # -1 when never heard from
+    priority: 0
+    decision_margin: -1.0  # -1 when there was nothing to score
+    edge_px: -1.0
+```
+
+States: `UNKNOWN`, `OK`, `NOT_IN_FRAME`, `REJECTED`, `NO_TF`, `SUPPRESSED`
+(outranked, not blind), `STALE` (its last word is older than `window_sec`, so
+nothing it said can still be in the window — a camera whose driver died reads
+as healthy without this).
+
+`decision_margin` and `edge_px` come with the state, accepted or rejected,
+because the state alone only says a detection cleared *this* node's gate —
+which is set for "good enough to publish". A consumer that wants a genuinely
+better view holds out for a number; this node keeps no opinion about what any
+task needs.
+
+`cho_task_manager`'s `OcclusionSweepBehavior` is the consumer: it reads this
+topic, decides whether a sweep would help, and drives a wrist camera over the
+object until the decode is good enough.
 
 ## Seeing it
 
@@ -264,13 +336,45 @@ load the resource and draws nothing; everything else keeps working.
 
 ## Testing without a camera
 
+Two stand-ins, at two different depths.
+
 ```bash
 ros2 run cho_object_pose mock_object_pose --ros-args -p position:="[0.45, 0.0, 0.05]"
 ```
 
-Stands in for the whole detector so a task tree can be built and tested first, and so a tree
+Replaces **this whole package**, so a task tree can be built and tested first, and so a tree
 failure can later be told apart from a perception failure. `delay_sec` exercises the other
 branch — `PoseTargetBehavior` failing on its timeout.
+
+```bash
+ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true
+```
+
+Replaces only the **detector**. It asks TF where each camera is, works out what that camera
+would see of each tag, and publishes the detections and `<prefix>tag_<id>` frames a real one
+would — so `object_pose_node` runs for real against it, with the window, the gates, the
+priority override and the visibility topic all on the production path. The scene is
+`config/fake_scene.yaml`; the geometry is in `fake_scene.py` and has no ROS in it.
+
+Point it at a simulator and the arm is real too, which is the part no unit test reaches — a
+moving wrist camera whose tag frame TF has to compose through the robot at the image's own
+stamp:
+
+```bash
+ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py
+ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
+ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true -p blind:="['oak:0']"
+ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
+    objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml \
+    cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
+```
+
+`blind` makes a camera miss a tag, standing in for an occlusion by the bench furniture the
+arm model does not contain — which is how the FR5 recovery sweep is exercised end to end.
+
+**`use_sim_time` has to match everywhere.** Every age on the visibility topic is this node's
+clock minus an image stamp, so a node on wall time against drivers on `/clock` reports every
+camera stale while it is publishing poses. The node says so out loud when it happens.
 
 ## Layout
 
@@ -278,9 +382,12 @@ branch — `PoseTargetBehavior` failing on its timeout.
 |---|---|
 | `geometry.py` | Quaternion helpers, the decode gate, aggregation, the yaw-only projection. No ROS, no clock, no camera — pure functions of numbers |
 | `objects.py` | Parsing and validation of `config/objects.yaml`, including the display shape |
-| `cameras.py` | Parsing and validation of `config/cameras.yaml` — the cameras to fuse, and the prefixes that keep their tag frames apart |
+| `cameras.py` | Parsing and validation of `config/cameras.yaml` — the cameras to fuse, the prefixes that keep their tag frames apart, and each one's `priority` |
+| `visibility.py` | The states a camera can be in, and which cameras' samples survive a priority contest. No ROS — the suppression rule is a pure function of names and integers |
 | `node.py` | The ROS adapter: subscribe, look TF up at the image stamp, gate, publish |
 | `mock_publisher.py` | A fixed pose on the output topic, for wiring tasks without hardware |
+| `fake_scene.py` | The simulated bench: scene parsing, the field-of-view cone, the line-of-sight occlusion test, apparent tag size. No ROS |
+| `fake_detections.py` | The ROS adapter for it — TF in, detections and tag frames out, so `node.py` runs for real without a camera |
 
 The split is the same one `cho_vla_core` uses, for the same reason: the part worth testing
 does not need a robot.

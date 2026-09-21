@@ -27,6 +27,9 @@ setup(
         'console_scripts': [
             'object_pose_node = cho_object_pose.node:main',
             'mock_object_pose = cho_object_pose.mock_publisher:main',
+            # Replaces the DETECTOR, so this package's own node runs for real
+            # against it. See config/fake_scene.yaml.
+            'fake_detections = cho_object_pose.fake_detections:main',
         ],
     },
 )

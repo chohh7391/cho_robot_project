@@ -26,7 +26,10 @@ find_package(builtin_interfaces REQUIRED)
 
 set(MSG_FILES
   "msg/ActionChunk.msg"
+  "msg/CameraVisibility.msg"
   "msg/GripperState.msg"
+  "msg/ObjectVisibility.msg"
+  "msg/ObjectVisibilityArray.msg"
   "msg/PoseLog.msg"
   "msg/VlaTelemetry.msg"
 )

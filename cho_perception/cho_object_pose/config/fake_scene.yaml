@@ -1,0 +1,124 @@
+# A bench that exists only in numbers, for `ros2 run cho_object_pose fake_detections`.
+#
+# It replaces the DETECTOR, not this package: object_pose_node runs for real
+# against it, so the aggregation window, the quality gate, the priority
+# override, the TF lookup at the image stamp and the visibility topic are all
+# the production path. What is simulated is the optics and nothing else.
+#
+# Point it at a running simulator and the arm is real too:
+#
+#   ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py
+#   ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
+#   ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true
+#   ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
+#       objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml \
+#       cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
+#
+# USE_SIM_TIME HAS TO MATCH ON ALL OF THEM. Every age the pose node publishes is
+# its own clock minus an image stamp; a mismatch makes it report every camera
+# stale while it is publishing poses. It now says so out loud, but this is one
+# of the two places to get it right.
+#
+# To make a camera miss something -- standing in for an occlusion by any of the
+# bench furniture the arm model does not contain:
+#
+#   ros2 run cho_object_pose fake_detections --ros-args -p blind:="['oak:0']"
+#
+# ---------------------------------------------------------------- the scene
+#
+# This one is the FR5 bench. Like config/objects.yaml it is both the documented
+# schema and what you get by default; a different cell passes its own file with
+# scene_config:=.
+base_frame: base_link
+
+# The printed tag, and the lens that looks at it. focal_px is fx: a D435's
+# infra1 stream is 848 wide over about 87 degrees, so fx is near 447. Together
+# these decide the apparent edge in pixels -- `tag_size_m * focal_px / range` --
+# which is the number cho_object_pose's own `min_edge_px` gate reads.
+tag_size_m: 0.039
+focal_px: 447.0
+
+# THE ONE INVENTED NUMBER. decision_margin is taken proportional to the
+# apparent edge, which is the right shape (a decode improves as the tag grows)
+# but is not a measurement. It is what decides how far into a recovery raster a
+# sweep has to go: at 1.80 a 39 mm tag clears a margin of 55 at about 0.56 m and
+# not at 0.59 m, which walks cho_task_manager's fr5_bench raster through its far
+# row and satisfies it in the middle one. Change it to exercise a different
+# case; do not quote the result as what a real camera returns.
+margin_per_px: 1.80
+
+# Links that can get between a camera and a tag, and how fat to call them. This
+# is how THE ARM OCCLUDING THE BENCH -- the failure the whole recovery exists
+# for -- arises from the arm's actual configuration rather than from a flag.
+# A frame that does not resolve simply blocks nothing.
+blocker_radius_m: 0.10
+blockers:
+  - upperarm_link
+  - forearm_link
+  - wrist1_link
+  - wrist2_link
+  - wrist3_link
+  - tool_tcp
+  - gripper_base_link
+
+cameras:
+  # Eye-in-hand. `frame` is the D435's own camera_link as
+  # cho_bringup_fr5/config/real/camera_extrinsics.yaml parents it to wrist3_link,
+  # so this camera moves with the arm and the pose node's lookup has to traverse
+  # the real robot chain -- which is the part no unit test can cover.
+  #
+  # The optical axis is the frame's +x, the RealSense camera_link convention.
+  #
+  # fov_deg is a CONE, and the honest cone for this camera is its SHORTER
+  # angle: a D435's infra stream is 87 x 58 degrees, and nothing in the sweep
+  # constrains the image roll -- the waypoint solver leaves it free, because
+  # that is what keeps the IK a well-conditioned 5-DOF task. So which way round
+  # the 87 lies is not known, and 58 is the angle that is in frame whatever the
+  # roll turns out to be. A cone at 87 would have the harness "see" tags a real
+  # run would miss, which is the one direction a test must not be wrong in.
+  - name: wrist
+    frame: wrist_link
+    frame_prefix: wrist_
+    detections_topic: /wrist/detections
+    fov_deg: 58.0
+    max_range_m: 1.0
+
+  # Eye-to-hand, and NOT field-of-view gated: it is a wide lens pointed at the
+  # whole bench, so a cone would only add a number nobody measured. Leaving
+  # fov_deg out is the honest setting for that.
+  - name: oak
+    frame: oak-d-base-frame
+    frame_prefix: oak_
+    detections_topic: /oak/detections
+    max_range_m: 3.0
+
+# Tags lie FLAT and UNROTATED in the base frame -- +z up, +x along base +x --
+# which makes the pose the pipeline should publish checkable by hand: it is this
+# position plus the object table's grasp_offset, and that answer has to land on
+# the vessel.
+#
+# The tag is NOT at the vessel. It stands on a stalk beside it, which is what
+# the object table records as a negative x offset -- beaker -70 mm, flask
+# -90 mm. So these are the vessel positions from
+# cho_task_manager/config/replay/mujoco_sdl_cell.yaml plus that stalk, read
+# forwards:
+#
+#   beaker  vessel (0.490, 0.175)  + 0.070  ->  tag (0.560, 0.175)
+#   flask   vessel (0.484, 0.332)  + 0.090  ->  tag (0.574, 0.332)
+#
+# and the pipeline should then publish (0.490, 0.175, 0.136) for the beaker --
+# the vessel's own xy, 150 mm above the bench plane. A published pose that is
+# 70 mm off in x is this file and the object table disagreeing about which of
+# the two the number is.
+#
+# z is the bench plane the FR5 extrinsics were surveyed against; the ids are
+# cho_task_manager/config/perception/vessel_detect.yaml's; and the same tag
+# positions are what cho_task_manager/config/sweep/fr5_bench.raster.yaml aims
+# the recovery raster at.
+tags:
+  - id: 0
+    name: beaker
+    xyz: [0.560, 0.17475, -0.014]
+  - id: 1
+    name: flask
+    xyz: [0.574, 0.33166, -0.014]

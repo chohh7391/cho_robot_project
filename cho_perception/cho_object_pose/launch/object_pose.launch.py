@@ -25,6 +25,12 @@ def generate_launch_description():
     share = get_package_share_directory('cho_object_pose')
     return LaunchDescription([
         DeclareLaunchArgument('robot_type', default_value='franka'),
+        # IT HAS TO MATCH THE CAMERA DRIVERS AND THE BRINGUP. Every age on the
+        # visibility topic is this node's clock minus an image stamp, so a node
+        # on wall time against drivers on /clock reports every camera stale
+        # while it is publishing poses. The node says so out loud when it
+        # happens, but the fix is here.
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument(
             'base_frame', default_value='',
             description='Empty takes model.arm_base_link from cho_robot_config. That is '
@@ -54,6 +60,18 @@ def generate_launch_description():
         DeclareLaunchArgument('max_position_spread_m', default_value='0.01'),
         DeclareLaunchArgument('report_period_sec', default_value='2.0'),
         DeclareLaunchArgument(
+            'publish_visibility', default_value='true',
+            description='Publish what every camera can see of every object, as '
+                        'cho_interfaces/ObjectVisibilityArray. This is what a task tree '
+                        'triggers an occlusion recovery from; the periodic log says the '
+                        'same thing to a human.'),
+        DeclareLaunchArgument('visibility_topic',
+                              default_value='/perception/object_visibility'),
+        DeclareLaunchArgument(
+            'visibility_period_sec', default_value='0.2',
+            description='How often to publish it. A rate, not a lifetime -- how old a '
+                        "camera's word may be before it stops counting is window_sec."),
+        DeclareLaunchArgument(
             'publish_markers', default_value='true',
             description='Draw each object at its detected pose, sized from the object '
                         "table's `shape`, for rviz beside the robot model."),
@@ -70,6 +88,8 @@ def generate_launch_description():
             # the numeric arguments arrive as strings and the node's typed
             # parameter declarations reject them at start-up.
             parameters=[{
+                'use_sim_time': ParameterValue(
+                    LaunchConfiguration('use_sim_time'), value_type=bool),
                 'robot_type': LaunchConfiguration('robot_type'),
                 'base_frame': LaunchConfiguration('base_frame'),
                 'objects_config': LaunchConfiguration('objects_config'),
@@ -86,6 +106,11 @@ def generate_launch_description():
                     LaunchConfiguration('max_position_spread_m'), value_type=float),
                 'report_period_sec': ParameterValue(
                     LaunchConfiguration('report_period_sec'), value_type=float),
+                'publish_visibility': ParameterValue(
+                    LaunchConfiguration('publish_visibility'), value_type=bool),
+                'visibility_topic': LaunchConfiguration('visibility_topic'),
+                'visibility_period_sec': ParameterValue(
+                    LaunchConfiguration('visibility_period_sec'), value_type=float),
                 'publish_markers': ParameterValue(
                     LaunchConfiguration('publish_markers'), value_type=bool),
                 'marker_topic': LaunchConfiguration('marker_topic'),

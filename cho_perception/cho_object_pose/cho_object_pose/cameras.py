@@ -11,6 +11,12 @@ The frame prefix is the part that has to be right. Two detectors left at the
 default both publish ``tag_9``, which gives one TF child two parents -- not an
 error, just transforms that intermittently resolve through the wrong camera.
 That is why duplicates here are rejected rather than tolerated.
+
+``priority`` is the one field that changes what the node DOES with a camera
+rather than where it finds it. Cameras left at the default are peers and their
+views are fused; a camera given a higher one replaces the lower ones for any
+object it can see, which is how a close-up recovery sweep overrides a standing
+observer instead of being averaged into it.
 """
 
 from collections import namedtuple
@@ -22,7 +28,8 @@ DEFAULT_VISUAL_COLOR = (0.6, 0.6, 0.6, 0.9)
 
 CameraSpec = namedtuple(
     'CameraSpec',
-    'name frame_prefix detections_topic image_topic camera_info_topic rectify visual')
+    'name frame_prefix detections_topic image_topic camera_info_topic rectify '
+    'priority visual')
 
 #: Where to draw the camera body, for rviz. DIAGNOSTIC, not decoration: the
 #: extrinsic that puts a tag in the robot's frame is the one number in this
@@ -42,6 +49,25 @@ def _floats(entry, key, label, length, default):
                and math.isfinite(item) for item in value):
         raise ValueError(f'{label}.{key} must contain only finite numbers')
     return tuple(float(item) for item in value)
+
+
+def _priority(entry, label):
+    """How much this camera's word is worth against another's.
+
+    Cameras at the same priority are FUSED, which is what every bench did
+    before this field existed and what leaving it out still does. A camera at a
+    HIGHER priority REPLACES the lower ones for any object it can currently
+    see, instead of being averaged with them -- see visibility.select_by_priority
+    for why an override rather than a weighting.
+
+    Integer, and it may be negative: the numbers only ever get compared, so what
+    matters is the order and not the size of the gaps.
+    """
+    value = entry.get('priority', 0)
+    # bool is an int in Python, and `priority: true` is a typo rather than a 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f'{label}.priority must be an integer')
+    return value
 
 
 def _parse_visual(entry, label):
@@ -116,6 +142,7 @@ def parse_cameras(document):
 
         specs.append(CameraSpec(name, frame_prefix, detections_topic,
                                 image_topic, camera_info_topic, rectify,
+                                _priority(entry, label),
                                 _parse_visual(entry, label)))
 
     for field, what in (('name', 'names'),
@@ -138,4 +165,4 @@ def single_camera(frame_prefix='', detections_topic=DEFAULT_DETECTIONS_TOPIC):
     meaning exactly what they always meant, so nothing that worked with one
     camera has to learn about this file.
     """
-    return [CameraSpec('camera', frame_prefix, detections_topic, '', '', False, None)]
+    return [CameraSpec('camera', frame_prefix, detections_topic, '', '', False, 0, None)]

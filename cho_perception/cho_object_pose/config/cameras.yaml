@@ -17,6 +17,9 @@
 # cameras that disagree by more than the gate publish nothing, which is the
 # honest answer when nobody knows where the cameras are.
 #
+# `priority` is the exception to that, and the reason it exists is below: a
+# recovery sweep is not another vote, it is a better measurement.
+#
 # This file does NOT start the cameras themselves. `cho_realsense` and
 # `cho_oak` do that, and the image topics below are what they publish:
 #
@@ -34,16 +37,38 @@ cameras:
   #   oak    the standing observer. Wide, far, always looking -- this is what
   #          locates the vessels when nothing is in the way.
   #   wrist  the recovery instrument. When the arm occludes something the OAK
-  #          needs, the planner sweeps the wrist over it from above and the
-  #          close view updates that object's pose.
+  #          needs, a task sweeps the wrist over it from above and the close
+  #          view updates that object's pose.
   #
-  # They are therefore NOT redundant views of one scene, which matters for the
-  # aggregation: the node medians every camera's samples together, so while both
-  # can see a tag the far, coarse view is pulled into the same estimate as the
-  # near, precise one. That is fine when they agree (and max_position_spread_m
-  # refuses them when they do not), but if a recovery sweep is supposed to
-  # OVERRIDE rather than average with the standing view, that is a change to the
-  # aggregation and not something this file can express.
+  # They are therefore NOT redundant views of one scene, and `priority` is what
+  # says so. Cameras at equal priority are fused as described above; a camera at
+  # a HIGHER one REPLACES the lower ones' samples, for the objects it can
+  # currently see and only for those. Without it the node would median a
+  # 200 mm close-up together with a 1 m wide-angle view and publish a pose
+  # neither camera saw -- or, once they disagreed by more than
+  # max_position_spread_m, publish nothing at all during exactly the sweep that
+  # was meant to fix things.
+  #
+  # The override is self-clearing and needs no expiry of its own: it lasts as
+  # long as the wrist has samples IN THE AGGREGATION WINDOW, so when the arm
+  # moves away those age out after window_sec and the OAK is believed again.
+  # A recovered pose is therefore exactly as long-lived as any other -- a task
+  # that needs to keep it latches it (PoseTargetBehavior), which is what every
+  # task already does.
+  #
+  # TWO THINGS TO KNOW BEFORE RAISING A PRIORITY:
+  #
+  #   * `min_cameras` is not applied to an object while an override is in force.
+  #     Demanding that several cameras agree and declaring one of them
+  #     authoritative are contradictory; with both, the wrist would suppress the
+  #     OAK and then fail its own quorum, and the object would go dark during
+  #     the sweep. min_samples and max_position_spread_m still apply, within the
+  #     winning camera's own samples.
+  #   * The wrist's extrinsic is now load-bearing rather than a cross-check.
+  #     cho_bringup_fr5/config/real/camera_extrinsics.yaml puts it at about
+  #     7 mm, measured from the mount rather than solved -- fine for a close-up
+  #     approach, and the number to improve if a recovered pose is used for
+  #     anything tighter.
 
   # Wrist-mounted D435, eye-in-hand. Its transform comes from the ROBOT's TF
   # (wrist3_link -> wrist_link), not from a static publisher, because it moves
@@ -55,6 +80,9 @@ cameras:
     rectify: false
     frame_prefix: wrist_
     detections_topic: /wrist/detections
+    # Outranks the standing observer. Only ever compared, never scaled, so the
+    # gap to the OAK's 0 means nothing beyond "higher".
+    priority: 10
     # Drawn at the driver's own camera_link, with the mounting pose copied
     # verbatim out of realsense2_description/urdf/_d435.urdf.xacro:
     #   xyz  d435_zero_depth_to_glass + d435_glass_to_front, -d435_cam_depth_py, 0
@@ -77,6 +105,9 @@ cameras:
     rectify: true
     frame_prefix: oak_
     detections_topic: /oak/detections
+    # The default, spelled out because this file is where the two cameras'
+    # relationship is documented and an implicit 0 says nothing.
+    priority: 0
     # `oak_model_origin` is the frame depthai_descriptions puts this very mesh
     # at, already rotated there (rpy 1.5708 0 1.5708 off the base frame), so
     # the offset here is zero. The driver publishes the frame; the mesh ships

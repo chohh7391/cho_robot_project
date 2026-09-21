@@ -57,6 +57,15 @@ def main():
     # that did not know which one is being carried would abort the run it
     # exists to protect. Name the ones that should stay put.
     node.declare_parameter("replay_watch", "")
+    # Where the wrist camera goes to look at a vessel the standing camera
+    # cannot see (occlusion_recovery). A bench's joint configurations, not a
+    # robot's, so it is a path like the replay artefacts above rather than
+    # anything derivable from the registry. Empty means "not a recovery task";
+    # the tree raises a clear error if it is selected without one.
+    node.declare_parameter("sweep_config", "")
+    # Where cho_object_pose says what each camera can see. Empty keeps the
+    # node's own default, which is what its launch publishes on.
+    node.declare_parameter("visibility_topic", "")
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
@@ -95,7 +104,7 @@ def main():
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
     for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via",
-                "replay_watch"):
+                "replay_watch", "sweep_config", "visibility_topic"):
         value = node.get_parameter(key).get_parameter_value().string_value
         if value:
             robot_config[key] = value

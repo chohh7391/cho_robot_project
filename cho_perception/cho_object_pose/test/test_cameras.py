@@ -137,3 +137,46 @@ def test_the_single_camera_fallback_is_the_old_behaviour():
     camera, = single_camera()
     assert camera.frame_prefix == ''
     assert camera.detections_topic == DEFAULT_DETECTIONS_TOPIC
+
+
+def test_priority_defaults_to_zero_so_cameras_are_peers():
+    # Every bench that predates this field must keep fusing exactly as it did.
+    camera, = parse_cameras(_document(_camera()))
+    assert camera.priority == 0
+
+
+def test_priority_is_read_and_may_be_negative():
+    # Only ever compared, never scaled, so nothing turns on the sign.
+    high, low = parse_cameras(_document(
+        _camera('wrist', priority=10), _camera('bench', priority=-1)))
+    assert (high.priority, low.priority) == (10, -1)
+
+
+def test_priority_must_be_an_integer_and_not_a_bool():
+    # `priority: true` is a typo, not a 1 -- and bool is an int in Python, so
+    # nothing but an explicit check catches it.
+    with pytest.raises(ValueError, match='priority'):
+        parse_cameras(_document(_camera(priority=True)))
+    with pytest.raises(ValueError, match='priority'):
+        parse_cameras(_document(_camera(priority='high')))
+    with pytest.raises(ValueError, match='priority'):
+        parse_cameras(_document(_camera(priority=1.5)))
+
+
+def test_the_single_camera_fallback_has_no_priority_contest():
+    camera, = single_camera()
+    assert camera.priority == 0
+
+
+def test_the_shipped_table_makes_the_wrist_outrank_the_oak():
+    # The bench's stated role split -- oak the standing observer, wrist the
+    # recovery instrument -- was a comment until this field existed. If these
+    # ever come out equal the recovery sweep silently goes back to being
+    # averaged into the far view.
+    import os
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'config', 'cameras.yaml')
+    with open(path, encoding='utf-8') as stream:
+        cameras = {camera.name: camera for camera in parse_cameras(yaml.safe_load(stream))}
+    assert cameras['wrist'].priority > cameras['oak'].priority

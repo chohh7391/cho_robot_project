@@ -23,6 +23,25 @@ believed. Two consequences worth knowing at the bench:
 * ``min_cameras`` is how you say that agreement is required rather than hoped
   for. It defaults to 1, which is the old single-camera behaviour exactly.
 
+**Unless one camera outranks another.** ``cameras.yaml`` gives each camera a
+``priority``; a higher one REPLACES the lower ones' samples for any object it
+can currently see, rather than being medianed with them. A wrist camera looking
+down at a beaker from 200 mm and a camera watching the whole bench from a metre
+away are not two measurements of the same quantity, and fusing them produces a
+pose neither saw. See ``visibility.select_by_priority``. While an override is in
+force for an object, ``min_cameras`` is not applied TO THAT OBJECT: an override
+is a claim that one view supersedes the rest, and also demanding that the rest
+agree with it would be a contradiction. The trade is named out loud in the
+object's status and in ``override_camera`` on the visibility topic, not made
+quietly.
+
+**What every camera is doing is published, not just logged.** The per-camera
+reasons this node has always had -- in frame, rejected, no TF -- go out on
+``/perception/object_visibility`` as ``cho_interfaces/ObjectVisibilityArray``.
+That is the seam an occlusion recovery needs: "the beaker is not in the OAK's
+frame" is a fact only this node knows, and a behaviour tree cannot read a log
+line.
+
 Which cameras exist is ``config/cameras.yaml``, read by this node and by the
 launch that starts the detectors, so the prefixes cannot drift apart.
 """
@@ -31,7 +50,12 @@ from collections import deque
 import threading
 
 from apriltag_msgs.msg import AprilTagDetectionArray
-from cho_object_pose import geometry
+from cho_interfaces.msg import (
+    CameraVisibility,
+    ObjectVisibility,
+    ObjectVisibilityArray,
+)
+from cho_object_pose import geometry, visibility
 from cho_object_pose.cameras import parse_cameras, single_camera
 from cho_object_pose.objects import parse_objects
 from geometry_msgs.msg import PoseStamped
@@ -48,6 +72,27 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 import yaml
+
+#: Wire code per visibility state, derived from the message BY NAME rather
+#: than written out, so the two lists cannot drift into disagreeing about a
+#: number. A state in ``visibility.STATES`` the message does not declare fails
+#: at import, which is where a wire-format mismatch should be found.
+_STATE_CODES = {state: getattr(CameraVisibility, f'STATE_{state.upper()}')
+                for state in visibility.STATES}
+
+#: Never heard from, so there is no age to report. A real age is never
+#: negative, which is what makes this readable in ``ros2 topic echo``.
+_NO_AGE = -1.0
+
+#: How far this node's own clock may sit from the detections it is receiving
+#: before it says so. The only thing that puts them seconds apart is a clock
+#: mismatch -- almost always `use_sim_time` set on the driver and not here --
+#: and the symptom is every camera reported STALE while poses stream out at
+#: 20 Hz, which is a lie a consumer cannot see through.
+_MAX_CLOCK_SKEW_SEC = 1.0
+
+#: Seconds between repeats of that complaint.
+_SKEW_COMPLAINT_PERIOD_SEC = 5.0
 
 #: visualization_msgs marker type per object shape.
 _MARKER_TYPES = {
@@ -90,6 +135,16 @@ class ObjectPoseNode(Node):
         self.declare_parameter('min_decision_margin', 35.0)
         self.declare_parameter('min_edge_px', 25.0)
         self.declare_parameter('report_period_sec', 2.0)
+        # The same per-camera reasons the report logs, on a topic, because a
+        # behaviour tree cannot read a log line. This is what a recovery sweep
+        # is triggered by, so it is on by default: the cost is one small
+        # message per period and nothing subscribes unless a task does.
+        self.declare_parameter('publish_visibility', True)
+        self.declare_parameter('visibility_topic', '/perception/object_visibility')
+        # A publication RATE, not a lifetime -- how old a camera's word may be
+        # before it stops counting is window_sec and nothing else. Fast enough
+        # that a tree ticking at 100 ms sees a change within a tick or two.
+        self.declare_parameter('visibility_period_sec', 0.2)
         # Display only: a body drawn at each published pose so an operator can
         # see the object next to the robot in rviz. Objects that declare no
         # `shape` in the table are simply not drawn.
@@ -121,6 +176,8 @@ class ObjectPoseNode(Node):
             min_decision_margin=float(self.get_parameter('min_decision_margin').value),
             min_edge_px=float(self.get_parameter('min_edge_px').value))
 
+        self._priorities = {camera.name: camera.priority for camera in self._cameras}
+
         self._samples = {spec.name: deque() for spec in self._specs}
         # ONE LOCK OVER THE AGGREGATION WINDOW, and it is not optional. The
         # detection subscriptions share a ReentrantCallbackGroup on a
@@ -135,15 +192,35 @@ class ObjectPoseNode(Node):
         # here needed a lock before.
         self._lock = threading.Lock()
         self._status = {spec.name: 'no detection yet' for spec in self._specs}
-        # Why each camera contributed nothing, kept per camera. Collapsing this
-        # into one string would let the last detection callback to run erase the
-        # reason the other two cameras are quiet -- and 'no TF' on one camera and
-        # 'too oblique' on another have completely different fixes.
+        # Why each camera contributed what it did, kept per camera as a
+        # (visibility.Reason, detection time) pair. Collapsing this into one
+        # string would let the last detection callback to run erase the reason
+        # the other two cameras are quiet -- and 'no TF' on one camera and 'too
+        # oblique' on another have completely different fixes.
+        #
+        # The time is the IMAGE's stamp, the same clock the aggregation window
+        # is measured on, so a reason and the sample it did or did not produce
+        # age together.
         self._camera_status = {
-            spec.name: {camera.name: 'no detection yet' for camera in self._cameras}
+            spec.name: {camera.name: (visibility.UNKNOWN, None)
+                        for camera in self._cameras}
             for spec in self._specs
         }
+        # Which cameras last won the priority contest for each object, so the
+        # report and the visibility topic can say a quiet camera was outranked
+        # rather than blind.
+        self._selection = {
+            spec.name: visibility.PrioritySelection(0, (), ()) for spec in self._specs
+        }
         self._published = {spec.name: 0 for spec in self._specs}
+        # When a pose last went out, for the `publishing` flag. Measured on the
+        # same image clock as everything else here.
+        self._published_at = {spec.name: None for spec in self._specs}
+        # The newest detection stamp from any camera, kept for one purpose: to
+        # notice that this node's clock and the detections' are not the same
+        # clock. See _check_clock.
+        self._newest_detection = None
+        self._skew_complained_at = None
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -160,6 +237,16 @@ class ObjectPoseNode(Node):
             spec.name: self.create_publisher(PoseStamped, spec.topic, QoSProfile(depth=1))
             for spec in self._specs
         }
+
+        self._visibility_publisher = None
+        if bool(self.get_parameter('publish_visibility').value):
+            # RELIABLE depth 1: a behaviour tree ticks at 100 ms and wants the
+            # newest snapshot, never a queue of old ones. Reliable because a
+            # dropped message here is a recovery that does not trigger.
+            self._visibility_publisher = self.create_publisher(
+                ObjectVisibilityArray,
+                str(self.get_parameter('visibility_topic').value),
+                QoSProfile(depth=1))
 
         self._marker_lifetime = float(self.get_parameter('marker_lifetime_sec').value)
         self._marker_publisher = None
@@ -188,6 +275,15 @@ class ObjectPoseNode(Node):
         report_period = float(self.get_parameter('report_period_sec').value)
         if report_period > 0.0:
             self.create_timer(report_period, self._report, callback_group=callback_group)
+
+        # A clock of its own, and faster than the report's: the report is for a
+        # human reading a terminal, this is what a tree decides on. It must also
+        # keep ticking when NO camera is publishing -- that is exactly the case
+        # a recovery has to notice -- so it cannot ride the detection callback.
+        visibility_period = float(self.get_parameter('visibility_period_sec').value)
+        if self._visibility_publisher is not None and visibility_period > 0.0:
+            self.create_timer(visibility_period, self._publish_visibility,
+                              callback_group=callback_group)
 
         # The camera bodies do not move with a detection, so they need a clock
         # of their own -- and a repeating one rather than a single shot, because
@@ -248,7 +344,7 @@ class ObjectPoseNode(Node):
         # Why this camera's detection contributed nothing, per object. It takes
         # priority over the sample-count status: 'no TF' and '2/5 samples' have
         # entirely different fixes and the first one explains the second.
-        blocked = {spec.name: 'tag not in frame' for spec in self._specs}
+        blocked = {spec.name: visibility.NOT_IN_FRAME for spec in self._specs}
         accepted = []
 
         for detection in msg.detections:
@@ -256,26 +352,34 @@ class ObjectPoseNode(Node):
             if spec is None:
                 continue
             corners = [[point.x, point.y] for point in detection.corners]
+            # Kept whether or not the detection is used. A sweep that is being
+            # rejected needs to know how close it came, and a sweep that is
+            # succeeding needs to know how well -- 'a pose exists' is exactly
+            # the thing a recovery is trying to improve on.
+            margin = float(detection.decision_margin)
+            edge = geometry.corner_min_edge_px(corners)
             reason = geometry.detection_reject_reason(
                 detection.hamming, detection.decision_margin, corners, self._gate)
             if reason is not None:
-                blocked[spec.name] = f'rejected: {reason}'
+                blocked[spec.name] = visibility.rejected(reason, margin, edge)
                 continue
             sample, failure = self._lookup(spec, camera, stamp, seconds)
             if sample is None:
-                blocked[spec.name] = failure
+                blocked[spec.name] = visibility.no_tf(failure, margin, edge)
                 continue
-            blocked[spec.name] = None
+            blocked[spec.name] = visibility.ok(margin, edge)
             accepted.append((spec.name, sample))
 
         # The TF lookups above are deliberately outside the lock: each one can
         # block for tf_timeout, and serialising two cameras on each other's TF
         # waits would undo the point of running them concurrently.
         with self._lock:
+            if self._newest_detection is None or seconds > self._newest_detection:
+                self._newest_detection = seconds
             for name, sample in accepted:
                 self._samples[name].append(sample)
             for spec in self._specs:
-                self._camera_status[spec.name][camera.name] = blocked[spec.name] or 'ok'
+                self._camera_status[spec.name][camera.name] = (blocked[spec.name], seconds)
                 self._evaluate(spec, seconds, msg.header.stamp)
 
     def _lookup(self, spec, camera, stamp, seconds):
@@ -296,7 +400,7 @@ class ObjectPoseNode(Node):
                 self._base_frame, frame, stamp,
                 timeout=Duration(seconds=self._tf_timeout))
         except TransformException as error:
-            return None, f'no TF {self._base_frame} <- {frame}: {error}'
+            return None, f'{self._base_frame} <- {frame}: {error}'
         translation = transform.transform.translation
         rotation = transform.transform.rotation
         return (seconds,
@@ -309,26 +413,44 @@ class ObjectPoseNode(Node):
         while samples and now_seconds - samples[0][0] > self._window:
             samples.popleft()
 
-        contributors = {sample[3] for sample in samples}
-        if len(samples) < self._min_samples:
+        # The priority contest, and it is decided by what is IN THE WINDOW, not
+        # by what is configured: a camera that saw nothing suppresses nothing.
+        # That is what makes the override self-clearing -- when the wrist loses
+        # the tag its samples age out and the standing camera is believed again
+        # on the very next evaluation, with no expiry logic anywhere.
+        selection = visibility.select_by_priority(
+            (sample[3] for sample in samples), self._priorities)
+        self._selection[spec.name] = selection
+        kept = set(selection.kept)
+        counted = [sample for sample in samples if sample[3] in kept]
+        note = self._override_note(selection)
+
+        contributors = {sample[3] for sample in counted}
+        if len(counted) < self._min_samples:
             self._status[spec.name] = (
-                f'{len(samples)}/{self._min_samples} samples in the last '
-                f'{self._window:.2f}s')
+                f'{len(counted)}/{self._min_samples} samples in the last '
+                f'{self._window:.2f}s' + note)
             return
-        if len(contributors) < self._min_cameras:
+        # min_cameras is NOT applied while an override is in force. Requiring
+        # several cameras to agree and declaring one of them authoritative are
+        # contradictory demands; with both, the recovery view would suppress the
+        # others and then fail its own quorum, and the object would go dark
+        # exactly when a task went to look at it. The trade is in `note`, in the
+        # object's status and in override_camera on the topic.
+        if not selection.suppressed and len(contributors) < self._min_cameras:
             self._status[spec.name] = (
                 f'{len(contributors)}/{self._min_cameras} cameras agreeing '
                 f"(have: {', '.join(sorted(contributors)) or 'none'})")
             return
 
-        estimate = geometry.aggregate_samples([sample[1] for sample in samples],
-                                              [sample[2] for sample in samples])
+        estimate = geometry.aggregate_samples([sample[1] for sample in counted],
+                                              [sample[2] for sample in counted])
         if estimate.position_spread_m > self._max_position_spread:
             self._status[spec.name] = (
                 f'unstable: position spread {estimate.position_spread_m * 1e3:.1f} mm '
                 f'> {self._max_position_spread * 1e3:.1f}'
                 + (f' across {len(contributors)} cameras -- check the extrinsics'
-                   if len(contributors) > 1 else ''))
+                   if len(contributors) > 1 else '') + note)
             return
 
         orientation = estimate.orientation
@@ -341,7 +463,8 @@ class ObjectPoseNode(Node):
             # the tag normal does not move it.
             yaw = geometry.tag_yaw(estimate.orientation, spec.yaw_axis)
             if yaw is None:
-                self._status[spec.name] = 'tag seen too close to edge-on to define a yaw'
+                self._status[spec.name] = (
+                    'tag seen too close to edge-on to define a yaw' + note)
                 return
             orientation = geometry.top_down_from_yaw(yaw)
             # The GRASP yaw is folded and the tool is flipped to point down;
@@ -353,7 +476,7 @@ class ObjectPoseNode(Node):
             spread_deg = np.rad2deg(estimate.orientation_spread_rad)
             self._status[spec.name] = (
                 f'unstable: orientation spread {spread_deg:.1f} deg '
-                f'> {np.rad2deg(self._max_orientation_spread):.1f}')
+                f'> {np.rad2deg(self._max_orientation_spread):.1f}' + note)
             return
 
         position, orientation = geometry.compose(
@@ -361,9 +484,123 @@ class ObjectPoseNode(Node):
             offset_frame=offset_frame)
         self._publish(spec, position, orientation, stamp_msg,
                       offset_frame if offset_frame is not None else orientation)
+        self._published_at[spec.name] = now_seconds
         self._status[spec.name] = (
             f'publishing, spread {estimate.position_spread_m * 1e3:.1f} mm '
-            f'over {estimate.count} samples from {len(contributors)} camera(s)')
+            f'over {estimate.count} samples from {len(contributors)} camera(s)' + note)
+
+    @staticmethod
+    def _override_note(selection):
+        """Render the note appended to a status while one camera outranks others."""
+        if not selection.suppressed:
+            return ''
+        return (f" [{', '.join(selection.kept)} overriding "
+                f"{', '.join(selection.suppressed)}; min_cameras not applied]")
+
+    def _camera_reasons(self, spec, now_seconds):
+        """(camera, reason, age) for every camera, as things stand right now.
+
+        CALL WITH THE LOCK HELD. Both the report and the visibility topic need
+        the same overlay -- a stored reason, aged, then marked suppressed if it
+        lost the priority contest -- and two copies of that would be two places
+        for 'outranked' and 'blind' to get confused with each other.
+        """
+        selection = self._selection[spec.name]
+        outranked = set(selection.suppressed)
+        winner = ', '.join(selection.kept) if selection.suppressed else ''
+        rows = []
+        for camera in self._cameras:
+            reason, at = self._camera_status[spec.name][camera.name]
+            age = _NO_AGE if at is None else max(0.0, now_seconds - at)
+            rows.append((
+                camera,
+                visibility.current_reason(
+                    reason, age, self._window,
+                    suppressed_by=winner if camera.name in outranked else ''),
+                age))
+        return rows
+
+    def _check_clock(self, now_seconds):
+        """Complain when this node's clock is not the detections' clock.
+
+        EVERY age on the visibility topic is node-clock-now minus an image
+        stamp, so a node running on wall time against a driver running on
+        /clock reports ages in the billions: every camera STALE, every object
+        `publishing` false, while poses stream out of this very node. That is
+        the worst failure available here -- a consumer cannot tell a lying
+        topic from a blind bench, and the recovery it triggers is a sweep for
+        an object nothing was wrong with.
+
+        Nothing else can put the two clocks seconds apart, so the diagnosis is
+        safe to state outright. Call with the lock held.
+        """
+        if self._newest_detection is None:
+            return
+        skew = abs(now_seconds - self._newest_detection)
+        if skew <= _MAX_CLOCK_SKEW_SEC:
+            self._skew_complained_at = None
+            return
+        if (self._skew_complained_at is not None
+                and now_seconds - self._skew_complained_at < _SKEW_COMPLAINT_PERIOD_SEC):
+            return
+        self._skew_complained_at = now_seconds
+        self.get_logger().error(
+            f'this node\'s clock is {skew:.1f}s from the detections it is receiving, '
+            'so every age and every `publishing` flag it publishes is wrong. Set '
+            'use_sim_time to the SAME value as the camera drivers and the bringup '
+            '(object_pose.launch.py takes use_sim_time:=). Until then the '
+            'visibility topic reports every camera stale.')
+
+    def _publish_visibility(self):
+        """Say what every camera can see, whether or not anything can be seen.
+
+        On its own timer rather than on the detection callback, because the case
+        this exists for is the one where a camera has gone quiet: a message that
+        only goes out when a detection arrives says nothing at the moment it
+        matters most.
+
+        Ages are node-clock now minus the IMAGE stamp the reason was recorded
+        at. Both are ROS time on one epoch, so the difference is real latency;
+        it is not the sample window's own arithmetic, which never leaves the
+        image clock.
+        """
+        if self._visibility_publisher is None:
+            return
+        now = self.get_clock().now()
+        now_seconds = now.nanoseconds * 1e-9
+
+        message = ObjectVisibilityArray()
+        message.header.stamp = now.to_msg()
+        # Not a geometric frame for this message, but the frame every pose it
+        # describes comes out in -- which is what a consumer checks next.
+        message.header.frame_id = self._base_frame
+
+        with self._lock:
+            self._check_clock(now_seconds)
+            for spec in self._specs:
+                selection = self._selection[spec.name]
+                published_at = self._published_at[spec.name]
+                entry = ObjectVisibility()
+                entry.name = spec.name
+                entry.publishing = (
+                    published_at is not None
+                    and now_seconds - published_at <= self._window)
+                entry.override_camera = (
+                    ', '.join(selection.kept) if selection.suppressed else '')
+                entry.status = self._status[spec.name]
+                for camera, reason, age in self._camera_reasons(spec, now_seconds):
+                    view = CameraVisibility()
+                    view.camera = camera.name
+                    view.state = _STATE_CODES[reason.state]
+                    view.detail = reason.detail
+                    view.age_sec = float(age)
+                    view.priority = int(camera.priority)
+                    view.decision_margin = float(reason.decision_margin)
+                    view.edge_px = float(reason.edge_px)
+                    entry.cameras.append(view)
+                message.objects.append(entry)
+
+        self._visibility_publisher.publish(message)
 
     def _publish(self, spec, position, orientation, stamp_msg, offset_frame):
         message = PoseStamped()
@@ -503,16 +740,25 @@ class ObjectPoseNode(Node):
         those have completely different fixes. With several cameras it also
         says WHICH camera is the quiet one, which is the first thing anyone
         asks.
+
+        The same content goes out on the visibility topic, in machine-readable
+        form. This stays because commissioning happens in a terminal.
         """
+        now_seconds = self.get_clock().now().nanoseconds * 1e-9
         with self._lock:
             lines = [(spec.name,
                       self._status[spec.name],
                       self._published[spec.name],
-                      dict(self._camera_status[spec.name]))
+                      [(camera.name, visibility.describe(reason),
+                        visibility.describe_score(reason), age)
+                       for camera, reason, age in self._camera_reasons(spec, now_seconds)])
                      for spec in self._specs]
-        for name, status, published, status_by_camera in lines:
-            cameras = ', '.join(f'{camera}: {reason}'
-                                for camera, reason in status_by_camera.items())
+        for name, status, published, rows in lines:
+            cameras = ', '.join(
+                f'{camera}: {reason}'
+                + (f' [{score}]' if score else '')
+                + ('' if age < 0.0 else f' ({age:.2f}s ago)')
+                for camera, reason, score, age in rows)
             self.get_logger().info(
                 f'[{name}] {status} ({published} published) | {cameras}')
 

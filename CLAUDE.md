@@ -132,6 +132,26 @@ cho_task_manager/
   cho_task_manager/
     behaviors/               # py_trees leaf nodes: action/, service/
     tasks/                   # Behavior trees, split per robot: franka/ (pick_and_place, forge), ur/ (pick_and_place, multi_move); __init__.py dispatches by robot_type via build_task_tree()
+    utils/occlusion.py       # ROS-free: when a recovery sweep is worth doing, when
+                             # it worked, and the sweep-table schema. Paired with
+                             # behaviors/action/occlusion_sweep.py, the leaf that
+                             # conducts it -- a LEAF and not something outside the
+                             # tree, because only a leaf can read the visibility
+                             # topic and judge its own success.
+    config/sweep/            # Where the wrist camera goes to look, per bench. A
+                             # boustrophedon raster at a fixed tool tilt, swept far
+                             # to near and repeated lower, stopping at the first
+                             # viewpoint whose decode clears min_decision_margin.
+                             # SIDEWAYS and not just downwards: the spacing is for
+                             # PARALLAX, not coverage (one viewpoint already covers
+                             # the area at this FOV), because a different line of
+                             # sight is the only thing that helps when something is
+                             # in the way. <bench>.raster.yaml is the spec a person
+                             # edits; <bench>.yaml is SOLVED from it by
+                             # scripts/solve_sweep_raster.py and is not hand-edited
+                             # -- every waypoint has to stay in one IK branch.
+                             # The task latches the pose BEFORE returning: a
+                             # recovered pose expires with the aggregation window.
     task_manager_node.py     # ROS2 node that runs the selected tree
     utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
 
@@ -171,6 +191,26 @@ cho_perception/              # Perception that knows a robot; grouping directory
                              # latches. geometry.py is ROS-free and holds everything
                              # worth testing; node.py is the tf2 adapter. See its
                              # README, and docs/apriltag_perception.md.
+                             #
+                             # cameras.yaml carries a per-camera `priority`. Equal
+                             # priorities are FUSED (median); a higher one REPLACES
+                             # the lower ones' samples for the objects it can see --
+                             # a 200 mm close-up and a 1 m wide view are not two
+                             # measurements of one quantity. The override is decided
+                             # by what is in the aggregation window, so it clears
+                             # itself after window_sec with no lifetime of its own,
+                             # and min_cameras is NOT applied to an object while it
+                             # is in force (requiring consensus and declaring one
+                             # camera authoritative are contradictory). visibility.py
+                             # holds that rule, ROS-free.
+                             #
+                             # /perception/object_visibility
+                             # (cho_interfaces/ObjectVisibilityArray) publishes what
+                             # every camera can see of every object -- the reasons
+                             # the node always logged, in a form a behaviour tree can
+                             # branch on, with each camera's decision_margin and
+                             # edge_px. That topic is the trigger for the FR5
+                             # occlusion recovery.
 
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)

@@ -17,6 +17,10 @@ setup(
             glob('config/perception/*.yaml')),
         (os.path.join('share', package_name, 'config', 'replay'),
             glob('config/replay/*.yaml')),
+        # Where the wrist camera goes to look at an occluded object. A bench's
+        # joint configurations, passed to occlusion_recovery as sweep_config:=.
+        (os.path.join('share', package_name, 'config', 'sweep'),
+            glob('config/sweep/*.yaml')),
         # Display meshes for the bench's glassware, named by config/perception
         # as package://cho_task_manager/meshes/<file>. rviz resolves that
         # through the ament index, so they have to be installed, not just
