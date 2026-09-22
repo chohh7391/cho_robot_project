@@ -1,101 +1,31 @@
-# D435 settings for AprilTag detection, handed to the stock realsense2_camera
-# launch through its own `config_file` argument. The driver is used exactly as
-# packaged; only these values are ours.
-#
-# SHAPE MATTERS: rs_launch.py loads this with a plain yaml.safe_load and passes
-# the resulting dict straight to the node, so this is a FLAT mapping -- not the
-# usual `/**: ros__parameters:` params-file layout, which would arrive as one
-# parameter literally named '/**'.
-#
-# Every value below was checked on hardware (D435 s/n 844212070094,
-# realsense2_camera 4.58.3) -- see the README for the commands.
-#
-# enable_color / enable_infra1 are deliberately NOT here: the launch's
-# stream:= argument sets them, and a key in this file would win over it
-# (the node gets [launch args, config file] in that order).
-
-# Stream profiles are NOT here. They live on the launch's profile:= argument,
-# because a key in this file would win over it (the node gets [launch args,
-# config file] in that order) and the profile is exactly the thing that has to
-# change with the USB link: 848x480x30 needs USB 3, and over USB 2 the D435
-# offers only 424x240 and 480x270 on infra.
+# infra1 only, Y8, emitter off: the global-shutter IR image is what the tag
+# detector wants, and the dot projector's pattern breaks tag decoding.
 depth_module.infra1_format: 'Y8'
-
 enable_depth: false
 enable_infra2: false
 
-# Start with auto exposure. Pin it when the frames stop decoding -- auto
-# hunting, motion blur from a long exposure, or auto metering on a window
-# behind the bench and crushing the tags to black, which is what happened here
-# on 2026-09-16 (mean pixel 8 with the bench in shadow; pinned to 500 it came
-# back to 108 and the scene was readable again):
-#   depth_module.enable_auto_exposure: false
-#   depth_module.exposure: 500
+# AUTO EXPOSURE IS OFF, and this is not a preference.
 #
-# THE TYPE OF `exposure` DEPENDS ON THE UNIT, not on the driver version. Both
-# units here run realsense2_camera 4.58.4, and the parameter is declared from
-# the range librealsense reports for the device:
+# The FR5 bench is an aluminium extrusion top under room lighting. Auto
+# exposure meters the whole frame, the bench dominates it, and the result is
+# 79% saturated pixels with a mean of 229/255 -- the tag board vanishes into
+# white and decodes nothing at all. Measured on this bench with the shipped
+# setting; the first wrist image was blank paper with a ghost where six tags
+# should have been.
 #
-#   s/n 332322072253, FW 5.17.3.10  INTEGER. `ros2 param get` says "Integer
-#       value is: 8500", and setting 8500.0 is rejected for type -- silently,
-#       as far as the image is concerned, so the frame simply never changes.
-#   s/n 844212070094, FW 5.9.2      double, and upstream's own rs_launch
-#       default passes an integer, which that node rejects with "invalid type:
-#       expected [double] got [integer]". That warning is upstream's, not ours.
+# 1000 us gives a mean of 82 with 2.6% saturated and the tag borders intact,
+# and the detector reads all six at margins of 144-177. It is a BENCH number,
+# not a camera number: a different room or a matt-black table wants a different
+# one. Re-take it by sweeping and looking at the saturated fraction, not at the
+# mean -- the mean is dominated by the bench either way.
 #
-# So check it before setting it -- `ros2 param get <camera> depth_module.exposure`
-# prints the type -- and expect a value that "does not take" rather than an error.
-depth_module.enable_auto_exposure: true
+# SET IT HERE, NEVER WITH `ros2 param set`. Changing exposure at runtime makes
+# the driver stop and restart the depth module, which comes back with
+# "xioctl(VIDIOC_S_FMT) failed, errno=16 Device or resource busy" and holds the
+# camera in that state until the node is killed. Measured, twice.
+depth_module.enable_auto_exposure: false
+depth_module.exposure: 1000
+depth_module.gain: 16
 
-# TRUE on purpose. This is the camera's INTERNAL chain,
-# camera_link -> camera_infra1_optical_frame, and apriltag_ros parents every
-# tag to the optical frame (confirmed: camera_info.header.frame_id is
-# camera_infra1_optical_frame). Turn it off and the tags have no path to the
-# robot at all. What you supply from outside is exactly one transform INTO
-# camera_link -- see the README; do not also model the optical frames there.
 publish_tf: true
-
-# THE IR PROJECTOR MUST BE OFF, and on the newer-firmware unit this is what
-# turns it off. Its dot pattern lands on a tag and punches holes through the
-# black cells, so apriltag decodes NOTHING on infra1 -- not a degraded
-# decision_margin, zero detections, which looks exactly like a camera pointed
-# the wrong way.
-#
-# The driver's warning "Projector capacity is overrided and disabled by FW"
-# means the CONTROL is overridden, not that the projector is off:
-#     rs-enumerate-devices -o
-#     Emitter Enabled : 0 ... 2, default 1     <- on
-#
-# WHETHER THIS KEY EXISTS DEPENDS ON THE UNIT, and an earlier note here
-# generalised from the wrong one. Measured 2026-09-16 on both:
-#
-#   s/n 332322072253, FW 5.17.3.10  declares depth_module.emitter_{enabled,
-#       always_on,on_off}. Default 1. With it left at 1, /detections runs at
-#       29.995 Hz and is EMPTY; setting it to 0 gives tag id 0 at
-#       decision_margin 66-68 on the same scene, immediately.
-#   s/n 844212070094, FW 5.9.2      declares no emitter parameter at all
-#       (`ros2 param list <camera> | grep emitter` is empty), and ITS PROJECTOR
-#       IS ON with no way to turn it off from ROS. An earlier draft of this
-#       note said it was disabled in firmware; that is the same misreading of
-#       "disabled by FW" that SESSION_LOG already corrected once, and the dots
-#       are plainly visible on infra1 (measured 2026-09-17 on the wrist mount).
-#
-# So this key is applied on the first unit and IGNORED on the second, which is
-# a launch warning ("Parameter ... is not supported", with the supported list)
-# and not an error -- the node starts normally. Confirmed 2026-09-17.
 depth_module.emitter_enabled: 0
-
-# On a unit with the projector on and no parameter for it -- 844212070094, the
-# one on the wrist -- there are two ways out, and for a WRIST mount only one of
-# them is usable:
-#
-#   stream:=color   the colour sensor has an IR-cut filter, so the pattern is
-#                   invisible (decision_margin ~90). ROLLING SHUTTER, so it is
-#                   wrong for a moving wrist -- and on a USB 2 link the colour
-#                   sensor is not offered at all (`rgb_camera.*` is empty), so
-#                   this escape is simply unavailable there.
-#   tape            cover the projector window between the two IR imagers.
-#                   Keeps infra1's global shutter. This is the wrist answer.
-#
-# SESSION_LOG called this one in advance: "손목 장착으로 가면 롤링 셔터가
-# 문제가 되므로 그때는 프로젝터 창을 테이프로 막고 infra1을 써야 한다."
