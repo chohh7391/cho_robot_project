@@ -1,0 +1,37 @@
+# The simulated cell with ONLY the wrist camera in the pipeline.
+#
+# cameras.yaml beside this file is the normal pair. This one drops the standing
+# camera, and it is not a trick for a demo: the standing camera is the part of
+# a bench most likely to be absent. It can be uninstalled, unplugged, out of
+# calibration, or simply not bought yet, and when it is, the arm's own camera
+# is the only one there is.
+#
+# IT IS ALSO THE ONLY CONFIGURATION IN WHICH `occlusion_recovery` ACTUALLY
+# SWEEPS, which is why the task is exercised with it. With the standing camera
+# present the vessels are already being published from the home pose, so the
+# sweep leaf finds nothing to recover and succeeds without moving -- correct
+# behaviour, and useless as a test of the motion. With only the wrist:
+#
+#   at the home pose   the tags are about 50 degrees off the wrist's optical
+#                      axis, against a guaranteed half-cone of 29, so nothing
+#                      is in frame and nothing is published
+#   during the sweep   the raster brings them into view and the pose appears
+#
+# which is the whole sequence the tree exists for, end to end, from rendered
+# pixels.
+#
+#   ros2 launch cho_object_pose detectors.launch.py cameras_config:=<this file> \
+#       objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/mujoco_sdl_cell.yaml
+#
+# `priority` is left at the wrist's 10 even though there is nothing to outrank.
+# It costs nothing -- a camera that suppresses no one suppresses no one -- and
+# keeping the two files' entries identical means the difference between them is
+# exactly the line that is missing.
+cameras:
+  - name: wrist_cam
+    image_topic: /wrist_cam/color
+    camera_info_topic: /wrist_cam/camera_info
+    rectify: false
+    frame_prefix: wrist_
+    detections_topic: /wrist_cam/detections
+    priority: 10

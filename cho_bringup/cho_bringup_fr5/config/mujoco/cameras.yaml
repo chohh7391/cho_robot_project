@@ -47,3 +47,24 @@ cameras:
     frame_prefix: sdl_
     detections_topic: /sdl_cam/detections
     priority: 0
+
+  # The second standing camera, AT THE SAME PRIORITY, which is what makes the
+  # two cooperate instead of one winning: equal priorities are fused, so the
+  # published position is the median across both and neither one's view of the
+  # depth direction is taken on its own. They are placed 53.7 degrees apart for
+  # exactly that reason -- see the scene.
+  #
+  # Two consequences worth knowing:
+  #   * max_position_spread_m becomes a check on the EXTRINSICS. Two cameras
+  #     that disagree about where a tag is by more than the gate publish
+  #     nothing, which is the honest answer when the hand-eye numbers are wrong.
+  #   * min_cameras: 2 would make the agreement mandatory rather than
+  #     opportunistic. It is left at 1 so one camera losing sight of a vessel
+  #     does not black it out; raise it once the extrinsics are trusted.
+  - name: sdl_cam_side
+    image_topic: /sdl_cam_side/color
+    camera_info_topic: /sdl_cam_side/camera_info
+    rectify: false
+    frame_prefix: sdl_side_
+    detections_topic: /sdl_cam_side/detections
+    priority: 0

@@ -35,6 +35,17 @@ transforms:
     xyz: [1.45, 0.0, 1.55]
     quaternion: [-0.664872, -0.664872, 0.240717, 0.240717]
 
+  # The second standing camera, beside the first rather than beyond it. The
+  # 53.7 degrees between their rays is the whole point: each one measures
+  # depth worst along its own ray, and that is the direction the other one
+  # measures well. MJCF: pos 0.5 1.1 1.2, quat (w x y z)
+  # 0.122738110 0.050531630 0.377332386 0.916516329.
+  - name: sdl_cam_side
+    parent_frame: base_link
+    child_frame: sdl_cam_side_frame
+    xyz: [0.5, 1.1, 1.2]
+    quaternion: [-0.122738, -0.916516, 0.377332, 0.050532]
+
   # The recovery instrument, riding the wrist. Same mount as the real D435 --
   # cho_description_fr5/xml/fr5_ag95.xml's `wrist_cam` carries the measured
   # extrinsic from config/real/camera_extrinsics.yaml -- so a sweep waypoint

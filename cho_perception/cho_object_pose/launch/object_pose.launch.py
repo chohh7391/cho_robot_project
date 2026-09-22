@@ -120,6 +120,12 @@ def generate_launch_description():
         Node(
             package='rviz2', executable='rviz2', name='rviz2',
             arguments=['-d', os.path.join(share, 'rviz', 'objects.rviz')],
+            # It needs the clock too. rviz on wall time against a bringup on
+            # /clock discards every transform as too old and draws an empty
+            # window, which looks exactly like a perception stack that is not
+            # running.
+            parameters=[{'use_sim_time': ParameterValue(
+                LaunchConfiguration('use_sim_time'), value_type=bool)}],
             condition=IfCondition(LaunchConfiguration('rviz')),
             output='screen',
         ),

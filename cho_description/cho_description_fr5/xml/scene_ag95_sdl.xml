@@ -97,5 +97,31 @@
     <camera name="sdl_cam" pos="1.45 0 1.55"
             quat="0.664872409 0.240717012 0.240717012 0.664872409"
             fovy="42.5" resolution="640 480"/>
+
+    <!-- A SECOND standing camera, and the reason it is worth its render cost is
+         the angle between them, not the extra pixels. One camera's pose error
+         lies mostly along its own viewing ray -- the direction it measures
+         worst -- so a second camera placed BESIDE the first measures that
+         direction well, and cho_object_pose's median across the two cancels
+         what a single view cannot see at all. Two cameras stacked side by side
+         would add samples and no information.
+         
+         Placed for that: its ray to either tag is 53.7 degrees off sdl_cam's,
+         at 45.2 degrees of elevation from the far +y corner. Closer in than
+         sdl_cam so the 100 mm tag still spans 32 px against the 25 px floor
+         (sdl_cam gets 31 px from 1.95 m).
+         
+         Same fovy and resolution as sdl_cam on purpose. The two are meant to
+         be peers -- equal `priority` in the camera table, so the node MEDIANS
+         them rather than letting either win -- and a peer with different
+         intrinsics would quietly carry more weight through its own accuracy.
+         
+         It does NOT change what the wrist does. The wrist still outranks both,
+         because a 0.39 m close-up and a 1.9 m standing view are not
+         measurements to average: measured here, the wrist lands 0.1 mm from
+         truth and a standing camera 7 mm. -->
+    <camera name="sdl_cam_side" pos="0.5 1.1 1.2"
+            quat="0.122738110 0.050531630 0.377332386 0.916516329"
+            fovy="42.5" resolution="640 480"/>
   </worldbody>
 </mujoco>
