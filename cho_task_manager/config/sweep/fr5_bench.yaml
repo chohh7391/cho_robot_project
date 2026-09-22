@@ -68,6 +68,7 @@ defaults:
   dwell_sec: 1.5
   min_decision_margin: 55.0
   min_tag_edge_px: 0.0
+  min_unseen_sec: 2.0
   planning_target: true
   timeout_sec: 320.0
 

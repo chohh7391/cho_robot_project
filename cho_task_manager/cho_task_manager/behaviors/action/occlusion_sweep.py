@@ -124,6 +124,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         goal_timeout_sec: float = 30.0,
         skip_if_visible: bool = True,
         planning_target: bool = None,
+        min_unseen_sec: float = None,
     ):
         # `action_name` targets an endpoint that is not a controller's own --
         # the MoveIt bridge serves the same JointSpace action, and a sweep over
@@ -147,8 +148,20 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         # value is ignored.
         self.planning_target = (sweep.planning_target if planning_target is None
                                 else bool(planning_target))
+        # How long the pose has to be gone before it counts as occlusion. Same
+        # arrangement as planning_target: the table carries the bench's answer
+        # and a caller may override it for one stage.
+        self.min_unseen_sec = (sweep.min_unseen_sec if min_unseen_sec is None
+                               else float(min_unseen_sec))
         self.subscription = None
         self._latest = None
+        # WHEN THE POSE STOPPED ARRIVING, and the one piece of state that
+        # deliberately outlives `initialise`. The subscription runs from
+        # `setup`, so this clock is already ticking when the tree first reaches
+        # this leaf -- which is the entire point. Resetting it here would mean
+        # the leaf could only ever observe zero seconds of occlusion and the
+        # threshold could never be met.
+        self._unpublished_since = None
         self._phase = 'assess'
         self._index = 0
         self._dwell_until = None
@@ -175,6 +188,8 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             + ', '.join(part for part in (
                 'planning target (wants its own close measurement)'
                 if self.planning_target else '',
+                f'occlusion called after {self.min_unseen_sec:.1f}s unpublished'
+                if self.min_unseen_sec > 0 else 'occlusion called instantly',
                 f'decode margin >= {self.sweep.min_decision_margin:.0f}'
                 if self.sweep.min_decision_margin > 0 else '',
                 f'tag >= {self.sweep.min_tag_edge_px:.0f} px'
@@ -184,6 +199,29 @@ class OcclusionSweepBehavior(BaseActionBehavior):
 
     def _on_visibility(self, msg):
         self._latest = msg
+        self._track_outage(msg)
+
+    def _track_outage(self, msg):
+        """Start or clear the clock on this object's pose going missing.
+
+        Runs on every publication, ticked or not: a leaf that only started
+        timing when the tree reached it could never see more than one tick of
+        outage, and `min_unseen_sec` would be unreachable.
+        """
+        for entry in msg.objects:
+            if entry.name != self.sweep.object:
+                continue
+            if entry.publishing:
+                self._unpublished_since = None
+            elif self._unpublished_since is None:
+                self._unpublished_since = self.node.get_clock().now()
+            return
+
+    def _unseen_sec(self):
+        """Return how long the pose has been missing, or None if it is arriving."""
+        if self._unpublished_since is None:
+            return None
+        return (self.node.get_clock().now() - self._unpublished_since).nanoseconds * 1e-9
 
     def initialise(self):
         # Dropped on purpose, unlike a cached pose: a snapshot taken before the
@@ -231,7 +269,9 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         assessment = occlusion.assess(view, self.sweep.recovery_camera,
                                       self.sweep.min_decision_margin,
                                       self.sweep.min_tag_edge_px,
-                                      self.planning_target)
+                                      self.planning_target,
+                                      unseen_sec=self._unseen_sec(),
+                                      min_unseen_sec=self.min_unseen_sec)
         if assessment.action == occlusion.SATISFIED:
             if self.skip_if_visible:
                 self.node.get_logger().info(
@@ -243,6 +283,12 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         elif assessment.action == occlusion.REFUSE:
             self.node.get_logger().error(f'[{self.name}] {assessment.reason}')
             return py_trees.common.Status.FAILURE
+        elif assessment.action == occlusion.WAIT:
+            # Still in the 'assess' phase, so the next tick asks again. The
+            # whole-sweep deadline keeps running through this on purpose: the
+            # waiting is part of the recovery's budget, not free time before it.
+            self.node.get_logger().debug(f'[{self.name}] {assessment.reason}')
+            return py_trees.common.Status.RUNNING
         else:
             self.node.get_logger().warn(f'[{self.name}] {assessment.reason}')
         return self._start_waypoint()

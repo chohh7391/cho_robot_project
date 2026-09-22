@@ -231,12 +231,33 @@ defaults:
   #
   # If it is ever set here it needs measuring HERE: this bench's tag is 39 mm
   # against the cell's 100, so the same standoff gives well under half the
-  # pixels. Read `edge Mpx` out of the pose node's report at the OAK and at a
-  # sweep waypoint, and set it between them.
+  # pixels. Read `edge Mpx` out of the pose node's report at a standing camera
+  # and at a sweep waypoint, and set it between them.
   min_tag_edge_px: 0.0
 
+  # HOW LONG A POSE HAS TO BE GONE before the arm goes looking for it.
+  #
+  # Occlusion is a DURATION and a single snapshot cannot tell it from a dropped
+  # frame. The pose node publishes from a window of `min_samples` over
+  # `window_sec` (0.5 s by default), so one blurred image, one tag caught at a
+  # bad instant or one slow TF lookup empties that window for a tick and the
+  # pose stops. Firing on that would send the arm across the cell for a frame
+  # that was already back.
+  #
+  # 2 s is four of the node's windows -- long enough that anything transient has
+  # had several chances to come back, short enough that a real obstruction is
+  # not left standing while the task waits. It is NOT a tuned number; it is a
+  # commissioning starting point. Watch the pose node's own status line during a
+  # run: if it reports short gaps at all, this has to clear the longest of them.
+  #
+  # The clock applies ONLY to the occlusion trigger. A view that is present and
+  # too oblique is exactly as oblique a second later, so `planning_target` and
+  # the score gates below still fire immediately.
+  min_unseen_sec: 2.0
+
   # The vessels this tree locates are the ones the arm then picks up, so each
-  # wants the wrist's own measurement rather than the OAK's oblique one. Set
+  # wants the wrist's own measurement rather than a standing camera's oblique
+  # one. Set
   # per-object, or overridden per-stage by the task -- see the cell spec, which
   # carries the measurements this rule came from.
   planning_target: true

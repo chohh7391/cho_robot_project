@@ -23,11 +23,21 @@ FAILURE = py_trees.common.Status.FAILURE
 
 
 class FakeTime:
+    """As much of rclpy.time.Time as this leaf uses, and no more.
+
+    ``__sub__`` returns a duration the way the real class does -- two Times
+    subtract to a Duration, not to a number -- because the leaf measures how
+    long a pose has been missing that way.
+    """
+
     def __init__(self, seconds):
         self.seconds = seconds
 
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
+
+    def __sub__(self, other):
+        return SimpleNamespace(nanoseconds=(self.seconds - other.seconds) * 1e9)
 
     def __gt__(self, other):
         return self.seconds > other.seconds
@@ -57,7 +67,7 @@ def _sweep(waypoints=('survey', 'close'), **overrides):
     return occlusion.SweepSpec(**spec)
 
 
-def _snapshot(publishing=False, wrist='not_in_frame', oak='not_in_frame',
+def _snapshot(publishing=False, wrist='not_in_frame', side_1='not_in_frame',
               wrist_margin=70.0):
     """An ObjectVisibilityArray, as far as this behaviour reads one."""
     from cho_interfaces.msg import CameraVisibility
@@ -71,7 +81,7 @@ def _snapshot(publishing=False, wrist='not_in_frame', oak='not_in_frame',
 
     return SimpleNamespace(objects=[SimpleNamespace(
         name='beaker', publishing=publishing, override_camera='wrist' if publishing else '',
-        status='test', cameras=[camera('oak', oak, 0, 40.0),
+        status='test', cameras=[camera('side_1', side_1, 0, 40.0),
                                 camera('wrist', wrist, 10, wrist_margin)])])
 
 
@@ -119,7 +129,7 @@ def test_an_object_already_published_succeeds_without_a_goal():
     # detection rather than behind a failed one.
     behaviour = _behaviour()
     behaviour.initialise()
-    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='suppressed'))
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='suppressed'))
     assert behaviour.update() == SUCCESS
     behaviour.client.send_goal_async.assert_not_called()
 
@@ -172,7 +182,7 @@ def test_it_stops_at_the_first_waypoint_that_works():
     assert behaviour.client.send_goal_async.call_count == 1
     _arrive(behaviour, result)
 
-    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='suppressed'))
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='suppressed'))
     behaviour.clock.advance(1.5)
     assert behaviour.update() == SUCCESS
     # The two remaining waypoints are not driven: the arm stops where the
@@ -211,7 +221,7 @@ def test_a_pose_that_decodes_badly_sends_it_down_a_rung():
     _arrive(behaviour, result)
 
     # Published, from the wrist, and still not good enough.
-    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='suppressed',
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='suppressed',
                                        wrist_margin=41.0))
     behaviour.clock.advance(1.5)
     _goal2, result2 = _accept_goal(behaviour)
@@ -219,7 +229,7 @@ def test_a_pose_that_decodes_badly_sends_it_down_a_rung():
     assert behaviour.client.send_goal_async.call_count == 2
 
     _arrive(behaviour, result2)
-    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='suppressed',
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='suppressed',
                                        wrist_margin=63.0))
     behaviour.clock.advance(1.5)
     assert behaviour.update() == SUCCESS
@@ -263,7 +273,7 @@ def test_a_poor_published_pose_sends_it_looking_without_being_occluded():
     # good enough to act on.
     behaviour = _behaviour(_sweep(('survey', 'close'), min_decision_margin=55.0))
     behaviour.initialise()
-    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='ok',
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='ok',
                                        wrist_margin=38.0))
     _accept_goal(behaviour)
     assert behaviour.update() == RUNNING
@@ -382,3 +392,78 @@ def test_a_second_run_starts_from_the_first_waypoint_again():
 def test_a_sweep_with_no_waypoints_is_refused_at_build_time():
     with pytest.raises(ValueError):
         OcclusionSweepBehavior('Nowhere', _sweep(waypoints=()))
+
+
+# --------------------------------------------------- occlusion is a duration
+
+def test_a_brief_dropout_waits_instead_of_driving():
+    behaviour = _behaviour(_sweep(min_unseen_sec=2.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_not_called()
+
+
+def test_the_sweep_starts_once_the_outage_outlasts_the_threshold():
+    behaviour = _behaviour(_sweep(min_unseen_sec=2.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    assert behaviour.update() == RUNNING       # 0 s gone, still waiting
+
+    behaviour.clock.advance(2.5)
+    behaviour._on_visibility(_snapshot())
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING       # now it drives
+    assert behaviour.client.send_goal_async.call_count == 1
+
+
+def test_the_outage_clock_runs_before_the_tree_ever_ticks_the_leaf():
+    # THE REASON THE CLOCK LIVES IN THE SUBSCRIPTION. A leaf that only started
+    # timing when it was first ticked could observe at most one tick of
+    # outage, and a threshold of seconds would be unreachable -- the recovery
+    # would either never fire or fire on the first frame, with the setting
+    # doing nothing either way.
+    behaviour = _behaviour(_sweep(min_unseen_sec=2.0))
+    behaviour._on_visibility(_snapshot())       # gone, and nobody has ticked yet
+    behaviour.clock.advance(3.0)
+    behaviour._on_visibility(_snapshot())
+
+    behaviour.initialise()                      # the tree reaches the leaf now
+    behaviour._on_visibility(_snapshot())
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    assert behaviour.client.send_goal_async.call_count == 1
+
+
+def test_a_pose_that_comes_back_on_its_own_restarts_the_clock():
+    behaviour = _behaviour(_sweep(min_unseen_sec=2.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    behaviour.clock.advance(1.5)
+    # It returned -- a dropped frame, not something in the way.
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', side_1='suppressed'))
+    behaviour.clock.advance(1.5)
+    # Gone again, but only just: the earlier 1.5 s must not be carried over.
+    behaviour._on_visibility(_snapshot())
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_not_called()
+
+
+def test_the_threshold_does_not_stop_a_quality_trigger_from_sweeping():
+    # Publishing, so there is no outage to time, but the wrist has not measured
+    # it and it is a planning target.
+    behaviour = _behaviour(_sweep(min_unseen_sec=5.0, planning_target=True))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='not_in_frame', side_1='ok'))
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    assert behaviour.client.send_goal_async.call_count == 1
+
+
+def test_a_caller_may_override_the_tables_threshold_for_one_stage():
+    behaviour = _behaviour(_sweep(min_unseen_sec=30.0), min_unseen_sec=0.0)
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    assert behaviour.client.send_goal_async.call_count == 1

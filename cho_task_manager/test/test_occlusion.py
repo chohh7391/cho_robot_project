@@ -15,7 +15,7 @@ import yaml
 JOINTS = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
 
 
-def _camera(name='oak', state='ok', detail='', age_sec=0.1, priority=0,
+def _camera(name='side_1', state='ok', detail='', age_sec=0.1, priority=0,
             decision_margin=70.0, edge_px=45.0):
     return occlusion.CameraView(name, state, detail, age_sec, priority,
                                 decision_margin, edge_px)
@@ -43,7 +43,7 @@ def test_a_published_but_poor_pose_is_also_worth_going_to_look_at():
     # pose exists" were good enough the recovery would never fire for it, and
     # the case would be unrecoverable by construction.
     view = _view(publishing=True, cameras=[
-        _camera('oak', 'ok', decision_margin=38.0),
+        _camera('side_1', 'ok', decision_margin=38.0),
         _camera('wrist', 'not_in_frame', priority=10)])
     assert occlusion.assess(view, 'wrist').action == occlusion.SATISFIED
     poor = occlusion.assess(view, 'wrist', min_decision_margin=55.0)
@@ -53,7 +53,7 @@ def test_a_published_but_poor_pose_is_also_worth_going_to_look_at():
 
 def test_a_published_and_good_pose_is_left_alone():
     view = _view(publishing=True, cameras=[
-        _camera('oak', 'ok', decision_margin=64.0),
+        _camera('side_1', 'ok', decision_margin=64.0),
         _camera('wrist', 'not_in_frame', priority=10)])
     assert occlusion.assess(
         view, 'wrist', min_decision_margin=55.0).action == occlusion.SATISFIED
@@ -64,7 +64,7 @@ def test_only_contributing_cameras_count_toward_the_best_decode():
     # the window: neither is holding up the pose being published, so neither
     # should be able to satisfy a requirement on it.
     view = _view(publishing=True, cameras=[
-        _camera('oak', 'suppressed', 'wrist', decision_margin=90.0),
+        _camera('side_1', 'suppressed', 'wrist', decision_margin=90.0),
         _camera('rs', 'stale', 'ok', decision_margin=95.0),
         _camera('wrist', 'ok', priority=10, decision_margin=40.0)])
     assert occlusion.best_decode(view) == 40.0
@@ -74,16 +74,16 @@ def test_only_contributing_cameras_count_toward_the_best_decode():
 
 def test_a_bench_with_nothing_to_score_reports_no_best_decode():
     assert occlusion.best_decode(_view(cameras=[
-        _camera('oak', 'not_in_frame',
+        _camera('side_1', 'not_in_frame',
                 decision_margin=occlusion.NO_SCORE)])) == occlusion.NO_SCORE
 
 
 def test_a_tag_no_camera_can_see_is_worth_going_to_look_at():
-    # This is what occlusion looks like from the perception side, and it is
-    # also what a tag outside the field of view looks like. Neither side can
+    # This is what occlusion looks like from the perception side_1, and it is
+    # also what a tag outside the field of view looks like. Neither side_1 can
     # tell them apart, and going to look is the right answer to both.
     assessment = occlusion.assess(_view(cameras=[
-        _camera('oak', 'not_in_frame'),
+        _camera('side_1', 'not_in_frame'),
         _camera('wrist', 'not_in_frame', priority=10)]), 'wrist')
     assert assessment.action == occlusion.SWEEP
 
@@ -91,7 +91,7 @@ def test_a_tag_no_camera_can_see_is_worth_going_to_look_at():
 def test_a_tag_that_decodes_badly_is_also_worth_a_closer_look():
     # Too far, too oblique, motion-blurred: exactly what a close view fixes.
     assessment = occlusion.assess(_view(cameras=[
-        _camera('oak', 'rejected', 'decision margin 18.0 < 35.0'),
+        _camera('side_1', 'rejected', 'decision margin 18.0 < 35.0'),
         _camera('wrist', 'not_in_frame', priority=10)]), 'wrist')
     assert assessment.action == occlusion.SWEEP
 
@@ -101,7 +101,7 @@ def test_a_sweep_camera_with_no_tf_is_refused_rather_than_driven():
     # wrist camera this is usually the robot's TF not being up -- and driving
     # the arm is a peculiar response to that.
     assessment = occlusion.assess(_view(cameras=[
-        _camera('oak', 'not_in_frame'),
+        _camera('side_1', 'not_in_frame'),
         _camera('wrist', 'no_tf', 'base_link <- wrist_tag_0: no transform',
                 priority=10)]), 'wrist')
     assert assessment.action == occlusion.REFUSE
@@ -109,10 +109,10 @@ def test_a_sweep_camera_with_no_tf_is_refused_rather_than_driven():
 
 
 def test_another_cameras_broken_tf_does_not_refuse_the_sweep():
-    # The OAK's extrinsic being wrong is a real problem and not this one's:
+    # `side_1`'s extrinsic being wrong is a real problem and not this one's:
     # the wrist has its own chain and can still do the looking.
     assessment = occlusion.assess(_view(cameras=[
-        _camera('oak', 'no_tf', 'base_link <- oak_tag_0: no transform'),
+        _camera('side_1', 'no_tf', 'base_link <- side_tag_0: no transform'),
         _camera('wrist', 'not_in_frame', priority=10)]), 'wrist')
     assert assessment.action == occlusion.SWEEP
 
@@ -122,7 +122,7 @@ def test_a_bench_where_nothing_is_running_is_refused():
     # where the pose node is not listening. An arm that sweeps because a node
     # failed to launch is answering the wrong question.
     assessment = occlusion.assess(_view(cameras=[
-        _camera('oak', 'stale', 'last said: ok', age_sec=42.0),
+        _camera('side_1', 'stale', 'last said: ok', age_sec=42.0),
         _camera('wrist', 'unknown', age_sec=-1.0, priority=10)]), 'wrist')
     assert assessment.action == occlusion.REFUSE
     assert 'detectors' in assessment.reason
@@ -133,7 +133,7 @@ def test_naming_a_camera_the_pose_node_does_not_have_is_refused():
     # failure that produces: a sweep that drives four waypoints and then waits
     # for a camera that was never in the fusion.
     assessment = occlusion.assess(
-        _view(cameras=[_camera('oak', 'not_in_frame')]), 'wrist')
+        _view(cameras=[_camera('side_1', 'not_in_frame')]), 'wrist')
     assert assessment.action == occlusion.REFUSE
     assert 'cameras.yaml' in assessment.reason
 
@@ -145,12 +145,12 @@ def test_a_good_decode_is_required_when_one_is_asked_for():
     # the far view that prompted the recovery already clears it -- so stopping
     # at the first rung that merely publishes trades one marginal measurement
     # for another. The requirement is what makes the sweep keep descending.
-    cameras = [_camera('oak', 'suppressed', 'wrist'),
+    cameras = [_camera('side_1', 'suppressed', 'wrist'),
                _camera('wrist', 'ok', priority=10, decision_margin=42.0)]
     view = _view(publishing=True, override_camera='wrist', cameras=cameras)
     assert not occlusion.recovered(view, 'wrist', min_decision_margin=55.0)
     # ...and it stops descending once it gets one.
-    better = [_camera('oak', 'suppressed', 'wrist'),
+    better = [_camera('side_1', 'suppressed', 'wrist'),
               _camera('wrist', 'ok', priority=10, decision_margin=64.0)]
     assert occlusion.recovered(
         _view(publishing=True, override_camera='wrist', cameras=better),
@@ -175,7 +175,7 @@ def test_a_camera_that_reports_no_score_cannot_clear_a_threshold():
 
 
 def test_recovery_needs_both_a_pose_and_the_sweep_camera_behind_it():
-    cameras = [_camera('oak', 'suppressed', 'wrist'),
+    cameras = [_camera('side_1', 'suppressed', 'wrist'),
                _camera('wrist', 'ok', priority=10)]
     assert occlusion.recovered(
         _view(publishing=True, override_camera='wrist', cameras=cameras), 'wrist')
@@ -185,7 +185,7 @@ def test_the_standing_camera_getting_its_view_back_is_not_a_recovery():
     # A fine outcome for the task, but the sweep did not cause it -- and a leaf
     # that took credit would hide one whose waypoints look nowhere useful.
     assert not occlusion.recovered(_view(publishing=True, cameras=[
-        _camera('oak', 'ok'),
+        _camera('side_1', 'ok'),
         _camera('wrist', 'not_in_frame', priority=10)]), 'wrist')
 
 
@@ -198,10 +198,10 @@ def test_the_sweep_camera_seeing_the_tag_is_not_yet_a_pose():
 
 def test_describe_cameras_names_every_camera_its_reason_and_its_score():
     text = occlusion.describe_cameras(_view(cameras=[
-        _camera('oak', 'rejected', 'too oblique', decision_margin=21.0, edge_px=18.0),
+        _camera('side_1', 'rejected', 'too oblique', decision_margin=21.0, edge_px=18.0),
         _camera('wrist', 'not_in_frame', priority=10,
                 decision_margin=occlusion.NO_SCORE)]))
-    assert 'oak: rejected (too oblique) [margin 21, edge 18px]' in text
+    assert 'side_1: rejected (too oblique) [margin 21, edge 18px]' in text
     # Nothing to score reads as nothing, not as a margin of -1.
     assert 'wrist: not_in_frame' in text
     assert '-1' not in text
@@ -429,7 +429,7 @@ def test_the_bench_raster_is_generated_and_says_so():
 def test_the_bench_table_sweeps_with_the_camera_that_outranks_the_other():
     # The join between two files: a recovery_camera that is not the
     # higher-priority one in cho_object_pose's cameras.yaml would have its
-    # close-up view MEDIANED into the OAK's far one instead of replacing it.
+    # close-up view MEDIANED into `side_1`'s far one instead of replacing it.
     cameras = pytest.importorskip('cho_object_pose.cameras')
     share = get_package_share_directory('cho_object_pose')
     with open(os.path.join(share, 'config', 'cameras.yaml'), encoding='utf-8') as stream:
@@ -489,7 +489,7 @@ def test_every_sweep_table_names_a_camera_its_bench_actually_has(
 def test_every_state_has_a_message_constant():
     # Strings in the rules above, uint8 on the wire, mapped BY NAME in
     # behaviors/action/occlusion_sweep.py. This is what keeps that mapping
-    # total from this side.
+    # total from this side_1.
     message = pytest.importorskip('cho_interfaces.msg')
     declared = {name[len('STATE_'):].lower()
                 for name in dir(message.CameraVisibility) if name.startswith('STATE_')}
@@ -565,3 +565,78 @@ def test_a_planning_target_written_as_a_string_is_refused():
                             'waypoints': [{'name': 'a', 'joints': [0.0] * 6}]}]}
     with pytest.raises(ValueError, match='planning_target'):
         occlusion.parse_sweeps(document)
+
+
+# ------------------------------------------------- occlusion is a duration
+
+def _gone(**kwargs):
+    """An object nobody is publishing, with the standing camera blind to it."""
+    return _view(cameras=[_camera('side_1', 'not_in_frame'),
+                          _camera('wrist', 'not_in_frame')], **kwargs)
+
+
+def test_a_pose_that_has_only_just_stopped_is_waited_on_not_swept_for():
+    # One empty aggregation window is a dropped frame, a blurred tag or a slow
+    # TF lookup. Driving an arm across the cell for it is the wrong answer, and
+    # it is the answer the instant trigger gives.
+    assessment = occlusion.assess(_gone(), 'wrist', unseen_sec=0.4, min_unseen_sec=2.0)
+    assert assessment.action == occlusion.WAIT
+    assert '0.4s ago' in assessment.reason
+    assert '2.0s' in assessment.reason
+
+
+def test_a_pose_gone_for_longer_than_the_threshold_is_occlusion():
+    assessment = occlusion.assess(_gone(), 'wrist', unseen_sec=3.5, min_unseen_sec=2.0)
+    assert assessment.action == occlusion.SWEEP
+    assert 'has not been for 3.5s' in assessment.reason
+
+
+def test_the_threshold_off_keeps_the_instant_trigger():
+    # The older behaviour, and still the right one for a bench whose pose node
+    # publishes continuously enough that any gap means something.
+    assert occlusion.assess(_gone(), 'wrist', unseen_sec=0.0,
+                            min_unseen_sec=0.0).action == occlusion.SWEEP
+
+
+def test_a_caller_that_does_not_time_it_gets_the_old_behaviour():
+    # None means "not measured", which must not be read as "zero seconds" --
+    # that would make every untimed caller wait for a threshold it can never
+    # report reaching.
+    assert occlusion.assess(_gone(), 'wrist', unseen_sec=None,
+                            min_unseen_sec=2.0).action == occlusion.SWEEP
+
+
+def test_the_clock_does_not_delay_a_quality_trigger():
+    # A view that is too oblique is exactly as oblique a second later. Waiting
+    # only postpones the sweep that was always going to be needed.
+    view = _view(publishing=True, cameras=[_camera('side_1', 'ok', edge_px=18.0),
+                                           _camera('wrist', 'not_in_frame')])
+    assessment = occlusion.assess(view, 'wrist', min_tag_edge_px=40.0,
+                                  unseen_sec=None, min_unseen_sec=5.0)
+    assert assessment.action == occlusion.SWEEP
+
+
+def test_a_refusal_still_beats_the_clock():
+    # Waiting cannot fix a broken TF chain, so the refusal has to be found
+    # first -- otherwise the leaf sits in WAIT until the sweep deadline and
+    # reports a timeout instead of the real fault.
+    view = _view(cameras=[_camera('side_1', 'not_in_frame'),
+                          _camera('wrist', 'no_tf', 'base_link <- wrist_tag_0: no transform')])
+    assessment = occlusion.assess(view, 'wrist', unseen_sec=0.1, min_unseen_sec=5.0)
+    assert assessment.action == occlusion.REFUSE
+
+
+def test_the_sweep_table_carries_the_threshold():
+    sweeps = occlusion.parse_sweeps({
+        'defaults': {'recovery_camera': 'wrist', 'min_unseen_sec': 2.5},
+        'sweeps': [{'object': 'beaker',
+                    'waypoints': [{'name': 'survey', 'joints': [0.0] * 6}]}]})
+    assert sweeps['beaker'].min_unseen_sec == 2.5
+
+
+def test_a_negative_threshold_is_refused():
+    with pytest.raises(ValueError, match='min_unseen_sec'):
+        occlusion.parse_sweeps({
+            'defaults': {'recovery_camera': 'wrist', 'min_unseen_sec': -1.0},
+            'sweeps': [{'object': 'beaker',
+                        'waypoints': [{'name': 'survey', 'joints': [0.0] * 6}]}]})

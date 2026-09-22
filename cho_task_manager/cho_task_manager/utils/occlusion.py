@@ -13,6 +13,14 @@ The rules, and why each is a rule rather than a heuristic:
     OCCLUSION LOOKS LIKE, and it is also what a tag simply outside the field of
     view looks like -- the perception side cannot tell them apart and does not
     try. Going to look is the right response to both.
+not published for long enough
+    OCCLUSION IS A DURATION, not an instant. A pose that stops arriving for one
+    tick is a dropped frame, a motion blur, a sample window that briefly fell
+    under ``min_samples``; a pose that stops arriving for seconds is something
+    standing in the way. ``min_unseen_sec`` is where a bench draws that line,
+    and below it the answer is :data:`WAIT` -- hold still and look again --
+    rather than sending an arm across the cell because of one bad frame. The
+    default is 0, which keeps the old instant trigger for benches that want it.
 ``rejected``
     The tag decoded but failed the quality gate: too far, too oblique, too
     blurred. A closer, squarer view is exactly what fixes that, so it is also
@@ -73,6 +81,8 @@ SATISFIED = 'satisfied'
 SWEEP = 'sweep'
 #: A sweep cannot fix this. Fail the leaf instead of driving the arm.
 REFUSE = 'refuse'
+#: The pose has only just stopped arriving. Hold still and look again.
+WAIT = 'wait'
 
 
 def camera_view(view, camera):
@@ -131,7 +141,7 @@ def best_tag_edge_px(view):
 
 
 def assess(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0,
-           planning_target=False):
+           planning_target=False, unseen_sec=None, min_unseen_sec=0.0):
     """Whether sweeping *recovery_camera* over *view*'s object is worth doing.
 
     TWO THINGS TRIGGER A SWEEP, not one. The obvious trigger is an object that
@@ -165,6 +175,21 @@ def assess(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0,
     ``min_decision_margin`` and ``min_tag_edge_px`` remain as the score-shaped
     triggers, for benches with no notion of a planning target. At 0 they are
     off and only occlusion recovers, which is the oldest behaviour.
+
+    ``min_unseen_sec`` PUTS A CLOCK ON THE OCCLUSION TRIGGER, and only on that
+    one. A pose that stopped arriving this instant and a pose that has been
+    gone for five seconds look identical in a single snapshot, and they are not
+    the same event: the first is a dropped frame or a window that briefly fell
+    under ``min_samples``, the second is something in the way. Below the
+    threshold this returns :data:`WAIT`, which asks the caller to look again
+    rather than to drive. *unseen_sec* is the caller's measurement of how long
+    the object has been unpublished -- this file has no clock, deliberately --
+    and None means it did not measure, which is treated as "long enough" so
+    that a caller who has not been taught to time it keeps the old behaviour.
+
+    The clock is NOT applied to the quality triggers. A view that is too
+    oblique is exactly as oblique a second later, so waiting for it only
+    delays the sweep that was always going to be needed.
 
     Ordered so that the reasons a sweep CANNOT help are found before the
     reasons it might: an arm that drives because a detector was not launched is
@@ -234,10 +259,22 @@ def assess(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0,
             f"'{view.name}' is being published, but the best any camera has of it "
             f"is {' and '.join(short)}. Going to look closer -- "
             f'{describe_cameras(view)}')
+    # NOT PUBLISHING, and now the only question is for how long. Everything a
+    # sweep cannot fix has already been ruled out above, so a short outage here
+    # is a dropped frame rather than a reason to refuse -- the caller is asked
+    # to look again, not told to give up.
+    if min_unseen_sec > 0.0 and unseen_sec is not None and unseen_sec < min_unseen_sec:
+        return Assessment(
+            WAIT,
+            f"'{view.name}' stopped being published {unseen_sec:.1f}s ago, and this "
+            f'bench calls it occlusion at {min_unseen_sec:.1f}s. Waiting -- a pose '
+            f'that comes back on its own was a dropped frame, not something in the '
+            f'way ({view.status})')
     return Assessment(
         SWEEP,
-        f"'{view.name}' is not being published ({view.status}); "
-        f'{describe_cameras(view)}')
+        f"'{view.name}' is not being published ({view.status})"
+        + (f' and has not been for {unseen_sec:.1f}s' if unseen_sec is not None else '')
+        + f'; {describe_cameras(view)}')
 
 
 def recovered(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0):
@@ -289,12 +326,12 @@ SweepWaypoint = namedtuple('SweepWaypoint', 'name joints duration')
 SweepSpec = namedtuple(
     'SweepSpec',
     'object recovery_camera waypoints waypoint_duration dwell_sec timeout_sec '
-    'min_decision_margin min_tag_edge_px planning_target')
+    'min_decision_margin min_tag_edge_px planning_target min_unseen_sec')
 #: The judgement fields default to "ask for nothing", as CameraView's scores
 #: do. parse_sweeps always fills all of them, so this is not a way to build a
 #: half-specified sweep; it is so that adding a criterion does not break every
 #: caller that builds one by hand -- which is what happened the last two times.
-SweepSpec.__new__.__defaults__ = (0.0, 0.0, False)
+SweepSpec.__new__.__defaults__ = (0.0, 0.0, False, 0.0)
 
 #: Long enough for the arm to stop ringing and for the pose node to fill a
 #: fresh aggregation window at it. Its default window is 0.5 s and it wants
@@ -333,8 +370,18 @@ DEFAULT_MIN_TAG_EDGE_PX = 0.0
 #: behaviour, where only occlusion and the score gates recover.
 DEFAULT_PLANNING_TARGET = False
 
+#: HOW LONG A POSE HAS TO BE MISSING before it counts as occlusion rather than
+#: as a dropped frame. 0 fires the instant the pose stops arriving, which is the
+#: older behaviour and is wrong on a real bench: the pose node publishes from a
+#: window of ``min_samples`` over ``window_sec``, so one blurred frame or one
+#: slow TF lookup empties it for a tick. Anything above the node's own window
+#: separates the two; the FR5 bench uses 2 s, which is several windows and still
+#: well inside a human's idea of "it is not coming back".
+DEFAULT_MIN_UNSEEN_SEC = 0.0
+
 _DEFAULT_KEYS = ('recovery_camera', 'waypoint_duration', 'dwell_sec', 'timeout_sec',
-                 'min_decision_margin', 'min_tag_edge_px', 'planning_target')
+                 'min_decision_margin', 'min_tag_edge_px', 'planning_target',
+                 'min_unseen_sec')
 
 
 def _flag(value, label):
@@ -473,6 +520,10 @@ def parse_sweeps(document, joint_names=None):
                 entry.get('planning_target',
                           defaults.get('planning_target', DEFAULT_PLANNING_TARGET)),
                 f'{label}.planning_target'),
+            min_unseen_sec=_positive(
+                entry.get('min_unseen_sec',
+                          defaults.get('min_unseen_sec', DEFAULT_MIN_UNSEEN_SEC)),
+                f'{label}.min_unseen_sec', allow_zero=True),
         )
     return sweeps
 
