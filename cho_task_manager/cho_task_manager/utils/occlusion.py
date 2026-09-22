@@ -93,19 +93,106 @@ def describe_cameras(view):
         for entry in view.cameras) or 'no cameras'
 
 
-def assess(view, recovery_camera):
+def _contributing(view):
+    """The cameras actually holding up the pose being published.
+
+    A suppressed camera's sample was thrown away and a stale one's is out of
+    the window, so neither is contributing and neither should be able to
+    satisfy a requirement on what is.
+    """
+    return [entry for entry in view.cameras if entry.state == 'ok']
+
+
+def best_decode(view):
+    """The best decode confidence among the contributing cameras, or NO_SCORE."""
+    scores = [entry.decision_margin for entry in _contributing(view)
+              if entry.decision_margin > NO_SCORE]
+    return max(scores) if scores else NO_SCORE
+
+
+def best_tag_edge_px(view):
+    """The biggest the tag appears to any contributing camera, or NO_SCORE.
+
+    THE HONEST PROXY FOR HOW WELL A POSE IS LOCALISED, and a different question
+    from ``best_decode``. decision_margin is the DECODER's confidence that it
+    read the right bits, and it stays high for a small, oblique, far-away tag
+    that decodes perfectly and localises badly -- measured in simulation, two
+    standing cameras returned margin 237 on a tag spanning 33 px while sitting
+    4 mm from the truth, and the wrist returned a similar margin on the same
+    tag at 120 px and 0.1 mm.
+
+    Apparent size is what actually maps to metric error: a corner located to a
+    fixed fraction of a pixel is worth range/focal metres, so twice the pixels
+    is half the error. A task that wants a pose it can act on asks for pixels.
+    """
+    edges = [entry.edge_px for entry in _contributing(view)
+             if entry.edge_px > NO_SCORE]
+    return max(edges) if edges else NO_SCORE
+
+
+def assess(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0,
+           planning_target=False):
     """Whether sweeping *recovery_camera* over *view*'s object is worth doing.
+
+    TWO THINGS TRIGGER A SWEEP, not one. The obvious trigger is an object that
+    is not being published at all -- something is in the way. The other is an
+    object that IS being published, from a view too poor to act on: a standing
+    camera watching a bench from a metre away sees every tag obliquely and
+    returns a pose that is present and not accurate. Treating "a pose exists"
+    as good enough would leave that case unrecoverable, because the recovery
+    would never fire.
+
+    ``planning_target`` IS THE HONEST FORM OF THAT SECOND TRIGGER, and it is a
+    fact about the task rather than a number about a picture. An object the arm
+    is about to touch has to be measured well; an object it only has to miss
+    does not, because the planner already inflates obstacles to swallow the
+    difference. So a target is recovered whenever the recovery camera has not
+    measured it ITSELF, however good the standing cameras' view looks.
+
+    That rule is not a preference. Measured on the simulated cell, the two
+    standing cameras returned the SAME decode margin (237.3 and 237.5) and the
+    SAME apparent tag size (32.8 and 33.4 px) while their poses sat 15.9 mm and
+    10.2 mm from truth -- a 57% difference in accuracy that NOTHING either
+    detector reports distinguishes. The error is a RANGE error (measured: 100%
+    of it along the camera's own line of sight), so what predicts it is where
+    the camera is, which a threshold on a detector's output cannot see. Hence a
+    target's criterion is provenance and not a score.
+
+    It also makes the two ends of the leaf symmetric: for a target, this asks
+    for exactly the condition :func:`recovered` accepts, so the sweep cannot
+    decline to start for a reason it would not have stopped for.
+
+    ``min_decision_margin`` and ``min_tag_edge_px`` remain as the score-shaped
+    triggers, for benches with no notion of a planning target. At 0 they are
+    off and only occlusion recovers, which is the oldest behaviour.
 
     Ordered so that the reasons a sweep CANNOT help are found before the
     reasons it might: an arm that drives because a detector was not launched is
     worse than one that refuses and says so.
     """
-    if view.publishing:
+    score = best_decode(view)
+    edge = best_tag_edge_px(view)
+    mine = camera_view(view, recovery_camera)
+    # For a planning target, 'someone is publishing it' is not the question;
+    # 'the close camera measured it' is. A missing camera fails this and falls
+    # through to the REFUSE below, which names the misconfiguration.
+    measured_close = not planning_target or (mine is not None and mine.state == 'ok')
+    good_enough = (view.publishing and measured_close
+                   and score >= min_decision_margin
+                   and edge >= min_tag_edge_px)
+    if good_enough:
+        detail = ', '.join(
+            part for part in (
+                f'measured by {recovery_camera}' if planning_target else '',
+                f'decode margin {score:.0f} >= {min_decision_margin:.0f}'
+                if min_decision_margin > 0.0 else '',
+                f'tag {edge:.0f} px >= {min_tag_edge_px:.0f}'
+                if min_tag_edge_px > 0.0 else '') if part)
         return Assessment(
             SATISFIED,
-            f"'{view.name}' is already being published ({view.status}); nothing to recover")
+            f"'{view.name}' is already being published ({view.status})"
+            + (f' at {detail}' if detail else '') + '; nothing to recover')
 
-    mine = camera_view(view, recovery_camera)
     if mine is None:
         return Assessment(
             REFUSE,
@@ -129,13 +216,31 @@ def assess(view, recovery_camera):
             'publishing on topics the pose node was not given -- not something a '
             'sweep can fix.')
 
+    if view.publishing:
+        # The second trigger. Worth its own sentence: an operator watching a
+        # pose stream out while the arm goes looking anyway needs to be told
+        # that the pose is the reason, not the absence of one.
+        short = []
+        if planning_target and mine.state != 'ok':
+            short.append(
+                f"'{recovery_camera}' has not measured it itself, and it is a "
+                'planning target')
+        if score < min_decision_margin:
+            short.append(f'decode margin {score:.0f} < {min_decision_margin:.0f}')
+        if edge < min_tag_edge_px:
+            short.append(f'tag only {edge:.0f} px across, wanted {min_tag_edge_px:.0f}')
+        return Assessment(
+            SWEEP,
+            f"'{view.name}' is being published, but the best any camera has of it "
+            f"is {' and '.join(short)}. Going to look closer -- "
+            f'{describe_cameras(view)}')
     return Assessment(
         SWEEP,
         f"'{view.name}' is not being published ({view.status}); "
         f'{describe_cameras(view)}')
 
 
-def recovered(view, recovery_camera, min_decision_margin=0.0):
+def recovered(view, recovery_camera, min_decision_margin=0.0, min_tag_edge_px=0.0):
     """True once *recovery_camera* is putting *view*'s object on the wire, well.
 
     Three conditions, and each rules out a different way of being wrong:
@@ -162,12 +267,12 @@ def recovered(view, recovery_camera, min_decision_margin=0.0):
     mine = camera_view(view, recovery_camera)
     if mine is None or mine.state != 'ok':
         return False
-    if min_decision_margin <= 0.0:
-        return True
     # A camera that reports no score cannot clear a threshold. It means the
     # publisher predates the score field, and silently passing would turn a
     # quality requirement into no requirement.
-    return mine.decision_margin >= min_decision_margin
+    if min_decision_margin > 0.0 and mine.decision_margin < min_decision_margin:
+        return False
+    return min_tag_edge_px <= 0.0 or mine.edge_px >= min_tag_edge_px
 
 
 # ---------------------------------------------------------- the sweep table
@@ -184,7 +289,12 @@ SweepWaypoint = namedtuple('SweepWaypoint', 'name joints duration')
 SweepSpec = namedtuple(
     'SweepSpec',
     'object recovery_camera waypoints waypoint_duration dwell_sec timeout_sec '
-    'min_decision_margin')
+    'min_decision_margin min_tag_edge_px planning_target')
+#: The judgement fields default to "ask for nothing", as CameraView's scores
+#: do. parse_sweeps always fills all of them, so this is not a way to build a
+#: half-specified sweep; it is so that adding a criterion does not break every
+#: caller that builds one by hand -- which is what happened the last two times.
+SweepSpec.__new__.__defaults__ = (0.0, 0.0, False)
 
 #: Long enough for the arm to stop ringing and for the pose node to fill a
 #: fresh aggregation window at it. Its default window is 0.5 s and it wants
@@ -209,8 +319,35 @@ DEFAULT_TIMEOUT_SEC = 90.0
 #: range on this bench.
 DEFAULT_MIN_DECISION_MARGIN = 55.0
 
+#: How big the tag has to appear before a pose is considered good enough to act
+#: on. 0 turns the check off. It tracks the metric error better than the decode
+#: margin does -- see best_tag_edge_px -- but only among views of SIMILAR
+#: obliquity: measured on the cell, two standing cameras 57% apart in accuracy
+#: reported 32.8 and 33.4 px, because the nearer one was the more oblique and
+#: the foreshortening cancelled the range. Use it to separate a wrist close-up
+#: from a standing view (33 px against 83), not to rank two standing views.
+DEFAULT_MIN_TAG_EDGE_PX = 0.0
+
+#: Whether this object is one the planner will act ON rather than merely avoid.
+#: Off by default: a bench with no notion of a stage target keeps the older
+#: behaviour, where only occlusion and the score gates recover.
+DEFAULT_PLANNING_TARGET = False
+
 _DEFAULT_KEYS = ('recovery_camera', 'waypoint_duration', 'dwell_sec', 'timeout_sec',
-                 'min_decision_margin')
+                 'min_decision_margin', 'min_tag_edge_px', 'planning_target')
+
+
+def _flag(value, label):
+    """*value* as a bool, refusing the truthy strings YAML makes easy to write.
+
+    ``planning_target: 'no'`` is a non-empty string and therefore true to
+    Python, which would silently send the arm looking at every object on the
+    bench. YAML already parses ``true``/``false``/``yes``/``no`` to bools, so
+    anything arriving here as a string was written wrong.
+    """
+    if not isinstance(value, bool):
+        raise ValueError(f'{label} must be true or false')
+    return value
 
 
 def _positive(value, label, allow_zero=False):
@@ -328,6 +465,14 @@ def parse_sweeps(document, joint_names=None):
                           defaults.get('min_decision_margin',
                                        DEFAULT_MIN_DECISION_MARGIN)),
                 f'{label}.min_decision_margin', allow_zero=True),
+            min_tag_edge_px=_positive(
+                entry.get('min_tag_edge_px',
+                          defaults.get('min_tag_edge_px', DEFAULT_MIN_TAG_EDGE_PX)),
+                f'{label}.min_tag_edge_px', allow_zero=True),
+            planning_target=_flag(
+                entry.get('planning_target',
+                          defaults.get('planning_target', DEFAULT_PLANNING_TARGET)),
+                f'{label}.planning_target'),
         )
     return sweeps
 

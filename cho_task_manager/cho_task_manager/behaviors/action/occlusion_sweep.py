@@ -14,6 +14,14 @@ The shape of it:
    cheap to put in front of a detection. A reason a sweep cannot fix (the sweep
    camera has no TF, or nothing is publishing at all) -> FAILURE, with the
    reason; see ``utils/occlusion.assess``.
+Two things send it looking, not one: an object that is not being published at
+all, and an object that IS being published from a view too poor to act on. A
+standing camera watching a bench from a metre away sees every tag obliquely and
+returns a pose that is present and not accurate; treating "a pose exists" as
+good enough would leave that case unrecoverable. ``min_decision_margin``
+separates them, and it is the same number the sweep stops on -- one standard of
+evidence, whether the arm had to move or not.
+
 2. **Sweep, one waypoint at a time.** Each is a full joint configuration from
    the task's own config, sent to the joint action server exactly as any other
    motion leaf would send it. The order is the config's, and the FR5 bench's is
@@ -115,6 +123,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         action_name: str = None,
         goal_timeout_sec: float = 30.0,
         skip_if_visible: bool = True,
+        planning_target: bool = None,
     ):
         # `action_name` targets an endpoint that is not a controller's own --
         # the MoveIt bridge serves the same JointSpace action, and a sweep over
@@ -130,6 +139,14 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         self.sweep = sweep
         self.visibility_topic = visibility_topic
         self.skip_if_visible = skip_if_visible
+        # Whether the planner will ACT on this object rather than avoid it.
+        # The sweep table carries a default because a bench with no planner
+        # still has to answer the question, but the answer properly belongs to
+        # the stage: the same beaker is a target in one step and an obstacle in
+        # the next. A task that knows its stage passes it here and the table's
+        # value is ignored.
+        self.planning_target = (sweep.planning_target if planning_target is None
+                                else bool(planning_target))
         self.subscription = None
         self._latest = None
         self._phase = 'assess'
@@ -154,9 +171,15 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             f"[{self.name}] recovery for '{self.sweep.object}' via camera "
             f"'{self.sweep.recovery_camera}': {len(self.sweep.waypoints)} waypoint(s) "
             f"({', '.join(point.name for point in self.sweep.waypoints)}), "
-            f'{self.sweep.dwell_sec:.1f}s dwell, decode margin >= '
-            f'{self.sweep.min_decision_margin:.0f}, '
-            f'{self.sweep.timeout_sec:.0f}s ceiling')
+            f'{self.sweep.dwell_sec:.1f}s dwell, '
+            + ', '.join(part for part in (
+                'planning target (wants its own close measurement)'
+                if self.planning_target else '',
+                f'decode margin >= {self.sweep.min_decision_margin:.0f}'
+                if self.sweep.min_decision_margin > 0 else '',
+                f'tag >= {self.sweep.min_tag_edge_px:.0f} px'
+                if self.sweep.min_tag_edge_px > 0 else '') if part)
+            + f', {self.sweep.timeout_sec:.0f}s ceiling')
         return ok
 
     def _on_visibility(self, msg):
@@ -205,7 +228,10 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         return self._dwelling(view)
 
     def _assess(self, view):
-        assessment = occlusion.assess(view, self.sweep.recovery_camera)
+        assessment = occlusion.assess(view, self.sweep.recovery_camera,
+                                      self.sweep.min_decision_margin,
+                                      self.sweep.min_tag_edge_px,
+                                      self.planning_target)
         if assessment.action == occlusion.SATISFIED:
             if self.skip_if_visible:
                 self.node.get_logger().info(
@@ -245,7 +271,8 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             self._best_margin = mine.decision_margin
             self._best_at = waypoint.name
         if occlusion.recovered(view, self.sweep.recovery_camera,
-                               self.sweep.min_decision_margin):
+                               self.sweep.min_decision_margin,
+                               self.sweep.min_tag_edge_px):
             outranked = [entry.camera for entry in view.cameras
                          if entry.state == 'suppressed']
             self.node.get_logger().info(
@@ -258,6 +285,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
                 + (f', decode margin {mine.decision_margin:.0f} >= '
                    f'{self.sweep.min_decision_margin:.0f}'
                    if self.sweep.min_decision_margin > 0.0 else '')
+                + f', tag {mine.edge_px:.0f} px across'
                 + f' -- {view.status}')
             return py_trees.common.Status.SUCCESS
 
@@ -266,12 +294,36 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             f"'{waypoint.name}': {occlusion.describe_cameras(view)}")
         self._index += 1
         if self._index >= len(self.sweep.waypoints):
-            self.node.get_logger().error(
-                f"[{self.name}] swept all {len(self.sweep.waypoints)} waypoint(s) and "
-                f"'{self.sweep.object}' is still not recovered. Last seen: "
-                f'{occlusion.describe_cameras(view)}. ' + self._diagnosis())
-            return py_trees.common.Status.FAILURE
+            return self._exhausted(view)
         return self._start_waypoint()
+
+    def _exhausted(self, view):
+        """Out of waypoints. SUCCESS only if there is a pose to go on with.
+
+        BEST EFFORT, and the distinction matters. A sweep sent because the
+        object could not be seen at all has nothing to hand back, and failing is
+        the only honest answer. A sweep sent because the view was POOR still has
+        that poor view: refusing it would turn a task that used to work into one
+        that does not, on the strength of an improvement that was never
+        guaranteed. It succeeds, loudly, and the operator is told what the pose
+        is worth.
+        """
+        swept = len(self.sweep.waypoints)
+        if view.publishing:
+            self.node.get_logger().warn(
+                f'[{self.name}] swept all {swept} waypoint(s) without improving on '
+                f"the standing view of '{self.sweep.object}': best decode margin "
+                f'{occlusion.best_decode(view):.0f} and tag '
+                f'{occlusion.best_tag_edge_px(view):.0f} px, against the '
+                f'{self.sweep.min_decision_margin:.0f} / '
+                f'{self.sweep.min_tag_edge_px:.0f} px asked for. Going on with the '
+                f'pose that is there -- {view.status}')
+            return py_trees.common.Status.SUCCESS
+        self.node.get_logger().error(
+            f"[{self.name}] swept all {swept} waypoint(s) and "
+            f"'{self.sweep.object}' is still not being published. Last seen: "
+            f'{occlusion.describe_cameras(view)}. ' + self._diagnosis())
+        return py_trees.common.Status.FAILURE
 
     def _diagnosis(self):
         """Name the likely fix for a sweep that ran out of waypoints.

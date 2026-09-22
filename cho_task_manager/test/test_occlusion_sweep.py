@@ -52,7 +52,7 @@ def _sweep(waypoints=('survey', 'close'), **overrides):
                 waypoints=tuple(occlusion.SweepWaypoint(name, (0.0,) * 6, 4.0)
                                 for name in waypoints),
                 waypoint_duration=4.0, dwell_sec=1.0, timeout_sec=60.0,
-                min_decision_margin=0.0)
+                min_decision_margin=0.0, min_tag_edge_px=0.0)
     spec.update(overrides)
     return occlusion.SweepSpec(**spec)
 
@@ -225,9 +225,10 @@ def test_a_pose_that_decodes_badly_sends_it_down_a_rung():
     assert behaviour.update() == SUCCESS
 
 
-def test_running_out_of_waypoints_on_score_is_reported_as_such():
-    # 'the tag was never in view' and 'it was in view the whole time and never
-    # sharp enough' are a sweep aimed wrong and a sweep that has to come closer.
+def test_running_out_of_waypoints_with_a_pose_in_hand_is_best_effort():
+    # A sweep that could not improve on what was already there still has what
+    # was already there. Failing would turn a task that used to work into one
+    # that does not, on the strength of an improvement nothing promised.
     behaviour = _behaviour(_sweep(('close',), min_decision_margin=55.0))
     behaviour.initialise()
     behaviour._on_visibility(_snapshot())
@@ -236,9 +237,37 @@ def test_running_out_of_waypoints_on_score_is_reported_as_such():
     _arrive(behaviour, result)
     behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', wrist_margin=44.0))
     behaviour.clock.advance(1.5)
-    assert behaviour.update() == FAILURE
+    assert behaviour.update() == SUCCESS
     assert behaviour._best_margin == 44.0
+
+
+def test_running_out_of_waypoints_with_no_pose_at_all_fails():
+    # The other half of the same decision: a sweep sent because the object
+    # could not be seen has nothing to hand back, and the diagnosis has to
+    # separate 'never in view' from 'in view and never sharp enough'.
+    behaviour = _behaviour(_sweep(('close',), min_decision_margin=55.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    _goal, result = _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    _arrive(behaviour, result)
+    behaviour._on_visibility(_snapshot(publishing=False, wrist='ok', wrist_margin=44.0))
+    behaviour.clock.advance(1.5)
+    assert behaviour.update() == FAILURE
     assert 'come closer' in behaviour._diagnosis()
+
+
+def test_a_poor_published_pose_sends_it_looking_without_being_occluded():
+    # The second trigger, end to end through the leaf: nothing is hidden, the
+    # pose is streaming, and the arm goes anyway because the decode is not
+    # good enough to act on.
+    behaviour = _behaviour(_sweep(('survey', 'close'), min_decision_margin=55.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok', oak='ok',
+                                       wrist_margin=38.0))
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_called_once()
 
 
 def test_never_decoding_at_all_is_reported_as_looking_in_the_wrong_place():

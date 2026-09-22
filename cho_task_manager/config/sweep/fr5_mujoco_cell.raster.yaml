@@ -17,27 +17,61 @@
 
 # The pattern, in prose, for the file this generates.
 header: |
-  A boustrophedon raster with the tool at a fixed tilt: rows at constant x
-  swept FAR TO NEAR, each row traversed in y with the direction alternating,
-  repeated at a second, lower height.
+  A boustrophedon raster covering a search AREA: rows at constant x swept FAR
+  TO NEAR, each row traversed in y with the direction alternating.
 
-  THE SPACING IS NOT A COVERAGE SPACING. The textbook boustrophedon rule is
-  stripe = footprint x (1 - overlap), and here that gives a single cell -- a
-  D435's infra stream already sees about 1.04 x 0.59 m at 0.55 m, which covers
-  the whole area of interest from one viewpoint. Coverage is not what the
-  motion buys. It buys PARALLAX: a different line of sight to the same tag,
-  which is the only thing that helps when something is standing in the way.
+  THE POSE IS SET FROM THE CAMERA, NOT THE TOOL. Every waypoint puts the
+  camera's optical axis PERPENDICULAR to the bench and its picture at a fixed
+  heading -- the measured mount is composed in, which is why the joint angles
+  do not look like a tool pointing down. They are not: the mount carries 17.3
+  degrees between the camera's axis and the tool's, so the two cannot both be
+  vertical, and it is the camera's that has to be. The tool ends up 17.3
+  degrees off vertical in a FIXED direction, with its tip 0.59 m above the
+  bench through the whole survey.
 
-  The tool tilt is the cheaper half of the same idea. It costs nothing in
-  reachability -- one fixed orientation per row is one IK branch -- and a tag
-  viewed at normal incidence is the WORST case for AprilTag's planar pose,
-  whose two-solution ambiguity is strongest there. Reversing the tilt per row
-  gives the raster two viewing directions instead of one, for free; it follows
-  the direction of travel, so it alternates with the boustrophedon.
+  IT COVERS AN AREA AND IS NOT AIMED AT AN OBJECT. What is being looked for is
+  an object whose position is not known -- that is the whole situation -- so a
+  raster centred on where a layout file thinks the tag is would be assuming the
+  answer. The same raster serves every object, and in a run that is cheaper
+  than it looks: the first sweep passes over the whole area, so anything else
+  out there becomes visible during it and the next object's leaf skips without
+  moving.
+
+  GAMMA-SHAPED, NEVER L-SHAPED. Every lateral move happens at the top height
+  and the only descent is vertical, at the end. Descending first and then
+  translating drags the gripper across a bench with other glassware standing on
+  it; translating first and then dropping straight down passes over everything.
+  That is also why the close pass is a SINGLE cell: a row down there is lateral
+  motion at low clearance, which is the shape being avoided. Consecutive
+  waypoints are checked ALONG the joint-space line between them, not only at
+  their endpoints, because two poses that each clear the bench can be joined by
+  an interpolation that dips through it.
+
+  ROW spacing and COLUMN spacing are separate because they do different jobs.
+  Each ROW is one traverse across the bench, so the row spacing is how many
+  times the arm sweeps left and right; the column spacing is how finely it
+  stops within a traverse, and it is coarse because the field of view already
+  covers the width.
+
+  Both are tighter than coverage alone would ask for. The textbook boustrophedon
+  rule is stripe = footprint x (1 - overlap), and this camera sees about 0.6 m
+  across at the survey height, so coverage alone would want a single row. The
+  motion has a second job: PARALLAX, a different line of sight to the same tag,
+  which is the only thing that helps when something is standing in the way. It
+  also buys the VIEWING ANGLE -- a tag seen at normal incidence is the worst
+  case for AprilTag's planar pose -- and incidence comes from where the camera
+  IS, not from where it points, so it is the lateral offset that provides it
+  and not any tilt of the tool.
+
+  THE AREA IS BOUNDED BY HOW FAR THE ARM SHOULD LEAN, not by where anything is.
+  Its far edge keeps the elbow bent; reaching further straightens the arm out
+  over a bench with glassware on it, for a view the camera's field of view
+  already had.
 
   The sweep STOPS at the first viewpoint whose decode clears
-  min_decision_margin, so the full raster only runs when the object genuinely
-  cannot be found -- and then it has tried everywhere.
+  min_decision_margin, so the full raster only runs when nothing can be found
+  -- and then it has looked everywhere it can reach.
+
 
 # The bench plane the tag lies in, and the arm that looks at it.
 bench_z_m: -0.014
@@ -52,7 +86,7 @@ robot:
   arm_dof: 6
   # cho_robot_config/config/fr5.yaml poses.home['1'] -- where the tree enters a
   # sweep from, and what the first waypoint's duration is sized against.
-  home: [0.0, -0.7853981634, -1.5707963268, 0.7853981634, -1.5707963268, 0.0]
+  home: [-0.0836, -1.1209, -2.0723, -1.7125, 1.6049, 0.0798]
 
 camera:
   # THE REAL BENCH'S MOUNT, on purpose. cho_description_fr5/xml/fr5_ag95.xml
@@ -64,39 +98,69 @@ camera:
   name: wrist
 
 raster:
-  # Half-width of the area swept, about the tag. At the high pass this
-  # subtends about 15 degrees of viewing direction, which is the parallax the
-  # motion is for.
-  extent_m: 0.15
-  columns: 3
-  # Off vertical. Enough to get the tag off normal incidence -- which is where
-  # AprilTag's planar pose is weakest -- and bounded from above by the FIELD OF
-  # VIEW rather than by taste: the solver leaves the image roll free (it is a
-  # 5-DOF task, which is what keeps the IK well conditioned), so the angle that
-  # is guaranteed to be in frame is the SHORTER one, the D435 infra stream's
-  # 58 deg vertical. Half of that is 29, and tilting by t leaves 29 - t degrees
-  # for the tag to be off centre: at 15 deg that is 14, which at the survey
-  # height covers a tag 0.13 m from where the raster cell is pointed. At 20 deg
-  # it would be 9, and the corner cells would be looking past the tag.
-  tilt_deg: 15.0
-  # The first waypoint is a 3 rad swing from the home pose, not a raster step.
+  # The area to search, in the robot's BASE FRAME.
+  #
+  # THESE ARE CAMERA POSITIONS, NOT THE GROUND COVERED. What the camera sees
+  # reaches well past them -- about 0.6 m across at the survey height -- so the
+  # arm does not have to travel over a tag to read it. The far edge is set by
+  # how far the arm should LEAN, not by where anything is: at x 0.58 the elbow
+  # is still bent, and pushing it to 0.72 straightens the arm out over the
+  # bench (cond(J) went to 44 there) for a view the camera already had.
+  area:
+    # Starts at the far edge and works back. y is symmetric about the base, so
+    # each row is a full traverse from one side to the other and back on the
+    # next -- which is what 'sweep left and right several times' means when it
+    # is written down.
+    x: [0.20, 0.60]
+    y: [-0.30, 0.30]
+  # How far apart the ROWS are -- each row is one left-and-right traverse, so
+  # this is how many times the arm sweeps across. NINE passes, 0.60 m back to
+  # 0.20 m, each a full 0.60 m of travel in y: the sweep is meant to look like
+  # someone scanning a bench, not like three lines.
+  row_spacing_m: 0.05
+  # How finely each traverse is sampled. Coarse on purpose: the field of view
+  # already covers the width, and the stops are there for parallax. Four stops
+  # across 0.60 m.
+  column_spacing_m: 0.20
+  # Straight down. Tilting the tool does NOT buy viewing angle -- incidence is
+  # set by where the camera is, and a tilt only moves the tag around within the
+  # picture. Measured in simulation at 15 degrees: the incidence at the central
+  # cell stayed at 1.3 degrees while the tag went from 15.1 to 22.2 degrees off
+  # the optical axis at an offset cell, against a guaranteed half-cone of 29.
+  # It spent field of view and bought nothing.
+  tilt_deg: 0.0
+  # The picture's roll is left FREE, and that is a trade rather than an
+  # oversight. Commanding it (camera_up_heading_deg, which the solver still
+  # accepts) stops the tool rotating as the camera translates and makes the
+  # guaranteed field of view the full 87 x 58 rectangle instead of the short
+  # 58 cone -- both real gains. It also makes the waypoint a 6-DOF pose, and
+  # measured on this arm that costs the CLOSE PASS: at heading 180 the raster
+  # came out 32 of 38 cells with `close_approach` and `close` among the
+  # casualties, because a fixed attitude at 0.386 m is more than the wrist has
+  # left. The Gamma-shaped descent is a safety property and the tool's slow
+  # rotation is cosmetic, so the descent wins.
+  #
+  # Set camera_up_heading_deg only if the close pass is dropped or the arm
+  # gains the wrist range to hold an attitude down there.
+  # The first waypoint is a long swing from the home pose, not a raster step.
   # This cell commissions at 0.394 rad/s (cho_moveit_fr5/config/joint_limits.yaml).
   approach_duration_s: 12.0
   passes:
-    # The SEARCH pass: high, so one viewpoint already covers the area, and the
-    # nine cells are there for the nine lines of sight rather than for coverage.
+    # THE SEARCH. High, so one viewpoint already covers a good part of the area
+    # and the cells are there for the lines of sight as much as the coverage.
     - name: survey
       height_m: 0.55
-      rows: 3
       duration_s: 3.0
-    # The RESOLUTION pass: lower, for pixels. One row, not nine cells, because
-    # by this point the search pass has already established whether the tag can
-    # be seen from anywhere at all -- and if it could not, more cells at a
-    # smaller footprint will not change that.
+    # THE CLOSE LOOK, for pixels. One cell, reached by a lateral move at the
+    # survey height and then a vertical drop. It goes to the MIDDLE of the area
+    # because it has no way of knowing where the search found something -- that
+    # is the obvious thing to make adaptive, and until it is, this is a
+    # fallback and not a second search.
     - name: close
       height_m: 0.40
-      rows: 1
+      at_centre: true
       duration_s: 3.0
+
 
 # What a solved waypoint has to satisfy to be kept. A cell that fails every one
 # of these is dropped from the raster and named in the generated file, rather
@@ -114,6 +178,12 @@ checks:
   # Between consecutive waypoints. A raster that flipped elbow-up to elbow-down
   # between two cells would swing the arm through space nothing has checked.
   max_step_rad: 1.0
+  # The same clearances, but along the joint-space line BETWEEN two waypoints
+  # rather than at them. Slightly lower than the endpoint figures on purpose: a
+  # joint-space straight line bulges in Cartesian space, and refusing every
+  # bulge would leave the raster with no reachable path at all.
+  min_path_tool_over_bench_m: 0.20
+  min_path_arm_over_bench_m: 0.10
   tool_frames: [tool_tcp, gripper_base_link, gripper_finger_link, wrist3_link]
   arm_frames: [upperarm_link, forearm_link, wrist1_link, wrist2_link]
 
@@ -122,28 +192,71 @@ solver:
 
 # Carried through to the generated file unchanged.
 defaults:
-  recovery_camera: wrist
+  # `wrist_cam`, not the bench's `wrist`: mujoco_ros2_control names the topics
+  # and frames after the MJCF camera, and the cell's camera table follows it.
+  # A name that is not in that table makes every sweep REFUSE before it moves,
+  # which is the right failure and still a wasted run.
+  recovery_camera: wrist_cam
   waypoint_duration: 3.0
   dwell_sec: 1.5
-  # MUCH HIGHER THAN THE BENCH'S 55, and it is not a tightening of the same
-  # requirement. A rendered tag has no sensor noise and no motion blur, and this
-  # cell's tag is 100 mm rather than 39: the standing camera already returns
-  # margins over 200 here, where the real bench measured 66-68 close up. A
-  # threshold of 55 would be met by the very first waypoint and the raster would
-  # never be exercised, which is the one thing this cell is for. THIS NUMBER IS
-  # NOT TRANSFERABLE to the bench, and neither is a margin measured here.
-  min_decision_margin: 300.0
-  # The whole raster, moves included: 12 s of approach plus eleven 3 s steps
-  # plus twelve 1.5 s dwells is about 63 s, so this is a factor of two of slack
-  # for a detection pipeline that is lagging.
-  timeout_sec: 150.0
+  # WHAT COUNTS AS SEEING IT AT ALL, in this cell.
+  #
+  # The bench's 55 is not transferable here and neither is this number. A
+  # rendered tag carries no noise and this cell's tag is 100 mm rather than 39,
+  # so margins run an order of magnitude higher -- and they differ per tag: the
+  # wrist measured 238 on tag 0 and 105 on tag 1 from the same viewpoint, which
+  # is the renderer's contrast and not the geometry.
+  #
+  # 50 is therefore set to mean "the wrist can read it", not "the wrist can read
+  # it well". That is the question this cell is used to answer: with the
+  # standing camera out of the table the object is invisible at the home pose
+  # and the sweep has to make it visible. Raising it turns the same run into a
+  # walk down the raster looking for a better viewpoint, which is worth doing
+  # once the numbers per waypoint have been recorded.
+  min_decision_margin: 50.0
+
+  # HOW BIG THE TAG HAS TO LOOK. OFF here, and the comment is the reason.
+  #
+  # It was 70 px, set to fire the recovery on a poor view as well as a missing
+  # one. Measuring the cell properly retired it. Against the scene's exact tag
+  # positions, with the arm parked clear:
+  #
+  #   sdl_cam       1.772 m  edge 32.8 px  margin 237.3  err 15.93 mm
+  #   sdl_cam_side  1.530 m  edge 33.4 px  margin 237.5  err 10.15 mm
+  #   wrist_cam     0.527 m  edge 83.4 px  margin 238.3  err  1.84 mm
+  #
+  # The two standing cameras are 57% apart in accuracy and report the SAME
+  # apparent size and the SAME margin, because the nearer one is the more
+  # oblique and the foreshortening cancels the range. So edge_px separates a
+  # wrist close-up from a standing view, which is what 70 was doing, but it
+  # cannot rank two standing views -- and stating it as an accuracy threshold
+  # claims more than it can deliver.
+  #
+  # `planning_target` says the same thing without the pretence: the object the
+  # arm is about to touch gets measured by the camera on the arm. Left at 0,
+  # this is one less number tuned in a simulator that does not transfer.
+  min_tag_edge_px: 0.0
+
+  # WHAT THE RECOVERY IS ACTUALLY FOR, in this cell.
+  #
+  # Both vessels are things the planner picks up, so both want the wrist's own
+  # measurement and not the standing pair's 10-16 mm. Anything the arm merely
+  # has to miss would be left false: the planner inflates obstacles by more
+  # than that error, so sending the arm to look at one buys nothing.
+  #
+  # On a bench with a real planner this belongs to the STAGE and not to a file
+  # -- the same beaker is a target in one step and an obstacle in the next --
+  # which is why OcclusionSweepBehavior takes an override that wins over this.
+  planning_target: true
+  # The whole raster, moves included: 12 s of approach plus 37 steps of 3 s
+  # plus 38 dwells of 1.5 s is about 180 s. This is the WORST case and only
+  # happens when nothing can be found anywhere; a run that finds its object
+  # stops there, which on this bench is usually within the first row or two.
+  timeout_sec: 320.0
 
 objects:
-  # The TAG, not the vessel. Here the tag is a 125 mm plate lying 0.15 m along
-  # +x from its vessel -- cho_description_fr5/xml/scene_ag95_sdl.xml's
-  # beaker_tag and flask_tag geoms, and the same 0.150 the cell's object table
-  # (config/perception/mujoco_sdl_cell.yaml) offsets back by.
+  # Only the names. The raster is the same for all of them -- it is a search of
+  # an area, not an approach to a position -- so there is nothing per-object
+  # left to state here.
   - object: beaker
-    tag_xy: [0.640, 0.17475]
   - object: flask
-    tag_xy: [0.63383, 0.33166]

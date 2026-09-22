@@ -240,22 +240,35 @@ def test_the_shipped_scene_puts_the_tags_where_the_object_table_expects_them():
         assert tag.position[0] - stalk == pytest.approx(vessel_x, abs=1e-3)
 
 
-def test_the_shipped_scene_and_the_sweep_raster_aim_at_the_same_tags():
-    # The raster looks where this scene puts the tag. Two files with two
-    # opinions about that is a sweep that drives twelve waypoints past the
-    # thing it went to find.
-    raster = pytest.importorskip('yaml')
+def test_the_shipped_scenes_tags_are_within_sight_of_the_raster():
+    # The raster is not aimed at these tags -- it covers an area, because the
+    # point is that the object's position is not known -- and the tags do NOT
+    # have to lie inside it. The area is where the CAMERA goes; what it sees
+    # reaches a footprint further in every direction.
+    #
+    # What does have to hold is that the footprint gets there. A harness whose
+    # tags are outside everything the sweep can see tests only the failure
+    # path, and does it while looking like a bench problem.
     share = pytest.importorskip(
         'ament_index_python.packages').get_package_share_directory
     path = os.path.join(share('cho_task_manager'), 'config', 'sweep',
                         'fr5_bench.raster.yaml')
     with open(path, encoding='utf-8') as stream:
-        aimed = {entry['object']: entry['tag_xy']
-                 for entry in raster.safe_load(stream)['objects']}
-    for tag in _shipped().tags:
-        assert tag.name in aimed
-        assert tag.position[0] == pytest.approx(aimed[tag.name][0], abs=1e-3)
-        assert tag.position[1] == pytest.approx(aimed[tag.name][1], abs=1e-3)
+        spec = yaml.safe_load(stream)
+    area = spec['raster']['area']
+    survey = next(item for item in spec['raster']['passes']
+                  if not item.get('at_centre'))
+    scene = _shipped()
+    # Half the guaranteed footprint at the survey height: the SHORT half-cone,
+    # because nothing constrains the image roll.
+    camera = next(item for item in scene.cameras if item.half_fov_rad is not None)
+    reach = float(survey['height_m']) * math.tan(camera.half_fov_rad)
+    assert reach > 0.2, reach
+    for tag in scene.tags:
+        assert area['x'][0] - reach <= tag.position[0] <= area['x'][1] + reach, (
+            tag.name, area, reach)
+        assert area['y'][0] - reach <= tag.position[1] <= area['y'][1] + reach, (
+            tag.name, area, reach)
 
 
 def test_the_wrist_is_cone_gated_and_the_oak_is_not():

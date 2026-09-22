@@ -203,6 +203,8 @@ def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.
         'vessels': [vessel.name for vessel in vessels],
         'min_decision_margin': {name: sweep.min_decision_margin
                                 for name, sweep in sweeps.items()},
+        'planning_targets': sorted(name for name, sweep in sweeps.items()
+                                   if sweep.planning_target),
         'uncovered': sorted(set(vessel.name for vessel in VESSELS) - set(sweeps)),
         'waypoints': {name: [point.name for point in sweep.waypoints]
                       for name, sweep in sweeps.items()},
