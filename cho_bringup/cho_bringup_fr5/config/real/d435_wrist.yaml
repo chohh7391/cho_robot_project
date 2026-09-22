@@ -1,0 +1,26 @@
+# A D435 on the wrist bracket, looking down at the bench from close range.
+#
+# EXPOSURE IS AN INSTALLATION NUMBER. Everything else about running a D435 for
+# tag detection is a property of the camera and lives in cho_realsense's
+# d435.yaml, which this file is a copy of with one line changed. What differs
+# is where the camera is pointed and how much light gets there, and that is a
+# fact about this cell -- which is why it is recorded here, beside the
+# extrinsics, rather than in the driver package.
+#
+# 3000 us measured on this bench 2026-09-22: mean 84 with 2.8% saturated and all six board tags decoding.
+#
+# RE-TAKE IT AFTER ANY CHANGE OF PLACE OR LIGHT, and check the result at the
+# DEVICE rather than in the config -- `ros2 topic echo /<ns>/<name>/infra1/metadata`
+# reports actual_exposure. Both D435s here ignored this setting entirely until
+# their firmware was updated, with no error a launch would show.
+
+depth_module.infra1_format: 'Y8'
+enable_depth: false
+enable_infra2: false
+
+depth_module.enable_auto_exposure: false
+depth_module.exposure: 3000
+depth_module.gain: 16
+
+publish_tf: true
+depth_module.emitter_enabled: 0

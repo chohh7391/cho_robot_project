@@ -40,9 +40,9 @@ def _entry(**overrides):
 
 # ------------------------------------------------------------- the real file
 
-def test_the_bench_ships_both_cameras():
+def test_the_bench_ships_all_three_cameras():
     transforms = load_transforms(_shipped())
-    assert {entry['name'] for entry in transforms} == {'wrist', 'side_1'}
+    assert {entry['name'] for entry in transforms} == {'wrist', 'side_1', 'side_2'}
 
 
 def test_the_wrist_hangs_off_the_arm_and_the_side_camera_off_the_base():
@@ -51,6 +51,7 @@ def test_the_wrist_hangs_off_the_arm_and_the_side_camera_off_the_base():
     # entry needs the robot's TF to resolve and the side camera's does not.
     assert by_name['wrist']['parent_frame'] == 'wrist3_link'
     assert by_name['side_1']['parent_frame'] == 'base_link'
+    assert by_name['side_2']['parent_frame'] == 'base_link'
 
 
 def test_every_child_is_a_driver_root_not_an_optical_frame():

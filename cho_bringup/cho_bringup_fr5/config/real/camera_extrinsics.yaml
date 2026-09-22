@@ -25,7 +25,8 @@
 # one frame two parents -- not an error, just transforms that resolve through
 # whichever arrived last.
 #
-#   D435   camera_link, named by `camera_name:=` -> `wrist_link` here
+#   D435   camera_link, named by `camera_name:=` -> `wrist_link` and
+#          `side_2_link` here
 #   OAK    `side_1_mount`, which cho_oak derives from its `name:=` -- see the
 #          note there about the driver's own default being a sentinel
 #
@@ -48,28 +49,38 @@ transforms:
   # `wrist3_link` and the robot's FK carries it. The bringup must therefore be
   # running for any wrist detection to resolve into the base frame.
   #
-  # SOLVED, from ten arm poses viewing the tag board (2026-09-22). The previous
-  # entry here was measured off a DIFFERENT mount by hand-posing the arm twice
-  # and averaging, and was 134 mm and most of a half-turn from this one -- a
-  # replaced mount is not a correction, it is a different camera position, and
-  # nothing but a re-solve finds it.
+  # SOLVED from eight arm poses viewing the tag board (2026-09-22, evening).
+  # ALL THREE CAMERAS BELOW COME FROM THAT ONE RUN, which is the point of doing
+  # it that way: they are placed against ONE board pose, so a disagreement
+  # between them is a real disagreement rather than two different boards.
   #
   # What says this one is right:
   #
-  #   reprojection over 24 board corners   0.41-1.76 px across the ten poses
-  #   the board's pose, pose to pose       1.53 mm mean, 2.87 mm worst
-  #   the board's height                   came out at -0.0080 against a bench
-  #                                        at -0.013, and NOTHING in the solve
-  #                                        knows the bench height
+  #   reprojection over board corners      0.112-0.201 px across the eight poses
+  #   the board's pose, pose to pose       0.99 mm mean, 1.92 mm worst
+  #   the board's height                   came out at -0.0111 against a bench
+  #                                        at -0.013 -- 1.9 mm, and NOTHING in
+  #                                        the solve knows the bench height
+  #   the board's plane                    0.16 deg off level
+  #   relative rotation between poses      77.4 deg median, 26 of 28 pairs
+  #                                        past 30 deg
   #
-  # That last line is the check the old procedure could not produce.
+  # Every one of those is better than the morning's run on this same bench, and
+  # the reason is not the procedure. This camera's firmware was 5.9.2, which
+  # ignored every exposure setting and left it about 31% saturated; on 5.17.3.10
+  # it takes the configured 3000 us and sits at 2.7%. Saturation costs corner
+  # precision first, and corner precision is the whole solve.
+  #
+  # It came off the bracket for that update and went back on, which moved it
+  # about 4 mm -- the difference from the morning's [0.00023, 0.04779, 0.22847].
+  # A remount is a re-solve, every time.
   - name: wrist
     parent_frame: wrist3_link
     child_frame: wrist_link
-    xyz: [0.00023, 0.04779, 0.22847]
+    xyz: [0.00033, 0.04869, 0.23250]
     # x, y, z, w -- the order geometry_msgs uses, NOT the w-first order some
     # CAD tools print.
-    quaternion: [0.536755, -0.531066, 0.458413, 0.468742]
+    quaternion: [0.542211, -0.525794, 0.456376, 0.470393]
 
   # ----------------------------------------------------------------- side_1
   # Eye-to-hand: the OAK stands beside the bench and does not move, so this is
@@ -83,33 +94,45 @@ transforms:
   # SOLVED from the same run as the wrist, off the board pose that run
   # produced:
   #
-  #   reprojection over 24 board corners   0.42-0.47 px
-  #   camera position across ten views     0.56 mm of spread
+  #   reprojection over board corners      0.290-0.422 px
+  #   camera position across eight views   5.17 mm of spread
   #
-  # Re-run the solve after anything touches the tripod, and keep an eye on
-  # those two numbers -- they are what tells you it has been touched.
+  # THAT SPREAD IS THE WEAKEST NUMBER IN THIS FILE, and the reason matters more
+  # than the number: at one of the eight poses the ARM STOOD BETWEEN THIS CAMERA
+  # AND THE BOARD and it saw three tags instead of six. A three-tag fit is a
+  # much poorer fit and it is in the average. side_2, never blocked, came out at
+  # 0.23 mm from the same recording. If this becomes the limit, re-run with
+  # poses chosen to keep the arm out of this camera's line.
+  #
+  # The tripod was moved before this run, about 108 mm from where the morning
+  # had it. Re-run after anything touches it and watch those two numbers --
+  # they are what tells you it has been touched.
   - name: side_1
     parent_frame: base_link
     child_frame: side_1_mount
-    xyz: [0.46210, 0.58172, 0.58819]
-    quaternion: [0.292552, 0.280998, -0.723582, 0.558466]
+    xyz: [0.39347, 0.52347, 0.52624]
+    quaternion: [0.381282, 0.281938, -0.690415, 0.546317]
 
   # ----------------------------------------------------------------- side_2
-  # THE SECOND STANDING CAMERA IS NOT HERE YET, and its absence is deliberate
-  # rather than an oversight. cho_object_pose/config/cameras.yaml lists it, so
-  # the pose node subscribes to it and reports `no_tf` for it until this entry
-  # exists -- a loud, correct failure that says "nobody has solved where this
-  # camera is" instead of a confident wrong pose.
+  # The second standing camera, and the best-conditioned entry in this file:
   #
-  # DO NOT FILL IT IN WITH A TAPE MEASURE. Every number in this file that was
-  # ever measured by hand turned out wrong by 100 mm or more, and nothing
-  # downstream can see the difference. Run the board:
+  #   reprojection over board corners      0.119-0.123 px
+  #   camera position across eight views   0.23 mm of spread
   #
-  #   ros2 run cho_camera_calibration record_board_views.py POSES.yaml OUT.json \
-  #       --moving-detections /wrist/detections --static-detections /side_2/detections
-  #   ros2 run cho_camera_calibration solve_hand_eye.py OUT.json --board <board>.yaml \
-  #       --moving-info /wrist/wrist/infra1/camera_info \
-  #       --static-info /side_2/side_2/infra1/camera_info
+  # It saw all six board tags at all eight poses, which is the entire
+  # difference between it and side_1 above.
   #
-  # Its `child_frame` is `side_2_link`, the D435's own camera_link, named by
-  # `camera_name:=side_2` -- the same arrangement as the wrist entry above.
+  # ITS ANGLE TO side_1 IS THE POINT OF IT. The two stand on opposite sides of
+  # the bench and their lines of sight to the board cross at 89.0 degrees, at
+  # 0.751 m and 0.699 m -- near-orthogonal, and neither dominating the other by
+  # range. Crossing two lines of sight is only worth anything when there is an
+  # angle between them: cho_object_pose's `fusion_mode: intersect` stops
+  # crossing below `min_ray_angle_deg` and falls back to a weighted mean,
+  # saying so in the object's status. 89 degrees is about as good as a bench
+  # this size allows, so know what you are giving up before moving either of
+  # them -- side by side, the fusion quietly becomes an average again.
+  - name: side_2
+    parent_frame: base_link
+    child_frame: side_2_link
+    xyz: [0.50381, -0.49779, 0.45737]
+    quaternion: [-0.239090, 0.278605, 0.750274, 0.549823]

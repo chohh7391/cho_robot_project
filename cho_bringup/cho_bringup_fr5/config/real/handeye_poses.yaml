@@ -1,0 +1,100 @@
+# The arm poses the hand-eye solve is recorded from, for THIS cell.
+#
+# They live here rather than in cho_camera_calibration because they are a fact
+# about this bench -- where its board sits, where its arm can reach, what its
+# cameras can see -- and that package is meant to serve any cell. The README
+# there calls this file POSES.yaml and takes it as an argument for the same
+# reason.
+#
+# THEY WERE LOST ONCE, sitting in a scratch directory, which is the whole
+# argument for this file existing. Regenerating them is not free: the generator
+# needs a rough camera model to aim with, and after a remount that model is
+# exactly what has not been solved yet.
+#
+# WHAT THE SOLVE WANTS OF THEM is one thing: LARGE RELATIVE ROTATIONS about
+# varied axes. Park & Martin takes the hand-eye rotation from the relative
+# rotations between poses and the translation rides on that, so a set that only
+# nudges the wrist is ill-conditioned -- measured, a 22-degree-median set put
+# the board 54 mm above a bench it was lying on. This set:
+#
+#   relative rotation   77.4 deg median, 26 of 28 pairs past 30 deg
+#   reprojection        0.112-0.201 px over the board corners
+#   board agreement     0.99 mm mean across the eight poses
+#
+# They ring the board at 0.40 m, tilted 0/20/32/42 degrees, with the camera
+# roll stepped around so consecutive views differ about changing axes.
+#
+# THE CALLER OWNS ARM SAFETY. These were checked against this cell's bench
+# height, tooling and a keep-out, and the joint-space line between consecutive
+# poses was clearance-checked too -- but that was for the cell as it stood on
+# 2026-09-22. Re-check before running them into a cell that has changed, and
+# note that pose 8 (t42a90r200) is 1.7 rad from the one before it.
+#
+# ONE KNOWN WEAKNESS: at one of these poses the arm stands between side_1 and
+# the board, which is why side_1 solved to 5.17 mm of spread against side_2's
+# 0.23. A better set would keep the arm out of both standing cameras' lines.
+poses:
+- name: t0a0r0
+  joints:
+  - 0.22742
+  - -1.38787
+  - -1.61357
+  - -1.84447
+  - 1.61832
+  - 0.2289
+- name: t0a0r60
+  joints:
+  - 0.42469
+  - -1.31198
+  - -1.67384
+  - -1.85065
+  - 1.50219
+  - -0.61359
+- name: t0a0r120
+  joints:
+  - 0.54197
+  - -1.11554
+  - -1.82279
+  - -1.79312
+  - 1.43038
+  - -1.54643
+- name: t0a0r180
+  joints:
+  - 0.39526
+  - -0.98048
+  - -1.92126
+  - -1.68685
+  - 1.50168
+  - -2.74596
+- name: t20a270r90
+  joints:
+  - -0.10456
+  - -1.26056
+  - -1.75789
+  - -1.73255
+  - 1.77618
+  - -1.67753
+- name: t20a315r135
+  joints:
+  - 0.01197
+  - -1.45993
+  - -1.57265
+  - -1.83806
+  - 1.70778
+  - -2.3533
+- name: t32a240r90
+  joints:
+  - -0.51129
+  - -0.98434
+  - -2.05754
+  - -1.59271
+  - 2.00166
+  - -2.11599
+- name: t42a90r200
+  joints:
+  - 1.18918
+  - -1.56523
+  - -1.71065
+  - -2.06804
+  - 1.1912
+  - -2.14021
