@@ -45,16 +45,22 @@
 # frame is NOT the same one -- x and y are swapped. Changing that parameter
 # silently rotates every offset here by 90 degrees.)
 #
-# MEASURED AT THE BENCH 2026-09-17: the vessels sit a quarter turn about the
-# tag's z from where this file first assumed, so the offsets below are the
-# earlier -y ones turned by -90 degrees, which sends (0, -d) to (-d, 0). The
-# distances did not change; only which way round the stalk points did.
+# REMOUNTED 2026-09-22, with the 70 mm reprint: the tag now lies flat on the
+# bench with the vessel BELOW it as the tag is printed -- the tag's own -y --
+# rather than off to one side along -x. Measured at the bench: 85 mm to the
+# beaker, 105 mm to the flask.
 #
-# Check the direction again after any reprint -- the sign turns on how the tags
-# were stuck on:
+# The frame an offset is applied in is `offset_frame_from_yaw`: the tag's yaw
+# axis projected on the base plane, with z along base +z. For a tag lying flat
+# that IS the printed frame, so +y is the printed up and +z is genuinely up --
+# which is why the third component is a height above the bench and not a
+# distance out of the tag face.
 #
-#   ros2 run tf2_ros tf2_echo tag_0 tag_1      # the two tags' relative heading
-#   rviz2  -> TF, tag_0 axes: red +x, green +y
+# Confirmed against the raw transforms rather than assumed: the wrist reads
+# tag_1's face normal as (-0.03, +0.04, +1.00) in the base frame, i.e. flat.
+# (The OAK reads the same tag's normal 62 degrees off vertical from its long
+# oblique view -- which is exactly why `top_down_yaw` throws the tag's full
+# orientation away and keeps only the heading.)
 #
 # If the published pose lands on the far side of the tag from the vessel, the
 # tags are mounted a half turn from what is assumed here: flip the sign of the
@@ -83,11 +89,18 @@ objects:
     # Confirmed on the bench 2026-09-16: tag id 0 decodes at hamming 0,
     # decision_margin 66-68 on the D435's infra1 stream.
     tag_id: 0
-    tag_size: 0.039
+    # Reprinted at 70 mm on 2026-09-22. The 39 mm tags spanned 24.9 px at the
+    # wrist's 0.70 m survey height, under cho_object_pose's 25 px floor, so the
+    # recovery sweep could not see what it went to look at. 70 mm gives 57 px
+    # there and 54 px at the OAK. MEASURE ANY REPRINT: the sheet these came
+    # from is pre-scaled for a printer that shrinks A4 by 8%, so the number on
+    # the PDF and the number on the paper are deliberately different.
+    tag_size: 0.070
     topic: /perception/object_pose/beaker
     grasp_offset:
-      # 70 mm from the tag to the beaker's centre, along the stalk.
-      position: [-0.070, 0.0, 0.150]
+      # 85 mm below the tag as printed, then 150 mm up: the grasp height above
+      # the bench, unchanged by the remount.
+      position: [0.0, -0.085, 0.150]
       # Identity: top_down_yaw below already produces the tool-down approach.
       orientation: [0.0, 0.0, 0.0, 1.0]
     # Keep the tag's yaw, approach straight down. AprilTag's planar pose has a
@@ -113,11 +126,11 @@ objects:
     # NOT yet confirmed: this tag has never been in the camera's field of view.
     # Point a camera at it and read the id off `ros2 topic echo /detections`.
     tag_id: 1
-    tag_size: 0.039
+    tag_size: 0.070   # reprinted with the beaker's; see the note there
     topic: /perception/object_pose/flask
     grasp_offset:
-      # 90 mm: the flask's stalk is longer than the beaker's.
-      position: [-0.090, 0.0, 0.150]
+      # 105 mm: the flask's tag stands further off than the beaker's.
+      position: [0.0, -0.105, 0.150]
       orientation: [0.0, 0.0, 0.0, 1.0]
     top_down_yaw: true
     yaw_axis: [1.0, 0.0, 0.0]
