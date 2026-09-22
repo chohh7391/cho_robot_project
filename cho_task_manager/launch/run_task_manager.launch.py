@@ -143,6 +143,21 @@ def generate_launch_description():
                 'min_samples': LaunchConfiguration('object_pose_min_samples'),
                 'min_cameras': LaunchConfiguration('object_pose_min_cameras'),
                 'max_position_spread_m': LaunchConfiguration('object_pose_max_spread_m'),
+                # FORWARDED EXPLICITLY, and the empty default turned into the
+                # real one here rather than left to the included file.
+                #
+                # IncludeLaunchDescription does not scope launch configurations,
+                # so an argument declared in BOTH files takes the parent's value
+                # and the child's DeclareLaunchArgument default never applies.
+                # This one's parent default is '' -- meaning "whatever the pose
+                # node uses" -- and passing that through made the node try to
+                # create a publisher on the empty topic and die at startup with
+                # "topic name must not be empty string". It only shows up when
+                # this launch starts the pose node itself, which is why it
+                # survived every run that started the two separately.
+                'visibility_topic': PythonExpression([
+                    "'", LaunchConfiguration('visibility_topic'),
+                    "' or '/perception/object_visibility'"]),
             }.items(),
         ),
         Node(
