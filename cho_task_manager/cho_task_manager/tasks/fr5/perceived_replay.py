@@ -40,7 +40,7 @@ different job, and it needs a planner rather than a gate.
 Run it against a bringup started on the trajectory controller, with the camera
 stack up::
 
-    ros2 launch cho_oak       oak.launch.py  name:=oak
+    ros2 launch cho_oak       oak.launch.py  name:=side
     ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_left  camera_name:=rs_left  serial_no:=_<serial>
     ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_right camera_name:=rs_right serial_no:=_<serial>
     CAMERAS=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml

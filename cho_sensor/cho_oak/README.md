@@ -3,14 +3,14 @@
 A Luxonis OAK-D, and nothing else. Detection lives in `cho_object_pose`.
 
 ```bash
-ros2 launch cho_oak oak.launch.py
+ros2 launch cho_oak oak.launch.py   # name:=side by default
 ```
 
 | topic | | |
 | --- | --- | --- |
-| `/oak/left/image_raw` | mono, **global shutter** | for tag detection |
-| `/oak/right/image_raw` | mono, global shutter | |
-| `/oak/rgb/image_rect` | colour, rolling shutter | |
+| `/side/left/image_raw` | mono, **global shutter** | for tag detection |
+| `/side/right/image_raw` | mono, global shutter | |
+| `/side/rgb/image_rect` | colour, rolling shutter | |
 
 `camera_info` is the sibling of each. **The mono streams are not rectified** —
 the driver rectifies RGB only, and the wide lens cannot be left distorted, so
@@ -33,7 +33,7 @@ If you do redo it, three ways in, unlike the D435 which has none:
 | | |
 | --- | --- |
 | `{rgb,left,right}.i_calibration_file` | a `camera_info` URL per stream |
-| `/oak/<stream>/set_camera_info` | `cameracalibrator`'s Commit works |
+| `/side/<stream>/set_camera_info` | `cameracalibrator`'s Commit works |
 | `camera.i_external_calibration_path`, `~/save_calibration` | DepthAI's own EEPROM path |
 
 The wide lens needs `rational_polynomial` (8 coefficients); `plumb_bob` cannot
@@ -41,7 +41,7 @@ represent it.
 
 ## Frames
 
-The driver publishes the camera's own chain below `oak-d-base-frame` from its
+The driver publishes the camera's own chain below `<name>_mount` from its
 own URDF. You supply one transform into that frame.
 
 ## Notes

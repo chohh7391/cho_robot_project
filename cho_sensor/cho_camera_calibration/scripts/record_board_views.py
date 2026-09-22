@@ -15,6 +15,18 @@ Nothing is solved here. Moving a real arm is the expensive part, so it happens
 once and the data goes to disk; the solve is separate and can be rerun.
 
     ros2 run cho_camera_calibration record_board_views.py POSES.yaml OUT.json
+        --moving-detections /wrist/detections
+        --static-detections /side/detections
+
+(one command; the wrapped lines are its arguments)
+
+MOVING and STATIC are the two roles a hand-eye solve has, not two cameras this
+package knows about: moving is the eye-in-hand one whose transform is being
+solved, static is an optional eye-to-hand one that rides along for free off the
+board pose the same solve produces. The names under which a particular bench
+publishes them belong to that bench -- `cho_object_pose/config/cameras.yaml`
+holds the FR5's -- so they are arguments, and the JSON is keyed by the role.
+The static one may be omitted; then only the hand-eye is solved.
 
 POSES.yaml is {poses: [{name, joints: [j1..j6]}, ...]}. THE CALLER OWNS ARM
 SAFETY: every pose and the joint-space line between consecutive ones has to be
@@ -22,8 +34,8 @@ checked against the bench, the tooling and anything standing in the cell before
 this is run. What the solve wants of them is in the package README -- large
 relative rotations, about varied axes, with the board in frame throughout.
 """
+import argparse
 import json
-import sys
 
 import numpy as np
 import rclpy
@@ -45,7 +57,7 @@ SAMPLE_SEC = 2.0
 
 
 class Recorder(Node):
-    def __init__(self):
+    def __init__(self, topics):
         super().__init__('record_corners')
         group = ReentrantCallbackGroup()
         self.buffer = Buffer()
@@ -54,8 +66,9 @@ class Recorder(Node):
             self, JointSpace,
             '/controller_action_server/joint_space_position_controller',
             callback_group=group)
-        self.latest = {'wrist': None, 'oak': None}
-        for key, topic in (('wrist', '/wrist/detections'), ('oak', '/oak/detections')):
+        self.topics = topics
+        self.latest = {key: None for key in topics}
+        for key, topic in topics.items():
             self.create_subscription(
                 AprilTagDetectionArray, topic,
                 lambda m, k=key: self.latest.__setitem__(k, m),
@@ -82,7 +95,7 @@ class Recorder(Node):
     def sample(self, seconds):
         """Take the median corner per tag and the arm pose, over a still window."""
         arm = []
-        corners = {'wrist': {}, 'oak': {}}
+        corners = {key: {} for key in self.topics}
         end = self.get_clock().now().nanoseconds + seconds * 1e9
         while rclpy.ok() and self.get_clock().now().nanoseconds < end:
             EXEC.spin_once(timeout_sec=0.05)
@@ -93,7 +106,7 @@ class Recorder(Node):
                 arm.append([t.x, t.y, t.z, r.x, r.y, r.z, r.w])
             except Exception:
                 pass
-            for key in ('wrist', 'oak'):
+            for key in self.topics:
                 msg = self.latest[key]
                 if msg is None:
                     continue
@@ -101,26 +114,36 @@ class Recorder(Node):
                     corners[key].setdefault(str(det.id), []).append(
                         [[c.x, c.y] for c in det.corners])
         out = {}
-        for key in ('wrist', 'oak'):
+        for key in self.topics:
             out[key] = {tag: np.median(np.array(rows), axis=0).tolist()
                         for tag, rows in corners[key].items() if len(rows) > 3}
         return arm, out
 
 
+# ARGUMENTS FIRST, then the arm. Parsing after `rclpy.init()` meant a typo in a
+# path was reported fifteen seconds later, having already waited for an action
+# server -- and on a bench where running this at all means the arm is live.
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument('poses', help='{poses: [{name, joints}, ...]}; see the README')
+parser.add_argument('out', help='where to write the recorded corners')
+parser.add_argument('--moving-detections', required=True,
+                    help='AprilTagDetectionArray from the eye-in-hand camera')
+parser.add_argument('--static-detections', default='',
+                    help='the same from an eye-to-hand camera, if there is one')
+args = parser.parse_args()
+
+TOPICS = {'moving': args.moving_detections}
+if args.static_detections:
+    TOPICS['static'] = args.static_detections
+poses = yaml.safe_load(open(args.poses, encoding='utf-8'))['poses']
+
 rclpy.init()
-node = Recorder()
+node = Recorder(TOPICS)
 EXEC = MultiThreadedExecutor()
 EXEC.add_node(node)
 if not node.client.wait_for_server(timeout_sec=15.0):
     raise SystemExit('joint space action server did not appear')
 
-USAGE = ('usage: record_board_views.py POSES.yaml OUT.json  '
-         '(see the package README)')
-
-if len(sys.argv) != 3:
-    raise SystemExit(USAGE)
-poses_path, out_path = sys.argv[1], sys.argv[2]
-poses = yaml.safe_load(open(poses_path, encoding='utf-8'))['poses']
 records = []
 for index, pose in enumerate(poses):
     print(f'[{index + 1}/{len(poses)}] {pose["name"]} -> moving', flush=True)
@@ -129,16 +152,17 @@ for index, pose in enumerate(poses):
         break
     node.wait(SETTLE_SEC)
     arm, corners = node.sample(SAMPLE_SEC)
-    print(f'   wrist {len(corners["wrist"])} tags, oak {len(corners["oak"])} tags, '
-          f'{len(arm)} arm samples', flush=True)
+    seen = ', '.join(f'{key} {len(tags)} tags' for key, tags in corners.items())
+    print(f'   {seen}, {len(arm)} arm samples', flush=True)
     records.append({
         'name': pose['name'], 'joints': pose['joints'],
         'arm': np.median(np.array(arm), axis=0).tolist() if arm else None,
-        'wrist_corners': corners['wrist'], 'oak_corners': corners['oak'],
+        'moving_corners': corners['moving'],
+        'static_corners': corners.get('static', {}),
     })
 
-with open(out_path, 'w', encoding='utf-8') as handle:
+with open(args.out, 'w', encoding='utf-8') as handle:
     json.dump(records, handle, indent=1)
-print(f'\nwrote {out_path} with {len(records)} poses')
+print(f'\nwrote {args.out} with {len(records)} poses')
 node.destroy_node()
 rclpy.shutdown()

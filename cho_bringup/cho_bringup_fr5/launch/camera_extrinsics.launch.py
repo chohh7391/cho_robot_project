@@ -12,7 +12,7 @@ extrinsics are stale" a reason to power-cycle the FR5.
 
 It is, however, ordered after the robot: the wrist entry hangs off
 ``wrist3_link``, so without the robot's TF a wrist detection has no path to the
-base frame. The OAK's does not care.
+base frame. The side camera's does not care.
 """
 
 import os

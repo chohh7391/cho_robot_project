@@ -20,7 +20,7 @@ is its own clock minus an image stamp, so a mismatch reports every camera stale
 while poses stream out; that node now says so out loud, and this is one of the
 two places to get it right.
 
-``blind`` is how a scenario is set up: ``-p blind:="['oak:0']"`` makes that
+``blind`` is how a scenario is set up: ``-p blind:="['side_1:0']"`` makes that
 camera miss that tag, standing in for an occlusion by something the arm model
 does not contain -- which is most of what stands on a bench.
 

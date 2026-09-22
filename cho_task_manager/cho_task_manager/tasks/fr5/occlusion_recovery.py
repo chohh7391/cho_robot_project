@@ -56,7 +56,7 @@ Run it against a bringup and the camera stack::
 
     ros2 launch cho_bringup_fr5 bringup_real_robot.launch.py
     ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
-    ros2 launch cho_oak       oak.launch.py  name:=oak
+    ros2 launch cho_oak       oak.launch.py  name:=side
     ros2 launch cho_realsense d435.launch.py camera_namespace:=wrist camera_name:=wrist serial_no:=_<serial>
 
     CAMERAS=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml

@@ -15,16 +15,16 @@ import pytest
 def test_equal_priority_cameras_are_all_kept():
     # The historical bench: peers, fused, nothing suppressed. A `priority`
     # nobody set must not change what any existing setup does.
-    selection = visibility.select_by_priority(['oak', 'rs_left'], {})
-    assert selection.kept == ('oak', 'rs_left')
+    selection = visibility.select_by_priority(['side_1', 'rs_left'], {})
+    assert selection.kept == ('rs_left', 'side_1')
     assert selection.suppressed == ()
 
 
 def test_a_higher_priority_camera_suppresses_the_others():
     selection = visibility.select_by_priority(
-        ['oak', 'wrist'], {'wrist': 10, 'oak': 0})
+        ['side_1', 'wrist'], {'wrist': 10, 'side_1': 0})
     assert selection.kept == ('wrist',)
-    assert selection.suppressed == ('oak',)
+    assert selection.suppressed == ('side_1',)
     assert selection.priority == 10
 
 
@@ -33,31 +33,31 @@ def test_a_camera_that_contributed_nothing_suppresses_nothing():
     # what is in the window, so the moment the wrist loses the tag its samples
     # age out and the standing camera is believed again -- with no lifetime
     # concept anywhere and no state to reset.
-    selection = visibility.select_by_priority(['oak'], {'wrist': 10, 'oak': 0})
-    assert selection.kept == ('oak',)
+    selection = visibility.select_by_priority(['side_1'], {'wrist': 10, 'side_1': 0})
+    assert selection.kept == ('side_1',)
     assert selection.suppressed == ()
 
 
 def test_several_cameras_can_share_the_winning_tier():
     selection = visibility.select_by_priority(
-        ['left', 'right', 'oak'], {'left': 5, 'right': 5, 'oak': 0})
+        ['left', 'right', 'side_1'], {'left': 5, 'right': 5, 'side_1': 0})
     assert selection.kept == ('left', 'right')
-    assert selection.suppressed == ('oak',)
+    assert selection.suppressed == ('side_1',)
 
 
 def test_repeated_samples_from_one_camera_count_once():
     # The node passes every sample in the window, not a set of names.
     selection = visibility.select_by_priority(
-        ['oak', 'oak', 'oak', 'wrist'], {'wrist': 1})
+        ['side_1', 'side_1', 'side_1', 'wrist'], {'wrist': 1})
     assert selection.kept == ('wrist',)
-    assert selection.suppressed == ('oak',)
+    assert selection.suppressed == ('side_1',)
 
 
 def test_a_camera_missing_from_the_table_counts_as_zero():
     # "Declares no priority" is what a default of 0 means, so an entry that
     # simply left the field out must not win or lose by accident.
-    selection = visibility.select_by_priority(['oak', 'wrist'], {'wrist': 3})
-    assert selection.suppressed == ('oak',)
+    selection = visibility.select_by_priority(['side_1', 'wrist'], {'wrist': 3})
+    assert selection.suppressed == ('side_1',)
 
 
 def test_negative_priorities_only_have_to_order():

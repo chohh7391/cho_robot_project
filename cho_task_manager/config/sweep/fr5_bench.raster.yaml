@@ -184,8 +184,8 @@ raster:
 # 100 x 33 x 43 mm) on a mount nobody has measured. Measure the installation
 # before relying on them.
 obstacles:
-  - name: oak
-    from_extrinsics: oak
+  - name: side_1
+    from_extrinsics: side_1
     radius_m: 0.10
 
 checks:

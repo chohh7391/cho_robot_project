@@ -19,7 +19,7 @@ old one.
     ros2 run cho_camera_calibration solve_hand_eye.py DATA.json
         --board <share>/cho_camera_calibration/config/tag_board_70mm.yaml
         --moving-info /wrist/wrist/infra1/camera_info
-        --static-info /oak/left/camera_info
+        --static-info /side/left/camera_info
 
 (one command; the wrapped lines are its arguments)
 
@@ -192,8 +192,8 @@ def main():
     # ---- settle the corner order on the data itself ---------------------
     scores = []
     for index, order in enumerate(orders):
-        errs = [board_pnp(r['wrist_corners'], K_moving, order, centres)[1]
-                for r in records if r['wrist_corners']]
+        errs = [board_pnp(r['moving_corners'], K_moving, order, centres)[1]
+                for r in records if r['moving_corners']]
         errs = [e for e in errs if e is not None]
         scores.append((float(np.mean(errs)) if errs else 1e9, index))
     scores.sort()
@@ -204,15 +204,15 @@ def main():
 
     A, B, errs = [], [], []
     for rec in records:
-        if rec['arm'] is None or not rec['wrist_corners']:
+        if rec['arm'] is None or not rec['moving_corners']:
             continue
-        T, err = board_pnp(rec['wrist_corners'], K_moving, order, centres)
+        T, err = board_pnp(rec['moving_corners'], K_moving, order, centres)
         if T is None:
             continue
         A.append(se3(rec['arm']))
         B.append(T)
         errs.append(err)
-        print(f'  {rec["name"]:<6s} {len(rec["wrist_corners"])} tags, '
+        print(f'  {rec["name"]:<6s} {len(rec["moving_corners"])} tags, '
               f'reprojection {err:.3f} px')
     if len(A) < 3:
         raise SystemExit('need at least three poses that saw the board')
@@ -266,9 +266,9 @@ def main():
     Z_full[:3, :3], Z_full[:3, 3] = R_Z, Z_pos
     cams, oerrs = [], []
     for rec in records:
-        if not rec.get('oak_corners'):
+        if not rec.get('static_corners'):
             continue
-        T, err = board_pnp(rec['oak_corners'], K_static, order, centres)
+        T, err = board_pnp(rec['static_corners'], K_static, order, centres)
         if T is None:
             continue
         cams.append(Z_full @ np.linalg.inv(T))

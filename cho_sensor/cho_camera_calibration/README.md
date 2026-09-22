@@ -90,7 +90,7 @@ side up. It is a calibration artefact, not furniture: use it and take it off.
     ros2 run cho_camera_calibration solve_hand_eye.py data.json \
         --board .../config/tag_board_70mm.yaml \
         --moving-info /wrist/wrist/infra1/camera_info \
-        --static-info /oak/left/camera_info
+        --static-info /side/left/camera_info
 
 `POSES.yaml` is `{poses: [{name, joints: [...]}, ...]}`, and **the caller owns
 arm safety** -- every pose and the joint-space line between consecutive ones
@@ -121,6 +121,6 @@ there.
 
 One tag at a surveyed point. It could not produce a residual -- a 6-DoF fit to
 a 6-DoF measurement is exact by construction -- so a wrong survey and a moved
-camera both looked like success. Both happened: the OAK's recorded pose was
+camera both looked like success. Both happened: `side`'s recorded pose was
 481 mm out and nothing said so, and the board's taped position was 48 mm from
 where it was believed to be.

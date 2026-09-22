@@ -34,7 +34,7 @@ requirement.
 ```bash
 TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
 
-ros2 launch cho_oak       oak.launch.py  name:=oak
+ros2 launch cho_oak       oak.launch.py  name:=side
 ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_left  camera_name:=rs_left  serial_no:=_<serial>
 ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_right camera_name:=rs_right serial_no:=_<serial>
 ros2 launch cho_object_pose detectors.launch.py objects_config:=$TABLE
@@ -95,7 +95,7 @@ line to show it. Re-measure after anything moves.
 bringup that is two publishers on one topic, and rviz's RobotModel keeps
 whichever arrived last — the arm vanishes and a camera appears in its place,
 with no error logged anywhere. `cho_oak`'s launch remaps it to
-`/oak/robot_description`; a second camera stack added later needs the same
+`/<name>/robot_description`; a second camera stack added later needs the same
 treatment.
 
 ## Running it

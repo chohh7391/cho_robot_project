@@ -13,7 +13,7 @@ resolve through whichever camera published last. Deriving both sides from one
 file is what makes that unrepresentable.
 
     ros2 launch cho_object_pose detectors.launch.py
-    ros2 topic hz /oak/detections /rs_left/detections /rs_right/detections
+    ros2 topic hz /side_1/detections /side_2/detections /wrist/detections
 """
 
 import os
