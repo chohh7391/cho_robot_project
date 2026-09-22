@@ -1,0 +1,40 @@
+# The tag board the hand-eye and eye-to-hand solves are run against.
+#
+# Its geometry comes from the PRINT, which is the whole reason it is one sheet
+# rather than six tags stuck down separately: six separate tags are six
+# separate placement problems, and placement is exactly what this board exists
+# to stop trusting. On one sheet the relative positions are the printer's, to a
+# tenth of a millimetre, and only the sheet's own pose is unknown -- and that
+# is solved, not measured.
+#
+# `tag_size_m` IS THE MEASURED SQUARE, not the nominal one. Printers scale: this
+# bench's shrinks A4 to its printable area, a fixed 273/297 = 91.92%, so a 70 mm
+# tag drawn at 70 came out at 64.35 and one drawn at 64 came out at 59. The
+# shipped PDF is pre-scaled to land at 70.0 on that printer; on any other, print
+# it, measure, and put the measurement here. targets/make_tag_board.py prints a
+# 100 mm ruler on the sheet for exactly this.
+#
+# Measure across the CORNER MARKS, not one tag: the marks span 175.0 x 262.5 mm
+# and dividing a long distance by its nominal spreads the caliper error thin.
+# The printed board here was confirmed at a scale of 1.0024 by the detector
+# itself -- tag-to-tag distances are independent of any extrinsic, so they check
+# the print and tag_size together without trusting anything else.
+
+family: tag36h11
+
+# Row-major from the top-left of the sheet, two columns by three rows.
+ids: [10, 11, 12, 13, 14, 15]
+columns: 2
+rows: 3
+
+# The black square, measured. The plate carrying it is this x 10/8.
+tag_size_m: 0.070
+
+# Centre to centre, which for abutting plates is the plate width.
+pitch_m: 0.0875
+
+# The board frame's origin is the midpoint of the two MIDDLE tags (12 and 13),
+# its x runs 12 -> 13 and its y from the bottom row to the top. Nothing has to
+# place that origin anywhere in particular -- the solve finds it -- but the
+# convention has to be written down or the tag ids and the geometry drift apart.
+origin: middle_pair
