@@ -1,0 +1,129 @@
+{
+ "seed": "2",
+ "tool": "fr5_ag95",
+ "recorded_utc": "2026-09-21T06:14:28Z",
+ "joint_names": [
+  "j1",
+  "j2",
+  "j3",
+  "j4",
+  "j5",
+  "j6"
+ ],
+ "waypoints": 804,
+ "duration_s": 36.71,
+ "home_arm_rad": [
+  -0.0832,
+  -1.1203,
+  -2.0703,
+  -1.7124,
+  1.6049,
+  0.0798
+ ],
+ "layout_the_trajectory_assumes": {
+  "beaker": {
+   "xy": [
+    0.4588,
+    0.1303
+   ],
+   "yaw_deg": -81.0
+  },
+  "flask": {
+   "xy": [
+    0.4996,
+    0.3379
+   ],
+   "yaw_deg": -126.0
+  },
+  "magnet": {
+   "xy": [
+    -0.3067,
+    0.4329
+   ],
+   "yaw_deg": -27.8
+  },
+  "box": {
+   "xy": [
+    -0.1129,
+    -0.5281
+   ],
+   "yaw_deg": 65.9
+  },
+  "stirrer": {
+   "xy": [
+    -0.1608,
+    0.5687
+   ],
+   "yaw_deg": -55.5
+  }
+ },
+ "gripper_events": [
+  {
+   "t_s": 8.02,
+   "event": "close"
+  },
+  {
+   "t_s": 33.297,
+   "event": "open"
+  }
+ ],
+ "operations": [
+  {
+   "t_s": 0.001,
+   "op": "Pick"
+  },
+  {
+   "t_s": 4.462,
+   "op": "Pick"
+  },
+  {
+   "t_s": 7.016,
+   "op": ""
+  },
+  {
+   "t_s": 8.959,
+   "op": "Move_to_Surface"
+  },
+  {
+   "t_s": 11.519,
+   "op": "Move_to_Surface"
+  },
+  {
+   "t_s": 15.122,
+   "op": "Move_to_Surface"
+  },
+  {
+   "t_s": 17.679,
+   "op": "pouring"
+  },
+  {
+   "t_s": 22.398,
+   "op": "Place"
+  },
+  {
+   "t_s": 24.953,
+   "op": "Place"
+  },
+  {
+   "t_s": 29.305,
+   "op": "Place"
+  },
+  {
+   "t_s": 32.345,
+   "op": ""
+  },
+  {
+   "t_s": 34.233,
+   "op": "Place"
+  },
+  {
+   "t_s": 36.791,
+   "op": "idle"
+  }
+ ],
+ "replay_notes": [
+  "Positions are absolute joint angles in radians for j1..j6, sampled at the rate the planner published them; t_s is seconds from the first command.",
+  "The arm is position-controlled and senses nothing during replay: the vessels must be at the layout above or the pour misses.",
+  "Gripper events are recovered from the simulated finger joint, not from the gripper command channel, which is a service rather than a topic; treat the times as approximate and drive the real gripper from them rather than replaying finger angles."
+ ]
+}

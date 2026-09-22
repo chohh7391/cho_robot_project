@@ -163,12 +163,17 @@
     <key name="zero"
          qpos="0 0 0 0 0 0 0"
          ctrl="0 0 0 0 0 0 0"/>
-    <!-- Canonical planning-safe, non-singular simulation ready pose. -->
+    <!-- The pose cho_robot_config/config/fr5.yaml calls poses.home['1'], and
+         the one the recorded trajectories start from
+         (cho_task_manager/config/replay/traj_level_seed2.csv). THE THREE HAVE
+         TO AGREE: the bringup selects a keyframe by name and the task manager
+         drives to the registry's numbers, so a simulator that starts elsewhere
+         lurches to the registry pose on the first goal. -->
     <key name="home"
-         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"
-         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"/>
+         qpos="-0.0836 -1.1209 -2.0723 -1.7125 1.6049 0.0798 0"
+         ctrl="-0.0836 -1.1209 -2.0723 -1.7125 1.6049 0.0798 0"/>
     <key name="home1"
-         qpos="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"
-         ctrl="0 -0.7853981634 -1.5707963268 0.7853981634 -1.5707963268 0 0"/>
+         qpos="-0.0836 -1.1209 -2.0723 -1.7125 1.6049 0.0798 0"
+         ctrl="-0.0836 -1.1209 -2.0723 -1.7125 1.6049 0.0798 0"/>
   </keyframe>
 </mujoco>

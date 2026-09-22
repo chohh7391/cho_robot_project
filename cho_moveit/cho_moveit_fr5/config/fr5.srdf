@@ -18,12 +18,12 @@
     <joint name="j6" value="0.0"/>
   </group_state>
   <group_state name="home1" group="fr5_arm">
-    <joint name="j1" value="0.0"/>
-    <joint name="j2" value="-0.7853981634"/>
-    <joint name="j3" value="-1.5707963268"/>
-    <joint name="j4" value="0.7853981634"/>
-    <joint name="j5" value="-1.5707963268"/>
-    <joint name="j6" value="0.0"/>
+    <joint name="j1" value="-0.0836"/>
+    <joint name="j2" value="-1.1209"/>
+    <joint name="j3" value="-2.0723"/>
+    <joint name="j4" value="-1.7125"/>
+    <joint name="j5" value="1.6049"/>
+    <joint name="j6" value="0.0798"/>
   </group_state>
 
   <!-- Vendor Setup Assistant output, checked against the cho FR5 link chain. -->

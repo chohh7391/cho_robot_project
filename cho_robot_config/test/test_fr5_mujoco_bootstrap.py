@@ -186,7 +186,21 @@ def test_fr5_ready_pose_fk_floor_clearance_and_conditioning(tmp_path):
     frame_id = model.getFrameId(registry['model']['ee_link'])
     pinocchio.forwardKinematics(model, data, q)
     pinocchio.updateFramePlacements(model, data)
-    assert data.oMf[frame_id].translation[2] >= 0.70
+
+    # WHAT CAN HIT THE TABLE, rather than how high the wrist happens to sit.
+    # This was a single `wrist3_link z >= 0.70`, which was the height of the
+    # folded-back pose the registry used to carry and not a clearance: the
+    # frame that can actually reach the table is the TOOL, a further 0.1 m
+    # down, and the lowest part of the arm is the upper arm, fixed by the
+    # shoulder and unaffected by any ready pose. A forward-leaning ready pose
+    # puts the wrist lower while clearing the table by just as much.
+    def height(name):
+        return float(data.oMf[model.getFrameId(name)].translation[2])
+
+    assert height('tool_tcp') >= 0.30
+    assert min(height(name) for name in
+               ('upperarm_link', 'forearm_link', 'wrist1_link', 'wrist2_link',
+                'wrist3_link')) >= 0.10
 
     jacobian = pinocchio.computeFrameJacobian(
         model, data, q, frame_id, pinocchio.ReferenceFrame.LOCAL_WORLD_ALIGNED)

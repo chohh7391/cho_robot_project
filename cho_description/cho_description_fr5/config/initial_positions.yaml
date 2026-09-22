@@ -1,9 +1,22 @@
-# FR5 simulation ready/spawn pose, in radians. This compact elbow pose is clear of
-# the floor and avoids the all-zero wrist singularity. The explicit zero pose remains
-# available as action_client `home 0` and as the MuJoCo `zero` keyframe.
-j1: 0.0
-j2: -0.7853981634
-j3: -1.5707963268
-j4: 0.7853981634
-j5: -1.5707963268
-j6: 0.0
+# FR5 simulation ready/spawn pose, in radians.
+#
+# ONE OF SIX COPIES, and the test that keeps them equal is
+# cho_robot_config/test/test_fr5_mujoco_bootstrap.py. The others are
+# cho_robot_config/config/fr5.yaml (poses.home['1'], the one they are all
+# copies OF), the `home` and `home1` keyframes in xml/fr5.xml and
+# xml/fr5_ag95.xml, cho_moveit_fr5/config/fr5.srdf's home1 group state, and
+# cho_bringup_fr5/config/isaac/robot_profile.json's arm_home.
+#
+# It is the pose the recorded trajectories start from
+# (cho_task_manager/config/replay/traj_level_seed2.csv). Leaning forward over
+# the bench rather than folded behind the base: the tool sits 0.40 m above the
+# table with the elbow bent, and it is better conditioned than the textbook
+# ready pose it replaced (smallest singular value 0.21 against 0.09). The
+# explicit zero pose remains available as action_client `home 0` and as the
+# MuJoCo `zero` keyframe.
+j1: -0.0836
+j2: -1.1209
+j3: -2.0723
+j4: -1.7125
+j5: 1.6049
+j6: 0.0798
