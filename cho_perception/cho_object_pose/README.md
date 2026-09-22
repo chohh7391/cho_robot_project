@@ -158,11 +158,11 @@ separate lists of three cameras would drift.
 
 ```yaml
 cameras:
-  - name: oak
-    image_topic: /oak/left/image_raw
+  - name: side_1
+    image_topic: /side_1/left/image_raw
     rectify: true              # the OAK rectifies RGB only
-    frame_prefix: oak_
-    detections_topic: /oak/detections
+    frame_prefix: side_1_
+    detections_topic: /side_1/detections
 ```
 
 `frame_prefix` is the field that has to be right. Detectors left at the default
@@ -170,26 +170,56 @@ all publish `tag_<id>`, and one TF child gains several parents — no error, jus
 transforms that intermittently resolve through the wrong camera. Duplicates are
 rejected at parse time for that reason, as are duplicate names and topics.
 
-**Every camera's view of a tag is fused, not chosen between.** They land in the
-same aggregation window, so the published position is the median across all of
-them and one bad view is outvoted. Two consequences:
+**Every camera's view of a tag is fused, not chosen between.** Aggregation is
+two stages, and they answer different questions. Within one camera the samples
+differ by *noise*, so the median is right. Across cameras they differ by each
+camera's own systematic **range** error, and that is a different problem:
+
+> A planar marker's corners are located to a fixed fraction of a pixel, so its
+> transverse error is tiny — measured on this cell at 0.03–0.06 mm against a
+> total of 10–16 mm. **The bearing is right; only the distance is wrong.**
+
+`fusion_mode` is which rule is applied across cameras:
+
+| mode | rule |
+| --- | --- |
+| `intersect` *(default)* | each camera contributes the **ray** it saw the tag along, and the pose is the point closest to all of them. Keeps what each camera knows and discards what it does not. Needs `optical_frame`. |
+| `inverse_distance` | weight by 1/d², average the translations, SLERP the rotations — the published rule, kept so it can be **run and measured** rather than argued about. |
+| `median` | the component-wise median across every camera. What this package did before either existed. |
+
+A weighted mean is a convex combination: it stays on the segment between the two
+estimates, and the crossing point is not on it. That is why these are different
+estimators rather than different tunings.
+
+`intersect` falls back — to `inverse_distance`, then `median` — when the
+geometry cannot support it: fewer than two cameras declare an `optical_frame`,
+or every line of sight is within `min_ray_angle_deg` of every other. **The
+fallback is named in the object's status line**, so a bench that quietly stopped
+crossing rays says so instead of just getting worse.
+
+Two consequences:
 
 - `max_position_spread_m` becomes a check on the **extrinsics** as well as the
-  noise. Cameras that disagree by more than the gate publish nothing, which is
-  the honest answer when the hand-eye numbers are wrong — much better than
-  averaging them into a pose no camera saw.
+  noise, and it means something different under each mode — the status line says
+  which. Under `intersect` it gates how far the **lines of sight missed each
+  other**, which contains no range error at all and is a direct residual on the
+  hand-eye numbers. Under the others it gates how far the camera estimates lie
+  apart, which mixes the two and cannot separate them. Expect to want a tighter
+  number under `intersect` and a looser one under the rest.
 - `min_cameras` is how you say agreement is *required* rather than hoped for. At
   1 (the default, and the old single-camera behaviour) whichever camera can see
   the tag is enough; at 2 a pose appears only when two cameras independently
   agree to within the spread gate. Commission at 1, raise it once the extrinsics
   hold.
 
+One camera is not a fusion: every mode returns its estimate unchanged.
+
 The report line says which camera is the quiet one, which is the first thing
 anyone asks:
 
 ```text
 [beaker] publishing, spread 3.7 mm over 27 samples from 3 camera(s) (168 published)
-         | oak: ok [margin 51, edge 33px] (0.03s ago), rs_left: ok [margin 48, edge 31px] (0.04s ago),
+         | side_1: ok [margin 51, edge 33px] (0.03s ago), rs_left: ok [margin 48, edge 31px] (0.04s ago),
            rs_right: rejected: decision_margin 21.4 < 35.0 [margin 21, edge 29px] (0.03s ago)
 ```
 
@@ -207,7 +237,7 @@ and only for those:
 ```yaml
   - name: wrist            # eye-in-hand, 200 mm away when it looks
     priority: 10
-  - name: oak              # standing observer, a metre off
+  - name: side_1           # standing observer, a metre off
     priority: 0
 ```
 
@@ -235,7 +265,7 @@ the sweep that was meant to fix things.
 `/perception/object_visibility`
 (`cho_interfaces/ObjectVisibilityArray`, 5 Hz) carries the same per-camera
 reasons the report logs, in a form a behaviour tree can branch on. It is the
-seam an occlusion recovery needs: "the beaker is not in the OAK's frame" is a
+seam an occlusion recovery needs: "the beaker is not in `side_1`'s frame" is a
 fact only this node has, and a log line is not readable by a task.
 
 ```text
@@ -244,7 +274,7 @@ publishing: false          # a pose went out within the last window
 override_camera: ''        # non-empty while one camera is suppressing others
 status: '2/5 samples in the last 0.50s'
 cameras:
-  - camera: oak
+  - camera: side_1
     state: 2               # STATE_NOT_IN_FRAME — occluded, or out of view
     detail: ''
     age_sec: 0.03          # -1 when never heard from
@@ -311,7 +341,7 @@ MarkerArray then carries the camera bodies in a `cameras` namespace:
 
 ```yaml
     visual:
-      frame: oak_model_origin        # an EXISTING TF frame; nothing is published
+      frame: side_1_model_origin        # an EXISTING TF frame; nothing is published
       mesh: package://depthai_descriptions/urdf/models/OAK-D-PRO-W.stl
       xyz: [0.0, 0.0, 0.0]
       rpy: [0.0, 0.0, 0.0]           # fixed-axis, as a URDF origin writes it
@@ -332,7 +362,7 @@ load the resource and draws nothing; everything else keeps working.
 > bringup that is a second publisher on one topic: rviz's RobotModel keeps
 > whichever arrived last, so the arm disappears and a camera body shows up in
 > its place, with no error anywhere. `cho_oak`'s launch remaps it to
-> `/oak/robot_description` for exactly this reason.
+> `/<name>/robot_description` for exactly this reason.
 
 ## Testing without a camera
 
@@ -363,7 +393,7 @@ stamp:
 ```bash
 ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py
 ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
-ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true -p blind:="['oak:0']"
+ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true -p blind:="['side_1:0']"
 ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
     objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml \
     cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
@@ -380,9 +410,10 @@ camera stale while it is publishing poses. The node says so out loud when it hap
 
 | File | Holds |
 |---|---|
-| `geometry.py` | Quaternion helpers, the decode gate, aggregation, the yaw-only projection. No ROS, no clock, no camera — pure functions of numbers |
+| `geometry.py` | Quaternion helpers, the decode gate, per-camera aggregation, the yaw-only projection. No ROS, no clock, no camera — pure functions of numbers |
+| `fusion.py` | How several cameras' finished estimates become one pose: crossing lines of sight, the published 1/d² rule, the median, and which fallback was taken. No ROS |
 | `objects.py` | Parsing and validation of `config/objects.yaml`, including the display shape |
-| `cameras.py` | Parsing and validation of `config/cameras.yaml` — the cameras to fuse, the prefixes that keep their tag frames apart, and each one's `priority` |
+| `cameras.py` | Parsing and validation of `config/cameras.yaml` — the cameras to fuse, the prefixes that keep their tag frames apart, each one's `priority`, and the `optical_frame` that lets it contribute a ray |
 | `visibility.py` | The states a camera can be in, and which cameras' samples survive a priority contest. No ROS — the suppression rule is a pure function of names and integers |
 | `node.py` | The ROS adapter: subscribe, look TF up at the image stamp, gate, publish |
 | `mock_publisher.py` | A fixed pose on the output topic, for wiring tasks without hardware |

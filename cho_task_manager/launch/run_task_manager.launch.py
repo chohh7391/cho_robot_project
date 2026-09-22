@@ -126,6 +126,14 @@ def generate_launch_description():
             description='How many different cameras must agree before a pose is '
                         'published. Raising it above 1 makes the spread gate a check on '
                         'the extrinsics, not just on the noise.'),
+        DeclareLaunchArgument(
+            'object_pose_fusion_mode', default_value='intersect',
+            description="How several cameras' views of one tag are combined: "
+                        "'intersect' crosses their lines of sight (the default, and "
+                        "the right rule when a marker's error is along the viewing "
+                        "ray), 'inverse_distance' is the published 1/d^2 rule with "
+                        "SLERP, 'median' is the older behaviour. Switching this is "
+                        'how the two are compared on one bench in one run.'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([
                 FindPackageShare('cho_object_pose'), 'launch', 'object_pose.launch.py'])),
@@ -143,6 +151,7 @@ def generate_launch_description():
                 'min_samples': LaunchConfiguration('object_pose_min_samples'),
                 'min_cameras': LaunchConfiguration('object_pose_min_cameras'),
                 'max_position_spread_m': LaunchConfiguration('object_pose_max_spread_m'),
+                'fusion_mode': LaunchConfiguration('object_pose_fusion_mode'),
                 # FORWARDED EXPLICITLY, and the empty default turned into the
                 # real one here rather than left to the included file.
                 #

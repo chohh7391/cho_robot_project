@@ -22,7 +22,7 @@
 # To make a camera miss something -- standing in for an occlusion by any of the
 # bench furniture the arm model does not contain:
 #
-#   ros2 run cho_object_pose fake_detections --ros-args -p blind:="['oak:0']"
+#   ros2 run cho_object_pose fake_detections --ros-args -p blind:="['side_1:0']"
 #
 # ---------------------------------------------------------------- the scene
 #
@@ -86,10 +86,19 @@ cameras:
   # Eye-to-hand, and NOT field-of-view gated: it is a wide lens pointed at the
   # whole bench, so a cone would only add a number nobody measured. Leaving
   # fov_deg out is the honest setting for that.
-  - name: oak
-    frame: oak-d-base-frame
-    frame_prefix: oak_
-    detections_topic: /oak/detections
+  - name: side_1
+    frame: side_1_mount
+    frame_prefix: side_1_
+    detections_topic: /side_1/detections
+    max_range_m: 3.0
+
+  # The second standing camera, and the ONLY thing it contributes is a
+  # different line of sight -- which is exactly what the harness cannot fake
+  # unless it stands somewhere else. Put its frame where the real one is.
+  - name: side_2
+    frame: side_2_link
+    frame_prefix: side_2_
+    detections_topic: /side_2/detections
     max_range_m: 3.0
 
 # Tags lie FLAT and UNROTATED in the base frame -- +z up, +x along base +x --

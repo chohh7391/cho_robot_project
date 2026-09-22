@@ -57,6 +57,21 @@ def generate_launch_description():
                         'independent agreement a requirement, since the spread gate then '
                         'has to be met ACROSS cameras and not just over time.'),
         DeclareLaunchArgument('window_sec', default_value='0.5'),
+        DeclareLaunchArgument(
+            'fusion_mode', default_value='intersect',
+            description="HOW several cameras are combined, not whether. 'intersect' "
+                        'crosses their lines of sight, which is the right estimator '
+                        "when a marker's error is along the viewing ray -- measured at "
+                        "100% on this bench. 'inverse_distance' is the published "
+                        'inverse-distance-squared rule with SLERP, kept so it can be '
+                        "run and measured rather than argued about. 'median' is what "
+                        'this package did before either existed. See fusion.py.'),
+        DeclareLaunchArgument(
+            'min_ray_angle_deg', default_value='10.0',
+            description='Below this angle between two cameras their lines of sight are '
+                        'too nearly parallel to cross, and the node falls back to a '
+                        "weighted mean -- saying so in the object's status rather than "
+                        'quietly getting worse.'),
         DeclareLaunchArgument('max_position_spread_m', default_value='0.01'),
         DeclareLaunchArgument('report_period_sec', default_value='2.0'),
         DeclareLaunchArgument(
@@ -102,6 +117,9 @@ def generate_launch_description():
                     LaunchConfiguration('min_cameras'), value_type=int),
                 'window_sec': ParameterValue(
                     LaunchConfiguration('window_sec'), value_type=float),
+                'fusion_mode': LaunchConfiguration('fusion_mode'),
+                'min_ray_angle_deg': ParameterValue(
+                    LaunchConfiguration('min_ray_angle_deg'), value_type=float),
                 'max_position_spread_m': ParameterValue(
                     LaunchConfiguration('max_position_spread_m'), value_type=float),
                 'report_period_sec': ParameterValue(

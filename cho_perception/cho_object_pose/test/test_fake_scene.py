@@ -142,9 +142,9 @@ def test_two_cameras_may_not_share_a_tag_frame_prefix():
     # The same rule the real camera table enforces, for the same reason: one
     # TF child would gain two parents.
     document = _document()
-    document['cameras'].append(dict(document['cameras'][0], name='oak',
-                                    frame='oak_link',
-                                    detections_topic='/oak/detections'))
+    document['cameras'].append(dict(document['cameras'][0], name='side_1',
+                                    frame='side_1_link',
+                                    detections_topic='/side_1/detections'))
     with pytest.raises(ValueError, match='prefixes'):
         fake_scene.parse_scene(document)
 
@@ -169,7 +169,7 @@ def test_a_scenario_is_checked_against_the_scene_it_names():
     scene = _scene()
     assert fake_scene.parse_blind(['wrist:0'], scene) == {('wrist', 0)}
     with pytest.raises(ValueError, match='no camera'):
-        fake_scene.parse_blind(['oak:0'], scene)
+        fake_scene.parse_blind(['side_1:0'], scene)
     with pytest.raises(ValueError, match='no tag'):
         fake_scene.parse_blind(['wrist:7'], scene)
     with pytest.raises(ValueError, match='<camera>:<tag id>'):
@@ -271,7 +271,7 @@ def test_the_shipped_scenes_tags_are_within_sight_of_the_raster():
             tag.name, area, reach)
 
 
-def test_the_wrist_is_cone_gated_and_the_oak_is_not():
+def test_the_wrist_is_cone_gated_and_the_side_camera_is_not():
     cameras = {camera.name: camera for camera in _shipped().cameras}
     assert cameras['wrist'].half_fov_rad is not None
-    assert cameras['oak'].half_fov_rad is None
+    assert cameras['side_1'].half_fov_rad is None

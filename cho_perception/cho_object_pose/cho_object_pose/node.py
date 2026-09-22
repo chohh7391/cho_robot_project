@@ -47,6 +47,7 @@ launch that starts the detectors, so the prefixes cannot drift apart.
 """
 
 from collections import deque
+import math
 import threading
 
 from apriltag_msgs.msg import AprilTagDetectionArray
@@ -55,7 +56,7 @@ from cho_interfaces.msg import (
     ObjectVisibility,
     ObjectVisibilityArray,
 )
-from cho_object_pose import geometry, visibility
+from cho_object_pose import fusion, geometry, visibility
 from cho_object_pose.cameras import parse_cameras, single_camera
 from cho_object_pose.objects import parse_objects
 from geometry_msgs.msg import PoseStamped
@@ -129,6 +130,16 @@ class ObjectPoseNode(Node):
         # rather than an opportunity: at 2, a pose is published only when two
         # cameras independently agree to within max_position_spread_m.
         self.declare_parameter('min_cameras', 1)
+        # HOW several cameras are combined, which is a different question from
+        # WHETHER they are (min_cameras) and from which of them count
+        # (priority). See fusion.py: the default crosses their lines of sight,
+        # `inverse_distance` reproduces the published inverse-distance-squared
+        # rule, and `median` is what this package did before either existed.
+        self.declare_parameter('fusion_mode', fusion.DEFAULT_MODE)
+        # Two cameras nearly in line cannot usefully be crossed. Below this the
+        # node falls back and says which rule it used in the object's status.
+        self.declare_parameter('min_ray_angle_deg',
+                               math.degrees(fusion.DEFAULT_MIN_RAY_ANGLE_RAD))
         self.declare_parameter('max_position_spread_m', 0.01)
         self.declare_parameter('max_orientation_spread_deg', 10.0)
         self.declare_parameter('max_hamming', 0)
@@ -168,6 +179,12 @@ class ObjectPoseNode(Node):
             raise ValueError(
                 f'min_cameras is {self._min_cameras} but only {len(self._cameras)} '
                 'camera(s) are configured, so nothing could ever be published')
+        self._fusion_mode = str(self.get_parameter('fusion_mode').value)
+        if self._fusion_mode not in fusion.MODES:
+            raise ValueError(
+                f'fusion_mode is {self._fusion_mode!r}; expected one of '
+                f'{", ".join(fusion.MODES)}')
+        self._min_ray_angle = math.radians(float(self.get_parameter('min_ray_angle_deg').value))
         self._max_position_spread = float(self.get_parameter('max_position_spread_m').value)
         self._max_orientation_spread = np.deg2rad(
             float(self.get_parameter('max_orientation_spread_deg').value))
@@ -406,7 +423,31 @@ class ObjectPoseNode(Node):
         return (seconds,
                 np.array([translation.x, translation.y, translation.z]),
                 np.array([rotation.x, rotation.y, rotation.z, rotation.w]),
-                camera.name), None
+                camera.name,
+                self._optical_centre(camera, stamp)), None
+
+    def _optical_centre(self, camera, stamp):
+        """Return where *camera* was looking from, in the base frame, or None.
+
+        Only geometric fusion needs this, and only a camera that declares an
+        ``optical_frame`` can supply it -- everything else in this node goes on
+        asking TF for the tag alone and never naming a camera's frame.
+
+        NO TIMEOUT, deliberately. The optical frame is an ANCESTOR of the tag
+        frame whose lookup has just succeeded at this same stamp, so the chain
+        is already in the buffer; waiting again would double the time every
+        detection callback holds still for, which is measured to matter with
+        several cameras.
+        """
+        if not camera.optical_frame:
+            return None
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                self._base_frame, camera.optical_frame, stamp)
+        except TransformException:
+            return None
+        origin = transform.transform.translation
+        return np.array([origin.x, origin.y, origin.z])
 
     def _evaluate(self, spec, now_seconds, stamp_msg):
         samples = self._samples[spec.name]
@@ -443,14 +484,9 @@ class ObjectPoseNode(Node):
                 f"(have: {', '.join(sorted(contributors)) or 'none'})")
             return
 
-        estimate = geometry.aggregate_samples([sample[1] for sample in counted],
-                                              [sample[2] for sample in counted])
-        if estimate.position_spread_m > self._max_position_spread:
-            self._status[spec.name] = (
-                f'unstable: position spread {estimate.position_spread_m * 1e3:.1f} mm '
-                f'> {self._max_position_spread * 1e3:.1f}'
-                + (f' across {len(contributors)} cameras -- check the extrinsics'
-                   if len(contributors) > 1 else '') + note)
+        estimate, fused, unstable = self._fuse(counted)
+        if unstable is not None:
+            self._status[spec.name] = unstable + note
             return
 
         orientation = estimate.orientation
@@ -487,7 +523,74 @@ class ObjectPoseNode(Node):
         self._published_at[spec.name] = now_seconds
         self._status[spec.name] = (
             f'publishing, spread {estimate.position_spread_m * 1e3:.1f} mm '
-            f'over {estimate.count} samples from {len(contributors)} camera(s)' + note)
+            f'over {estimate.count} samples from {len(contributors)} camera(s)'
+            + (f' [{fused.detail}]' if len(contributors) > 1 else '') + note)
+
+    def _fuse(self, counted):
+        """Combine the window's samples into one pose: within each camera, then across.
+
+        TWO STAGES, because the two differences are not the same difference.
+        Within one camera the samples differ by NOISE and the median is right.
+        Across cameras they differ by each camera's own systematic range error,
+        which no average removes and crossing lines of sight does -- see
+        ``fusion.py`` for the measurement behind that.
+
+        The gate is applied to BOTH, separately, and the messages say which
+        failed. One camera whose own samples wander is a camera problem; two
+        steady cameras that disagree is an EXTRINSICS problem, and telling an
+        operator "spread 30 mm" without saying which is not telling them
+        anything. Under ``intersect`` the second number is how far the rays
+        missed each other, which is a direct residual of the extrinsics and
+        does not contain the range errors at all -- so the same threshold is
+        far tighter there than it looks.
+
+        Returns ``(estimate, fused, unstable)``; *unstable* is None on success
+        and otherwise the status line explaining the rejection.
+        """
+        by_camera = {}
+        for sample in counted:
+            by_camera.setdefault(sample[3], []).append(sample)
+
+        estimates, worst_camera, worst_spread = [], None, 0.0
+        for name in sorted(by_camera):
+            rows = by_camera[name]
+            per = geometry.aggregate_samples([row[1] for row in rows],
+                                             [row[2] for row in rows])
+            if per.position_spread_m > worst_spread:
+                worst_camera, worst_spread = name, per.position_spread_m
+            # A wrist camera MOVES, so its optical centre is aggregated exactly
+            # the way its tag observations are: the median over the same window.
+            # Anything else would cross a ray from one instant with a tag seen
+            # at another.
+            origins = [row[4] for row in rows if row[4] is not None]
+            origin = np.median(np.array(origins), axis=0) if origins else None
+            estimates.append(
+                fusion.CameraEstimate(name, per.position, per.orientation, origin))
+
+        if worst_spread > self._max_position_spread:
+            return None, None, (
+                f'unstable: {worst_camera} alone moved {worst_spread * 1e3:.1f} mm '
+                f'> {self._max_position_spread * 1e3:.1f} within the window')
+
+        fused = fusion.fuse(estimates, self._fusion_mode, self._min_ray_angle)
+        if fused.residual_m > self._max_position_spread:
+            what = ('lines of sight missed each other by'
+                    if fused.mode == fusion.INTERSECT else 'cameras disagree by')
+            return None, None, (
+                f'unstable: {what} {fused.residual_m * 1e3:.1f} mm > '
+                f'{self._max_position_spread * 1e3:.1f} across {len(estimates)} '
+                f'cameras -- check the extrinsics [{fused.detail}]')
+
+        # Reported, not gated: how far the raw samples sit from the answer. With
+        # `intersect` this is dominated by the very range errors the crossing
+        # removed, so it is a description of the views and not a fault.
+        spread = float(max(np.linalg.norm(sample[1] - fused.position)
+                           for sample in counted))
+        orientation_spread = max(geometry.quat_angle(fused.orientation, sample[2])
+                                 for sample in counted)
+        return (geometry.Aggregate(fused.position, fused.orientation, spread,
+                                   orientation_spread, len(counted)),
+                fused, None)
 
     @staticmethod
     def _override_note(selection):

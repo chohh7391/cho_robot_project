@@ -26,7 +26,8 @@
 # whichever arrived last.
 #
 #   D435   camera_link, named by `camera_name:=` -> `wrist_link` here
-#   OAK    `oak-d-base-frame`, the driver's `parent_frame:=` default
+#   OAK    `side_1_mount`, which cho_oak derives from its `name:=` -- see the
+#          note there about the driver's own default being a sentinel
 #
 # --------------------------------------------------------------- how to redo
 #
@@ -70,7 +71,7 @@ transforms:
     # CAD tools print.
     quaternion: [0.536755, -0.531066, 0.458413, 0.468742]
 
-  # -------------------------------------------------------------------- oak
+  # ----------------------------------------------------------------- side_1
   # Eye-to-hand: the OAK stands beside the bench and does not move, so this is
   # a bench-layout number. IT IS WRONG THE MOMENT THE TRIPOD IS NUDGED -- and
   # it was. The previous entry had it 481 mm from where it actually stands,
@@ -87,8 +88,28 @@ transforms:
   #
   # Re-run the solve after anything touches the tripod, and keep an eye on
   # those two numbers -- they are what tells you it has been touched.
-  - name: oak
+  - name: side_1
     parent_frame: base_link
-    child_frame: oak-d-base-frame
+    child_frame: side_1_mount
     xyz: [0.46210, 0.58172, 0.58819]
     quaternion: [0.292552, 0.280998, -0.723582, 0.558466]
+
+  # ----------------------------------------------------------------- side_2
+  # THE SECOND STANDING CAMERA IS NOT HERE YET, and its absence is deliberate
+  # rather than an oversight. cho_object_pose/config/cameras.yaml lists it, so
+  # the pose node subscribes to it and reports `no_tf` for it until this entry
+  # exists -- a loud, correct failure that says "nobody has solved where this
+  # camera is" instead of a confident wrong pose.
+  #
+  # DO NOT FILL IT IN WITH A TAPE MEASURE. Every number in this file that was
+  # ever measured by hand turned out wrong by 100 mm or more, and nothing
+  # downstream can see the difference. Run the board:
+  #
+  #   ros2 run cho_camera_calibration record_board_views.py POSES.yaml OUT.json \
+  #       --moving-detections /wrist/detections --static-detections /side_2/detections
+  #   ros2 run cho_camera_calibration solve_hand_eye.py OUT.json --board <board>.yaml \
+  #       --moving-info /wrist/wrist/infra1/camera_info \
+  #       --static-info /side_2/side_2/infra1/camera_info
+  #
+  # Its `child_frame` is `side_2_link`, the D435's own camera_link, named by
+  # `camera_name:=side_2` -- the same arrangement as the wrist entry above.

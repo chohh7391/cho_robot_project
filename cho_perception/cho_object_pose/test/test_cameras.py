@@ -14,7 +14,7 @@ def _document(*cameras):
     return {'cameras': list(cameras)}
 
 
-def _camera(name='oak', **overrides):
+def _camera(name='side_1', **overrides):
     entry = {'name': name,
              'image_topic': f'/{name}/left/image_raw',
              'frame_prefix': f'{name}_',
@@ -25,17 +25,17 @@ def _camera(name='oak', **overrides):
 
 def test_a_camera_is_parsed_with_its_four_fields():
     camera, = parse_cameras(_document(_camera()))
-    assert camera.name == 'oak'
-    assert camera.frame_prefix == 'oak_'
-    assert camera.detections_topic == '/oak/detections'
-    assert camera.image_topic == '/oak/left/image_raw'
+    assert camera.name == 'side_1'
+    assert camera.frame_prefix == 'side_1_'
+    assert camera.detections_topic == '/side_1/detections'
+    assert camera.image_topic == '/side_1/left/image_raw'
 
 
 def test_camera_info_defaults_to_the_images_sibling():
     # image_transport's convention. Spelling it out in every entry would be
     # three more strings that can be typed wrong.
     camera, = parse_cameras(_document(_camera()))
-    assert camera.camera_info_topic == '/oak/left/camera_info'
+    assert camera.camera_info_topic == '/side_1/left/camera_info'
 
 
 def test_camera_info_can_be_given_explicitly():
@@ -56,20 +56,20 @@ def test_two_cameras_may_not_share_a_frame_prefix():
     # published last. No error anywhere -- just wrong poses, sometimes.
     with pytest.raises(ValueError, match='frame prefixes'):
         parse_cameras(_document(
-            _camera('oak', frame_prefix='cam_'),
+            _camera('side_1', frame_prefix='cam_'),
             _camera('rs_left', frame_prefix='cam_')))
 
 
 def test_two_cameras_may_not_share_a_detections_topic():
     with pytest.raises(ValueError, match='detections topics'):
         parse_cameras(_document(
-            _camera('oak', detections_topic='/detections'),
+            _camera('side_1', detections_topic='/detections'),
             _camera('rs_left', detections_topic='/detections')))
 
 
 def test_two_cameras_may_not_share_a_name():
     with pytest.raises(ValueError, match='names'):
-        parse_cameras(_document(_camera('oak'), _camera('oak', frame_prefix='other_')))
+        parse_cameras(_document(_camera('side_1'), _camera('side_1', frame_prefix='other_')))
 
 
 def test_a_camera_without_an_image_topic_is_rejected():
@@ -94,11 +94,11 @@ def test_a_camera_without_a_visual_is_simply_not_drawn():
 
 def test_a_visual_carries_the_frame_mesh_and_mounting_pose():
     camera, = parse_cameras(_document(_camera(visual={
-        'frame': 'oak_model_origin',
+        'frame': 'side_1_model_origin',
         'mesh': 'package://depthai_descriptions/urdf/models/OAK-D-PRO-W.stl',
         'xyz': [0.0043, -0.0175, 0.0],
         'rpy': [1.5708, 0.0, 1.5708]})))
-    assert camera.visual.frame == 'oak_model_origin'
+    assert camera.visual.frame == 'side_1_model_origin'
     assert camera.visual.mesh.endswith('OAK-D-PRO-W.stl')
     assert camera.visual.position == (0.0043, -0.0175, 0.0)
     # Fixed-axis rpy, kept as written so it can be checked against the vendor's
@@ -109,25 +109,29 @@ def test_a_visual_carries_the_frame_mesh_and_mounting_pose():
 
 def test_a_visual_needs_a_frame_and_a_mesh():
     for missing in ('frame', 'mesh'):
-        visual = {'frame': 'oak_model_origin', 'mesh': 'package://x/y.stl'}
+        visual = {'frame': 'side_1_model_origin', 'mesh': 'package://x/y.stl'}
         del visual[missing]
         with pytest.raises(ValueError, match=f'visual.{missing}'):
             parse_cameras(_document(_camera(visual=visual)))
 
 
-def test_the_bench_table_ships_two_distinct_cameras_both_drawn():
+def test_the_bench_table_ships_three_distinct_cameras_all_drawn():
     import os
 
     import yaml
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'config', 'cameras.yaml')
     cameras = parse_cameras(yaml.safe_load(open(path, encoding='utf-8')))
-    # The standing observer and the wrist recovery instrument. A third entry
+    # Two standing observers and the wrist recovery instrument. A fourth entry
     # here means a detector nobody started.
-    assert {camera.name for camera in cameras} == {'oak', 'wrist'}
-    assert len({camera.frame_prefix for camera in cameras}) == 2
-    # The OAK's mono streams are unrectified and the D435's infra1 is not.
-    assert {camera.name for camera in cameras if camera.rectify} == {'oak'}
+    assert {camera.name for camera in cameras} == {'side_1', 'side_2', 'wrist'}
+    assert len({camera.frame_prefix for camera in cameras}) == 3
+    # The OAK-D's mono streams are unrectified and the D435s' infra1 is not.
+    assert {camera.name for camera in cameras if camera.rectify} == {'side_1'}
+    # Crossing lines of sight needs to know where each line STARTS, so every
+    # camera on this bench declares its optical centre. Without it the node
+    # falls back to a weaker rule, and says so rather than failing.
+    assert all(camera.optical_frame for camera in cameras)
     # Both are drawn, because a camera in the wrong place is what the picture
     # is for.
     assert all(camera.visual for camera in cameras)
@@ -168,15 +172,19 @@ def test_the_single_camera_fallback_has_no_priority_contest():
     assert camera.priority == 0
 
 
-def test_the_shipped_table_makes_the_wrist_outrank_the_oak():
-    # The bench's stated role split -- oak the standing observer, wrist the
-    # recovery instrument -- was a comment until this field existed. If these
-    # ever come out equal the recovery sweep silently goes back to being
-    # averaged into the far view.
+def test_the_shipped_table_makes_the_wrist_outrank_both_standing_cameras():
+    # The bench's stated role split -- side_1 and side_2 the standing pair,
+    # wrist the recovery instrument -- was a comment until this field existed.
+    # If these ever come out equal the recovery sweep silently goes back to
+    # being averaged into the far views.
     import os
     import yaml
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'config', 'cameras.yaml')
     with open(path, encoding='utf-8') as stream:
         cameras = {camera.name: camera for camera in parse_cameras(yaml.safe_load(stream))}
-    assert cameras['wrist'].priority > cameras['oak'].priority
+    assert cameras['wrist'].priority > cameras['side_1'].priority
+    assert cameras['wrist'].priority > cameras['side_2'].priority
+    # And the standing pair are PEERS, or they would not be fused with each
+    # other at all -- which is the whole reason there are two of them.
+    assert cameras['side_1'].priority == cameras['side_2'].priority

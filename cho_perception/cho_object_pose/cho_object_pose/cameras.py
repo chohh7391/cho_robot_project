@@ -12,6 +12,14 @@ default both publish ``tag_9``, which gives one TF child two parents -- not an
 error, just transforms that intermittently resolve through the wrong camera.
 That is why duplicates here are rejected rather than tolerated.
 
+``optical_frame`` is the one place this package names a camera's own frame,
+and it is here rather than in the node for the same reason everything else is:
+the node asks TF for ``base <- <prefix>tag_<id>`` and never needs to know what
+lies in between. Geometric fusion does need to know -- crossing two lines of
+sight means knowing where each line STARTS -- so the bench declares it. Leave
+it out and the camera still works; it just cannot contribute a ray, and
+``fusion`` falls back and says so.
+
 ``priority`` is the one field that changes what the node DOES with a camera
 rather than where it finds it. Cameras left at the default are peers and their
 views are fused; a camera given a higher one replaces the lower ones for any
@@ -29,7 +37,10 @@ DEFAULT_VISUAL_COLOR = (0.6, 0.6, 0.6, 0.9)
 CameraSpec = namedtuple(
     'CameraSpec',
     'name frame_prefix detections_topic image_topic camera_info_topic rectify '
-    'priority visual')
+    'priority visual optical_frame')
+#: Growing this namedtuple has broken hand-built callers twice. A default means
+#: the next field does not.
+CameraSpec.__new__.__defaults__ = ('',)
 
 #: Where to draw the camera body, for rviz. DIAGNOSTIC, not decoration: the
 #: extrinsic that puts a tag in the robot's frame is the one number in this
@@ -135,6 +146,9 @@ def parse_cameras(document):
         if not detections_topic:
             raise ValueError(f'{label}.detections_topic must not be empty')
         frame_prefix = _string(entry, 'frame_prefix', label)
+        # The camera's own optical centre, for geometric fusion. Optional: a
+        # bench that only ever medians does not need it.
+        optical_frame = _string(entry, 'optical_frame', label)
 
         rectify = entry.get('rectify', False)
         if not isinstance(rectify, bool):
@@ -143,7 +157,8 @@ def parse_cameras(document):
         specs.append(CameraSpec(name, frame_prefix, detections_topic,
                                 image_topic, camera_info_topic, rectify,
                                 _priority(entry, label),
-                                _parse_visual(entry, label)))
+                                _parse_visual(entry, label),
+                                optical_frame))
 
     for field, what in (('name', 'names'),
                         ('frame_prefix', 'tag frame prefixes'),

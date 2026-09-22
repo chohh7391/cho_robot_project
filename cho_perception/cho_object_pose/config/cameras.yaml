@@ -10,65 +10,96 @@
 # no error, just transforms that intermittently resolve through the wrong
 # camera. The parser rejects duplicates for that reason.
 #
-# Fusing them is what buys the accuracy: every camera's view of a tag lands in
-# the same aggregation window, so the published position is the MEDIAN across
-# all of them and one camera's bad view is outvoted rather than believed. It
-# also turns `max_position_spread_m` into a check on the extrinsics -- three
-# cameras that disagree by more than the gate publish nothing, which is the
-# honest answer when nobody knows where the cameras are.
+# ------------------------------------------------------------------- fusing
 #
-# `priority` is the exception to that, and the reason it exists is below: a
-# recovery sweep is not another vote, it is a better measurement.
+# Two standing cameras see every tag, and their views are COMBINED rather than
+# chosen between. How they are combined is `fusion_mode` on the pose node, and
+# it is worth knowing which rule a bench is running because they are different
+# estimators and not different tunings:
+#
+#   intersect          the default. Each camera contributes the RAY it saw the
+#                      tag along, and the pose is the point closest to all of
+#                      them. A planar marker's error is essentially all along
+#                      the viewing ray -- measured at 100% on this cell, with
+#                      0.03-0.06 mm transverse against 10-16 mm total -- so
+#                      this keeps what each camera knows and discards what it
+#                      does not. Needs `optical_frame` below.
+#   inverse_distance   the published method: weight by 1/d^2, average the
+#                      translations, SLERP the rotations. Kept so the paper's
+#                      Perception Module can be RUN and measured on this bench
+#                      rather than argued about.
+#   median             what this package did before either existed.
+#
+# `max_position_spread_m` means something different under each, and the status
+# line says which: under `intersect` it gates how far the LINES OF SIGHT missed
+# each other, which contains no range error at all and is therefore a direct
+# residual on the extrinsics; under the others it gates how far the camera
+# estimates lie apart, which mixes the extrinsics with each camera's range
+# error and cannot separate them. Expect to want a tighter number under
+# `intersect` and a looser one under the rest.
+#
+# `priority` is the exception to all of it, and the reason is below: a recovery
+# sweep is not another vote, it is a better measurement.
 #
 # This file does NOT start the cameras themselves. `cho_realsense` and
 # `cho_oak` do that, and the image topics below are what they publish:
 #
-#   ros2 launch cho_oak       oak.launch.py  name:=oak
-#   ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_left  camera_name:=rs_left  serial_no:=_<serial>
-#   ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_right camera_name:=rs_right serial_no:=_<serial>
+#   ros2 launch cho_oak       oak.launch.py  name:=side_1
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=side_2 camera_name:=side_2 serial_no:=_844212070094
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=wrist  camera_name:=wrist  serial_no:=_332322072253
 #
-# The two D435 serials are in cho_camera_calibration/config/cameras.yaml. SET
-# THEM: an empty serial opens whichever unit the driver finds first, so with two
-# on the bench which one you got -- and therefore which calibration applies --
-# is undefined.
+# The D435 serials are in cho_camera_calibration/config/cameras.yaml. SET THEM:
+# an empty serial opens whichever unit the driver finds first, so with two on
+# the bench which one you got -- and therefore which calibration applies -- is
+# undefined.
 cameras:
-  # THE TWO CAMERAS HAVE DIFFERENT JOBS, and it is worth knowing which:
+  # THE CAMERAS HAVE TWO DIFFERENT JOBS, and it is worth knowing which:
   #
-  #   oak    the standing observer. Wide, far, always looking -- this is what
-  #          locates the vessels when nothing is in the way.
-  #   wrist  the recovery instrument. When the arm occludes something the OAK
-  #          needs, a task sweeps the wrist over it from above and the close
-  #          view updates that object's pose.
+  #   side_1  the standing observers. Wide, far, always looking, and FUSED with
+  #   side_2  each other -- this is what locates the vessels when nothing is in
+  #           the way. Two of them, spatially separated, because one line of
+  #           sight cannot be crossed with anything.
+  #   wrist   the recovery instrument. When the standing pair loses something
+  #           the arm needs, a task sweeps the wrist over it and the close view
+  #           updates that object's pose.
   #
-  # They are therefore NOT redundant views of one scene, and `priority` is what
-  # says so. Cameras at equal priority are fused as described above; a camera at
-  # a HIGHER one REPLACES the lower ones' samples, for the objects it can
-  # currently see and only for those. Without it the node would median a
-  # 200 mm close-up together with a 1 m wide-angle view and publish a pose
-  # neither camera saw -- or, once they disagreed by more than
-  # max_position_spread_m, publish nothing at all during exactly the sweep that
-  # was meant to fix things.
+  # The wrist is therefore NOT a third vote, and `priority` is what says so.
+  # Cameras at equal priority are fused as described above; a camera at a
+  # HIGHER one REPLACES the lower ones' samples, for the objects it can
+  # currently see and only for those. Without it the node would combine a
+  # 200 mm close-up with two 1 m wide-angle views and publish a pose no camera
+  # saw -- or, once they disagreed by more than max_position_spread_m, publish
+  # nothing at all during exactly the sweep that was meant to fix things.
   #
   # The override is self-clearing and needs no expiry of its own: it lasts as
   # long as the wrist has samples IN THE AGGREGATION WINDOW, so when the arm
-  # moves away those age out after window_sec and the OAK is believed again.
-  # A recovered pose is therefore exactly as long-lived as any other -- a task
-  # that needs to keep it latches it (PoseTargetBehavior), which is what every
-  # task already does.
+  # moves away those age out after window_sec and the standing pair is believed
+  # again. A recovered pose is therefore exactly as long-lived as any other --
+  # a task that needs to keep it latches it (PoseTargetBehavior), which is what
+  # every task already does.
   #
   # TWO THINGS TO KNOW BEFORE RAISING A PRIORITY:
   #
   #   * `min_cameras` is not applied to an object while an override is in force.
   #     Demanding that several cameras agree and declaring one of them
   #     authoritative are contradictory; with both, the wrist would suppress the
-  #     OAK and then fail its own quorum, and the object would go dark during
-  #     the sweep. min_samples and max_position_spread_m still apply, within the
-  #     winning camera's own samples.
+  #     standing pair and then fail its own quorum, and the object would go dark
+  #     during the sweep. min_samples and max_position_spread_m still apply,
+  #     within the winning camera's own samples.
   #   * The wrist's extrinsic is now load-bearing rather than a cross-check.
-  #     cho_bringup_fr5/config/real/camera_extrinsics.yaml puts it at about
-  #     7 mm, measured from the mount rather than solved -- fine for a close-up
-  #     approach, and the number to improve if a recovered pose is used for
-  #     anything tighter.
+  #     cho_bringup_fr5/config/real/camera_extrinsics.yaml carries a SOLVED one
+  #     (AX = ZB over ten arm poses, 0.41-1.76 px reprojection), which is what
+  #     makes a recovered pose worth overriding with. Re-solve after anything
+  #     touches the mount: the previous entry survived a mount swap and was
+  #     134 mm out with no symptom.
+  #
+  # `optical_frame` is the ONLY place this package names a camera's own frame.
+  # The node otherwise asks TF for `base <- <prefix>tag_<id>` and never cares
+  # what lies in between, which is what lets a camera be bolted to a wrist or
+  # stood on a tripod without a line of code changing. Crossing lines of sight
+  # is the one thing that needs to know where a line STARTS. Omit it and that
+  # camera contributes no ray; `fusion` then falls back and names the fallback
+  # in the object's status rather than quietly getting worse.
 
   # Wrist-mounted D435, eye-in-hand. Its transform comes from the ROBOT's TF
   # (wrist3_link -> wrist_link), not from a static publisher, because it moves
@@ -80,8 +111,9 @@ cameras:
     rectify: false
     frame_prefix: wrist_
     detections_topic: /wrist/detections
-    # Outranks the standing observer. Only ever compared, never scaled, so the
-    # gap to the OAK's 0 means nothing beyond "higher".
+    optical_frame: wrist_infra1_optical_frame
+    # Outranks the standing observers. Only ever compared, never scaled, so the
+    # gap to their 0 means nothing beyond "higher".
     priority: 10
     # Drawn at the driver's own camera_link, with the mounting pose copied
     # verbatim out of realsense2_description/urdf/_d435.urdf.xacro:
@@ -97,23 +129,56 @@ cameras:
       xyz: [0.0043, -0.0175, 0.0]
       rpy: [1.5708, 0.0, 1.5708]
 
-  # OAK-D Pro W, eye-to-hand. The driver rectifies RGB only and the wide lens is
-  # an eight-coefficient rational_polynomial, so the mono stream needs image_proc
-  # ahead of the detector -- that is what rectify: true inserts.
-  - name: oak
-    image_topic: /oak/left/image_raw
+  # OAK-D Pro W, eye-to-hand, on the tripod. The driver rectifies RGB only and
+  # the wide lens is an eight-coefficient rational_polynomial, so the mono
+  # stream needs image_proc ahead of the detector -- that is what rectify: true
+  # inserts.
+  - name: side_1
+    image_topic: /side_1/left/image_raw
     rectify: true
-    frame_prefix: oak_
-    detections_topic: /oak/detections
-    # The default, spelled out because this file is where the two cameras'
+    frame_prefix: side_1_
+    detections_topic: /side_1/detections
+    optical_frame: side_1_left_camera_optical_frame
+    # The default, spelled out because this file is where the cameras'
     # relationship is documented and an implicit 0 says nothing.
     priority: 0
-    # `oak_model_origin` is the frame depthai_descriptions puts this very mesh
-    # at, already rotated there (rpy 1.5708 0 1.5708 off the base frame), so
-    # the offset here is zero. The driver publishes the frame; the mesh ships
+    # `side_1_model_origin` is the frame depthai_descriptions puts this very
+    # mesh at, already rotated there (rpy 1.5708 0 1.5708 off the base frame),
+    # so the offset here is zero. The driver publishes the frame; the mesh ships
     # with depthai_descriptions, which the OAK stack already depends on.
     visual:
-      frame: oak_model_origin
+      frame: side_1_model_origin
       mesh: package://depthai_descriptions/urdf/models/OAK-D-PRO-W.stl
       xyz: [0.0, 0.0, 0.0]
       rpy: [0.0, 0.0, 0.0]
+
+  # The second standing camera: the spare D435, eye-to-hand.
+  #
+  # ITS ONLY JOB IS TO LOOK FROM SOMEWHERE ELSE. One camera's range error
+  # cannot be detected, let alone corrected, by looking harder from the same
+  # place -- the whole gain here is the ANGLE between this line of sight and
+  # side_1's. Put it across the bench from the OAK rather than beside it, and
+  # check the angle the pose node reports in the object's status: below
+  # `min_ray_angle_deg` it stops crossing them and says so.
+  #
+  # THIS UNIT'S PROJECTOR CANNOT BE TURNED OFF. Firmware 5.9.2 declares no
+  # emitter parameter at all, and the dot pattern breaks tag decoding. Tape the
+  # projector window -- see cho_camera_calibration/config/cameras.yaml, which
+  # records which serial is which.
+  #
+  # ITS EXTRINSIC MUST BE SOLVED BEFORE IT IS BELIEVED, and until it is, the
+  # pose node reports `no_tf` for this camera and carries on with side_1 alone.
+  # That is the correct failure and it is a loud one; do not paper over it by
+  # measuring the tripod with a tape. See cho_camera_calibration's README.
+  - name: side_2
+    image_topic: /side_2/side_2/infra1/image_rect_raw
+    rectify: false
+    frame_prefix: side_2_
+    detections_topic: /side_2/detections
+    optical_frame: side_2_infra1_optical_frame
+    priority: 0
+    visual:
+      frame: side_2_link
+      mesh: package://realsense2_description/meshes/d435.dae
+      xyz: [0.0043, -0.0175, 0.0]
+      rpy: [1.5708, 0.0, 1.5708]

@@ -32,7 +32,7 @@ def _write(tmp_path, entry):
 
 
 def _entry(**overrides):
-    entry = {'name': 'oak', 'parent_frame': 'base_link', 'child_frame': 'oak-d-base-frame',
+    entry = {'name': 'side_1', 'parent_frame': 'base_link', 'child_frame': 'side_1_mount',
              'xyz': [0.1, 0.2, 0.3], 'quaternion': [0.0, 0.0, 0.0, 1.0]}
     entry.update(overrides)
     return entry
@@ -42,15 +42,15 @@ def _entry(**overrides):
 
 def test_the_bench_ships_both_cameras():
     transforms = load_transforms(_shipped())
-    assert {entry['name'] for entry in transforms} == {'wrist', 'oak'}
+    assert {entry['name'] for entry in transforms} == {'wrist', 'side_1'}
 
 
-def test_the_wrist_hangs_off_the_arm_and_the_oak_off_the_base():
+def test_the_wrist_hangs_off_the_arm_and_the_side_camera_off_the_base():
     by_name = {entry['name']: entry for entry in load_transforms(_shipped())}
     # Eye-in-hand vs eye-to-hand, and the difference is not cosmetic: the wrist
-    # entry needs the robot's TF to resolve and the OAK's does not.
+    # entry needs the robot's TF to resolve and the side camera's does not.
     assert by_name['wrist']['parent_frame'] == 'wrist3_link'
-    assert by_name['oak']['parent_frame'] == 'base_link'
+    assert by_name['side_1']['parent_frame'] == 'base_link'
 
 
 def test_every_child_is_a_driver_root_not_an_optical_frame():
