@@ -14,19 +14,38 @@ cameras:
   - model: D435
     serial: '844212070094'
     usb_serial: '846623021037'
-    firmware: 5.9.2         # too old to report a USB type. Declares NO emitter
-                            # parameter, and its projector is ON with no way to
-                            # turn it off from ROS -- an earlier note here said
-                            # "off in FW", which is the misreading of "disabled
-                            # by FW" (that means the CONTROL is disabled).
-                            # Tape the projector window to use infra1.
+    firmware: 5.9.2         # TOO OLD FOR THIS DRIVER TO CONFIGURE, measured
+                            # 2026-09-22. `depth_module.exposure` is rejected
+                            # ("expected [double] got [integer]") and the device
+                            # stays at its factory 8500 us; it publishes no
+                            # exposure/gain/emitter metadata, so nothing reads
+                            # back either. auto-exposure and gain do still take.
+                            # `rs-fw-update` will not flash it: librealsense
+                            # 2.58 classifies it [GMSL] rather than [USB] and
+                            # then looks for a DFU device that never appears.
+                            # Reading its flash works -- there is a 2 MB backup
+                            # of 5.9.2 if one is ever needed. Update it from the
+                            # Windows tool, which is the supported path for
+                            # firmware this old.
+                            #
+                            # Declares NO emitter parameter, and its projector
+                            # is ON with no way to turn it off from ROS -- an
+                            # earlier note here said "off in FW", which is the
+                            # misreading of "disabled by FW" (that means the
+                            # CONTROL is disabled). Tape the projector window to
+                            # use infra1.
     driver: realsense2_camera
     calibrations: []
 
   - model: D435
     serial: '332322072253'
     usb_serial: '343743022395'
-    firmware: 5.17.3.10     # may expose depth_module.emitter_enabled; must be 0
+    firmware: 5.17.3.10     # may expose depth_module.emitter_enabled; must be 0.
+                            # Exposure DOES apply on this one -- confirmed at
+                            # the device through the infra1 metadata topic.
+                            # Newer than the 5.17.0.10 Intel publishes at
+                            # librealsense.intel.com, so there is nothing to
+                            # update it to from there.
     driver: realsense2_camera
     calibrations: []
 

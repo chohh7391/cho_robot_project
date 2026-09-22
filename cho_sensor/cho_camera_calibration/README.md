@@ -86,11 +86,29 @@ side up. It is a calibration artefact, not furniture: use it and take it off.
 
 ### Running it
 
-    ros2 run cho_camera_calibration record_board_views.py POSES.yaml data.json
+    ros2 launch cho_object_pose detectors.launch.py \
+        objects_config:=.../cho_camera_calibration/config/board_detect.yaml
+
+    ros2 run cho_camera_calibration record_board_views.py POSES.yaml data.json \
+        --moving-detections /wrist/detections \
+        --static-detections side_1=/side_1/detections side_2=/side_2/detections
+
     ros2 run cho_camera_calibration solve_hand_eye.py data.json \
         --board .../config/tag_board_70mm.yaml \
         --moving-info /wrist/wrist/infra1/camera_info \
-        --static-info /side/left/camera_info
+        --static-info side_1=/side_1/left/camera_info \
+                      side_2=/side_2/side_2/infra1/camera_info
+
+**Start the detectors against `board_detect.yaml`**, not against whatever object
+table the bench uses for its own job. The FR5's names the vessel tags only, and
+a detector told to look for those reports no board tag at all -- so the arm
+drives all ten poses, every node looks healthy, and the recording comes back
+empty. Measured once, which was enough.
+
+Every fixed camera goes in ONE run. Moving the arm is the expensive and the
+risky part, so two cameras that were both nudged are one recording rather than
+two; solving them against the same board pose is also what makes their two
+answers comparable.
 
 `POSES.yaml` is `{poses: [{name, joints: [...]}, ...]}`, and **the caller owns
 arm safety** -- every pose and the joint-space line between consecutive ones

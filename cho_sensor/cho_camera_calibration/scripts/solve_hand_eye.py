@@ -19,7 +19,8 @@ old one.
     ros2 run cho_camera_calibration solve_hand_eye.py DATA.json
         --board <share>/cho_camera_calibration/config/tag_board_70mm.yaml
         --moving-info /wrist/wrist/infra1/camera_info
-        --static-info /side/left/camera_info
+        --static-info side_1=/side_1/left/camera_info
+                      side_2=/side_2/side_2/infra1/camera_info
 
 (one command; the wrapped lines are its arguments)
 
@@ -173,8 +174,10 @@ def main():
     parser.add_argument('--board', required=True, help='the board config')
     parser.add_argument('--moving-info', required=True,
                         help="camera_info of the camera ON the arm")
-    parser.add_argument('--static-info', default='',
-                        help="camera_info of a fixed camera to solve as well")
+    parser.add_argument('--static-info', nargs='*', default=[],
+                        metavar='NAME=TOPIC',
+                        help='camera_info of each fixed camera to solve as well, '
+                             'named as in the recording')
     args = parser.parse_args()
 
     spec = yaml.safe_load(open(args.board, encoding='utf-8'))
@@ -185,7 +188,12 @@ def main():
     rclpy.init()
     node = rclpy.create_node('solve_hand_eye')
     K_moving = intrinsics(node, args.moving_info)
-    K_static = intrinsics(node, args.static_info) if args.static_info else None
+    K_static = {}
+    for item in args.static_info:
+        label, _, topic = item.partition('=')
+        if not label or not topic:
+            raise SystemExit(f'--static-info wants NAME=TOPIC, got {item!r}')
+        K_static[label] = intrinsics(node, topic)
     node.destroy_node()
     rclpy.shutdown()
 
@@ -260,32 +268,42 @@ def main():
     print('    -- if the board lies on a surface of known height, its solved z '
           'is a free check:\n       nothing here knows that height.')
 
-    if K_static is None:
+    if not K_static:
         return
+    # Each fixed camera is solved SEPARATELY against the one board pose above.
+    # Nothing ties them to each other, which is what makes printing both worth
+    # doing: two cameras solved off the same board that then disagree about
+    # where anything is have an extrinsic problem between them -- and that is
+    # exactly the error crossing their lines of sight is sensitive to.
     Z_full = np.eye(4)
     Z_full[:3, :3], Z_full[:3, 3] = R_Z, Z_pos
-    cams, oerrs = [], []
-    for rec in records:
-        if not rec.get('static_corners'):
+    for label, K in K_static.items():
+        cams, oerrs = [], []
+        for rec in records:
+            corners = (rec.get('static_corners') or {}).get(label)
+            if not corners:
+                continue
+            T, err = board_pnp(corners, K, order, centres)
+            if T is None:
+                continue
+            cams.append(Z_full @ np.linalg.inv(T))
+            oerrs.append(err)
+        print(f'\nbase -> {label} OPTICAL frame:')
+        if not cams:
+            print(f'    NOTHING RECORDED under {label!r} -- check the name '
+                  'matches the one given to --static-detections.')
             continue
-        T, err = board_pnp(rec['static_corners'], K_static, order, centres)
-        if T is None:
-            continue
-        cams.append(Z_full @ np.linalg.inv(T))
-        oerrs.append(err)
-    if not cams:
-        return
-    cpos = np.array([c[:3, 3] for c in cams])
-    mean = cpos.mean(axis=0)
-    best = int(np.argmin(np.linalg.norm(cpos - mean, axis=1)))
-    q = R_to_quat(cams[best][:3, :3])
-    print(f'\nbase -> static camera OPTICAL frame, from {len(cams)} views:')
-    print(f'    xyz: [{mean[0]:.5f}, {mean[1]:.5f}, {mean[2]:.5f}]')
-    print(f'    quaternion: [{q[0]:.6f}, {q[1]:.6f}, {q[2]:.6f}, {q[3]:.6f}]')
-    print(f'    spread {1000 * np.linalg.norm(cpos - mean, axis=1).max():.2f} mm, '
-          f'reprojection {min(oerrs):.3f}-{max(oerrs):.3f} px')
-    print('\nBOTH POSES ARE OPTICAL FRAMES. camera_extrinsics.yaml names each '
-          "driver's own\nroot, so compose each with its driver's internal "
+        cpos = np.array([c[:3, 3] for c in cams])
+        mean = cpos.mean(axis=0)
+        best = int(np.argmin(np.linalg.norm(cpos - mean, axis=1)))
+        q = R_to_quat(cams[best][:3, :3])
+        print(f'    xyz: [{mean[0]:.5f}, {mean[1]:.5f}, {mean[2]:.5f}]')
+        print(f'    quaternion: [{q[0]:.6f}, {q[1]:.6f}, {q[2]:.6f}, {q[3]:.6f}]')
+        print(f'    from {len(cams)} views, spread '
+              f'{1000 * np.linalg.norm(cpos - mean, axis=1).max():.2f} mm, '
+              f'reprojection {min(oerrs):.3f}-{max(oerrs):.3f} px')
+    print('\nEVERY POSE ABOVE IS AN OPTICAL FRAME. camera_extrinsics.yaml names '
+          "each driver's\nown root, so compose each with its driver's internal "
           'chain before writing it there.')
 
 

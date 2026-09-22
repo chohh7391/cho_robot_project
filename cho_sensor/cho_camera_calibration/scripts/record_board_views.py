@@ -16,17 +16,24 @@ once and the data goes to disk; the solve is separate and can be rerun.
 
     ros2 run cho_camera_calibration record_board_views.py POSES.yaml OUT.json
         --moving-detections /wrist/detections
-        --static-detections /side/detections
+        --static-detections side_1=/side_1/detections side_2=/side_2/detections
 
 (one command; the wrapped lines are its arguments)
 
-MOVING and STATIC are the two roles a hand-eye solve has, not two cameras this
+MOVING and STATIC are the two roles a hand-eye solve has, not cameras this
 package knows about: moving is the eye-in-hand one whose transform is being
-solved, static is an optional eye-to-hand one that rides along for free off the
-board pose the same solve produces. The names under which a particular bench
-publishes them belong to that bench -- `cho_object_pose/config/cameras.yaml`
-holds the FR5's -- so they are arguments, and the JSON is keyed by the role.
-The static one may be omitted; then only the hand-eye is solved.
+solved, static is any number of eye-to-hand ones that ride along for free off
+the board pose the same solve produces. The names a particular bench publishes
+them under belong to that bench -- `cho_object_pose/config/cameras.yaml` holds
+the FR5's -- so they are arguments, and the JSON is keyed by role and then by
+the name given here.
+
+AS MANY STATIC CAMERAS AS THE BENCH HAS, in one pass. Moving the arm is the
+expensive and the risky part of this procedure, so nothing should need it done
+twice: two fixed cameras that were both nudged are one run, not two. They are
+solved independently afterwards against the same board pose, which also means
+their answers can be compared -- and it is the board that makes that comparison
+mean anything.
 
 POSES.yaml is {poses: [{name, joints: [j1..j6]}, ...]}. THE CALLER OWNS ARM
 SAFETY: every pose and the joint-space line between consecutive ones has to be
@@ -128,13 +135,23 @@ parser.add_argument('poses', help='{poses: [{name, joints}, ...]}; see the READM
 parser.add_argument('out', help='where to write the recorded corners')
 parser.add_argument('--moving-detections', required=True,
                     help='AprilTagDetectionArray from the eye-in-hand camera')
-parser.add_argument('--static-detections', default='',
-                    help='the same from an eye-to-hand camera, if there is one')
+parser.add_argument('--static-detections', nargs='*', default=[],
+                    metavar='NAME=TOPIC',
+                    help='the same from each fixed camera, named; may be repeated')
 args = parser.parse_args()
 
 TOPICS = {'moving': args.moving_detections}
-if args.static_detections:
-    TOPICS['static'] = args.static_detections
+STATIC = {}
+for item in args.static_detections:
+    label, _, topic = item.partition('=')
+    if not label or not topic:
+        raise SystemExit(f'--static-detections wants NAME=TOPIC, got {item!r}')
+    if label == 'moving':
+        raise SystemExit("--static-detections: 'moving' is the other role's name")
+    if label in STATIC:
+        raise SystemExit(f'--static-detections: {label!r} given twice')
+    STATIC[label] = topic
+    TOPICS[f'static:{label}'] = topic
 poses = yaml.safe_load(open(args.poses, encoding='utf-8'))['poses']
 
 rclpy.init()
@@ -158,7 +175,7 @@ for index, pose in enumerate(poses):
         'name': pose['name'], 'joints': pose['joints'],
         'arm': np.median(np.array(arm), axis=0).tolist() if arm else None,
         'moving_corners': corners['moving'],
-        'static_corners': corners.get('static', {}),
+        'static_corners': {label: corners[f'static:{label}'] for label in STATIC},
     })
 
 with open(args.out, 'w', encoding='utf-8') as handle:

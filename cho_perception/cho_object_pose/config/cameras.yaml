@@ -45,8 +45,8 @@
 # `cho_oak` do that, and the image topics below are what they publish:
 #
 #   ros2 launch cho_oak       oak.launch.py  name:=side_1
-#   ros2 launch cho_realsense d435.launch.py camera_namespace:=side_2 camera_name:=side_2 serial_no:=_844212070094
-#   ros2 launch cho_realsense d435.launch.py camera_namespace:=wrist  camera_name:=wrist  serial_no:=_332322072253
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=side_2 camera_name:=side_2 serial_no:=_332322072253
+#   ros2 launch cho_realsense d435.launch.py camera_namespace:=wrist  camera_name:=wrist  serial_no:=_844212070094
 #
 # The D435 serials are in cho_camera_calibration/config/cameras.yaml. SET THEM:
 # an empty serial opens whichever unit the driver finds first, so with two on
@@ -106,6 +106,16 @@ cameras:
   # with the arm -- so the robot bringup has to be running for this one to
   # resolve. infra1 is global shutter, which is the reason a wrist mount uses
   # it rather than the rolling-shutter colour stream.
+  #
+  # THIS IS THE OLD UNIT, serial 844212070094 on firmware 5.9.2, and it is the
+  # one that cannot be told anything. Measured on the bench (2026-09-22):
+  # `depth_module.exposure` is inert over 100-8000 us, `depth_module.gain` is
+  # inert over 4-16, and it publishes NO exposure/gain/emitter metadata at all,
+  # so there is not even a way to read back what it is doing. It sits wherever
+  # the firmware puts it -- about 30% saturated looking down at this bench.
+  # It still decodes all six board tags, but corner precision is the first
+  # thing saturation costs, and the recovery sweep depends on this camera.
+  # Swapping the two D435s, or updating this one's firmware, is the fix.
   - name: wrist
     image_topic: /wrist/wrist/infra1/image_rect_raw
     rectify: false
@@ -161,10 +171,8 @@ cameras:
   # check the angle the pose node reports in the object's status: below
   # `min_ray_angle_deg` it stops crossing them and says so.
   #
-  # THIS UNIT'S PROJECTOR CANNOT BE TURNED OFF. Firmware 5.9.2 declares no
-  # emitter parameter at all, and the dot pattern breaks tag decoding. Tape the
-  # projector window -- see cho_camera_calibration/config/cameras.yaml, which
-  # records which serial is which.
+  # This is the NEWER unit (5.17.3.10). The older one is on the wrist; see the
+  # note there about what it cannot be told to do.
   #
   # ITS EXTRINSIC MUST BE SOLVED BEFORE IT IS BELIEVED, and until it is, the
   # pose node reports `no_tf` for this camera and carries on with side_1 alone.

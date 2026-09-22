@@ -1,0 +1,72 @@
+# What a detector has to be told so the tag board shows up on /detections.
+#
+# `tag_board_70mm.yaml` beside this file describes the board's GEOMETRY, which
+# is what the solve consumes. This describes the same board as a set of tags to
+# LOOK FOR, which is what a detector consumes, and the two are different
+# audiences: without this, `detectors.launch.py` is started with whatever
+# object table the bench happens to use for its job -- the FR5's names only the
+# vessel tags -- and the board is invisible to every camera while the arm
+# dutifully drives all ten calibration poses recording nothing.
+#
+# Measured: that is exactly what happens. The detector logs which ids it is
+# looking for at startup and nothing else complains.
+#
+# ONE ENTRY PER TAG, because the object table has no notion of a rigid group of
+# them; the grouping lives in tag_board_70mm.yaml and is applied by the solver.
+# Nothing here is used for anything but ids and sizes -- the offsets are zero
+# and the poses these produce are ignored, since the solve works from CORNERS.
+# They are present because the schema wants them.
+#
+# `tag_size` IS THE MEASURED SQUARE and must agree with tag_board_70mm.yaml. It
+# does not enter the corner solve, but it does decide the tag poses the pose
+# node would publish from these ids, and a board left in front of a running
+# bench should not publish nonsense.
+
+objects:
+  - name: board_10
+    tag_id: 10
+    tag_size: 0.070
+    topic: /perception/object_pose/board_10
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+  - name: board_11
+    tag_id: 11
+    tag_size: 0.070
+    topic: /perception/object_pose/board_11
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+  - name: board_12
+    tag_id: 12
+    tag_size: 0.070
+    topic: /perception/object_pose/board_12
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+  - name: board_13
+    tag_id: 13
+    tag_size: 0.070
+    topic: /perception/object_pose/board_13
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+  - name: board_14
+    tag_id: 14
+    tag_size: 0.070
+    topic: /perception/object_pose/board_14
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+
+  - name: board_15
+    tag_id: 15
+    tag_size: 0.070
+    topic: /perception/object_pose/board_15
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]

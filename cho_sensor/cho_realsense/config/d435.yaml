@@ -13,11 +13,37 @@ enable_infra2: false
 # setting; the first wrist image was blank paper with a ghost where six tags
 # should have been.
 #
-# 1000 us gives a mean of 82 with 2.6% saturated and the tag borders intact,
-# and the detector reads all six at margins of 144-177. It is a BENCH number,
-# not a camera number: a different room or a matt-black table wants a different
-# one. Re-take it by sweeping and looking at the saturated fraction, not at the
-# mean -- the mean is dominated by the bench either way.
+# 1000 us suits a wrist looking down at this bench from close range. It is an
+# INSTALLATION number, not a camera number, and this file being shared by every
+# D435 on the bench is a known wart: the same 1000 us left a standing camera at
+# a mean of 30 and decode margins of 27-31, under the pose node's own gate of
+# 35, where 5000 us gave 77 and 127-151. Pass a different `camera_config:=` per
+# installation until there is somewhere better to put it.
+#
+# CHECK IT AT THE DEVICE, NOT IN THE CONFIG. The driver reports what the sensor
+# actually did in the frame metadata, which is the only honest readback:
+#
+#   ros2 topic echo /<ns>/<name>/infra1/metadata      -> actual_exposure,
+#                                                        auto_exposure, gain_level
+#
+# This matters because THE SETTING IS SILENTLY IGNORED ON OLD FIRMWARE. Measured
+# 2026-09-22 on two D435s: on 5.17.3.10 the value arrives (asked 1000, device
+# reports 1000; asked 5000, reports 5000). On 5.9.2 the driver logs
+#
+#   Could not set param: depth_module.exposure ... expected [double] got [integer]
+#
+# and the device sits at its factory 8500 us forever, about 31% saturated here,
+# while publishing no exposure/gain metadata at all -- so there is not even a
+# way to notice without comparing pictures. `enable_auto_exposure` and `gain`
+# still apply on both. Update the firmware rather than working around it.
+#
+# A WARNING ABOUT MEASURING THIS. A RealSense is exclusive: a second node cannot
+# open a camera the first still holds, and it fails quietly by simply not
+# publishing. Sweeping exposures by relaunching in a loop therefore measures the
+# FIRST node over and over unless every previous one is confirmed dead, and the
+# result looks exactly like a setting that does nothing. Count the processes
+# between runs; `pkill -f camera_name:=<name>` does NOT match the node, only the
+# launch wrapper.
 #
 # SET IT HERE, NEVER WITH `ros2 param set`. Changing exposure at runtime makes
 # the driver stop and restart the depth module, which comes back with
