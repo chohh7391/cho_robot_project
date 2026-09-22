@@ -30,59 +30,65 @@
 #
 # --------------------------------------------------------------- how to redo
 #
-# Put a tag of known size at a SURVEYED point in the robot's base frame, read
-# base_link <- <prefix>tag_<id>, and solve for the camera. One tag is enough
-# for an eye-to-hand camera and is what was done for the OAK below. It makes
-# that tag's own residual meaningless (it is fitted), so the checks that count
-# are the ones on OTHER tags -- see each entry.
+# `ros2 run cho_camera_calibration solve_hand_eye.py` -- see that package's
+# README. Both entries below come from one run of it.
+#
+# THE BOARD'S OWN POSE IS AN OUTPUT, NOT AN INPUT. The earlier procedure put
+# one tag at a surveyed point and solved the camera against it, which made
+# that tag's residual meaningless (it is fitted) and left the survey itself
+# unchecked. Measured: the same board, taped twice at the same nominal spot,
+# moved the solved camera 52 mm; and when the robot finally measured where
+# the board actually was, it was 48 mm from where it had been placed. Solving
+# AX = ZB over a moving arm gives the hand-eye AND the board's pose together,
+# so no tape measure enters either number.
 transforms:
   # ------------------------------------------------------------------ wrist
   # Eye-in-hand: the D435 rides the wrist, so its transform hangs off
   # `wrist3_link` and the robot's FK carries it. The bringup must therefore be
   # running for any wrist detection to resolve into the base frame.
   #
-  # MEASURED FROM THE MOUNT, not solved from a tag: the arm was posed twice by
-  # hand and the two solutions averaged. Checked afterwards against the
-  # surveyed tag 3 at (0.300, 0.000, -0.014): the wrist put it 7.4 mm away,
-  # which is the size expected from averaging two hand-set poses and is the
-  # honest accuracy of this entry.
+  # SOLVED, from ten arm poses viewing the tag board (2026-09-22). The previous
+  # entry here was measured off a DIFFERENT mount by hand-posing the arm twice
+  # and averaging, and was 134 mm and most of a half-turn from this one -- a
+  # replaced mount is not a correction, it is a different camera position, and
+  # nothing but a re-solve finds it.
   #
-  # A proper AX=ZB hand-eye solve over a dozen poses would do better. It was
-  # not worth it for a camera whose job is a close-up recovery sweep, where
-  # 7 mm at 200 mm range is already inside the approach tolerance.
+  # What says this one is right:
+  #
+  #   reprojection over 24 board corners   0.41-1.76 px across the ten poses
+  #   the board's pose, pose to pose       1.53 mm mean, 2.87 mm worst
+  #   the board's height                   came out at -0.0080 against a bench
+  #                                        at -0.013, and NOTHING in the solve
+  #                                        knows the bench height
+  #
+  # That last line is the check the old procedure could not produce.
   - name: wrist
     parent_frame: wrist3_link
     child_frame: wrist_link
-    xyz: [-0.02545, -0.06255, 0.15598]
+    xyz: [0.00023, 0.04779, 0.22847]
     # x, y, z, w -- the order geometry_msgs uses, NOT the w-first order some
     # CAD tools print.
-    quaternion: [0.804637, 0.002884, 0.593509, 0.017283]
+    quaternion: [0.536755, -0.531066, 0.458413, 0.468742]
 
   # -------------------------------------------------------------------- oak
   # Eye-to-hand: the OAK stands beside the bench and does not move, so this is
-  # a bench-layout number. IT IS WRONG THE MOMENT THE TRIPOD IS NUDGED, and
-  # nothing will say so.
+  # a bench-layout number. IT IS WRONG THE MOMENT THE TRIPOD IS NUDGED -- and
+  # it was. The previous entry had it 481 mm from where it actually stands,
+  # with no log line, no residual and no symptom beyond object poses that were
+  # confidently wrong. Running the board against it put the board 422 mm from
+  # its surveyed spot, tilted the bench plane 19.3 degrees off level and spread
+  # six coplanar tags over 60 mm of height. A board notices; one tag cannot.
   #
-  # SOLVED FROM ONE TAG: id 3, 39 mm, surveyed at (0.300, 0.000, -0.014) in the
-  # base frame. Three checks, of which only the last two mean anything:
+  # SOLVED from the same run as the wrist, off the board pose that run
+  # produced:
   #
-  #   tag 3 lands 0.2 mm from the surveyed point -- BY CONSTRUCTION. It is the
-  #     tag that was fitted, so this number is not evidence of anything.
-  #   tag 1 comes out at z = -14.1 mm against the same bench plane's -14.0 mm.
-  #     Its z was never fitted and both tags lie on the same aluminium
-  #     extrusion, so 0.1 mm is a genuine, independent check on roll and pitch.
-  #   the WRIST, through a completely separate chain (measured mount + FK),
-  #     agrees on tag 3 to 7.3 mm. Given the wrist's own 7.4 mm above, that
-  #     residual is the wrist's, not this entry's.
+  #   reprojection over 24 board corners   0.42-0.47 px
+  #   camera position across ten views     0.56 mm of spread
   #
-  # Jitter with the arm still: 0.55 mm over ~800 samples.
-  #
-  # What none of that proves is the ABSOLUTE position against the robot --
-  # everything here is referenced to the surveyed tag, so an error in that
-  # survey moves everything together and no check above can see it. Closing
-  # that needs the TCP touched to a known point and compared against FK.
+  # Re-run the solve after anything touches the tripod, and keep an eye on
+  # those two numbers -- they are what tells you it has been touched.
   - name: oak
     parent_frame: base_link
     child_frame: oak-d-base-frame
-    xyz: [0.41984, 0.15200, 0.37690]
-    quaternion: [0.535050, 0.124190, -0.795538, 0.255767]
+    xyz: [0.46210, 0.58172, 0.58819]
+    quaternion: [0.292552, 0.280998, -0.723582, 0.558466]

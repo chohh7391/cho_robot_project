@@ -156,6 +156,38 @@ raster:
 # What a solved waypoint has to satisfy to be kept. A cell that fails every one
 # of these is dropped from the raster and named in the generated file, rather
 # than being quietly replaced by something nearby.
+# WHAT ELSE IS STANDING IN THE SEARCH AREA.
+#
+# Every clearance check below measures height above the bench, and the URDF
+# holds the robot and nothing else -- so anything bolted into the cell inside
+# the raster is invisible to the whole solve. The OAK is such a thing.
+#
+# THE POSITION COMES FROM THE EXTRINSICS FILE, and that is the point. Solving
+# this against the extrinsic that used to be recorded put the OAK at
+# (0.420, 0.152, 0.377), inside x [0.20, 0.60] by y [-0.30, 0.30] and 9 mm
+# below the close pass, with the AG-95 finger passing 69 mm from it -- a
+# frightening number that was an artefact of a stale file. The camera was
+# actually 481 mm away from there. Calibrated properly it sits at y = 0.58,
+# OUTSIDE the search area and above it, and the measured worst approach over
+# the whole raster is 330 mm.
+#
+# So this section currently costs nothing, and it stays for two reasons: the
+# OAK is a real object in the cell that the robot model does not contain, and
+# `from_extrinsics` means re-running the calibration re-aims the keep-out
+# without anyone remembering to. If the tripod is ever moved back over the
+# bench, the solve will drop the cells that would have hit it instead of
+# finding out the hard way.
+#
+# radius_m is the OAK's own bulk and checks.min_obstacle_clearance_m is the
+# robot's, since the checked frames are points and the gripper around them is
+# not. Both are PROVISIONAL -- sized to cover an OAK-D Pro W (about
+# 100 x 33 x 43 mm) on a mount nobody has measured. Measure the installation
+# before relying on them.
+obstacles:
+  - name: oak
+    from_extrinsics: oak
+    radius_m: 0.10
+
 checks:
   max_position_error_m: 0.005
   max_axis_error_deg: 1.0
@@ -175,6 +207,7 @@ checks:
   # bulge would leave the raster with no reachable path at all.
   min_path_tool_over_bench_m: 0.20
   min_path_arm_over_bench_m: 0.10
+  min_obstacle_clearance_m: 0.12
   tool_frames: [tool_tcp, gripper_base_link, gripper_finger_link, wrist3_link]
   arm_frames: [upperarm_link, forearm_link, wrist1_link, wrist2_link]
 

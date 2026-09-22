@@ -133,6 +133,48 @@ def build_model(spec):
     return model, camera_id, entry
 
 
+def load_obstacles(spec):
+    """Keep-out spheres the raster has to fly around, in the robot's frame.
+
+    THE BENCH PLANE IS NOT THE ONLY THING IN THE WAY. Every clearance check
+    in this solver measures height above the bench, and the URDF contains the
+    robot and nothing else -- so a camera on a post standing inside the search
+    area is invisible to all of it. On the FR5 bench the OAK stands at
+    (0.420, 0.152, 0.377), which is INSIDE x [0.20, 0.60] by y [-0.30, 0.30]
+    and 9 mm below the close pass's height. Measured against the solved table,
+    the AG-95 finger frame passes 69 mm from it.
+
+    ``from_extrinsics`` takes the position out of the same file the static
+    publisher reads, so an obstacle that IS a camera has one source of truth
+    for where it is; ``xyz`` is for everything else. ``radius_m`` is the
+    obstacle's own bulk, and ``checks.min_obstacle_clearance_m`` is the
+    robot's -- the frames are points and the gripper around them is not.
+    """
+    entries = spec.get('obstacles') or []
+    if not entries:
+        return []
+    transforms = None
+    resolved = []
+    for entry in entries:
+        if 'xyz' in entry:
+            position = np.array(entry['xyz'], dtype=float)
+        else:
+            if transforms is None:
+                with open(share(spec['camera']['package'],
+                                spec['camera']['extrinsics']),
+                          encoding='utf-8') as handle:
+                    transforms = yaml.safe_load(handle)['transforms']
+            name = entry['from_extrinsics']
+            match = next((item for item in transforms if item['name'] == name), None)
+            if match is None:
+                raise SystemExit(
+                    f"obstacle '{entry['name']}' names extrinsics entry '{name}', "
+                    'which that file does not have')
+            position = np.array(match['xyz'], dtype=float)
+        resolved.append((entry['name'], position, float(entry['radius_m'])))
+    return resolved
+
+
 class Solver:
     """Position + optical-direction IK, with the image roll left free."""
 
@@ -194,15 +236,33 @@ class Solver:
             q = np.clip(q + np.clip(step, -0.12, 0.12), self.lower, self.upper)
         return q
 
-    def path_clearance(self, start, end, bench_z, checks, samples=25):
-        """Lowest tool and arm height along the straight line from start to end.
+    def obstacle_clearance(self, checks, obstacles):
+        """Closest approach of any checked frame to any keep-out sphere.
+
+        Assumes forward() has already been called. Returns infinity when there
+        are no obstacles, so a spec without them behaves exactly as before.
+        """
+        if not obstacles:
+            return float('inf')
+        gap = float('inf')
+        for name in checks['tool_frames'] + checks['arm_frames']:
+            point = self.data.oMf[self.model.getFrameId(name)].translation
+            for _label, centre, radius in obstacles:
+                gap = min(gap, float(np.linalg.norm(point - centre)) - radius)
+        return gap
+
+    def path_clearance(self, start, end, bench_z, checks, obstacles=(), samples=25):
+        """Lowest tool and arm height, and closest obstacle approach, along the
+        straight line from start to end.
 
         THE ENDPOINTS ARE NOT THE PATH. Two poses that each clear the bench can
         be joined by an interpolation that dips through it -- the action server
         interpolates in joint space, and a joint-space straight line is a curve
-        in Cartesian space with no reason to stay above anything.
+        in Cartesian space with no reason to stay above anything. The same is
+        true of going around something: the measured worst approach to the OAK
+        is IN TRANSIT, not at any waypoint.
         """
-        tool, arm = float('inf'), float('inf')
+        tool, arm, clear = float('inf'), float('inf'), float('inf')
         for step in range(samples + 1):
             q = start + (end - start) * (step / samples)
             self.forward(q)
@@ -210,9 +270,10 @@ class Solver:
                        for name in checks['tool_frames'] + checks['arm_frames']}
             tool = min(tool, min(heights[n] for n in checks['tool_frames']) - bench_z)
             arm = min(arm, min(heights[n] for n in checks['arm_frames']) - bench_z)
-        return tool, arm
+            clear = min(clear, self.obstacle_clearance(checks, obstacles))
+        return tool, arm, clear
 
-    def inspect(self, q, position, direction, bench_z, checks):
+    def inspect(self, q, position, direction, bench_z, checks, obstacles=()):
         self.forward(q)
         placement = self.data.oMf[self.camera_id]
         axis = placement.rotation[:, 0]
@@ -229,6 +290,7 @@ class Solver:
             'arm_over_bench_m': min(heights[n] for n in checks['arm_frames']) - bench_z,
             'joint_margin_rad': float(min(np.min(q - self.lower), np.min(self.upper - q))),
             'condition': float(np.linalg.cond(jacobian)),
+            'obstacle_clearance_m': self.obstacle_clearance(checks, obstacles),
         }
 
 
@@ -335,7 +397,7 @@ def raster_cells(spec):
     return cells
 
 
-def solve_raster(solver, spec, seed):
+def solve_raster(solver, spec, seed, obstacles=()):
     """Solve the whole search raster once. It is the same for every object."""
     tilt = math.radians(float(spec['raster'].get('tilt_deg', 0.0)))
     checks = spec['checks']
@@ -375,24 +437,29 @@ def solve_raster(solver, spec, seed):
         for candidate in seeds:
             q = solver.solve(cell['position'], direction, candidate, rotation=attitude)
             report = solver.inspect(q, cell['position'], direction,
-                                    spec['bench_z_m'], checks)
+                                    spec['bench_z_m'], checks, obstacles)
             if (report['position_error_m'] > checks['max_position_error_m']
                     or report['axis_error_deg'] > checks['max_axis_error_deg']
                     or report['joint_margin_rad'] < checks['min_joint_margin_rad']
                     or report['condition'] > checks['max_condition']
                     or report['tool_over_bench_m'] < checks['min_tool_over_bench_m']
-                    or report['arm_over_bench_m'] < checks['min_arm_over_bench_m']):
+                    or report['arm_over_bench_m'] < checks['min_arm_over_bench_m']
+                    or report['obstacle_clearance_m']
+                    < checks.get('min_obstacle_clearance_m', 0.0)):
                 continue
             step = float(np.max(np.abs(q - anchor)))
             if not cell['first'] and step > checks['max_step_rad'] * (skipped + 1):
                 continue
             if not cell['first']:
-                path_tool, path_arm = solver.path_clearance(
-                    anchor, q, spec['bench_z_m'], checks)
+                path_tool, path_arm, path_clear = solver.path_clearance(
+                    anchor, q, spec['bench_z_m'], checks, obstacles)
                 if (path_tool < checks['min_path_tool_over_bench_m']
-                        or path_arm < checks['min_path_arm_over_bench_m']):
+                        or path_arm < checks['min_path_arm_over_bench_m']
+                        or path_clear
+                        < checks.get('min_obstacle_clearance_m', 0.0)):
                     continue
                 report['path_tool_over_bench_m'] = path_tool
+                report['path_obstacle_clearance_m'] = path_clear
             # NEAREST, including for the first waypoint. Picking the
             # best-conditioned solution there instead cost 22 of 38 cells: the
             # first waypoint fixes the IK branch every later one has to stay
@@ -423,6 +490,7 @@ def main():
         spec = yaml.safe_load(handle)
 
     model, camera_id, extrinsic = build_model(spec)
+    obstacles = load_obstacles(spec)
     solver = Solver(model, camera_id, int(spec['robot']['arm_dof']))
     home = np.array(spec['robot']['home'], dtype=float)
 
@@ -459,7 +527,7 @@ def main():
     # looks: the first object's sweep passes over the whole area, so anything
     # else out there becomes visible during it and the next object's leaf skips
     # without moving.
-    waypoints, failures = solve_raster(solver, spec, home)
+    waypoints, failures = solve_raster(solver, spec, home, obstacles)
     area = spec['raster']['area']
     print(f'raster: {len(waypoints)} waypoint(s)'
           + (f', {len(failures)} unreachable: {failures}' if failures else ''),

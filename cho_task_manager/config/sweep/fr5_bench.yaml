@@ -75,237 +75,237 @@ sweeps:
   - object: beaker
     # Searches x [0.2, 0.6] by y [-0.3, 0.3], rows 0.05 m apart and stops 0.2 m along each, bench plane z = -0.014. Those are CAMERA positions; what it sees reaches well beyond them. NOT aimed at where this object is thought to be: finding that out is the job.
     waypoints:
-      # cam (+0.600, -0.300, +0.536), tool 0.455 m over the bench, cond(J) 11, 0.90 rad from the last
+      # cam (+0.600, -0.300, +0.536), tool 0.526 m over the bench, cond(J) 24, 2.01 rad from the last
       - name: survey_r0c0
-        joints: [-0.3006, -1.7606, -1.1739, -1.5273, 1.7395, 0.9051]
+        joints: [-0.1958, -2.0412, -0.5066, -2.1293, 1.4335, -1.9344]
         duration: 12.0
-      # cam (+0.600, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.27 rad from the last
+      # cam (+0.600, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.32 rad from the last
       - name: survey_r0c1
-        joints: [-0.0285, -1.6202, -1.3189, -1.5764, 1.8001, 0.6353]
-      # cam (+0.600, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.29 rad from the last
+        joints: [0.1290, -1.8182, -0.8296, -2.0231, 1.4352, -1.9794]
+      # cam (+0.600, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 14, 0.31 rad from the last
       - name: survey_r0c2
-        joints: [0.2638, -1.6460, -1.2747, -1.6585, 1.8416, 0.3791]
-      # cam (+0.600, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 13, 0.26 rad from the last
+        joints: [0.4385, -1.7649, -0.9086, -1.9581, 1.4543, -2.2902]
+      # cam (+0.600, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 17, 0.25 rad from the last
       - name: survey_r0c3
-        joints: [0.5231, -1.8426, -1.0214, -1.7875, 1.8658, 0.1220]
-      # cam (+0.550, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 12, 0.11 rad from the last
+        joints: [0.6897, -1.9178, -0.7135, -1.9745, 1.4773, -2.5356]
+      # cam (+0.550, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 14, 0.15 rad from the last
       - name: survey_r1c3
-        joints: [0.5529, -1.7459, -1.1347, -1.7982, 1.8700, 0.0286]
-      # cam (+0.550, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.28 rad from the last
+        joints: [0.7547, -1.8007, -0.8673, -1.9509, 1.4641, -2.4036]
+      # cam (+0.550, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.27 rad from the last
       - name: survey_r1c2
-        joints: [0.2773, -1.5375, -1.3810, -1.6788, 1.8496, 0.3127]
-      # cam (+0.550, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.32 rad from the last
+        joints: [0.4851, -1.6453, -1.0446, -1.9513, 1.4482, -2.2096]
+      # cam (+0.550, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.34 rad from the last
       - name: survey_r1c1
-        joints: [-0.0436, -1.5096, -1.4243, -1.5991, 1.8139, 0.5608]
-      # cam (+0.550, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.29 rad from the last
+        joints: [0.1449, -1.6968, -0.9752, -2.0102, 1.4323, -1.8975]
+      # cam (+0.550, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 19, 0.35 rad from the last
       - name: survey_r1c0
-        joints: [-0.3332, -1.6523, -1.2958, -1.5231, 1.7529, 0.8512]
-      # cam (+0.500, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.10 rad from the last
+        joints: [-0.2055, -1.9539, -0.6284, -2.1329, 1.4291, -1.6616]
+      # cam (+0.500, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 16, 0.15 rad from the last
       - name: survey_r2c0
-        joints: [-0.3780, -1.5523, -1.3946, -1.5428, 1.7751, 0.7553]
-      # cam (+0.500, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.31 rad from the last
+        joints: [-0.2245, -1.8520, -0.7658, -2.1183, 1.4311, -1.5132]
+      # cam (+0.500, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.37 rad from the last
       - name: survey_r2c1
-        joints: [-0.0684, -1.4068, -1.5068, -1.6482, 1.8325, 0.4454]
-      # cam (+0.500, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.35 rad from the last
+        joints: [0.1488, -1.7319, -0.9039, -2.1495, 1.4491, -1.1406]
+      # cam (+0.500, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.36 rad from the last
       - name: survey_r2c2
-        joints: [0.2791, -1.4476, -1.4508, -1.7459, 1.8643, 0.1467]
-      # cam (+0.500, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.30 rad from the last
+        joints: [0.5082, -1.8165, -0.7867, -2.2201, 1.4824, -0.7811]
+      # cam (+0.500, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 24, 0.32 rad from the last
       - name: survey_r2c3
-        joints: [0.5816, -1.6705, -1.2089, -1.8466, 1.8716, -0.1311]
-      # cam (+0.450, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.09 rad from the last
+        joints: [0.8240, -2.0360, -0.4726, -2.3021, 1.4687, -0.9127]
+      # cam (+0.450, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 18, 0.17 rad from the last
       - name: survey_r3c3
-        joints: [0.6250, -1.5854, -1.2934, -1.8700, 1.8697, -0.2080]
-      # cam (+0.450, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.32 rad from the last
+        joints: [0.8774, -1.9216, -0.6417, -2.2623, 1.4855, -0.7542]
+      # cam (+0.450, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.31 rad from the last
       - name: survey_r3c2
-        joints: [0.3023, -1.3426, -1.5319, -1.7825, 1.8669, 0.1027]
-      # cam (+0.450, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.37 rad from the last
+        joints: [0.5634, -1.6793, -0.9539, -2.1904, 1.4827, -0.7784]
+      # cam (+0.450, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.39 rad from the last
       - name: survey_r3c1
-        joints: [-0.0704, -1.2907, -1.5966, -1.6673, 1.8282, 0.4740]
-      # cam (+0.450, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.33 rad from the last
+        joints: [0.1688, -1.5939, -1.0585, -2.1288, 1.4468, -1.1733]
+      # cam (+0.450, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.41 rad from the last
       - name: survey_r3c0
-        joints: [-0.4032, -1.4498, -1.4919, -1.5376, 1.7632, 0.8078]
-      # cam (+0.400, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.09 rad from the last
+        joints: [-0.2457, -1.7123, -0.9444, -2.0691, 1.4297, -1.5864]
+      # cam (+0.400, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.10 rad from the last
       - name: survey_r4c0
-        joints: [-0.4539, -1.3569, -1.5651, -1.5678, 1.7753, 0.7545]
-      # cam (+0.400, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.36 rad from the last
+        joints: [-0.2730, -1.6230, -1.0407, -2.0744, 1.4314, -1.4990]
+      # cam (+0.400, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.45 rad from the last
       - name: survey_r4c1
-        joints: [-0.0891, -1.1845, -1.6607, -1.7213, 1.8351, 0.4272]
-      # cam (+0.400, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.41 rad from the last
+        joints: [0.1784, -1.4982, -1.1469, -2.1511, 1.4565, -1.0468]
+      # cam (+0.400, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.43 rad from the last
       - name: survey_r4c2
-        joints: [0.3247, -1.2469, -1.5917, -1.8432, 1.8704, 0.0183]
-      # cam (+0.400, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.35 rad from the last
+        joints: [0.6066, -1.5826, -1.0541, -2.1993, 1.5013, -0.6206]
+      # cam (+0.400, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.31 rad from the last
       - name: survey_r4c3
-        joints: [0.6728, -1.5162, -1.3514, -1.9168, 1.8634, -0.3304]
-      # cam (+0.350, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.07 rad from the last
+        joints: [0.9201, -1.8463, -0.7411, -2.2568, 1.5185, -0.4865]
+      # cam (+0.350, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.12 rad from the last
       - name: survey_r5c3
-        joints: [0.7351, -1.4413, -1.4135, -1.9488, 1.8581, -0.3974]
-      # cam (+0.350, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.38 rad from the last
+        joints: [0.9895, -1.7505, -0.8623, -2.2365, 1.5345, -0.3681]
+      # cam (+0.350, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.30 rad from the last
       - name: survey_r5c2
-        joints: [0.3620, -1.1456, -1.6479, -1.8996, 1.8713, -0.0199]
-      # cam (+0.350, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.49 rad from the last
+        joints: [0.6887, -1.4646, -1.1651, -2.2070, 1.5025, -0.6110]
+      # cam (+0.350, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.48 rad from the last
       - name: survey_r5c1
-        joints: [-0.1246, -1.0878, -1.7041, -1.8009, 1.8478, 0.3289]
-      # cam (+0.350, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.39 rad from the last
+        joints: [0.2111, -1.3706, -1.2547, -2.1661, 1.4530, -1.0889]
+      # cam (+0.350, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.51 rad from the last
       - name: survey_r5c0
-        joints: [-0.5179, -1.2708, -1.6231, -1.6109, 1.7905, 0.6834]
-      # cam (+0.300, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.08 rad from the last
+        joints: [-0.3038, -1.5032, -1.1635, -2.0572, 1.4296, -1.6004]
+      # cam (+0.300, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.08 rad from the last
       - name: survey_r6c0
-        joints: [-0.5956, -1.1924, -1.6679, -1.6622, 1.8058, 0.6054]
-      # cam (+0.300, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 12, 0.42 rad from the last
+        joints: [-0.3438, -1.4264, -1.2277, -2.0794, 1.4307, -1.5323]
+      # cam (+0.300, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.57 rad from the last
       - name: survey_r6c1
-        joints: [-0.1785, -1.0019, -1.7297, -1.8989, 1.8608, 0.1946]
-      # cam (+0.300, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.55 rad from the last
+        joints: [0.2287, -1.2814, -1.3125, -2.2121, 1.4643, -0.9586]
+      # cam (+0.300, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.53 rad from the last
       - name: survey_r6c2
-        joints: [0.3668, -1.1057, -1.6418, -2.0399, 1.8626, -0.3407]
-      # cam (+0.300, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.43 rad from the last
+        joints: [0.7544, -1.3784, -1.2323, -2.2361, 1.5258, -0.4324]
+      # cam (+0.300, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.30 rad from the last
       - name: survey_r6c3
-        joints: [0.7987, -1.4369, -1.3936, -2.0617, 1.8136, -0.7323]
-      # cam (+0.250, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.09 rad from the last
+        joints: [1.0506, -1.6744, -0.9505, -2.2291, 1.5644, -0.1557]
+      # cam (+0.250, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.09 rad from the last
       - name: survey_r7c3
-        joints: [0.8903, -1.3768, -1.4384, -2.0926, 1.8013, -0.7988]
-      # cam (+0.250, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.45 rad from the last
+        joints: [1.1449, -1.5950, -1.0362, -2.2228, 1.5777, -0.0624]
+      # cam (+0.250, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.30 rad from the last
       - name: survey_r7c2
-        joints: [0.4397, -1.2110, -1.5307, -2.2458, 1.6947, -1.2429]
-      # cam (+0.250, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 8, 0.60 rad from the last
+        joints: [0.8431, -1.2903, -1.2928, -2.2692, 1.5483, -0.2691]
+      # cam (+0.250, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.59 rad from the last
       - name: survey_r7c1
-        joints: [-0.1632, -1.2938, -1.4726, -2.2415, 1.5122, -1.8458]
-      # cam (+0.250, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.45 rad from the last
+        joints: [0.2566, -1.1875, -1.3637, -2.2652, 1.4744, -0.8560]
+      # cam (+0.250, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.65 rad from the last
       - name: survey_r7c0
-        joints: [-0.6135, -1.5691, -1.2556, -2.1273, 1.3868, -2.2985]
-      # cam (+0.200, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.08 rad from the last
+        joints: [-0.3939, -1.3506, -1.2854, -2.1019, 1.4314, -1.5006]
+      # cam (+0.200, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.06 rad from the last
       - name: survey_r8c0
-        joints: [-0.6884, -1.4936, -1.3294, -2.1228, 1.3788, -2.3320]
-      # cam (+0.200, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.49 rad from the last
+        joints: [-0.4580, -1.2861, -1.3282, -2.1292, 1.4325, -1.4598]
+      # cam (+0.200, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.74 rad from the last
       - name: survey_r8c1
-        joints: [-0.2017, -1.1914, -1.5365, -2.2801, 1.5127, -1.8442]
-      # cam (+0.200, +0.100, +0.536), tool 0.455 m over the bench (0.454 lowest on the way here), cond(J) 10, 0.72 rad from the last
+        joints: [0.2843, -1.1016, -1.3989, -2.3283, 1.4897, -0.7170]
+      # cam (+0.200, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.66 rad from the last
       - name: survey_r8c2
-        joints: [0.5146, -1.0887, -1.5983, -2.2844, 1.7259, -1.1279]
-      # cam (+0.200, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.48 rad from the last
+        joints: [0.9438, -1.2078, -1.3414, -2.3047, 1.5785, -0.0568]
+      # cam (+0.200, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.32 rad from the last
       - name: survey_r8c3
-        joints: [0.9981, -1.3063, -1.4916, -2.1066, 1.8041, -0.7842]
-      # cam (+0.400, +0.000, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.89 rad from the last
+        joints: [1.2574, -1.5257, -1.1048, -2.2225, 1.5883, 0.0119]
+      # cam (+0.400, +0.000, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.85 rad from the last
       - name: close_approach
-        joints: [0.1091, -1.5795, -1.2291, -2.2048, 1.5645, -1.6758]
-      # cam (+0.400, +0.000, +0.386), tool 0.305 m over the bench (0.305 lowest on the way here), cond(J) 8, 0.42 rad from the last
+        joints: [0.4091, -1.5110, -1.1287, -2.1785, 1.4764, -0.8365]
+      # cam (+0.400, +0.000, +0.386), tool 0.376 m over the bench (0.376 lowest on the way here), cond(J) 8, 0.43 rad from the last
       - name: close
-        joints: [0.1836, -1.5544, -1.6446, -1.7955, 1.4643, -2.0073]
+        joints: [0.3342, -1.4723, -1.5570, -1.8184, 1.5283, -0.4139]
 
   - object: flask
     # Searches x [0.2, 0.6] by y [-0.3, 0.3], rows 0.05 m apart and stops 0.2 m along each, bench plane z = -0.014. Those are CAMERA positions; what it sees reaches well beyond them. NOT aimed at where this object is thought to be: finding that out is the job.
     waypoints:
-      # cam (+0.600, -0.300, +0.536), tool 0.455 m over the bench, cond(J) 11, 0.90 rad from the last
+      # cam (+0.600, -0.300, +0.536), tool 0.526 m over the bench, cond(J) 24, 2.01 rad from the last
       - name: survey_r0c0
-        joints: [-0.3006, -1.7606, -1.1739, -1.5273, 1.7395, 0.9051]
+        joints: [-0.1958, -2.0412, -0.5066, -2.1293, 1.4335, -1.9344]
         duration: 12.0
-      # cam (+0.600, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.27 rad from the last
+      # cam (+0.600, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.32 rad from the last
       - name: survey_r0c1
-        joints: [-0.0285, -1.6202, -1.3189, -1.5764, 1.8001, 0.6353]
-      # cam (+0.600, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.29 rad from the last
+        joints: [0.1290, -1.8182, -0.8296, -2.0231, 1.4352, -1.9794]
+      # cam (+0.600, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 14, 0.31 rad from the last
       - name: survey_r0c2
-        joints: [0.2638, -1.6460, -1.2747, -1.6585, 1.8416, 0.3791]
-      # cam (+0.600, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 13, 0.26 rad from the last
+        joints: [0.4385, -1.7649, -0.9086, -1.9581, 1.4543, -2.2902]
+      # cam (+0.600, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 17, 0.25 rad from the last
       - name: survey_r0c3
-        joints: [0.5231, -1.8426, -1.0214, -1.7875, 1.8658, 0.1220]
-      # cam (+0.550, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 12, 0.11 rad from the last
+        joints: [0.6897, -1.9178, -0.7135, -1.9745, 1.4773, -2.5356]
+      # cam (+0.550, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 14, 0.15 rad from the last
       - name: survey_r1c3
-        joints: [0.5529, -1.7459, -1.1347, -1.7982, 1.8700, 0.0286]
-      # cam (+0.550, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.28 rad from the last
+        joints: [0.7547, -1.8007, -0.8673, -1.9509, 1.4641, -2.4036]
+      # cam (+0.550, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.27 rad from the last
       - name: survey_r1c2
-        joints: [0.2773, -1.5375, -1.3810, -1.6788, 1.8496, 0.3127]
-      # cam (+0.550, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.32 rad from the last
+        joints: [0.4851, -1.6453, -1.0446, -1.9513, 1.4482, -2.2096]
+      # cam (+0.550, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.34 rad from the last
       - name: survey_r1c1
-        joints: [-0.0436, -1.5096, -1.4243, -1.5991, 1.8139, 0.5608]
-      # cam (+0.550, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.29 rad from the last
+        joints: [0.1449, -1.6968, -0.9752, -2.0102, 1.4323, -1.8975]
+      # cam (+0.550, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 19, 0.35 rad from the last
       - name: survey_r1c0
-        joints: [-0.3332, -1.6523, -1.2958, -1.5231, 1.7529, 0.8512]
-      # cam (+0.500, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.10 rad from the last
+        joints: [-0.2055, -1.9539, -0.6284, -2.1329, 1.4291, -1.6616]
+      # cam (+0.500, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 16, 0.15 rad from the last
       - name: survey_r2c0
-        joints: [-0.3780, -1.5523, -1.3946, -1.5428, 1.7751, 0.7553]
-      # cam (+0.500, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.31 rad from the last
+        joints: [-0.2245, -1.8520, -0.7658, -2.1183, 1.4311, -1.5132]
+      # cam (+0.500, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.37 rad from the last
       - name: survey_r2c1
-        joints: [-0.0684, -1.4068, -1.5068, -1.6482, 1.8325, 0.4454]
-      # cam (+0.500, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.35 rad from the last
+        joints: [0.1488, -1.7319, -0.9039, -2.1495, 1.4491, -1.1406]
+      # cam (+0.500, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.36 rad from the last
       - name: survey_r2c2
-        joints: [0.2791, -1.4476, -1.4508, -1.7459, 1.8643, 0.1467]
-      # cam (+0.500, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.30 rad from the last
+        joints: [0.5082, -1.8165, -0.7867, -2.2201, 1.4824, -0.7811]
+      # cam (+0.500, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 24, 0.32 rad from the last
       - name: survey_r2c3
-        joints: [0.5816, -1.6705, -1.2089, -1.8466, 1.8716, -0.1311]
-      # cam (+0.450, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.09 rad from the last
+        joints: [0.8240, -2.0360, -0.4726, -2.3021, 1.4687, -0.9127]
+      # cam (+0.450, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 18, 0.17 rad from the last
       - name: survey_r3c3
-        joints: [0.6250, -1.5854, -1.2934, -1.8700, 1.8697, -0.2080]
-      # cam (+0.450, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.32 rad from the last
+        joints: [0.8774, -1.9216, -0.6417, -2.2623, 1.4855, -0.7542]
+      # cam (+0.450, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.31 rad from the last
       - name: survey_r3c2
-        joints: [0.3023, -1.3426, -1.5319, -1.7825, 1.8669, 0.1027]
-      # cam (+0.450, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.37 rad from the last
+        joints: [0.5634, -1.6793, -0.9539, -2.1904, 1.4827, -0.7784]
+      # cam (+0.450, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.39 rad from the last
       - name: survey_r3c1
-        joints: [-0.0704, -1.2907, -1.5966, -1.6673, 1.8282, 0.4740]
-      # cam (+0.450, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.33 rad from the last
+        joints: [0.1688, -1.5939, -1.0585, -2.1288, 1.4468, -1.1733]
+      # cam (+0.450, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.41 rad from the last
       - name: survey_r3c0
-        joints: [-0.4032, -1.4498, -1.4919, -1.5376, 1.7632, 0.8078]
-      # cam (+0.400, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.09 rad from the last
+        joints: [-0.2457, -1.7123, -0.9444, -2.0691, 1.4297, -1.5864]
+      # cam (+0.400, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.10 rad from the last
       - name: survey_r4c0
-        joints: [-0.4539, -1.3569, -1.5651, -1.5678, 1.7753, 0.7545]
-      # cam (+0.400, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.36 rad from the last
+        joints: [-0.2730, -1.6230, -1.0407, -2.0744, 1.4314, -1.4990]
+      # cam (+0.400, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.45 rad from the last
       - name: survey_r4c1
-        joints: [-0.0891, -1.1845, -1.6607, -1.7213, 1.8351, 0.4272]
-      # cam (+0.400, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.41 rad from the last
+        joints: [0.1784, -1.4982, -1.1469, -2.1511, 1.4565, -1.0468]
+      # cam (+0.400, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.43 rad from the last
       - name: survey_r4c2
-        joints: [0.3247, -1.2469, -1.5917, -1.8432, 1.8704, 0.0183]
-      # cam (+0.400, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.35 rad from the last
+        joints: [0.6066, -1.5826, -1.0541, -2.1993, 1.5013, -0.6206]
+      # cam (+0.400, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 15, 0.31 rad from the last
       - name: survey_r4c3
-        joints: [0.6728, -1.5162, -1.3514, -1.9168, 1.8634, -0.3304]
-      # cam (+0.350, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.07 rad from the last
+        joints: [0.9201, -1.8463, -0.7411, -2.2568, 1.5185, -0.4865]
+      # cam (+0.350, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 13, 0.12 rad from the last
       - name: survey_r5c3
-        joints: [0.7351, -1.4413, -1.4135, -1.9488, 1.8581, -0.3974]
-      # cam (+0.350, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.38 rad from the last
+        joints: [0.9895, -1.7505, -0.8623, -2.2365, 1.5345, -0.3681]
+      # cam (+0.350, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.30 rad from the last
       - name: survey_r5c2
-        joints: [0.3620, -1.1456, -1.6479, -1.8996, 1.8713, -0.0199]
-      # cam (+0.350, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.49 rad from the last
+        joints: [0.6887, -1.4646, -1.1651, -2.2070, 1.5025, -0.6110]
+      # cam (+0.350, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.48 rad from the last
       - name: survey_r5c1
-        joints: [-0.1246, -1.0878, -1.7041, -1.8009, 1.8478, 0.3289]
-      # cam (+0.350, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.39 rad from the last
+        joints: [0.2111, -1.3706, -1.2547, -2.1661, 1.4530, -1.0889]
+      # cam (+0.350, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.51 rad from the last
       - name: survey_r5c0
-        joints: [-0.5179, -1.2708, -1.6231, -1.6109, 1.7905, 0.6834]
-      # cam (+0.300, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.08 rad from the last
+        joints: [-0.3038, -1.5032, -1.1635, -2.0572, 1.4296, -1.6004]
+      # cam (+0.300, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.08 rad from the last
       - name: survey_r6c0
-        joints: [-0.5956, -1.1924, -1.6679, -1.6622, 1.8058, 0.6054]
-      # cam (+0.300, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 12, 0.42 rad from the last
+        joints: [-0.3438, -1.4264, -1.2277, -2.0794, 1.4307, -1.5323]
+      # cam (+0.300, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.57 rad from the last
       - name: survey_r6c1
-        joints: [-0.1785, -1.0019, -1.7297, -1.8989, 1.8608, 0.1946]
-      # cam (+0.300, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 11, 0.55 rad from the last
+        joints: [0.2287, -1.2814, -1.3125, -2.2121, 1.4643, -0.9586]
+      # cam (+0.300, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.53 rad from the last
       - name: survey_r6c2
-        joints: [0.3668, -1.1057, -1.6418, -2.0399, 1.8626, -0.3407]
-      # cam (+0.300, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.43 rad from the last
+        joints: [0.7544, -1.3784, -1.2323, -2.2361, 1.5258, -0.4324]
+      # cam (+0.300, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.30 rad from the last
       - name: survey_r6c3
-        joints: [0.7987, -1.4369, -1.3936, -2.0617, 1.8136, -0.7323]
-      # cam (+0.250, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.09 rad from the last
+        joints: [1.0506, -1.6744, -0.9505, -2.2291, 1.5644, -0.1557]
+      # cam (+0.250, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.09 rad from the last
       - name: survey_r7c3
-        joints: [0.8903, -1.3768, -1.4384, -2.0926, 1.8013, -0.7988]
-      # cam (+0.250, +0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.45 rad from the last
+        joints: [1.1449, -1.5950, -1.0362, -2.2228, 1.5777, -0.0624]
+      # cam (+0.250, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.30 rad from the last
       - name: survey_r7c2
-        joints: [0.4397, -1.2110, -1.5307, -2.2458, 1.6947, -1.2429]
-      # cam (+0.250, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 8, 0.60 rad from the last
+        joints: [0.8431, -1.2903, -1.2928, -2.2692, 1.5483, -0.2691]
+      # cam (+0.250, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.59 rad from the last
       - name: survey_r7c1
-        joints: [-0.1632, -1.2938, -1.4726, -2.2415, 1.5122, -1.8458]
-      # cam (+0.250, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.45 rad from the last
+        joints: [0.2566, -1.1875, -1.3637, -2.2652, 1.4744, -0.8560]
+      # cam (+0.250, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.65 rad from the last
       - name: survey_r7c0
-        joints: [-0.6135, -1.5691, -1.2556, -2.1273, 1.3868, -2.2985]
-      # cam (+0.200, -0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.08 rad from the last
+        joints: [-0.3939, -1.3506, -1.2854, -2.1019, 1.4314, -1.5006]
+      # cam (+0.200, -0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 9, 0.06 rad from the last
       - name: survey_r8c0
-        joints: [-0.6884, -1.4936, -1.3294, -2.1228, 1.3788, -2.3320]
-      # cam (+0.200, -0.100, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.49 rad from the last
+        joints: [-0.4580, -1.2861, -1.3282, -2.1292, 1.4325, -1.4598]
+      # cam (+0.200, -0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 12, 0.74 rad from the last
       - name: survey_r8c1
-        joints: [-0.2017, -1.1914, -1.5365, -2.2801, 1.5127, -1.8442]
-      # cam (+0.200, +0.100, +0.536), tool 0.455 m over the bench (0.454 lowest on the way here), cond(J) 10, 0.72 rad from the last
+        joints: [0.2843, -1.1016, -1.3989, -2.3283, 1.4897, -0.7170]
+      # cam (+0.200, +0.100, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.66 rad from the last
       - name: survey_r8c2
-        joints: [0.5146, -1.0887, -1.5983, -2.2844, 1.7259, -1.1279]
-      # cam (+0.200, +0.300, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 9, 0.48 rad from the last
+        joints: [0.9438, -1.2078, -1.3414, -2.3047, 1.5785, -0.0568]
+      # cam (+0.200, +0.300, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 11, 0.32 rad from the last
       - name: survey_r8c3
-        joints: [0.9981, -1.3063, -1.4916, -2.1066, 1.8041, -0.7842]
-      # cam (+0.400, +0.000, +0.536), tool 0.455 m over the bench (0.455 lowest on the way here), cond(J) 10, 0.89 rad from the last
+        joints: [1.2574, -1.5257, -1.1048, -2.2225, 1.5883, 0.0119]
+      # cam (+0.400, +0.000, +0.536), tool 0.526 m over the bench (0.526 lowest on the way here), cond(J) 10, 0.85 rad from the last
       - name: close_approach
-        joints: [0.1091, -1.5795, -1.2291, -2.2048, 1.5645, -1.6758]
-      # cam (+0.400, +0.000, +0.386), tool 0.305 m over the bench (0.305 lowest on the way here), cond(J) 8, 0.42 rad from the last
+        joints: [0.4091, -1.5110, -1.1287, -2.1785, 1.4764, -0.8365]
+      # cam (+0.400, +0.000, +0.386), tool 0.376 m over the bench (0.376 lowest on the way here), cond(J) 8, 0.43 rad from the last
       - name: close
-        joints: [0.1836, -1.5544, -1.6446, -1.7955, 1.4643, -2.0073]
+        joints: [0.3342, -1.4723, -1.5570, -1.8184, 1.5283, -0.4139]
