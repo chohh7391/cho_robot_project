@@ -31,6 +31,13 @@ add_library(${PROJECT_NAME} SHARED
     src/joint_space_position_controller.cpp
     src/task_space_ik_controller.cpp
     src/pouring_controller.cpp
+    src/pour/container_gate.cpp
+    src/pour/guards.cpp
+    src/pour/material_profile.cpp
+    src/pour/pour_planner.cpp
+    src/pour/pour_types.cpp
+    src/pour/scale_filter.cpp
+    src/pour/shaping_law.cpp
     src/servers/joint_space_action_server.cpp
     src/servers/task_space_action_server.cpp
     src/servers/pour_action_server.cpp
@@ -68,6 +75,40 @@ install(
 )
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    # The pour law only. These link src/pour/ directly and pull in no ROS at
+    # all, which is the point of that subdirectory: a material's behaviour can
+    # be pinned against a synthetic vessel without a controller_manager, a
+    # scale, or a robot.
+    ament_add_gtest(test_pour
+        test/test_pour.cpp
+        src/pour/container_gate.cpp
+        src/pour/guards.cpp
+        src/pour/material_profile.cpp
+        src/pour/pour_planner.cpp
+        src/pour/pour_types.cpp
+        src/pour/scale_filter.cpp
+        src/pour/shaping_law.cpp
+    )
+    target_include_directories(test_pour PRIVATE include test)
+
+    # Not a test: prints both laws' results on pour_sim.hpp's vessels, which is
+    # where the comparison quoted in controllers.yaml comes from. Built with the
+    # tests, left in the build tree, never installed.
+    add_executable(pour_ab
+        test/pour_ab.cpp
+        src/pour/container_gate.cpp
+        src/pour/guards.cpp
+        src/pour/material_profile.cpp
+        src/pour/pour_planner.cpp
+        src/pour/pour_types.cpp
+        src/pour/scale_filter.cpp
+        src/pour/shaping_law.cpp
+    )
+    target_include_directories(pour_ab PRIVATE include test)
+endif()
+
 ament_export_dependencies(
     controller_interface
     pluginlib

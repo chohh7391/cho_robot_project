@@ -171,40 +171,224 @@ pouring_controller:
       - j4
       - j5
       - j6
-    # Where the weight arrives, in grams. A plain Float64 and not the scale
-    # driver's own WeightStamped: the controller should not depend on one
-    # vendor's message to read a number, and the driver stays the self-contained
-    # module cho_sensor/hansung_scale is meant to be. A relay adapts the two.
-    scale_topic: /scale/grams
-    # Stop tilting if the weight goes quiet for this long. A pour with no
-    # feedback is not an adaptive pour, and tilting on the last number heard is
-    # how a vessel empties onto the bench.
+    # ---- which law pours --------------------------------------------------
+    # phase_machine  park below the onset before believing the scale, regulate
+    #                flow through the bulk, meter the last grams as timed pulses.
+    # shaping        Yoshikawa et al. (arXiv:2212.09672): PD on the weight error
+    #                convolved with a decaying sinusoid, which makes the pour
+    #                intermittent the way a chemist's is. This controller's
+    #                original law, and the reference.
+    # Against the synthetic vessel in test/pour_sim.hpp (`pour_ab`), on THIS
+    # scale's timing both land within ~0.5 g of 50 g and the phase machine takes
+    # ~14 s to the shaping law's ~230 s; against a 3 s-delayed scale like the
+    # paper's, shaping holds ~1% and the phase machine falls to ~22%. Neither is
+    # a hardware number. Run both here before choosing.
+    law: phase_machine
+
+    # ---- where the weight comes from -------------------------------------
+    # A neutral ScaleReading, not the scale driver's own WeightStamped:
+    # cho_sensor/hansung_scale has to keep building in a workspace that never
+    # heard of this repository, so no controller here depends on it.
+    # `ros2 run cho_control_tools scale_relay` adapts the two.
+    #
+    # And not a bare Float64, which is what this read before: the relay carries
+    # the STABLE flag, which is the settle signal -- measured returning to stable
+    # about 1.0 s after the flow stops. Samples are timed by their ARRIVAL on
+    # the controller's clock, not by header.stamp, so a sim-time bringup or a
+    # scale on another PC cannot put two clocks into one subtraction.
+    scale_topic: /scale/reading
+    # Measured on the HS-AA over 15 minutes: 4.989 Hz, inter-arrival sd 8 ms,
+    # worst gap 209 ms, zero dropped frames. 0.5 s is 2.4x the worst observed.
+    # Do NOT loosen it without re-measuring under full bringup load -- what it
+    # guards is a dead scale, and every extra second is a second of tilting with
+    # no feedback.
     scale_timeout: 0.5
-    # How long a pour holds still waiting for its FIRST reading. A goal that
-    # arrives before the scale node did is a late scale, not a failed one.
-    scale_startup_grace: 2.0
-    # The law's own sample period. NOT the controller period: the same law runs
-    # in simulation at 25 Hz (sdl_project tamp_server), and a pour reported from
-    # both has to be one controller sampled the same way. Between law samples the
-    # commanded velocity is held, so the command still leaves here at 125 Hz.
-    control_period: 0.04
-    # PD on the weight error, then convolution shaping. Same gains and the same
-    # kernel as the simulated pour; changing one without the other makes the two
-    # different controllers wearing one name.
-    kp: 0.008
-    kd: 0.002
-    kernel_horizon: 2.5
-    shaping_freq: 0.8
-    shaping_decay: 1.2
-    kernel_alpha: 0.15
-    # Wrist angular velocity ceiling. At the law's 25 Hz this caps one step at
-    # 0.02 rad (1.15 deg), which is what keeps the tilt smooth enough not to
-    # slosh.
-    max_tilt_rate: 0.5
-    # Absolute tilt bound from the carried attitude. Well past a normal pour, so
-    # it only fires when the scale never reports what the goal asked for.
-    max_tilt: 2.0
-    # How close to the target counts as poured [g].
-    weight_tolerance: 0.5
-    # Per-cycle command bound, the same one the task-space controller uses (0.005 rad at 125 Hz = 0.625 rad/s).
+    scale_sample_period: 0.2
+    # A jump larger than this many sample-periods of the fastest configured flow
+    # is not a pour at any rate: it is the pan being knocked or the vessel being
+    # lifted. Both were recorded on the rig as +-90 g between adjacent samples.
+    # A rejected jump is never adopted as the new level: a clump landing and a
+    # receiving vessel lifted off the pan look the same from here, and adopting
+    # the second pours onto the bare pan. The pour stops through scale_timeout
+    # instead and reports the jump rather than a silent scale.
+    outlier_factor: 3.0
+
+    # ---- the joint that tilts --------------------------------------------
+    # Under the AG-95's SIDE grasp the last joint's roll axis runs through the
+    # grasp, so the vessel's tilt tracks it 1:1. Under a top-down grasp the same
+    # rotation is yaw and pours nothing.
+    pour_joint: j6
+    # Which way that joint turns to bring the lip DOWN. No amount of feedback
+    # discovers this safely -- the wrong sign tips the vessel away from the
+    # scale -- so it is declared. Exactly +1.0 or -1.0.
+    pour_direction: 1.0
+    # Absolute bound from the attitude the vessel was carried in. The grasp does
+    # not have to be square: every angle here is relative, and the angle the
+    # vessel actually starts pouring at is found rather than configured. A
+    # beaker gripped off-vertical just reaches its onset sooner, so leave room.
+    max_tilt: 1.2
+    # The other end of the range: how far BEHIND the carried attitude the vessel
+    # may be turned. Parking below the carried attitude is legitimate -- a vessel
+    # handed over already leaning pours at or below it -- but it is also the
+    # direction nothing else stops. A park that would go further than this ends
+    # the pour instead.
+    max_back_tilt: 0.3
     max_delta_q: 0.005
+    feedback_period: 0.1
+
+    # ---- the vessel on the pan -------------------------------------------
+    # How far the first settled reading may sit from the goal's container_grams
+    # before the pour is refused. Not optional: the same flask read 139.15 g dry
+    # and 149.02 g with the previous pour's water still in it, and the scale's
+    # zero point moved during a session. An offset with no check pours anyway.
+    container_tolerance: 0.5
+    verify_timeout: 8.0
+
+    # ---- the law ----------------------------------------------------------
+    # Poured mass that counts as "the flow has started" [g].
+    onset_grams: 0.5
+    # The bulk phase aims to reach its stop point this many seconds out, which
+    # is what tapers the flow on the way in. The taper is the whole game: the
+    # stop error is the transport delay's uncertainty times the flow rate at the
+    # moment the tilt stops, so arriving fast costs grams no gain can recover.
+    approach_sec: 2.0
+    # Tilt rate per unit of TILT error [1/s]. The bulk phase drives an angle,
+    # derived from a flow coefficient it identifies from the pour itself. A rate
+    # law on flow error cannot work here: fed a measurement that is a transport
+    # delay old, it keeps tilting while the pour it already commanded is still
+    # in the air, and the flow lands well past the profile's ceiling.
+    kp_tilt: 2.0
+    # Stop this many times the controller's own estimate of what is still
+    # coming. Above 1.0 on purpose -- the flow estimate is fitted over past
+    # samples of a delayed signal, so it lags a rising pour. Stopping early
+    # leaves a gap the trim pulses close; stopping late leaves an overshoot
+    # nothing can.
+    stop_margin_factor: 1.5
+    no_flow_epsilon: 0.15
+    stall_timeout: 3.0
+
+    # ---- parking and settling ---------------------------------------------
+    # The single most important thing this controller does NOT do: judge whether
+    # the pour is finished while the vessel is still tilted. Measured on the
+    # HS-AA, during a 1.5 g/s drip the indicator held one value and flagged it
+    # stable for 5.4 s with material still arriving, and the gap between
+    # avalanches has no upper bound, so no settle time fixes it. The vessel is
+    # parked below the onset angle -- where no flow is possible by construction
+    # -- and only then is the reading believed.
+    settle_timeout: 10.0
+    # Floor on how far below the onset the vessel parks. The margin actually
+    # used is the larger of this and the onset estimate's own uncertainty.
+    retract_margin: 0.02
+    # Nothing the scale says about the park angle counts until the pour that
+    # just stopped has landed. Judging sooner reads that tail as proof the
+    # vessel is still pouring and lowers a park that was already right.
+    park_check_sec: 0.6
+    park_drip_grams: 0.05
+    max_park_attempts: 5
+    # A retract that has not arrived within 1.5x its expected travel plus this
+    # is declared unreachable (a joint limit pinning the command), and the goal
+    # ends with the vessel returned to its carried attitude. Without it the goal
+    # never finishes: cancel, timeout and staleness all defer to a retract.
+    retract_slack_sec: 1.0
+    tilt_epsilon: 0.002
+
+    # ---- trim pulses -------------------------------------------------------
+    # The last grams are metered as short openings of continuous flow, never as
+    # a slow trickle. Measured: below about 1.5 g/s water breaks into drops and
+    # 99% of the mass arrives in ~1.2 g lumps whose size the lip decides. A
+    # timed pulse is the same quantum with the CONTROLLER deciding it.
+    trim_tilt_margin: 0.02
+    # Each pulse is sized to close only this fraction of the gap. A pulse is
+    # open-loop by necessity -- at 5 Hz it spans a handful of samples and the
+    # material has not landed in any of them -- so it cannot be corrected while
+    # it runs. Short is recoverable; over is the end of the pour.
+    trim_undershoot: 0.7
+    max_pulse_sec: 2.0
+    max_trim_pulses: 8
+
+    # ---- default bounds for a goal that does not set them ------------------
+    # A goal's tolerance is floored by what one dose of the material weighs, so
+    # asking for finer than the material can be metered in ends the pour at the
+    # floor and says so rather than chasing it.
+    weight_tolerance: 0.5
+
+    # ---- the shaping law --------------------------------------------------
+    # Only read when law is shaping. Everything it shares with the phase machine
+    # -- container check, settle timeout, stall rule -- comes from the same
+    # parameters above, so an A/B compares laws, not setups.
+    shaping:
+      # The law's own sample period. The kernel's taps are spaced by exactly
+      # this; resample it and it is a different law.
+      control_period: 0.04
+      # NOT the 0.008 / 0.002 this controller shipped with. The kernel's DC gain
+      # is ~1.25, so kp 0.008 on a 50 g error asks for 0.50 rad/s -- the rate
+      # limit -- and the vessel tips at full rate until ~8 g has landed; in the
+      # simulated sweep that pour failed outright. The gain scales with the
+      # TARGET, which the law has no notion of: these came from a sweep at 50 g
+      # and will be too timid at 5 g and too eager at 500.
+      kp: 0.0001
+      kd: 0.005
+      kernel_horizon: 2.5
+      shaping_freq: 0.8
+      shaping_decay: 1.2
+      kernel_alpha: 0.15
+      max_tilt_rate: 0.5
+      settle_hold_sec: 1.2
+
+    # ---- material profiles -------------------------------------------------
+    # Two classes, two endpoints each; the goal's flow_index (0..1) interpolates
+    # between them. One number moves the whole profile together, because these
+    # quantities are not independent and letting a caller set them separately
+    # invites a combination no material has.
+    #
+    # ONLY liquid.free has hardware behind it: water on this cell's HS-AA,
+    # 2026-09-16 -- 6-11 g/s continuous, 1.0 s to settle after the flow stopped
+    # (three pours, 0.99/1.01/0.99), <= 0.21 g of tail, ~1.2 g drops once the
+    # stream thinned. Every other endpoint is a commissioning seed. Tune them by
+    # pouring and reading `measured_afterflow` off the action result.
+    liquid:
+      free:              # flow_index 0: water, alcohol
+        max_flow_rate: 10.0
+        trim_flow_rate: 2.0
+        trim_pulse_sec: 0.15
+        transport_delay: 0.4
+        afterflow_grams: 0.3
+        settle_hold_sec: 1.2
+        tilt_rate: 0.5
+        seek_tilt_rate: 0.15
+        dose_quantum: 0.3
+      resistant:         # flow_index 1: honey, syrup
+        max_flow_rate: 2.0
+        trim_flow_rate: 0.5
+        trim_pulse_sec: 0.4
+        transport_delay: 1.2
+        afterflow_grams: 4.0
+        settle_hold_sec: 3.0
+        tilt_rate: 0.2
+        seek_tilt_rate: 0.06
+        # Every stop of a material this thick leaves a string behind, and that
+        # string IS the smallest amount it can be metered in.
+        dose_quantum: 3.0
+    granular:
+      free:              # flow_index 0: dry salt, sugar
+        max_flow_rate: 8.0
+        trim_flow_rate: 1.5
+        trim_pulse_sec: 0.2
+        transport_delay: 0.3
+        afterflow_grams: 0.5
+        settle_hold_sec: 1.5
+        tilt_rate: 0.35
+        seek_tilt_rate: 0.10
+        dose_quantum: 0.5
+      resistant:         # flow_index 1: damp, clumping powder
+        max_flow_rate: 3.0
+        trim_flow_rate: 0.8
+        trim_pulse_sec: 0.5
+        transport_delay: 0.6
+        afterflow_grams: 3.0
+        settle_hold_sec: 3.0
+        tilt_rate: 0.18
+        seek_tilt_rate: 0.05
+        # Damp coffee grounds on this rig did not slide down evenly -- they came
+        # away all at once. That lump is the dose quantum, and no gain divides it.
+        dose_quantum: 2.0

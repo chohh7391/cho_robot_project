@@ -1,34 +1,119 @@
-# Pour until a scale says enough has come out, then return the vessel upright.
+# Pour until a scale says enough has come out, then set the vessel back down.
 #
-# The controller closes the loop on a weight it reads itself; this goal only
-# says how much, and how carefully. Every bound left at 0 falls back to the
+# The controller closes the loop on a weight it reads itself; this goal says how
+# much, into what, and of what. Every bound left at 0 falls back to the
 # controller's configured value, the same convention Gripper.action uses, so a
-# caller that has no opinion about tilt rates does not have to invent one.
+# caller with no opinion about tilt rates does not have to invent one.
 float64 target_grams
+
+# What the scale reads with the EMPTY receiving vessel on it.
+#
+# The indicator is read-only -- its RS232 port accepts nothing, so it cannot be
+# tared from here -- and the pour is therefore measured as
+# (reading - container_grams). This is the only zero the controller has.
+#
+# It is also a PRECONDITION, not just an offset. Before the first tilt the
+# controller waits for a settled reading and refuses the goal if it does not
+# match this value, which is what catches a vessel that is not on the scale, the
+# wrong vessel, residue left by an earlier pour, and a zero point someone moved
+# with the front-panel button. An offset alone catches none of those and pours
+# anyway.
+float64 container_grams
+
+# What is being poured.
+#
+# The two classes do not share a flow law and cannot be collapsed into one
+# parameter. A liquid's outflow is a continuous, monotone function of tilt, so
+# it can be regulated. A granular medium arrives in avalanches whose size is set
+# by the aperture and the packing, not by the controller, so the best it can do
+# is meter them: below some tilt nothing moves, above it a lump goes.
+uint8 MATERIAL_LIQUID=0
+uint8 MATERIAL_GRANULAR=1
+uint8 material
+
+# How reluctantly it flows, 0 to 1, WITHIN its class.
+#
+#   liquid   0 = water or alcohol      1 = honey or syrup     (viscosity)
+#   granular 0 = dry salt or sugar     1 = damp clumping flour (cohesion)
+#
+# It selects nothing by itself. It interpolates every rate, delay and settle
+# bound between the two endpoints the controller is configured with, so one
+# number moves the whole profile together: a higher index pours slower, waits
+# longer for the stream to arrive, expects a larger tail after the tilt stops,
+# and holds still longer before believing the scale.
+#
+# It is a PRIOR, not a measurement. The controller re-estimates the tail from
+# what this pour actually did and uses the measured value for the trim pulses
+# that follow, so an index that is wrong by a little costs one pulse, not the
+# pour.
+float64 flow_index
+
 # Wrist angular velocity ceiling [rad/s]. The pour joint is the one whose axis
-# tilts the held vessel, so this is also the vessel's tilt rate.
+# tilts the held vessel, so this is also the vessel's tilt rate. It caps the
+# profile's own rate; it does not replace it.
 float64 max_tilt_rate
+
 # Absolute bound on the tilt this pour may reach [rad], measured from the
 # attitude the vessel was carried in. It is what stops a pour that the scale
 # never satisfies -- an empty vessel, a blocked spout, a scale that reads zero.
 float64 max_tilt
+
 # How close to target_grams counts as done [g].
+#
+# A floor applies that this cannot cross: the controller cannot resolve below
+# one dose quantum, and for a pour that has broken into drops the quantum is set
+# by the lip, not by the gains. Ask for less and the pour ends at the floor and
+# says so rather than chasing a tolerance the geometry cannot deliver.
 float64 tolerance
+
 # Give up after this long [s], counted from the first commanded tilt.
 float64 timeout
 ---
 bool is_completed
-# What the scale read when the pour stopped, and how far the vessel had tilted
-# at that moment. Both are measurements, not commands: the executed tilt is the
-# integrated command, which is what the vessel actually saw.
+
+# What the scale read, minus container_grams, once the vessel was upright and
+# the reading had settled. This is the number the pour delivered; it is NOT the
+# reading at the moment the tilt stopped, which is always short by whatever was
+# still in the air and long by the stream's impact on the pan.
 float64 final_grams
+
+# How far the vessel had tilted at the furthest point, and how long the goal
+# ran. Both are measurements: the executed tilt is the integrated command, which
+# is what the vessel actually saw.
 float64 peak_tilt
 float64 elapsed
+
+# How many trim pulses it took after the bulk phase. 0 means the bulk phase
+# landed inside tolerance on its own.
+int32 trim_pulses
+
+# What actually came out after the tilt stopped, measured as the difference
+# between the reading when the command stopped and the settled reading. This is
+# the quantity flow_index only guesses at, and it is worth logging: it is the
+# right seed for the next pour of the same material.
+float64 measured_afterflow
+
 # Empty on success. On failure this says which bound stopped the pour, so an
 # operator can tell "tilted as far as allowed and nothing came out" from "the
-# scale went quiet".
+# scale went quiet" from "the vessel on the pan was not the one the goal
+# described".
 string message
 ---
 float64 current_grams
 float64 tilt
 float64 elapsed
+
+# Estimated outflow [g/s], from the scale, not from the model. Zero whenever the
+# controller is not currently reading flow.
+float64 flow_rate
+
+# Which phase the pour is in, for an operator watching a goal that legitimately
+# spends seconds holding still.
+uint8 PHASE_VERIFY=0
+uint8 PHASE_SEEK=1
+uint8 PHASE_BULK=2
+uint8 PHASE_RETRACT=3
+uint8 PHASE_SETTLE=4
+uint8 PHASE_TRIM=5
+uint8 PHASE_DONE=6
+uint8 phase
