@@ -181,6 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help='rad/s; 0 uses the material profile\'s')
     parser.add_argument('--timeout', type=float, default=0.0,
                         help='seconds; 0 uses the controller\'s')
+    parser.add_argument('--reference-joints', type=float, nargs=6, default=None,
+                        metavar='Q',
+                        help='how to tip, shown rather than named: the arm at the deepest tilt '
+                             'of a recorded pour (j1..j6, rad). The controller tips about the '
+                             'axis the EE turns about to get there. Omitted: about the pour '
+                             'joint\'s own axis.')
     return parser
 
 
@@ -216,6 +222,8 @@ def main(argv=None):
         goal.max_tilt = float(args.max_tilt)
         goal.max_tilt_rate = float(args.max_tilt_rate)
         goal.timeout = float(args.timeout)
+        if args.reference_joints is not None:
+            goal.pour_reference_joints = [float(q) for q in args.reference_joints]
         return node.pour(goal)
     except KeyboardInterrupt:
         return 130

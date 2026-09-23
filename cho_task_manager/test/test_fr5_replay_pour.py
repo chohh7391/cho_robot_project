@@ -234,12 +234,13 @@ def test_the_grasp_is_measured_once_the_jaws_have_settled_on_the_vessel(tmp_path
     names = _replay_names(_tree(tmp_path, replay_pour_grams=20.0))
     # Right after the settle of the close that picks the vessel up, before the
     # arm moves on -- and nowhere else.
-    at = names.index('1_Measure_Grasp')
+    at = names.index('1_Measure_Grasp_Or_At_Pour')
     assert names[at - 2:at] == ['1_Gripper_Close_Move_to_Surface', '1_Gripper_Settle']
     assert names[at + 1] == '2_Replay_Move_to_Surface'
     assert sum('Measure_Grasp' in name for name in names) == 1
     tree = _tree(tmp_path, replay_pour_grams=20.0)
     sampler = [n for n in tree.iterate() if isinstance(n, GraspMarkerSampleBehavior)][0]
+    assert sampler.name == '1_Measure_Grasp'
     assert sampler.marker_topic == DEFAULT_MARKER_TOPIC
     assert sampler.required_frame == 'base_link'
     assert sampler.joint_names == ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
@@ -249,6 +250,16 @@ def test_the_grasp_is_measured_once_the_jaws_have_settled_on_the_vessel(tmp_path
     # not a direction or a joint index: recordings differ in both.
     assert pour.pour_direction == 0
     assert pour.pour_reference_joints[5] == pytest.approx(-1.2 * (1.0 - 0.5 / 4.5))
+
+
+def test_a_grasp_that_goes_unmeasured_does_not_stop_the_replay(tmp_path):
+    # Measured on the real cell: the jaws turned the beaker as they closed and
+    # its marker left side_2's frame. The pour goal then goes without a grasp
+    # and the controller measures the marker at the pour start -- from side_1.
+    tree = _tree(tmp_path, replay_pour_grams=20.0, replay_pour_required='true')
+    sampler = [n for n in tree.iterate() if isinstance(n, GraspMarkerSampleBehavior)][0]
+    assert isinstance(sampler.parent, py_trees.decorators.FailureIsSuccess)
+    assert sampler.parent.name == '1_Measure_Grasp_Or_At_Pour'
 
 
 def test_a_pour_that_turns_another_joint_is_shown_as_it_is(tmp_path):

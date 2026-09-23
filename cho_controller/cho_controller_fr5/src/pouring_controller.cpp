@@ -203,9 +203,10 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("geometry.vessel_radius", vessel_.radius);
         auto_declare<double>("geometry.vessel_height", vessel_.height);
         // No defaults that would pass for measurements: where the marker is
-        // stuck and where the receiver stands are facts about this bench.
-        auto_declare<double>("geometry.tag_radius", vessel_.tag_radius);
-        auto_declare<double>("geometry.tag_height", vessel_.tag_height);
+        // stuck and where the receiver stands are facts about this bench. NaN,
+        // not zero, because zero is a real answer (see configure).
+        auto_declare<double>("geometry.tag_radius", std::numeric_limits<double>::quiet_NaN());
+        auto_declare<double>("geometry.tag_height", std::numeric_limits<double>::quiet_NaN());
         auto_declare<std::vector<double>>("geometry.receiver_rim_center", {});
         auto_declare<double>("geometry.receiver_radius", receiver_.radius);
         const pour::LipPathConfig ld;
@@ -446,14 +447,17 @@ bool PouringController::assign_geometry_parameters()
     lip_config_.grasp_depth = node->get_parameter("geometry.grasp_depth").as_double();
     lip_config_.max_depth_error = node->get_parameter("geometry.max_depth_error").as_double();
     max_carry_lean_ = node->get_parameter("geometry.max_carry_lean").as_double();
-    // Zero is the declared default and never a measurement: a marker on the
-    // vessel's axis would be inside it.
-    if (!std::isfinite(vessel_.tag_radius) || vessel_.tag_radius <= 0.0 ||
+    // Unset is NaN. Zero is an answer: the pose already IS a point on the
+    // vessel's axis, because the object table applied a known offset in the
+    // marker's own yaw -- which, unlike a bare radius, fixes the depth along
+    // the jaws even for a marker standing off to one side of them.
+    if (!std::isfinite(vessel_.tag_radius) || vessel_.tag_radius < 0.0 ||
         !std::isfinite(vessel_.tag_height)) {
         RCLCPP_ERROR(logger,
             "geometry.tag_radius and geometry.tag_height must be measured: how far the "
-            "marker's centre sits from the held vessel's axis, and how high above its bottom "
-            "(got %f, %f). Which side of the vessel it is on is not needed",
+            "pose's point sits from the held vessel's axis (0 when the object table puts it "
+            "on the axis), and how high above its bottom (got %f, %f). Which side of the "
+            "vessel it is on is not needed",
             vessel_.tag_radius, vessel_.tag_height);
         return false;
     }

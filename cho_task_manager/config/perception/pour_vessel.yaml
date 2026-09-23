@@ -26,26 +26,35 @@
 # that is a flag, not a sticker -- a card on the side away from the lip,
 # standing clear of the jaws, facing side_2.
 #
-# The published pose is the marker's centre: no offset, and only the POSITION
-# is used downstream. Where the marker sits on the beaker is the controller's
-# `geometry.tag_radius` and `geometry.tag_height`, measured once -- and not
-# which side it is on, which changes with how the beaker stood.
+# The published pose is the BEAKER'S BOTTOM CENTRE, not the marker: the stalk
+# holds tag 0 flat, level with the beaker's bottom, 85 mm from its axis along
+# the tag's own -y as printed -- vessel_detect.yaml's offset, applied the same
+# way, in the marker's unfolded yaw. So the controller's `geometry.tag_radius`
+# and `geometry.tag_height` are both 0. Only the POSITION is used downstream.
+#
+# The yaw is what makes that work whichever way the stalk points. A bare radius
+# leaves two places on the jaws' centre line the beaker could be, and with the
+# stalk off to one side of the jaws a millimetre across them becomes a
+# centimetre along them. With the direction known, a degree of yaw is 1.5 mm.
+#
+# Check it on the bench before a pour: with the beaker on the riser the pose
+# must land on the beaker, not 170 mm away on the far side of the stalk. If it
+# does the latter, the tag is mounted a half turn from what is assumed here --
+# flip the sign of the offset's y.
 objects:
   - name: held_beaker
-    # The beaker's own tag, MOVED off its stalk onto the beaker. Left on the
-    # stalk it stays on the bench when the beaker is lifted, and this would
-    # measure the stalk: the vessel would come out wherever the stalk is, which
-    # the centring and alignment checks will usually -- not certainly --
-    # refuse. Same id as vessel_detect.yaml's `beaker`, so never load the two
+    # Tag 0 on the beaker's stalk, which comes with the beaker when it is
+    # lifted. Same id as vessel_detect.yaml's `beaker`, so never load the two
     # tables into one pose node.
     tag_id: 0
     # The 2026-09-22 reprint, as vessel_detect.yaml has it.
     tag_size: 0.070
     topic: /perception/object_pose/held_beaker
     grasp_offset:
-      position: [0.0, 0.0, 0.0]
+      # 85 mm below the tag as printed, and no higher: the stalk is level with
+      # the beaker's bottom. vessel_detect.yaml's 150 mm up is a standoff for
+      # the gripper, not part of the beaker.
+      position: [0.0, -0.085, 0.0]
       orientation: [0.0, 0.0, 0.0, 1.0]
-    # Orientation is not used, and for a marker standing upright it is also the
-    # part that flips; keeping only the yaw costs nothing here.
     top_down_yaw: true
     yaw_axis: [1.0, 0.0, 0.0]

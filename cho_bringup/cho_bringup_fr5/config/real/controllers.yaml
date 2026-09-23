@@ -260,18 +260,24 @@ pouring_controller:
     #           `joint` put 6.3 g outside the rim -- and reported success, since
     #           the scale only weighs what lands.
     #
-    # Left at `joint` until the marker exists. To switch:
-    #   1. move tag 0 off its stalk onto the beaker, facing side_2, and measure
-    #      tag_radius and tag_height;
-    #   2. run cho_object_pose with cho_task_manager's
-    #      config/perception/pour_vessel.yaml. Two cameras if they can both see
-    #      it: one camera's range error lies along its line of sight -- 10-16 mm
-    #      on this bench -- and a lip held 10 mm lower than believed puts a jaw
-    #      on the rim. With side_2 alone, check the "Pour geometry" log line
-    #      against a ruler on an empty-beaker dry run first;
-    #   3. measure the jaws and replace hand_boxes;
-    #   4. set pour_geometry: measured.
-    pour_geometry: joint
+    # `measured` since 2026-09-23, off tag 0 on its stalk: flat, in the plane of
+    # the beaker's bottom, 85 mm from its axis (vessel_detect.yaml's offset). The
+    # riser recordings tip about an axis 1.32 rad from j6, which `joint` refuses.
+    #
+    # The marker is looked at ONCE per pour -- right after the jaws close if
+    # side_2 sees it there, else here at the pour start, from side_1 -- and from
+    # then on the beaker is a rigid offset in the jaws, carried by this
+    # controller's own kinematics. Nothing is perceived again mid-pour.
+    #
+    # The stalk must NOT point the way the beaker tips. Flat beside the lip, it
+    # swings under it and about 40 mm into the flask by 24 degrees of tilt, and
+    # nothing here models it.
+    #
+    # Still open: one camera's range error lies along its line of sight --
+    # 10-16 mm on this bench -- and a lip held 10 mm lower than believed puts a
+    # jaw on the rim, so check the "Pour geometry" log line against a ruler on
+    # an empty-beaker dry run first; and the jaws are not measured (hand_boxes).
+    pour_geometry: measured
     geometry:
       vessel_pose_topic: /perception/object_pose/held_beaker
       # Nothing here transforms a pose: it has to arrive in the arm's base.
@@ -285,19 +291,21 @@ pouring_controller:
       # The 100 mL beaker: 50 mm across, 70 mm tall.
       vessel_radius: 0.025
       vessel_height: 0.070
-      # Where the marker's centre is stuck on the beaker: its horizontal
-      # distance from the beaker's axis, and its height above the bottom.
-      # MEASURE THEM; left out until then, and `measured` refuses to configure
-      # without them. NOT which side of the beaker it is on -- that depends on
-      # how the beaker stood when it was picked up and on the recording's
-      # approach, and the jaws' centring supplies it:
-      #   tag_radius: 0.0xx
-      #   tag_height: 0.0xx
-      # Where the jaws hold, along the approach from wrist3_link: the AG-95's
-      # grasp_link. The marker leaves two places on the jaws' centre line the
-      # beaker's axis could be, a marker's width apart; this picks one, and a
-      # beaker that comes out further than max_depth_error from it is refused.
-      grasp_depth: 0.29
+      # Where the pose's point is on the beaker: its horizontal distance from
+      # the beaker's axis, and its height above the bottom. Both 0: the pose
+      # node already moves tag 0's position 85 mm along the tag's own -y, onto
+      # the beaker's bottom centre (pour_vessel.yaml), so which way the stalk
+      # points costs nothing. A bare marker would need its radius here, and
+      # only the jaws' centring to say which side of the beaker it is on.
+      tag_radius: 0.0
+      tag_height: 0.0
+      # Where the jaws hold, along the approach from wrist3_link. A beaker that
+      # comes out further than max_depth_error from it is refused (with a
+      # nonzero tag_radius it also picks which of the two places on the jaws'
+      # centre line the axis is). 0.27, not the AG-95's grasp_link (0.29): the
+      # riser recordings close on the beaker 0.270 m out, and the real grasp
+      # measured 0.279.
+      grasp_depth: 0.27
       max_depth_error: 0.04
       approach_axis_in_ee: [0.0, 0.0, 1.0]
       # A beaker measured upright at its grasp may lean this much by the time
@@ -311,10 +319,18 @@ pouring_controller:
       # and comes in over the mouth only as far as the tilt swings the glass
       # and the jaws below it back out past the rim, `lip_gap` clear.
       lip_clearance: 0.020
-      lip_max_height: 0.080
+      lip_max_height: 0.100
       # Held here rather than at the height the vessel was brought in at: a
       # recorded pre-pour pose hangs it 20 cm over the receiver.
-      lip_height: 0.050
+      #
+      # 85 mm -- the held beaker's height plus 15 mm -- so that ALL of it stays
+      # above the receiver's rim, bottom included, from the first tilt on (the
+      # tilt about the lip only lifts it further). At 20 mm (2026-09-23) the
+      # lip went down beside the receiver and the held beaker's body 47 mm
+      # below the rim, where a few centimetres of error in where the side
+      # camera put it was enough to knock the receiver off the scale. Above the
+      # rim, a position error can spill; it cannot collide.
+      lip_height: 0.085
       lip_inset: 0.012
       lip_gap: 0.005
       landing_margin: 0.005
@@ -476,14 +492,20 @@ pouring_controller:
     # pouring and reading `measured_afterflow` off the action result.
     liquid:
       free:              # flow_index 0: water, alcohol
-        max_flow_rate: 10.0
+        # Slowed after the first lip-pivot water pour (2026-09-23, measured
+        # geometry, a ~75 mL fill): seeking at 0.15 rad/s the tilt ran ~6 deg
+        # past the onset before a 5 Hz scale showed anything, the first
+        # reading was 5.28 g and a 5 g pour ended at 17.45 g. Slow enough now
+        # for the scale to steer the pour rather than report it: onset sought
+        # at 0.03 rad/s, bulk held to 3 g/s, bulk and trim tilting at 0.15.
+        max_flow_rate: 3.0
         trim_flow_rate: 2.0
         trim_pulse_sec: 0.15
         transport_delay: 0.4
         afterflow_grams: 0.3
         settle_hold_sec: 1.2
-        tilt_rate: 0.5
-        seek_tilt_rate: 0.15
+        tilt_rate: 0.15
+        seek_tilt_rate: 0.03
         dose_quantum: 0.3
       resistant:         # flow_index 1: honey, syrup
         max_flow_rate: 2.0
@@ -492,8 +514,10 @@ pouring_controller:
         transport_delay: 1.2
         afterflow_grams: 4.0
         settle_hold_sec: 3.0
-        tilt_rate: 0.2
-        seek_tilt_rate: 0.06
+        # Kept below the free endpoint's slowed rates: the profile check refuses
+        # a resistant material that tilts faster than a free one.
+        tilt_rate: 0.1
+        seek_tilt_rate: 0.02
         # Every stop of a material this thick leaves a string behind, and that
         # string IS the smallest amount it can be metered in.
         dose_quantum: 3.0

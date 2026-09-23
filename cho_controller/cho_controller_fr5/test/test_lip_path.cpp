@@ -329,6 +329,27 @@ TEST(LipPath, FindsTheGraspWhicheverSideOfTheBeakerTheMarkerIsOn)
     }
 }
 
+TEST(LipPath, TakesAPoseAlreadyOnTheVesselsAxisAtFaceValue)
+{
+    // tag_radius 0: the object table applied the marker's known offset in its
+    // own yaw, so the pose is the bottom centre. The depth is then read off it
+    // directly -- an error along the jaws comes through one for one, where a
+    // bare radius with the marker off to one side would amplify it.
+    Scene scene;
+    scene.tag_offset = Eigen::Vector3d::Zero();
+    LipPath path;
+    std::string why;
+    ASSERT_TRUE(scene.plan(path, why)) << why;
+    EXPECT_NEAR(path.ee_in_vessel().x(), 0.0, 1e-9);
+    EXPECT_NEAR(path.ee_in_vessel().y(), -kJawDepth, 1e-9);
+    EXPECT_NEAR(path.ee_in_vessel().z(), scene.grasp_height, 1e-9);
+
+    scene.tag_error = Eigen::Vector3d(0.0, 0.004, 0.0);   // 4 mm further along the jaws
+    ASSERT_TRUE(scene.plan(path, why)) << why;
+    EXPECT_NEAR(path.ee_in_vessel().y(), -kJawDepth - 0.004, 1e-9);
+    EXPECT_NEAR(path.depth_error(), 0.004, 1e-9);
+}
+
 TEST(LipPath, RefusesAVesselThatIsNotWhereTheJawsHold)
 {
     // A marker 60 mm further along than any beaker between these jaws could put

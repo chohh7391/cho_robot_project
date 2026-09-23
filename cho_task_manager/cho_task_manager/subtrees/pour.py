@@ -13,9 +13,16 @@ hand-over:
 
 One step goes earlier, right after the jaws close on the vessel
 (`grasp_measure_children`): measuring where it sits in them, while it is still
-on the bench 0.4 m from side_2 and the arm stands still for the gripper settle,
-rather than from where the recording hangs it for the pour, 0.95 m away. The
-pour goal carries that grasp.
+on the bench 0.6 m from side_2 and the arm stands still for the gripper settle,
+rather than from where the recording hangs it for the pour, 0.95 m from side_2.
+The pour goal carries that grasp.
+
+That measurement is a head start, not a precondition. The jaws turn the vessel
+as they close, and a marker that was in view before can be out of it after; a
+grasp that goes unmeasured leaves the pour goal without one, and the controller
+then measures the marker itself once the arm has stood still at the pour start
+-- where side_1 sees it from 0.37 m. Only if neither sees it is the pour
+refused, before anything moves.
 
 The switches are verified for the same reason every replay switch is: the
 exclusive switch is BEST_EFFORT, so activating a controller the bringup never
@@ -150,17 +157,24 @@ def parse_pour_request(robot_config, prefix='replay_pour_'):
 
 
 def grasp_measure_children(robot_config, request, prefix=''):
-    """What goes right after the jaws close on the vessel that will be poured."""
+    """What goes right after the jaws close on the vessel that will be poured.
+
+    Never fails the replay: an unmeasured grasp is measured at the pour instead.
+    """
     if request.marker_topic is None:
         return []
     registry = load_registry_config(
         robot_config['robot_type'], robot_config.get('profile', 'single'))
-    return [GraspMarkerSampleBehavior(
+    sampler = GraspMarkerSampleBehavior(
         name='%sMeasure_Grasp' % prefix,
         marker_topic=request.marker_topic,
         required_frame=registry['model']['arm_base_link'],
         joint_names=registry['model']['joints'],
-    )]
+    )
+    # The sampler logs why it saw nothing; the pour behaviour then says the
+    # controller will measure the marker itself.
+    return [py_trees.decorators.FailureIsSuccess(
+        name='%sMeasure_Grasp_Or_At_Pour' % prefix, child=sampler)]
 
 
 def pour_handover_children(robot_config, request, return_controller, prefix='',
