@@ -204,12 +204,14 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("geometry.vessel_height", vessel_.height);
         // No defaults that would pass for measurements: where the marker is
         // stuck and where the receiver stands are facts about this bench.
-        auto_declare<std::vector<double>>("geometry.tag_in_vessel", {});
+        auto_declare<double>("geometry.tag_radius", vessel_.tag_radius);
+        auto_declare<double>("geometry.tag_height", vessel_.tag_height);
         auto_declare<std::vector<double>>("geometry.receiver_rim_center", {});
         auto_declare<double>("geometry.receiver_radius", receiver_.radius);
         const pour::LipPathConfig ld;
         auto_declare<double>("geometry.lip_clearance", ld.clearance);
         auto_declare<double>("geometry.lip_max_height", ld.max_height);
+        auto_declare<double>("geometry.lip_height", ld.lip_height);
         auto_declare<double>("geometry.lip_inset", ld.inset);
         auto_declare<double>("geometry.lip_gap", ld.gap);
         auto_declare<double>("geometry.landing_margin", ld.landing_margin);
@@ -219,6 +221,10 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("geometry.max_centering_error", ld.max_centering_error);
         auto_declare<double>("geometry.max_tag_distance", ld.max_tag_distance);
         auto_declare<std::vector<double>>("geometry.closing_axis_in_ee", {1.0, 0.0, 0.0});
+        auto_declare<std::vector<double>>("geometry.approach_axis_in_ee", {0.0, 0.0, 1.0});
+        auto_declare<double>("geometry.grasp_depth", ld.grasp_depth);
+        auto_declare<double>("geometry.max_depth_error", ld.max_depth_error);
+        auto_declare<double>("geometry.max_carry_lean", max_carry_lean_);
         auto_declare<std::vector<double>>("geometry.hand_boxes", {});
         auto_declare<double>("geometry.align_speed", align_speed_);
         auto_declare<double>("geometry.max_lip_speed", max_lip_speed_);
@@ -412,6 +418,7 @@ bool PouringController::assign_geometry_parameters()
     receiver_.radius = node->get_parameter("geometry.receiver_radius").as_double();
     lip_config_.clearance = node->get_parameter("geometry.lip_clearance").as_double();
     lip_config_.max_height = node->get_parameter("geometry.lip_max_height").as_double();
+    lip_config_.lip_height = node->get_parameter("geometry.lip_height").as_double();
     lip_config_.inset = node->get_parameter("geometry.lip_inset").as_double();
     lip_config_.gap = node->get_parameter("geometry.lip_gap").as_double();
     lip_config_.landing_margin = node->get_parameter("geometry.landing_margin").as_double();
@@ -434,9 +441,28 @@ bool PouringController::assign_geometry_parameters()
             "frame it has to be in (the arm's base; nothing here transforms it)");
         return false;
     }
-    if (!vec3("geometry.tag_in_vessel",
-              "where the marker's centre is stuck on the held vessel, in its frame (x toward "
-              "the lip, z up from the centre of its bottom). Measure it", vessel_.tag_in_vessel) ||
+    vessel_.tag_radius = node->get_parameter("geometry.tag_radius").as_double();
+    vessel_.tag_height = node->get_parameter("geometry.tag_height").as_double();
+    lip_config_.grasp_depth = node->get_parameter("geometry.grasp_depth").as_double();
+    lip_config_.max_depth_error = node->get_parameter("geometry.max_depth_error").as_double();
+    max_carry_lean_ = node->get_parameter("geometry.max_carry_lean").as_double();
+    // Zero is the declared default and never a measurement: a marker on the
+    // vessel's axis would be inside it.
+    if (!std::isfinite(vessel_.tag_radius) || vessel_.tag_radius <= 0.0 ||
+        !std::isfinite(vessel_.tag_height)) {
+        RCLCPP_ERROR(logger,
+            "geometry.tag_radius and geometry.tag_height must be measured: how far the "
+            "marker's centre sits from the held vessel's axis, and how high above its bottom "
+            "(got %f, %f). Which side of the vessel it is on is not needed",
+            vessel_.tag_radius, vessel_.tag_height);
+        return false;
+    }
+    if (!std::isfinite(max_carry_lean_) || max_carry_lean_ <= 0.0) {
+        RCLCPP_ERROR(logger, "geometry.max_carry_lean must be positive (got %f)", max_carry_lean_);
+        return false;
+    }
+    if (!vec3("geometry.approach_axis_in_ee",
+              "the direction the jaws reach along, in the EE frame", lip_config_.approach_axis_in_ee) ||
         !vec3("geometry.receiver_rim_center",
               "the centre of the receiver's rim in the arm's base frame -- the scale's centre, "
               "at the rim's height", receiver_.rim_center) ||
@@ -696,8 +722,65 @@ pour::PourRequest PouringController::make_request() const
     return request;
 }
 
-void PouringController::start_goal(double now)
+bool PouringController::start_goal(double now)
 {
+    const int asked = action_server_->bounds().pour_direction;
+    goal_direction_ = asked != 0 ? static_cast<double>(asked) : pour_direction_;
+    if (asked != 0 && goal_direction_ != pour_direction_) {
+        RCLCPP_INFO(get_node()->get_logger(),
+            "This goal pours with direction %+.0f, not the configured %+.0f",
+            goal_direction_, pour_direction_);
+    }
+
+    // How the goal says to tip: the axis the EE turns about from here to the
+    // reference configuration, in this controller's own kinematics.
+    reference_axis_valid_ = false;
+    const auto & reference = action_server_->bounds().pour_reference_joints;
+    if (!reference.empty()) {
+        Eigen::VectorXd q_now = state_.q;
+        q_now.head(num_dof_) = q_ref_;
+        Eigen::VectorXd q_deep = state_.q;
+        for (int i = 0; i < num_dof_; ++i) {
+            q_deep(i) = reference[i];
+        }
+        pinocchio::SE3 H_now, H_deep;
+        Eigen::MatrixXd J_now, J_unused;
+        compute_arm_kinematics(q_now, H_now, J_now);
+        compute_arm_kinematics(q_deep, H_deep, J_unused);
+        const Eigen::Vector3d turn =
+            pinocchio::log3(H_deep.rotation() * H_now.rotation().transpose());
+        const double angle = turn.norm();
+        // Less than this is not a pour; its axis would be noise.
+        constexpr double kMinReferenceTilt = 0.2;
+        if (!std::isfinite(angle) || angle < kMinReferenceTilt) {
+            std::ostringstream os;
+            os << "the pour was not started: its reference configuration turns the EE only "
+               << std::fixed << std::setprecision(3) << angle << " rad from where the goal "
+                  "starts, which does not show a pour";
+            abort_before_motion(os.str());
+            return false;
+        }
+        const Eigen::Vector3d axis_world = turn / angle;
+        if (measured_geometry_) {
+            reference_axis_ee_ = H_now.rotation().transpose() * axis_world;
+            reference_axis_valid_ = true;
+        } else {
+            // The pour joint alone can only tip about its own axis.
+            const Eigen::Vector3d joint_axis =
+                (H_now.rotation() * J_now.col(pour_index_).tail<3>()).normalized();
+            const double c = joint_axis.dot(axis_world);
+            if (std::abs(c) < 0.8) {
+                std::ostringstream os;
+                os << "the pour was not started: it tips the vessel about an axis "
+                   << std::fixed << std::setprecision(2)
+                   << std::acos(std::min(1.0, std::abs(c))) << " rad from the pour joint's, "
+                      "which turning that joint alone cannot do. pour_geometry: measured can";
+                abort_before_motion(os.str());
+                return false;
+            }
+            goal_direction_ = c > 0.0 ? 1.0 : -1.0;
+        }
+    }
     theta_start_ = q_ref_(pour_index_);
     tilt_ = 0.0;
     peak_tilt_ = 0.0;
@@ -718,9 +801,10 @@ void PouringController::start_goal(double now)
         inset_cmd_ = 0.0;
         ik_lagging_ = false;
         ik_bad_since_ = -1.0;
-        return;
+        return true;
     }
     start_pour(now);
+    return true;
 }
 
 void PouringController::start_pour(double now)
@@ -807,8 +891,8 @@ controller_interface::return_type PouringController::update(
         filter_.push(sample);
     }
 
-    if (phase_ == Phase::Idle) {
-        start_goal(now);
+    if (phase_ == Phase::Idle && !start_goal(now)) {
+        return controller_interface::return_type::OK;
     }
 
     elapsed_ += dt;
@@ -827,7 +911,7 @@ controller_interface::return_type PouringController::update(
 
     if (phase_ == Phase::Untilt) {
         last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
-        const double step = std::abs(pour_direction_) * max_delta_q_ / std::max(dt, 1e-9);
+        const double step = std::abs(goal_direction_) * max_delta_q_ / std::max(dt, 1e-9);
         const double rate = std::min(law_->return_tilt_rate(), step);
         if (std::abs(tilt_) <= rate * dt) {
             tilt_ = 0.0;
@@ -855,7 +939,7 @@ controller_interface::return_type PouringController::update(
     peak_tilt_ = std::max(peak_tilt_, std::abs(tilt_));
 
     Eigen::VectorXd q_cmd = q_ref_;
-    q_cmd(pour_index_) = theta_start_ + pour_direction_ * tilt_;
+    q_cmd(pour_index_) = theta_start_ + goal_direction_ * tilt_;
     clamp_to_joint_limits(q_cmd);
 
     // Per-cycle command bound. The trajectory the law produces is already rate
@@ -879,7 +963,7 @@ controller_interface::return_type PouringController::update(
     // The tilt follows the CLAMPED command, so a joint limit or the per-cycle
     // bound cannot leave the planner reasoning about an angle the arm was never
     // asked to reach.
-    tilt_ = pour_direction_ * (q_cmd(pour_index_) - theta_start_);
+    tilt_ = goal_direction_ * (q_cmd(pour_index_) - theta_start_);
 
     publish_feedback_if_due(dt);
     return controller_interface::return_type::OK;
@@ -955,25 +1039,46 @@ bool PouringController::track(const Eigen::Isometry3d & target, double now, std:
     Eigen::MatrixXd J;
     compute_arm_kinematics(q_full, H, J);
 
+    // The task point is the LIP, not the EE origin. The origin sits ~0.3 m
+    // from it, so a rotation lag the origin barely shows moves the lip by
+    // millimetres -- 6 mm at the 0.02 rad the rotation tolerance allows,
+    // measured against the riser recordings, which pour by turning j4 1.4x as
+    // fast as the vessel tips and so run into max_delta_q.
+    const Eigen::Vector3d r = lip_path_.lip_in_ee();
+    const auto point_of = [&r](const Eigen::Matrix3d & R, const Eigen::Vector3d & p) {
+        return Eigen::Vector3d(p + R * r);
+    };
     // Local-frame task error against the COMMAND, like the task-space IK: the
     // measured joints never enter it, so servo noise is not fed back.
     Eigen::Matrix<double, 6, 1> error;
-    error.head<3>() = H.rotation().transpose() * (target.translation() - H.translation());
+    error.head<3>() = H.rotation().transpose() *
+        (point_of(target.linear(), target.translation()) - point_of(H.rotation(), H.translation()));
     error.tail<3>() = pinocchio::log3(H.rotation().transpose() * target.linear());
-    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+    // A point r off the frame moves at v + w x r = v - [r]x w.
+    Eigen::Matrix3d skew_r;
+    skew_r << 0.0, -r.z(), r.y(), r.z(), 0.0, -r.x(), -r.y(), r.x(), 0.0;
+    Eigen::MatrixXd J_task = J;
+    J_task.topRows<3>() -= skew_r * J.bottomRows<3>();
+    Eigen::Matrix<double, 6, 6> JJt = J_task * J_task.transpose();
     JJt.diagonal().array() += ik_lambda_ * ik_lambda_;
-    Eigen::VectorXd dq = J.transpose() * JJt.ldlt().solve(error);
+    Eigen::VectorXd dq = J_task.transpose() * JJt.ldlt().solve(error);
     if (!dq.allFinite()) {
         why = "the lip path's IK solve went non-finite";
         return false;
     }
-    dq = dq.array().max(-max_delta_q_).min(max_delta_q_);
+    // Scaled as a whole, not clamped joint by joint: clamping one joint and
+    // not the others bends the step off the path it was solved for.
+    const double biggest = dq.cwiseAbs().maxCoeff();
+    if (biggest > max_delta_q_) {
+        dq *= max_delta_q_ / biggest;
+    }
     Eigen::VectorXd q_cmd = q_ref_ + dq;
     clamp_to_joint_limits(q_cmd);
 
     q_full.head(num_dof_) = q_cmd;
     compute_arm_kinematics(q_full, H, J);
-    const double pos_err = (target.translation() - H.translation()).norm();
+    const double pos_err = (point_of(target.linear(), target.translation()) -
+                            point_of(H.rotation(), H.translation())).norm();
     const double rot_err =
         pinocchio::log3(H.rotation().transpose() * target.linear()).norm();
     if (!q_cmd.allFinite() || !std::isfinite(pos_err) || !std::isfinite(rot_err)) {
@@ -1034,8 +1139,52 @@ controller_interface::return_type PouringController::update_measured(double now,
             abort_before_motion("the goal was cancelled before the pour began");
             return controller_interface::return_type::OK;
         }
-        const VesselSample sample = *vessel_buffer_.readFromRT();
-        if (!vessel_sample_usable(sample, now)) {
+        const auto & bounds = action_server_->bounds();
+        const bool measured_earlier = !bounds.grasp_joints.empty();
+        VesselSample sample = *vessel_buffer_.readFromRT();
+        if (measured_earlier) {
+            // The goal carries a grasp measured before it: the marker's
+            // base-frame centre and the joints the arm was in. The grasp is a
+            // rigid offset, so the marker's place in the EE frame then is its
+            // place now -- carried to the present by this controller's own
+            // kinematics, the same model the lip path is followed with.
+            Eigen::VectorXd q_then = state_.q;
+            for (int i = 0; i < num_dof_; ++i) {
+                q_then(i) = bounds.grasp_joints[i];
+            }
+            pinocchio::SE3 H_then, H_now;
+            Eigen::MatrixXd J_unused;
+            compute_arm_kinematics(q_then, H_then, J_unused);
+            Eigen::VectorXd q_now = state_.q;
+            q_now.head(num_dof_) = q_ref_;
+            compute_arm_kinematics(q_now, H_now, J_unused);
+            const Eigen::Vector3d marker_then(bounds.grasp_marker[0], bounds.grasp_marker[1],
+                                              bounds.grasp_marker[2]);
+            // The vessel was upright when it was measured -- standing on the
+            // bench in the jaws. Whatever the EE has turned through since, it
+            // has turned the vessel through too.
+            const Eigen::Vector3d axis_now =
+                H_now.rotation() * H_then.rotation().transpose() * Eigen::Vector3d::UnitZ();
+            const double lean = std::acos(std::clamp(axis_now.z(), -1.0, 1.0));
+            if (lean > max_carry_lean_) {
+                std::ostringstream os;
+                os << "the pour was not started: the vessel was measured upright at its grasp, "
+                   << "and the carry since has tipped it " << std::fixed << std::setprecision(3)
+                   << lean << " rad (limit " << max_carry_lean_ << " rad). The lip path "
+                   << "assumes it hangs upright when the pour starts";
+                abort_before_motion(os.str());
+                return controller_interface::return_type::OK;
+            }
+            sample.position = to_isometry(H_now) * (to_isometry(H_then).inverse() * marker_then);
+            sample.finite = sample.position.allFinite();
+            sample.frame_ok = true;
+            sample.stamp = now;
+            if (!sample.finite) {
+                abort_before_motion("the pour was not started: the grasp measured before the "
+                                    "goal does not give a finite marker position");
+                return controller_interface::return_type::OK;
+            }
+        } else if (!vessel_sample_usable(sample, now)) {
             if (now - measure_started_ > vessel_pose_timeout_) {
                 std::ostringstream os;
                 os << "no usable pose of the held vessel within vessel_pose_timeout ("
@@ -1055,15 +1204,18 @@ controller_interface::return_type PouringController::update_measured(double now,
         compute_arm_kinematics(q_full, H, J);
         // The local Jacobian's angular column for a revolute joint is its axis
         // in the EE frame.
-        const Eigen::Vector3d axis =
-            pour_direction_ * (H.rotation() * J.col(pour_index_).tail<3>());
+        const Eigen::Vector3d axis = reference_axis_valid_
+            ? Eigen::Vector3d(H.rotation() * reference_axis_ee_)
+            : Eigen::Vector3d(goal_direction_ * (H.rotation() * J.col(pour_index_).tail<3>()));
         if (!lip_path_.plan(to_isometry(H), axis, sample.position,
                             action_server_->bounds().max_tilt, vessel_, receiver_, lip_config_,
                             why)) {
             abort_before_motion("the pour was not started: " + why);
             return controller_interface::return_type::OK;
         }
-        RCLCPP_INFO(get_node()->get_logger(), "Pour geometry: %s", lip_path_.summary().c_str());
+        RCLCPP_INFO(get_node()->get_logger(), "Pour geometry (%s): %s",
+                    measured_earlier ? "grasp measured before the goal" : "marker measured now",
+                    lip_path_.summary().c_str());
         align_s_ = 0.0;
         phase_ = Phase::Align;
     }

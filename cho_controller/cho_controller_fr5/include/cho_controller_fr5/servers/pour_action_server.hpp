@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "cho_controller_fr5/servers/base_action_server.hpp"
 #include "cho_interfaces/action/pour.hpp"
@@ -28,6 +30,15 @@ struct PourBounds {
     double max_tilt{0.0};
     double tolerance{0.0};
     double timeout{0.0};
+    //: A grasp measured before the goal: the joints it was measured in and the
+    //: marker's base-frame centre then. Empty joints: measure at goal start.
+    std::vector<double> grasp_joints;
+    std::array<double, 3> grasp_marker{{0.0, 0.0, 0.0}};
+    //: +1 / -1 from the goal, or 0 for the controller's configured one.
+    int pour_direction{0};
+    //: A configuration showing how the pour tips the vessel; empty: the pour
+    //: joint's axis.
+    std::vector<double> pour_reference_joints;
 };
 
 /**

@@ -30,7 +30,11 @@ constexpr double kJawDepth = 0.245;
 struct Scene {
     Eigen::Vector3d vessel_origin{0.45, 0.32, 0.15};   // bottom centre, base frame
     double grasp_height{0.030};                        // jaws' centre above the bottom
-    Eigen::Vector3d tag_in_vessel{-(kR + 0.003), 0.0, 0.045};
+    // Where the marker is stuck, as an offset from the bottom centre in BASE
+    // axes: on a card beyond the fingertips (the approach is base +y), which is
+    // the one side of a side-gripped beaker the jaws leave free and a camera in
+    // front can see.
+    Eigen::Vector3d tag_offset{0.0, kR + 0.003, 0.045};
     Eigen::Vector3d tag_error{Eigen::Vector3d::Zero()};
     Eigen::Vector3d pour_axis{Eigen::Vector3d::UnitY()};
     Receiver receiver;
@@ -44,7 +48,7 @@ struct Scene {
         receiver.radius = kR;
         vessel.radius = kR;
         vessel.height = kH;
-        vessel.tag_in_vessel = tag_in_vessel;
+        config.grasp_depth = kJawDepth;
     }
 
     Eigen::Isometry3d ee() const
@@ -58,7 +62,7 @@ struct Scene {
         return T;
     }
 
-    Eigen::Vector3d tag() const { return vessel_origin + tag_in_vessel + tag_error; }
+    Eigen::Vector3d tag() const { return vessel_origin + tag_offset + tag_error; }
 
     //: Two jaws closed on the vessel: `thickness` past its wall, `half_height`
     //: above and below the grasp, the AG-95's 110 mm along the approach.
@@ -76,7 +80,8 @@ struct Scene {
     bool plan(LipPath & path, std::string & why) const
     {
         vessel_with_tag_ = vessel;
-        vessel_with_tag_.tag_in_vessel = tag_in_vessel;
+        vessel_with_tag_.tag_radius = tag_offset.head<2>().norm();
+        vessel_with_tag_.tag_height = tag_offset.z();
         return path.plan(ee(), pour_axis, tag(), max_tilt, vessel_with_tag_, receiver, config, why);
     }
 
@@ -145,7 +150,8 @@ TEST(LipPath, RecoversTheGraspItWasGiven)
     EXPECT_NEAR(ee.x(), 0.0, 1e-9);
     EXPECT_NEAR(ee.y(), -kJawDepth, 1e-9);
     EXPECT_NEAR(ee.z(), scene.grasp_height, 1e-9);
-    EXPECT_NEAR(path.centering_error(), 0.0, 1e-9);
+    EXPECT_NEAR(path.depth_error(), 0.0, 1e-9);
+    EXPECT_NEAR(path.marker_offset(), 0.0, 1e-9);
     EXPECT_TRUE(path.pour_direction().isApprox(Eigen::Vector3d::UnitX()));
 }
 
@@ -304,12 +310,44 @@ TEST(LipPath, BacksOutBeforeDescendingPastTheRim)
     }
 }
 
+TEST(LipPath, FindsTheGraspWhicheverSideOfTheBeakerTheMarkerIsOn)
+{
+    // Which side of the beaker faces where depends on how it stood when it was
+    // picked up and on the recording's approach. None of it is configured: the
+    // same beaker, grasped the same way, comes out the same.
+    for (const double azimuth : {90.0, -90.0, 45.0, 135.0, -60.0, 20.0}) {
+        Scene scene;
+        const double a = azimuth * M_PI / 180.0;
+        scene.tag_offset = Eigen::Vector3d((kR + 0.003) * std::cos(a), (kR + 0.003) * std::sin(a),
+                                           0.045);
+        LipPath path;
+        std::string why;
+        ASSERT_TRUE(scene.plan(path, why)) << "azimuth " << azimuth << ": " << why;
+        EXPECT_NEAR(path.ee_in_vessel().x(), 0.0, 1e-9) << "azimuth " << azimuth;
+        EXPECT_NEAR(path.ee_in_vessel().y(), -kJawDepth, 1e-9) << "azimuth " << azimuth;
+        EXPECT_NEAR(path.ee_in_vessel().z(), scene.grasp_height, 1e-9) << "azimuth " << azimuth;
+    }
+}
+
+TEST(LipPath, RefusesAVesselThatIsNotWhereTheJawsHold)
+{
+    // A marker 60 mm further along than any beaker between these jaws could put
+    // it: something else's, or a beaker standing beyond the fingertips.
+    Scene scene;
+    scene.tag_error = Eigen::Vector3d(0.0, 0.060, 0.0);
+    LipPath path;
+    std::string why;
+    EXPECT_FALSE(scene.plan(path, why));
+    EXPECT_NE(why.find("along the jaws from where"), std::string::npos) << why;
+}
+
 TEST(LipPath, RefusesAMeasurementThatPutsTheVesselOffTheJawsCentreLine)
 {
-    // The jaws centre what they close on, so a vessel measured 12 mm to one side
-    // along their closing axis is a measurement 12 mm wrong.
+    // The jaws centre what they close on, so a marker measured further from
+    // their centre line than it is stuck from the axis is a measurement wrong
+    // by the difference.
     Scene scene;
-    scene.tag_error = Eigen::Vector3d(0.012, 0.0, 0.0);
+    scene.tag_error = Eigen::Vector3d(0.040, 0.0, 0.0);
     LipPath path;
     std::string why;
     EXPECT_FALSE(scene.plan(path, why));
@@ -317,14 +355,32 @@ TEST(LipPath, RefusesAMeasurementThatPutsTheVesselOffTheJawsCentreLine)
     EXPECT_FALSE(path.planned());
 }
 
-TEST(LipPath, RefusesAReceiverBehindTheLip)
+TEST(LipPath, ComesAroundFromAVesselCarriedInAboveTheReceiver)
 {
+    // Where a recorded pour starts: the vessel hangs over the receiver, 150 mm
+    // up, lip well past its centre. Nothing is below the rim, so the lip backs
+    // out above it, comes down on the near side and starts from there.
     Scene scene;
-    scene.receiver.rim_center.x() = 0.38;
+    scene.with_jaws();
+    scene.vessel_origin = Eigen::Vector3d(0.52, 0.32, kRimZ + 0.150);
+    scene.config.max_align_distance = 0.30;
+    scene.config.lip_height = 0.050;
     LipPath path;
     std::string why;
-    EXPECT_FALSE(scene.plan(path, why));
-    EXPECT_NE(why.find("behind the lip"), std::string::npos) << why;
+    ASSERT_TRUE(scene.plan(path, why)) << why;
+    EXPECT_GT(path.align_length(), 0.15);
+    // Brought down to lip_height, not to max_height where the start's 220 mm
+    // would have been clamped -- and lifted only as far as landing needs.
+    EXPECT_GE(path.height(), 0.050);
+    EXPECT_LT(path.height(), 0.080);
+    EXPECT_LT(path.inset_limit(0.0), 0.0);
+    for (double s = 0.0; s <= path.align_length(); s += 0.001) {
+        const Eigen::Isometry3d ee = path.ee_pose_aligning(s);
+        Eigen::Isometry3d vessel = Eigen::Isometry3d::Identity();
+        vessel.translation() = scene.vessel_origin + (ee.translation() - scene.ee().translation());
+        EXPECT_LT(incursion(vessel, ee, scene.config.hand_boxes, scene.receiver), 0.0) << "s " << s;
+    }
+    EXPECT_NE(path.summary().find("toward heading 0 deg"), std::string::npos) << path.summary();
 }
 
 TEST(LipPath, RefusesToMoveAVesselAlreadyOverTheRim)

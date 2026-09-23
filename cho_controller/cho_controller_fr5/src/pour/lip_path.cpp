@@ -65,6 +65,8 @@ bool LipPathConfig::validate(std::string & why) const
         {"max_align_distance", max_align_distance},
         {"max_axis_elevation", max_axis_elevation},
         {"max_centering_error", max_centering_error},
+        {"grasp_depth", grasp_depth},
+        {"max_depth_error", max_depth_error},
         {"max_tag_distance", max_tag_distance},
         {"outline_step", outline_step},
         {"hand_step", hand_step},
@@ -86,6 +88,11 @@ bool LipPathConfig::validate(std::string & why) const
         why = os.str();
         return false;
     }
+    if (!std::isfinite(lip_height) || lip_height < 0.0) {
+        why = "lip_height must be zero (keep the height the vessel was brought in at) or a "
+              "positive height above the rim";
+        return false;
+    }
     if (max_height < clearance) {
         why = "max_height must not be below clearance: they are the two ends of the range the "
               "lip is held in above the rim";
@@ -105,8 +112,10 @@ bool LipPathConfig::validate(std::string & why) const
         why = os.str();
         return false;
     }
-    if (!closing_axis_in_ee.allFinite() || closing_axis_in_ee.norm() < 1e-9) {
-        why = "closing_axis_in_ee must be a nonzero vector: the direction the jaws close along";
+    if (!closing_axis_in_ee.allFinite() || closing_axis_in_ee.norm() < 1e-9 ||
+        !approach_axis_in_ee.allFinite() || approach_axis_in_ee.norm() < 1e-9) {
+        why = "closing_axis_in_ee and approach_axis_in_ee must be nonzero vectors: the "
+              "direction the jaws close along, and the one they reach along";
         return false;
     }
     for (std::size_t i = 0; i < hand_boxes.size(); ++i) {
@@ -273,9 +282,10 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
         return false;
     }
     if (!(std::isfinite(vessel.radius) && vessel.radius > 0.0 && std::isfinite(vessel.height) &&
-          vessel.height > 0.0 && vessel.tag_in_vessel.allFinite())) {
-        why = "the held vessel needs a finite positive radius and height and a finite marker "
-              "position on it";
+          vessel.height > 0.0 && std::isfinite(vessel.tag_radius) && vessel.tag_radius >= 0.0 &&
+          std::isfinite(vessel.tag_height))) {
+        why = "the held vessel needs a finite positive radius and height, and the marker's "
+              "distance from its axis and height above its bottom";
         return false;
     }
     if (!(std::isfinite(receiver.radius) && receiver.radius > 0.0 &&
@@ -325,33 +335,66 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
         why = os.str();
         return false;
     }
-    Eigen::Isometry3d T_v0 = Eigen::Isometry3d::Identity();
-    T_v0.linear() = R_v0_;
-    T_v0.translation() = tag_position - R_v0_ * vessel.tag_in_vessel;
-    T_v_ee_ = T_v0.inverse() * ee_start;
-    lip_in_vessel_ = Eigen::Vector3d(vessel.radius, 0.0, vessel.height);
-    lip0_ = T_v0 * lip_in_vessel_;
-
     const Eigen::Vector3d closing = (ee_start.linear() * config.closing_axis_in_ee).normalized();
     if (std::abs(closing.dot(up)) > 0.5) {
         why = "the jaws close along the vessel's axis rather than across it: this is not a "
               "grasp a vessel can be poured from";
         return false;
     }
-    // The jaws' centre line runs through the EE origin, and they centre what
-    // they close on. So the vessel's axis lies in that plane, and how far the
-    // measurement puts it outside is how wrong the measurement is.
-    centering_error_ = (T_v0.translation() - ee_start.translation()).dot(closing);
-    if (std::abs(centering_error_) > config.max_centering_error) {
+    // The jaws' centre line, on the horizontal: they centre what they close
+    // on, so the upright axis stands on this line, which runs through the EE
+    // origin and points from the wrist toward the fingertips.
+    Eigen::Vector3d along = up.cross(closing);
+    along.z() = 0.0;
+    along.normalize();
+    const Eigen::Vector3d approach = ee_start.linear() * config.approach_axis_in_ee.normalized();
+    if (along.dot(approach) < 0.0) {
+        along = -along;
+    }
+    Eigen::Vector3d from_ee = tag_position - ee_start.translation();
+    from_ee.z() = 0.0;
+    const double t = from_ee.dot(along);
+    marker_offset_ = (from_ee - t * along).norm();
+    // The marker cannot be further from that line than from the axis. What it
+    // is further by is measurement error -- a single camera's range error lies
+    // along its line of sight -- or a tag_radius that does not match the tag.
+    if (marker_offset_ > vessel.tag_radius + config.max_centering_error) {
         std::ostringstream os;
-        os << "the vessel measured " << mm(centering_error_) << " off the jaws' centre line "
-           << "along the direction they close (limit " << mm(config.max_centering_error)
-           << "). The jaws centre what they grip, so that is measurement error, not grasp: a "
-              "marker seen by one camera is off along that camera's line of sight. Check both "
-              "side cameras see it, and that tag_in_vessel matches where it is stuck";
+        os << "the marker measured " << mm(marker_offset_) << " from the jaws' centre line, but "
+           << "it is stuck " << mm(vessel.tag_radius) << " from the vessel's axis, which the "
+           << "jaws centre on that line (tolerance " << mm(config.max_centering_error)
+           << "). That is measurement error, not grasp: a marker seen by one camera is off "
+              "along that camera's line of sight. Check the camera sees it squarely, and that "
+              "tag_radius matches where it is stuck";
         why = os.str();
         return false;
     }
+    // Two places on the line are tag_radius from the marker; the jaws are at
+    // one of them.
+    const double half = std::sqrt(std::max(
+        0.0, vessel.tag_radius * vessel.tag_radius - marker_offset_ * marker_offset_));
+    const double nominal = config.grasp_depth * approach.dot(along);
+    const double near_side = t - half;
+    const double far_side = t + half;
+    const double depth =
+        std::abs(near_side - nominal) <= std::abs(far_side - nominal) ? near_side : far_side;
+    depth_error_ = depth - nominal;
+    if (std::abs(depth_error_) > config.max_depth_error) {
+        std::ostringstream os;
+        os << "the vessel's axis comes out " << mm(depth_error_) << " along the jaws from where "
+           << "they hold (grasp_depth " << mm(config.grasp_depth) << ", limit "
+           << mm(config.max_depth_error) << "): the marker is not on the vessel between these "
+              "jaws, or tag_radius or grasp_depth is wrong";
+        why = os.str();
+        return false;
+    }
+    Eigen::Isometry3d T_v0 = Eigen::Isometry3d::Identity();
+    T_v0.linear() = R_v0_;
+    T_v0.translation() = ee_start.translation() + depth * along;
+    T_v0.translation().z() = tag_position.z() - vessel.tag_height;
+    T_v_ee_ = T_v0.inverse() * ee_start;
+    lip_in_vessel_ = Eigen::Vector3d(vessel.radius, 0.0, vessel.height);
+    lip0_ = T_v0 * lip_in_vessel_;
 
     // ---- the receiver, in pour coordinates ------------------------------
     const double R = receiver.radius;
@@ -359,11 +402,12 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
     const double inset0 = (lip0_ - near_rim).dot(x_);
     const double lateral0 = (lip0_ - receiver.rim_center).dot(y_);
     const double height0 = lip0_.z() - receiver.rim_center.z();
-    if ((receiver.rim_center - lip0_).dot(x_) <= 0.0) {
-        why = "the receiver is behind the lip: tilting this way tips the vessel away from it. "
-              "Check pour_direction, or bring the vessel to the other side of the receiver";
-        return false;
-    }
+    // Where the lip starts relative to the receiver is NOT checked beyond the
+    // collision test below. A vessel carried in from above -- a recorded
+    // pre-pour pose hangs it 20 cm over the receiver -- starts with its lip
+    // past the receiver's centre, and the alignment's first move backs it out
+    // above the rim, where nothing can meet anything. Which side it ends up
+    // on is the pour direction's, and the summary names it.
 
     // ---- what must stay out of it --------------------------------------
     points_.clear();
@@ -408,7 +452,8 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
     }
 
     // ---- the height it is held at ----------------------------------------
-    height_ = std::clamp(height0, config.clearance, config.max_height);
+    height_ = std::clamp(config.lip_height > 0.0 ? config.lip_height : height0,
+                         config.clearance, config.max_height);
     build_at_height(inset0, lateral0, height0, max_tilt);
     const double by = std::min(config.landing_by_tilt, max_tilt);
     const double lifted_from = height_;
@@ -459,11 +504,14 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
     }
 
     const double inset_start = inset_limit(0.0);
-    // Under the side grasp the approach axis runs horizontally through the EE
-    // origin and the jaws' centre, so the origin's height IS the grasp height.
+    // Where the jaws hold, in the vessel's frame: its height is the grasp
+    // height, whatever angle the approach came in at.
+    const Eigen::Vector3d jaws =
+        T_v_ee_ * (config.grasp_depth * config.approach_axis_in_ee.normalized());
     std::ostringstream os;
-    os << "vessel held with the wrist axis " << mm(T_v_ee_.translation().z())
-       << " above its bottom (" << mm(centering_error_) << " off the jaws' centre line); lip "
+    os << "vessel held with the jaws " << mm(jaws.z())
+       << " above its bottom and its axis " << mm(depth_error_) << " along the jaws from where "
+       << "they hold (marker " << mm(marker_offset_) << " off their centre line); lip "
        << "measured " << mm(inset0) << " past the near rim, " << mm(lateral0) << " off centre, "
        << mm(height0) << " above; aligning " << mm(align_length_) << " to start "
        << mm(inset_start) << " past it at " << mm(height_);
@@ -472,7 +520,8 @@ bool LipPath::plan(const Eigen::Isometry3d & ee_start, const Eigen::Vector3d & p
            << rad(by) << ")";
     }
     os << "; pours into the receiver from " << rad(landing_tilt_) << " to "
-       << rad(last_landing_tilt_);
+       << rad(last_landing_tilt_) << ", toward heading " << std::fixed << std::setprecision(0)
+       << std::atan2(x_.y(), x_.x()) * 180.0 / M_PI << " deg";
     summary_ = os.str();
     planned_ = true;
     return true;

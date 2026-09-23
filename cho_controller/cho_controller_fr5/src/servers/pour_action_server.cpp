@@ -1,5 +1,6 @@
 #include "cho_controller_fr5/servers/pour_action_server.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -71,6 +72,37 @@ rclcpp_action::GoalResponse FR5PourActionServer::handle_goal(
             return rclcpp_action::GoalResponse::REJECT;
         }
     }
+    if (goal->pour_direction != 0 && goal->pour_direction != 1 && goal->pour_direction != -1) {
+        RCLCPP_ERROR(node_->get_logger(),
+            "[%s] Goal rejected: pour_direction must be +1, -1, or 0 for the configured one; "
+            "got %d", action_name_.c_str(), static_cast<int>(goal->pour_direction));
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (!goal->pour_reference_joints.empty() &&
+        (static_cast<int>(goal->pour_reference_joints.size()) != num_dof_ ||
+         !std::all_of(goal->pour_reference_joints.begin(), goal->pour_reference_joints.end(),
+                      [](double q) { return std::isfinite(q); }))) {
+        RCLCPP_ERROR(node_->get_logger(),
+            "[%s] Goal rejected: pour_reference_joints must be empty or %d finite joint "
+            "positions; got %zu", action_name_.c_str(), num_dof_,
+            goal->pour_reference_joints.size());
+        return rclcpp_action::GoalResponse::REJECT;
+    }
+    // A grasp measured earlier is all or nothing: joints for every arm joint,
+    // and a marker, all finite. Half of one would be a grasp nobody measured.
+    if (!goal->grasp_joints.empty()) {
+        const bool joints_ok = static_cast<int>(goal->grasp_joints.size()) == num_dof_ &&
+            std::all_of(goal->grasp_joints.begin(), goal->grasp_joints.end(),
+                        [](double q) { return std::isfinite(q); });
+        const auto & m = goal->grasp_marker;
+        if (!joints_ok || !std::isfinite(m.x) || !std::isfinite(m.y) || !std::isfinite(m.z)) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "[%s] Goal rejected: grasp_joints must be empty (measure the grasp at the "
+                "goal) or %d finite joint positions with a finite grasp_marker; got %zu",
+                action_name_.c_str(), num_dof_, goal->grasp_joints.size());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+    }
     if (control_running_ || (goal_handle_ && goal_handle_->is_active())) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Goal rejected: another pour is active",
             action_name_.c_str());
@@ -102,6 +134,10 @@ void FR5PourActionServer::handle_accepted(const std::shared_ptr<PourGoalHandle> 
     bounds_.max_tilt = or_default(goal->max_tilt, defaults_.max_tilt);
     bounds_.tolerance = or_default(goal->tolerance, defaults_.tolerance);
     bounds_.timeout = or_default(goal->timeout, defaults_.timeout);
+    bounds_.grasp_joints = goal->grasp_joints;
+    bounds_.pour_direction = goal->pour_direction;
+    bounds_.pour_reference_joints = goal->pour_reference_joints;
+    bounds_.grasp_marker = {goal->grasp_marker.x, goal->grasp_marker.y, goal->grasp_marker.z};
 
     RCLCPP_INFO(node_->get_logger(),
         "[%s] Pouring %.1f g of %s (flow_index %.2f) into a %.2f g vessel "

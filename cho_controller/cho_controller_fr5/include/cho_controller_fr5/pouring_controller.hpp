@@ -56,7 +56,12 @@ namespace fr5 {
  *
  * Two things the grasp still owes it. `pour_direction` says which way the joint
  * has to turn to bring the lip down, because no amount of feedback discovers
- * that safely -- guessing wrong tips the vessel away from the scale. And a grasp
+ * that safely -- guessing wrong tips the vessel away from the scale. A goal may
+ * carry its own, or -- pour_reference_joints -- a configuration that shows the
+ * pour, and then the vessel is tipped about whatever axis the EE turns about
+ * to reach it. A replay passes its recording's deepest tilt, because recordings
+ * do not agree on the axis: the first real-cell ones rolled the wrist about the
+ * approach, later ones turn about the jaws' closing axis. And a grasp
  * rotated about a DIFFERENT axis than the pour axis is out of scope: the joint
  * would swing the lip sideways instead of tipping it.
  *
@@ -78,7 +83,11 @@ namespace fr5 {
  * Return, and the arm finishes in exactly the joint configuration it started
  * in. Measure waits for a marker pose that arrived at least vessel_settle_sec
  * after the arm last moved, because the pose node aggregates over a window and
- * a window that straddles a motion describes nowhere the vessel ever was. The
+ * a window that straddles a motion describes nowhere the vessel ever was --
+ * unless the goal carries a grasp measured earlier (grasp_joints and
+ * grasp_marker), which a replay takes right after the jaws close, with the
+ * vessel still on the bench and close to a camera. Then nothing is waited for:
+ * the marker's offset from the EE then is its offset now. The
  * law is told nothing new: its tilt is still the rotation from the carried
  * attitude, and its tilt bound is capped where the lip stops being over the
  * mouth.
@@ -135,7 +144,8 @@ private:
     //: One law step: the tilt rate it asks for, or 0 once it has finished (in
     //: which case begin_untilt() has been called).
     double step_law(double now);
-    void start_goal(double now);
+    //: False when the goal was refused before anything moved.
+    bool start_goal(double now);
     void start_pour(double now);
     controller_interface::return_type update_measured(double now, double dt);
     //: Why `sample` cannot be planned from yet; empty when it can.
@@ -167,6 +177,12 @@ private:
     std::string pour_joint_;
     //: +1 or -1: which way the pour joint turns to bring the lip down.
     double pour_direction_{1.0};
+    //: The one this goal pours with: the goal's, when it gives one.
+    double goal_direction_{1.0};
+    //: The pour axis in the EE frame, from the goal's reference configuration,
+    //: when it gave one (its sign tips the lip down); otherwise unused.
+    Eigen::Vector3d reference_axis_ee_{Eigen::Vector3d::UnitZ()};
+    bool reference_axis_valid_{false};
     double scale_timeout_{0.5};
     double max_tilt_{2.0};
     //: Lower end of the tilt range: how far BEHIND the carried attitude the
@@ -196,6 +212,10 @@ private:
     double ik_tolerance_{0.002};
     double ik_rot_tolerance_{0.02};
     double ik_fail_sec_{0.5};
+    //: How far a vessel measured upright at its grasp may lean by the time the
+    //: pour starts [rad]. The lip path assumes it hangs upright; a carry that
+    //: tipped it would put the lip somewhere the path does not know about.
+    double max_carry_lean_{0.10};
     pour::HeldVessel vessel_;
     pour::Receiver receiver_;
     pour::LipPathConfig lip_config_;

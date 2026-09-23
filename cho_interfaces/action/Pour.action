@@ -68,6 +68,37 @@ float64 tolerance
 
 # Give up after this long [s], counted from the first commanded tilt.
 float64 timeout
+
+# Where the held vessel's marker was measured, and the arm configuration it was
+# measured in -- for a pour whose grasp was measured EARLIER than the goal, as a
+# replay does right after its jaws close on the vessel, with the vessel still on
+# the bench 0.4 m from a side camera rather than hung 0.95 m from it. Only read
+# under `pour_geometry: measured`.
+#
+# The controller works out the marker's place relative to its own EE from these
+# with its own kinematic model, so the grasp stays one rigid offset measured
+# once. Empty grasp_joints (the default) means it measures the marker itself
+# when the goal starts, off its configured topic.
+#
+#   grasp_joints   the arm's joint positions at that moment, in the
+#                  controller's joint order [rad]
+#   grasp_marker   the marker's centre then, in the arm's base frame [m]
+float64[] grasp_joints
+geometry_msgs/Point grasp_marker
+
+# Which way the pour joint turns to bring the lip down: +1 or -1, or 0 (the
+# default) for the controller's configured pour_direction.
+int8 pour_direction
+
+# An arm configuration showing HOW this pour tips the vessel -- a replay passes
+# the recording's deepest tilt. The controller tips the vessel about the axis
+# its EE turns about from where the goal starts to this configuration, which
+# fixes both the axis and which way the lip goes down; pour_direction is then
+# not used. Recordings do not agree on this: the first real-cell ones poured by
+# rolling the wrist about the approach, later ones by turning about the jaws'
+# closing axis, and a config file cannot know which the next one does.
+# Empty (the default): tip about the pour joint's axis, pour_direction's way.
+float64[] pour_reference_joints
 ---
 bool is_completed
 

@@ -15,10 +15,15 @@ struct HeldVessel {
     double radius{0.025};
     //: Bottom to rim [m].
     double height{0.070};
-    //: Centre of the marker the cameras locate, in the vessel frame [m]. Only
-    //: its POSITION is used -- a tag's orientation is the part of its pose that
-    //: flips between frames.
-    Eigen::Vector3d tag_in_vessel{Eigen::Vector3d::Zero()};
+    //: Where the marker the cameras locate is stuck on it: its centre's
+    //: horizontal distance from the vessel's axis, and its height above the
+    //: bottom [m]. Only its POSITION is used -- a tag's orientation is the part
+    //: of its pose that flips between frames -- and deliberately NOT which side
+    //: of the vessel it is on. That depends on how the vessel stood when it was
+    //: picked up and on how the grasp approached it, both of which change from
+    //: one recording to the next; the jaws' centring supplies the rest.
+    double tag_radius{0.0};
+    double tag_height{0.0};
 };
 
 //: The vessel being poured into. Fixed, not perceived: it stands on the scale.
@@ -38,9 +43,14 @@ struct HandBox {
 struct LipPathConfig {
     //: Lowest the lip is held above the receiver's rim [m].
     double clearance{0.020};
-    //: Highest. The lip is held at the height it was brought in at, clamped
-    //: to this range, for the whole pour.
+    //: Highest. The lip is held at one height for the whole pour.
     double max_height{0.080};
+    //: That height [m]: `lip_height` when positive, otherwise the height the
+    //: vessel was brought in at -- clamped to [clearance, max_height] either
+    //: way, then lifted for landing_by_tilt. A taught pre-pour pose already
+    //: says how high; a recorded one hangs the vessel 20 cm up, and pouring
+    //: from max_height because of it would be a choice nobody made.
+    double lip_height{0.0};
     //: How far inside the receiver's near rim the lip is brought once nothing
     //: prevents it [m].
     double inset{0.012};
@@ -61,11 +71,20 @@ struct LipPathConfig {
     //: How far the pour axis may be off horizontal [rad]. Tilting about a
     //: steep axis swings the lip sideways instead of tipping it.
     double max_axis_elevation{0.35};
-    //: How far the measured vessel axis may sit off the jaws' centre line
-    //: along their closing axis [m]. The jaws centre what they grip, so any
-    //: offset there is measurement error, and this is the only place a
-    //: marker's range error shows up as something checkable.
+    //: How much further the marker may measure from the jaws' centre line
+    //: than tag_radius puts it from the vessel's axis [m]. The jaws centre what
+    //: they grip, so the axis lies on that line and the marker cannot be
+    //: further from it than from the axis: any excess is measurement error.
     double max_centering_error{0.008};
+    //: Distance along the approach from the EE origin to where the jaws hold
+    //: [m], and how far from it the vessel's axis may come out. The marker and
+    //: the centring leave two places along the jaws the axis could be, a
+    //: marker's width apart; this picks the one where the jaws actually are.
+    //: So it has to be right to well within tag_radius: off by more, it picks
+    //: the other place, 2 * tag_radius away, and nothing can tell.
+    double grasp_depth{0.29};
+    double max_depth_error{0.04};
+    Eigen::Vector3d approach_axis_in_ee{Eigen::Vector3d::UnitZ()};
     //: A marker further than this from the EE is not on anything it holds [m].
     double max_tag_distance{0.5};
     Eigen::Vector3d closing_axis_in_ee{Eigen::Vector3d::UnitX()};
@@ -163,15 +182,21 @@ public:
     //: rim, i.e. between which what pours lands in the receiver [rad].
     [[nodiscard]] double landing_tilt() const { return landing_tilt_; }
     [[nodiscard]] double last_landing_tilt() const { return last_landing_tilt_; }
-    //: Height above the rim the lip is held at [m]: where it was brought in,
-    //: clamped to [clearance, max_height], and lifted for landing_by_tilt.
+    //: Height above the rim the lip is held at [m]: lip_height or where it
+    //: was brought in, clamped to [clearance, max_height], and lifted for
+    //: landing_by_tilt.
     [[nodiscard]] double height() const { return height_; }
     [[nodiscard]] const Eigen::Vector3d & pour_direction() const { return x_; }
     [[nodiscard]] const Eigen::Vector3d & tilt_axis() const { return y_; }
     [[nodiscard]] const Eigen::Vector3d & lip_start() const { return lip0_; }
     //: The measured grasp: the EE origin in the vessel frame [m].
     [[nodiscard]] Eigen::Vector3d ee_in_vessel() const { return T_v_ee_.translation(); }
-    [[nodiscard]] double centering_error() const { return centering_error_; }
+    //: The lip in the EE frame: the point the arm has to keep on the path.
+    [[nodiscard]] Eigen::Vector3d lip_in_ee() const { return T_v_ee_.inverse() * lip_in_vessel_; }
+    //: How far the marker measured from the jaws' centre line, and how far
+    //: along it the axis came out from grasp_depth [m].
+    [[nodiscard]] double marker_offset() const { return marker_offset_; }
+    [[nodiscard]] double depth_error() const { return depth_error_; }
     //: One line for the log: where the lip was, where it goes, what range pours.
     [[nodiscard]] const std::string & summary() const { return summary_; }
 
@@ -204,7 +229,8 @@ private:
     double height_{0.0};
     double landing_tilt_{0.0};
     double last_landing_tilt_{0.0};
-    double centering_error_{0.0};
+    double marker_offset_{0.0};
+    double depth_error_{0.0};
     std::string summary_;
 };
 

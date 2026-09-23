@@ -221,7 +221,16 @@ pouring_controller:
     # Which way that joint turns to bring the lip DOWN. No amount of feedback
     # discovers this safely -- the wrong sign tips the vessel away from the
     # scale -- so it is declared. Exactly +1.0 or -1.0.
-    pour_direction: 1.0
+    #
+    # Under the side grasp the other sign also brings A rim point down -- the
+    # one on the far jaw -- so a wrong sign does not fail, it pours over the
+    # other side of the beaker.
+    #
+    # Only the default: a goal may carry its own, and a replay does, read off
+    # the recording's pour. -1 is what both real-cell recordings do (seed2 turns
+    # j6 from -0.31 to -1.57 rad, seed4 from -0.12 to -1.21), so a hand-sent
+    # goal pours the way they would.
+    pour_direction: -1.0
     # Absolute bound from the attitude the vessel was carried in. The grasp does
     # not have to be square: every angle here is relative, and the angle the
     # vessel actually starts pouring at is found rather than configured. A
@@ -253,7 +262,7 @@ pouring_controller:
     #
     # Left at `joint` until the marker exists. To switch:
     #   1. move tag 0 off its stalk onto the beaker, facing side_2, and measure
-    #      tag_in_vessel;
+    #      tag_radius and tag_height;
     #   2. run cho_object_pose with cho_task_manager's
     #      config/perception/pour_vessel.yaml. Two cameras if they can both see
     #      it: one camera's range error lies along its line of sight -- 10-16 mm
@@ -276,10 +285,24 @@ pouring_controller:
       # The 100 mL beaker: 50 mm across, 70 mm tall.
       vessel_radius: 0.025
       vessel_height: 0.070
-      # Where the marker's centre is on the vessel, in the vessel's frame: x
-      # toward the lip, z up from the centre of its bottom. MEASURE IT. Left
-      # out until then, and `measured` refuses to configure without it:
-      #   tag_in_vessel: [x, y, z]
+      # Where the marker's centre is stuck on the beaker: its horizontal
+      # distance from the beaker's axis, and its height above the bottom.
+      # MEASURE THEM; left out until then, and `measured` refuses to configure
+      # without them. NOT which side of the beaker it is on -- that depends on
+      # how the beaker stood when it was picked up and on the recording's
+      # approach, and the jaws' centring supplies it:
+      #   tag_radius: 0.0xx
+      #   tag_height: 0.0xx
+      # Where the jaws hold, along the approach from wrist3_link: the AG-95's
+      # grasp_link. The marker leaves two places on the jaws' centre line the
+      # beaker's axis could be, a marker's width apart; this picks one, and a
+      # beaker that comes out further than max_depth_error from it is refused.
+      grasp_depth: 0.29
+      max_depth_error: 0.04
+      approach_axis_in_ee: [0.0, 0.0, 1.0]
+      # A beaker measured upright at its grasp may lean this much by the time
+      # the pour starts [rad]; a carry that tipped it further is refused.
+      max_carry_lean: 0.10
       # The receiver is fixed at the scale's centre, rim at 180 mm (measured on
       # the cell, 2026-09-23). Not perceived.
       receiver_rim_center: [0.520, 0.320, 0.180]
@@ -289,6 +312,9 @@ pouring_controller:
       # and the jaws below it back out past the rim, `lip_gap` clear.
       lip_clearance: 0.020
       lip_max_height: 0.080
+      # Held here rather than at the height the vessel was brought in at: a
+      # recorded pre-pour pose hangs it 20 cm over the receiver.
+      lip_height: 0.050
       lip_inset: 0.012
       lip_gap: 0.005
       landing_margin: 0.005
@@ -297,9 +323,13 @@ pouring_controller:
       # rim. The lip is lifted until the stream lands inside from this tilt on:
       # 0.5 rad covers this beaker up to about 110 g of water.
       landing_by_tilt: 0.5
-      # The largest correction made before tilting. The pre-pour pose is still
-      # the task's: bring the lip about 20 mm short of the rim.
-      max_align_distance: 0.060
+      # The largest move made before tilting. From a taught pre-pour pose it is
+      # a few cm; from where the real-cell recordings start their pour -- the
+      # jaws 38 cm up, over the receiver -- it is about 23 cm, backed out above
+      # the rim before it comes down. A recording that starts its pour further
+      # off still works up to this; beyond it the vessel is not where the task
+      # thinks.
+      max_align_distance: 0.400
       align_speed: 0.02
       max_lip_speed: 0.03
       max_axis_elevation: 0.35
