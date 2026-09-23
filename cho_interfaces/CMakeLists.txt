@@ -30,6 +30,7 @@ set(MSG_FILES
   "msg/GripperState.msg"
   "msg/ObjectVisibility.msg"
   "msg/ObjectVisibilityArray.msg"
+  "msg/PourStream.msg"
   "msg/PoseLog.msg"
   "msg/ScaleReading.msg"
   "msg/VlaTelemetry.msg"

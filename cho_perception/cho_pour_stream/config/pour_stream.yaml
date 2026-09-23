@@ -1,0 +1,92 @@
+# Stream detection for a pour, and where the camera has to be for it to work.
+#
+# WHERE THE CAMERA LOOKS
+#
+# At the FALL COLUMN -- the open gap between the lip of the pouring vessel and
+# the rim of the receiving one. Not at the lip, not at the receiver.
+#
+#   not the lip       the vessel edge is in frame and MOVES as the wrist tilts,
+#                     so the background changes and every frame difference lights
+#                     up. A viscous material also clings there: you would see a
+#                     string that is not detaching.
+#   not the receiver  splashing, foam and the already-poured contents all move.
+#   the gap           the only thing that ever crosses it is falling material.
+#
+# FIXED TO THE BENCH, NOT TO THE WRIST. The detector subtracts a learned
+# background, and a camera that moves with the arm has no background to learn.
+#
+# LOOK ALONG THE POUR AXIS. The vessel tilts about one axis, so the stream falls
+# in a plane; facing that plane shows the stream at its widest. Sighting down it
+# instead sees it nearly end-on.
+#
+# THE BAND IS A HORIZONTAL STRIP, not a box. Tilting swings the lip along an arc,
+# so the stream moves sideways during the pour. Make the band span the whole
+# width that arc covers, and keep it SHORT vertically -- tall enough to prove
+# free fall, clear of the gripper above and the receiving rim below. Anything
+# that enters the band and is not falling material is a false positive, and the
+# gripper is the one most likely to.
+#
+# BACKDROP AND LIGHT -- worth more than any threshold below. A matte, uniform
+# card behind the gap: dark behind water and clear liquids, white behind coffee
+# and dark powders. Light from the camera side, diffuse, no specular highlight
+# on the vessel. Water against clutter is nearly invisible; water against a
+# matte dark card with side light is a bright line. If a clear stream still will
+# not show, a printed stripe pattern on the backdrop works -- the stream
+# refracts it and the stripes visibly bend.
+#
+# SENSOR. Global shutter. A falling stream and falling grains smear under a
+# rolling shutter, which is what the OAK-D Pro W's mono pair is for and why
+# cho_oak publishes RGBSTEREO; the D435's colour sensor is rolling shutter. Turn
+# the IR dot projector OFF -- it puts a moving speckle pattern in the band. 60-90
+# fps, framed so the gap is 200-400 mm across: a 3-5 mm stream is then 6-10 px
+# wide, which is plenty.
+#
+# NO EXTRINSICS NEEDED. This asks "is something crossing this band", never
+# "where is it in the robot's frame", so there is no camera-to-robot transform
+# to calibrate and none of cho_camera_calibration is on the critical path.
+#
+# SETTING THE NUMBERS. Run `ros2 run cho_pour_stream pour_stream_tune` and follow
+# the procedure in its docstring. Everything below is a starting point measured
+# on nothing.
+pour_stream_node:
+  ros__parameters:
+    # cho_oak's global-shutter mono. Mono comes out unrectified, which does not
+    # matter here: a band-crossing test needs no rectification.
+    image_topic: /side_1/left/image_raw
+    output_topic: /pour/stream
+
+    # The band, in normalized image coordinates. Wide across the lip's arc,
+    # short in height, sitting in the free-fall gap.
+    band_x0: 0.10
+    band_y0: 0.45
+    band_x1: 0.90
+    band_y1: 0.60
+
+    # Intensity change that counts as a changed pixel. Set it above the p99 the
+    # tuner reports with nothing pouring.
+    diff_threshold: 12
+    # Guards against isolated sensor noise. The row coverage does the real work.
+    min_pixels: 30
+    # Fraction of the band's rows the change must span. Material in free fall
+    # crosses all of them; a splash, a shadow or a reflection off the tilting
+    # vessel does not. This is the discriminator that matters.
+    min_row_coverage: 0.6
+    # More of the band than this changing at once is an occlusion or a lighting
+    # change, and is reported as UNUSABLE rather than as a torrent.
+    max_changed_fraction: 0.5
+
+    # Frames above threshold before the stream is called started. Small: the
+    # rising edge is the pouring onset and seeing it early is the whole point.
+    open_frames: 2
+    # Frames below threshold before it is called stopped. Long enough to bridge
+    # sensor noise, deliberately NOT long enough to bridge the gap between
+    # drops: this reports the instant. Whether a pour is finished, or merely
+    # between avalanches, is decided by whatever is counting the mass.
+    close_frames: 12
+
+    warmup_frames: 20
+    background_alpha: 0.02
+    # Consecutive unusable frames after which the background is re-seeded. What
+    # it recovers from is someone switching a light on.
+    reset_after_invalid: 60
+    report_period_sec: 5.0
