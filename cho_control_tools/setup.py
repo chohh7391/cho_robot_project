@@ -43,6 +43,7 @@ setup(
             'task_space_probe = cho_control_tools.diagnostics.task_space_probe:main',
             'openarm_task_goal = cho_control_tools.openarm_task.goal:main',
             'openarm_task_tour = cho_control_tools.openarm_task.tour:main',
+            'fr5_pour_client = cho_control_tools.clients.fr5.pour_client:main',
             'scale_relay = cho_control_tools.sensors.scale_relay:main',
             'plot_joint_pos_log = cho_control_tools.plotting.joint_pos_log:main',
             'plot_pose_log = cho_control_tools.plotting.pose_log:main',
