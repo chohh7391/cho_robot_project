@@ -57,6 +57,22 @@ def main():
     # that did not know which one is being carried would abort the run it
     # exists to protect. Name the ones that should stay put.
     node.declare_parameter("replay_watch", "")
+    # Pour the recording's `pouring` span by weight instead of replaying it
+    # (trajectory_replay). 0 grams means replay it as recorded. The container
+    # is the EMPTY receiver's weight in grams, or "auto" (the default) to read
+    # it off the scale just before the pour. See subtrees/pour.py.
+    node.declare_parameter("replay_pour_grams", 0.0)
+    node.declare_parameter("replay_pour_container", "")
+    node.declare_parameter("replay_pour_material", "")
+    node.declare_parameter("replay_pour_flow_index", 0.0)
+    node.declare_parameter("replay_pour_timeout", 0.0)
+    # The held vessel's marker, measured right after the jaws close on it. Empty
+    # keeps the task default (pour_vessel.yaml's topic); "none" leaves the
+    # measuring to the pouring controller when the pour starts.
+    node.declare_parameter("replay_pour_marker_topic", "")
+    # "true": a pour that misses its target stops the replay. Empty or "false":
+    # the replay carries on from where the controller put the arm back.
+    node.declare_parameter("replay_pour_required", "")
     # Where the wrist camera goes to look at a vessel the standing camera
     # cannot see (occlusion_recovery). A bench's joint configurations, not a
     # robot's, so it is a path like the replay artefacts above rather than
@@ -107,7 +123,9 @@ def main():
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
     for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via",
-                "replay_watch", "sweep_config", "sweep_mode", "visibility_topic"):
+                "replay_watch", "sweep_config", "sweep_mode", "visibility_topic",
+                "replay_pour_container", "replay_pour_material", "replay_pour_marker_topic",
+                "replay_pour_required"):
         value = node.get_parameter(key).get_parameter_value().string_value
         if value:
             robot_config[key] = value
@@ -115,6 +133,12 @@ def main():
         "replay_speed_scale").get_parameter_value().double_value
     if replay_speed_scale > 0.0:
         robot_config["replay_speed_scale"] = replay_speed_scale
+    for key in ("replay_pour_grams", "replay_pour_flow_index", "replay_pour_timeout"):
+        value = node.get_parameter(key).get_parameter_value().double_value
+        if value != 0.0:
+            # Negative values are passed on, so the tree refuses them by name
+            # rather than this quietly dropping them.
+            robot_config[key] = value
 
     try:
         root = build_task_tree(task, robot_config)

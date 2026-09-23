@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -75,6 +76,37 @@ def generate_launch_description():
                         'watchdog. Name only vessels that should STAY PUT -- a transfer '
                         'recording moves one on purpose, and watching that one aborts a '
                         'good run.'),
+        # ---- pour the recorded pour by weight (fr5 trajectory_replay) ----
+        DeclareLaunchArgument(
+            'replay_pour_grams', default_value='0.0',
+            description='Grams to pour where the recording pours. 0 replays the '
+                        "recorded pour as recorded; above 0 the `pouring` span is "
+                        'handed to pouring_controller (pour_geometry: measured) and '
+                        'the replay resumes from where that span ends.'),
+        DeclareLaunchArgument(
+            'replay_pour_container', default_value='auto',
+            description="The EMPTY receiver's weight in grams, or auto to read it off "
+                        'the scale just before the pour.'),
+        DeclareLaunchArgument(
+            'replay_pour_material', default_value='liquid',
+            description='liquid or granular.'),
+        DeclareLaunchArgument(
+            'replay_pour_flow_index', default_value='0.0',
+            description='0..1 within the material class: 0 water or dry salt, 1 honey '
+                        'or a damp clumping powder.'),
+        DeclareLaunchArgument(
+            'replay_pour_marker_topic', default_value='',
+            description="The held vessel's marker, measured right after the jaws close. "
+                        'Empty: /perception/object_pose/held_beaker (pour_vessel.yaml). '
+                        'none: the pouring controller measures it when the pour starts.'),
+        DeclareLaunchArgument(
+            'replay_pour_required', default_value='false',
+            description='true: a pour that misses its target stops the replay, vessel in '
+                        'hand. false: the replay carries on from where the pouring '
+                        'controller put the arm back (checked first).'),
+        DeclareLaunchArgument(
+            'replay_pour_timeout', default_value='0.0',
+            description="Seconds the pour law may take; 0 keeps the controller's."),
         # ---- perception, when the task needs a detected target ----
         # cho_object_pose is generic: it owns the pipeline, the gates and the
         # frame resolution, and knows nothing about any particular job. WHICH
@@ -197,6 +229,18 @@ def generate_launch_description():
                 'replay_speed_scale': LaunchConfiguration('replay_speed_scale'),
                 'home_via': LaunchConfiguration('home_via'),
                 'replay_watch': LaunchConfiguration('replay_watch'),
+                # Typed: `replay_pour_grams:=20` would otherwise arrive as an integer
+                # and be refused by a parameter declared as a double.
+                'replay_pour_grams': ParameterValue(LaunchConfiguration('replay_pour_grams'), value_type=float),
+                # And a string, because it may be a number (139.15) or `auto`.
+                'replay_pour_container': ParameterValue(
+                    LaunchConfiguration('replay_pour_container'), value_type=str),
+                'replay_pour_material': LaunchConfiguration('replay_pour_material'),
+                'replay_pour_flow_index': ParameterValue(LaunchConfiguration('replay_pour_flow_index'), value_type=float),
+                'replay_pour_timeout': ParameterValue(LaunchConfiguration('replay_pour_timeout'), value_type=float),
+                'replay_pour_marker_topic': LaunchConfiguration('replay_pour_marker_topic'),
+                'replay_pour_required': ParameterValue(
+                    LaunchConfiguration('replay_pour_required'), value_type=str),
                 'sweep_config': LaunchConfiguration('sweep_config'),
                 'sweep_mode': LaunchConfiguration('sweep_mode'),
                 'visibility_topic': LaunchConfiguration('visibility_topic'),

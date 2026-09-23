@@ -54,6 +54,10 @@ class PourActionBehavior(BaseActionBehavior):
         pour_timeout: float = 0.0,
         target_grams_key: str = None,
         container_grams_key: str = None,
+        grasp_joints_key: str = None,
+        grasp_marker_key: str = None,
+        pour_direction: int = 0,
+        pour_reference_joints: list = None,
         blackboard_namespace: str = TASK_NAMESPACE,
         timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     ):
@@ -91,10 +95,25 @@ class PourActionBehavior(BaseActionBehavior):
         self.pour_timeout = pour_timeout
         self.target_grams_key = target_grams_key
         self.container_grams_key = container_grams_key
+        # A grasp measured earlier (GraspMarkerSampleBehavior): both or neither.
+        if (grasp_joints_key is None) != (grasp_marker_key is None):
+            raise ValueError(
+                f'[{name}] give both grasp_joints_key and grasp_marker_key or neither: a grasp '
+                'is the marker AND the joints it was measured in')
+        if pour_direction not in (-1, 0, 1):
+            raise ValueError(
+                f'[{name}] pour_direction must be +1, -1, or 0 for the controller\'s own; got '
+                f'{pour_direction!r}')
+        self.pour_direction = pour_direction
+        # How to tip, shown rather than said: see Pour.action.
+        self.pour_reference_joints = (
+            [float(q) for q in pour_reference_joints] if pour_reference_joints else [])
+        self.grasp_joints_key = grasp_joints_key
+        self.grasp_marker_key = grasp_marker_key
         self.blackboard_namespace = blackboard_namespace
 
         self.blackboard = self.attach_blackboard_client(namespace=blackboard_namespace)
-        for key in (target_grams_key, container_grams_key):
+        for key in (target_grams_key, container_grams_key, grasp_joints_key, grasp_marker_key):
             if key:
                 self.blackboard.register_key(key=key, access=py_trees.common.Access.READ)
 
@@ -128,4 +147,20 @@ class PourActionBehavior(BaseActionBehavior):
         goal.max_tilt = float(self.max_tilt)
         goal.max_tilt_rate = float(self.max_tilt_rate)
         goal.timeout = float(self.pour_timeout)
+        goal.pour_direction = int(self.pour_direction)
+        goal.pour_reference_joints = list(self.pour_reference_joints)
+        if self.grasp_joints_key is not None:
+            joints = read_if_set(self.blackboard, self.grasp_joints_key)
+            marker = read_if_set(self.blackboard, self.grasp_marker_key)
+            if joints is not None and marker is not None:
+                goal.grasp_joints = [float(q) for q in joints]
+                goal.grasp_marker.x, goal.grasp_marker.y, goal.grasp_marker.z = (
+                    float(v) for v in marker)
+            else:
+                # Not an error: a recording that starts with the vessel already
+                # in hand has no grasp to measure it at. The controller then
+                # measures the marker itself when the goal starts.
+                self.node.get_logger().warn(
+                    f'[{self.name}] no grasp was measured before this pour; the controller '
+                    'will measure the marker itself, from wherever the vessel is now')
         self.send_action_goal(goal)

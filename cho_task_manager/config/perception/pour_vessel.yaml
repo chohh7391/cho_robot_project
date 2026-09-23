@@ -28,7 +28,8 @@
 #
 # The published pose is the marker's centre: no offset, and only the POSITION
 # is used downstream. Where the marker sits on the beaker is the controller's
-# `geometry.tag_in_vessel`, measured once, in the beaker's own frame.
+# `geometry.tag_radius` and `geometry.tag_height`, measured once -- and not
+# which side it is on, which changes with how the beaker stood.
 objects:
   - name: held_beaker
     # The beaker's own tag, MOVED off its stalk onto the beaker. Left on the

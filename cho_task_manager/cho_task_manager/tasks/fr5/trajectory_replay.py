@@ -47,6 +47,14 @@ follows from that being POSITION CONTROL THAT SENSES NOTHING:
    than this arm's commissioning ceiling is stretched, loudly. The waypoints
    themselves are replayed exactly as recorded -- no re-planning, no
    re-interpolation.
+5. **The recorded pour can be handed to the pouring controller.** Given
+   ``replay_pour_grams``, the run of waypoints labelled ``pouring`` is not
+   replayed: the arm goes as far as its first waypoint, the pouring controller
+   measures the held vessel, pours that many grams by weight and returns the arm
+   to exactly that configuration, and the replay resumes from the pour's last
+   waypoint -- which the recording puts at the same place. See
+   ``utils/pour_splice.py`` for what is checked before that is allowed, and
+   ``subtrees/pour.py`` for the hand-over.
 
 A recording that changes TOOL partway through (a linked Move -> Transfer ->
 Stir workflow) is out of scope: this arm carries one gripper and the repo has
@@ -83,11 +91,17 @@ from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
 )
 from cho_task_manager.subtrees import guarded_mission, home_subtree
+from cho_task_manager.subtrees.pour import (
+    grasp_measure_children,
+    parse_pour_request,
+    pour_handover_children,
+)
 from cho_task_manager.utils.controller_names import (
     load_robot_config,
     moveit_joint_action_name,
 )
 from cho_task_manager.utils.msg_utils import make_joint_state
+from cho_task_manager.utils.pour_splice import splice_pour
 from cho_task_manager.utils.trajectory_recording import (
     DEFAULT_POSITION_TOLERANCE_M,
     DEFAULT_YAW_TOLERANCE_DEG,
@@ -272,6 +286,11 @@ def create_fr5_trajectory_replay_tree(robot_config=None) -> py_trees.behaviour.B
     time_scale = max(1.0 / speed_scale, ceiling_scale)
 
     segments = plan_segments(recording)
+    # Refused here, before a node exists, like the layout: a recording whose pour
+    # cannot be handed over cleanly is not replayed with a gap in it.
+    pour_request = parse_pour_request(robot_config)
+    if pour_request is not None:
+        segments = splice_pour(recording, segments)
 
     mission = py_trees.composites.Sequence(
         name='FR5_Trajectory_Replay_Sequence', memory=True)
@@ -302,7 +321,9 @@ def create_fr5_trajectory_replay_tree(robot_config=None) -> py_trees.behaviour.B
     replay_seq = py_trees.composites.Sequence(name='3_Replay', memory=True)
     replay_seq.add_children(_replay_children(
         segments, controller, joint_names, time_scale, limits,
-        velocity_scaling(robot_config)))
+        velocity_scaling(robot_config),
+        pour_children=_pour_children_for(robot_config, pour_request, controller),
+        grasp_children=_grasp_children_for(robot_config, pour_request)))
 
     # Finishing returns to the recording's OWN start pose, the same one
     # 1_Initialize goes to. That leaves the cell as the next run of this
@@ -330,8 +351,31 @@ def create_fr5_trajectory_replay_tree(robot_config=None) -> py_trees.behaviour.B
         'ceiling': ceiling,
         'home_via': home_via,
         'segments': [repr(segment) for segment in segments],
+        'pour': pour_request.as_dict() if pour_request is not None else None,
     }
     return root
+
+
+def _grasp_children_for(robot_config, pour_request):
+    """What _replay_children puts right after the grasp of the vessel poured, or None."""
+    if pour_request is None:
+        return None
+
+    def build(index):
+        return grasp_measure_children(robot_config, pour_request, prefix='%d_' % index)
+    return build
+
+
+def _pour_children_for(robot_config, pour_request, controller):
+    """What _replay_children puts where a spliced-out pour was, or None."""
+    if pour_request is None:
+        return None
+
+    def build(index, segment):
+        return pour_handover_children(
+            robot_config, pour_request, controller, prefix='%d_' % index,
+            pour_reference=segment.reference, resume_from=segment.start)
+    return build
 
 
 def _home_block(robot_config, home, home_via, hold, controller, name, suffix, park=False):
@@ -385,10 +429,27 @@ def _home_block(robot_config, home, home_via, hold, controller, name, suffix, pa
 
 
 def _replay_children(segments, controller, joint_names, time_scale, limits, scaling,
-                     settle_sec=GRIPPER_SETTLE_SEC):
-    """One behaviour per segment, in recorded order."""
+                     settle_sec=GRIPPER_SETTLE_SEC, pour_children=None, grasp_children=None):
+    """One behaviour per segment, in recorded order.
+
+    *pour_children* builds what replaces a pour segment (``splice_pour``), as
+    ``pour_children(index, segment) -> [behaviour, ...]``. *grasp_children*
+    builds what follows the settle of the LAST grasp before it -- the one that
+    closed on the vessel being poured -- as ``grasp_children(index)``.
+    """
+    pours = [i for i, segment in enumerate(segments) if segment.kind == 'pour']
+    grasps = [i for i, segment in enumerate(segments)
+              if segment.kind == 'gripper' and segment.grasp and pours and i < pours[0]]
+    grasp_of_pour = grasps[-1] if grasps else None
     children = []
     for index, segment in enumerate(segments):
+        if segment.kind == 'pour':
+            if pour_children is None:
+                raise ValueError(
+                    'the replay reached a spliced-out pour (%r) with nothing to pour it'
+                    % segment)
+            children.extend(pour_children(index, segment))
+            continue
         if segment.kind == 'gripper':
             children.append(GripperActionBehavior(
                 name='%d_Gripper_%s_%s' % (
@@ -398,6 +459,11 @@ def _replay_children(segments, controller, joint_names, time_scale, limits, scal
             # Stand still until the jaws really have. See GRIPPER_SETTLE_SEC.
             children.append(py_trees.timers.Timer(
                 name='%d_Gripper_Settle' % index, duration=settle_sec))
+            if index == grasp_of_pour and grasp_children is not None:
+                # Settled jaws, an arm standing still, and the vessel still on
+                # the bench near a camera: the best moment the replay has to
+                # measure where it sits in them.
+                children.extend(grasp_children(index))
             continue
         children.append(FollowJointTrajectoryBehavior(
             name='%d_Replay_%s' % (index, segment.operation or 'move'),
