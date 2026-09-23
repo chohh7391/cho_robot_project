@@ -121,22 +121,27 @@ transforms:
     quaternion: [0.378580, 0.199000, -0.735016, 0.526144]
 
   # ----------------------------------------------------------------- side_2
-  # The second standing camera:
+  # The second standing camera. RE-SOLVED the evening of 2026-09-23, after it
+  # was moved 112.8 mm and 15.7 deg to bring the riser off the bottom edge of
+  # its view: the held beaker's marker had sat at y 483 of 480 px there, and
+  # left the frame altogether when the jaws turned the beaker on closing.
   #
-  #   reprojection over board corners      0.236-0.256 px
-  #   camera position across eight views   1.25 mm of spread
+  #   reprojection over board corners      0.240-0.256 px
+  #   camera position across eight views   1.37 mm of spread
   #
-  # It saw all six board tags at all eight poses. Moved before this run
-  # (2026-09-23), 364 mm and 11.9 deg from the previous entry.
+  # The same eight poses, with side_1 left out (its OAK had dropped off USB).
+  # It is still placed against the same board as the two above: this run's
+  # board came out 0.12 mm from the morning's, and its wrist hand-eye 0.2 mm
+  # and 0.00 deg from the entry above, so neither of those was re-entered.
   #
   # Its view is oblique, and that costs pixels in one direction: the board
   # tags' SHORT edge measures 23-32 px from here, against cho_object_pose's
-  # 25 px floor. The corners solve fine; a 70 mm vessel tag at the same range
-  # and angle will sit on that floor.
+  # 25 px floor. The corners solve fine. The 70 mm marker on the riser's
+  # beaker, nearer, spans about 70 px.
   #
   # ITS ANGLE TO side_1 IS THE POINT OF IT. The two stand on opposite sides of
-  # the bench and their lines of sight to the board cross at 88.5 degrees, at
-  # 0.863 m and 0.928 m -- near-orthogonal, and neither dominating the other by
+  # the bench and their lines of sight to the board cross at 91.4 degrees, at
+  # 0.863 m and 0.874 m -- near-orthogonal, and neither dominating the other by
   # range. Crossing two lines of sight is only worth anything when there is an
   # angle between them: cho_object_pose's `fusion_mode: intersect` stops
   # crossing below `min_ray_angle_deg` and falls back to a weighted mean,
@@ -146,5 +151,5 @@ transforms:
   - name: side_2
     parent_frame: base_link
     child_frame: side_2_link
-    xyz: [0.85497, -0.57537, 0.51592]
-    quaternion: [-0.176785, 0.303620, 0.799049, 0.487938]
+    xyz: [0.74391, -0.58947, 0.50241]
+    quaternion: [-0.303286, 0.256268, 0.779330, 0.484756]
