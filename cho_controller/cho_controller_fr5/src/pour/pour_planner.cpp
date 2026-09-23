@@ -27,7 +27,8 @@ bool PourPlanner::configure(const PlannerConfig & config, const MaterialProfile 
         {"settle_timeout", config.settle_timeout},
         {"stall_timeout", config.stall_timeout},
         {"retract_margin", config.retract_margin},
-        {"trim_tilt_margin", config.trim_tilt_margin},
+        {"trim_detect_grams", config.trim_detect_grams},
+        {"trim_creep_fraction", config.trim_creep_fraction},
         {"tilt_epsilon", config.tilt_epsilon},
         {"max_pulse_sec", config.max_pulse_sec},
         {"stop_margin_factor", config.stop_margin_factor},
@@ -46,6 +47,11 @@ bool PourPlanner::configure(const PlannerConfig & config, const MaterialProfile 
             why = os.str();
             return false;
         }
+    }
+    if (config.trim_creep_fraction > 1.0) {
+        why = "trim_creep_fraction must be at most 1.0: a trim pulse creeping faster than the "
+              "seek overshoots the onset by more than the seek does, and pours more for it";
+        return false;
     }
     if (config.trim_undershoot > 1.0) {
         why = "trim_undershoot must be at most 1.0: a pulse aimed past the remaining gap cannot "
@@ -87,7 +93,6 @@ void PourPlanner::begin(const PourRequest & request, double now)
     baseline_ = request.container_grams;
     onset_tilt_ = 0.0;
     hold_tilt_ = 0.0;
-    trim_tilt_ = 0.0;
     retract_target_ = 0.0;
     grams_at_stop_ = 0.0;
     predicted_post_stop_ = 0.0;
@@ -96,8 +101,12 @@ void PourPlanner::begin(const PourRequest & request, double now)
     settle_deadline_ = 0.0;
     stall_since_ = 0.0;
     stalled_ = false;
+    trim_stage_ = TrimStage::Creep;
+    trim_need_ = 0.0;
+    trim_start_grams_ = 0.0;
+    creep_seen_ = 0.0;
+    creep_in_flight_ = 0.0;
     pulse_started_ = 0.0;
-    pulse_running_ = false;
     pulse_sec_ = 0.0;
     park_attempts_ = 0;
     park_base_margin_ = config_.retract_margin;
@@ -106,7 +115,6 @@ void PourPlanner::begin(const PourRequest & request, double now)
     park_ref_grams_ = 0.0;
     park_ref_time_ = 0.0;
     park_ref_set_ = false;
-    trim_boost_ = 0.0;
     trim_flow_measured_ = 0.0;
     expected_pulse_grams_ = 0.0;
     gain_est_ = 0.0;
@@ -194,16 +202,6 @@ void PourPlanner::set_onset(double onset)
 {
     onset_tilt_ = onset;
     hold_tilt_ = std::max(onset_tilt_ - park_margin_, -request_.max_back_tilt);
-    // Where a trim pulse tilts to. With the gain identified this is the angle
-    // that actually produces the trim rate; the fixed margin is only the
-    // fallback for a pour that has not flowed long enough to identify one, and
-    // it also floors the result so a large gain cannot collapse the pulse into
-    // a tilt the vessel does not notice.
-    double above = config_.trim_tilt_margin;
-    if (gain_est_ > 0.0) {
-        above = std::max(config_.trim_tilt_margin, limits_.trim_flow_rate / gain_est_);
-    }
-    trim_tilt_ = onset_tilt_ + above + trim_boost_;
 }
 
 PourCommand PourPlanner::enter_retract(double target, const PourObservation & obs)
@@ -359,7 +357,7 @@ PourCommand PourPlanner::step_seek(const PourObservation & obs)
         return emit(tilt_rate_limit());
     }
 
-    if (obs.tilt >= request_.max_tilt) {
+    if (at_tilt_bound(obs, request_.max_tilt, config_.tilt_epsilon)) {
         if (!stalled_) {
             stalled_ = true;
             stall_since_ = obs.now;
@@ -417,17 +415,24 @@ PourCommand PourPlanner::step_bulk(const PourObservation & obs)
     double rate = std::clamp(config_.kp_tilt * (desired - obs.tilt), -tilt_rate_limit(),
                              tilt_rate_limit());
 
-    if (obs.tilt >= request_.max_tilt) {
+    if (at_tilt_bound(obs, request_.max_tilt, config_.tilt_epsilon)) {
         rate = std::min(rate, 0.0);
-        if (flow < config_.no_flow_epsilon) {
+        // At the bound the law has no tilt left to give, so a flow that has
+        // fallen below the trim rate is not coming back: the vessel is nearly
+        // down to what cannot reach its lip at this tilt, and it drains the
+        // rest ever more slowly. Waiting for it to stop outright (what this
+        // used to wait for) waited out the goal's timeout -- 180 s for a 100 mL
+        // beaker asked for more than it could give. Short is recoverable.
+        if (flow < limits_.trim_flow_rate) {
             if (!stalled_) {
                 stalled_ = true;
                 stall_since_ = obs.now;
             }
             if ((obs.now - stall_since_) > config_.stall_timeout) {
                 std::ostringstream os;
-                os << "reached the tilt bound with " << remaining
-                   << " g still to pour and the flow had stopped";
+                os << "reached the tilt bound (" << request_.max_tilt << " rad) with "
+                   << remaining << " g still to pour, and the flow there had fallen to " << flow
+                   << " g/s: what is left in the vessel can barely reach its lip at that tilt";
                 return fail_after_retract(os.str(), obs);
             }
         } else {
@@ -525,24 +530,17 @@ PourCommand PourPlanner::step_settle(const PourObservation & obs)
     }
     tail_measurable_ = false;
 
-    if (report_.trim_pulses > 0 && expected_pulse_grams_ > 0.0 && pulse_sec_ > 0.0) {
-        const double delivered = poured(obs) - report_.poured_grams;
+    // What the HOLD part of a pulse was worth per second, so the next hold is
+    // sized from this vessel rather than the profile's guess. The creep's own
+    // share is taken off first; a pulse that was all creep teaches nothing
+    // about the hold.
+    if (report_.trim_pulses > 0 && pulse_sec_ > 0.05) {
+        const double delivered = poured(obs) - report_.poured_grams - creep_seen_;
         if (delivered > config_.park_drip_grams) {
-            // What a pulse at this angle is actually worth, per second. The
-            // profile's trim_flow_rate was only ever a guess about a vessel
-            // nobody measured; this is the vessel in the gripper.
             const double rate = delivered / pulse_sec_;
             trim_flow_measured_ =
                 (trim_flow_measured_ <= 0.0) ? rate : (0.5 * trim_flow_measured_ + 0.5 * rate);
-        } else {
-            // Nothing moved at all: the pulse angle is below the angle this
-            // vessel flows at. Nudge it up, bounded, so the budget is not spent
-            // repeating an angle that was never right.
-            const double ceiling = 5.0 * config_.trim_tilt_margin;
-            trim_boost_ = std::min(ceiling, trim_boost_ + config_.trim_tilt_margin);
-            set_onset(onset_tilt_);
         }
-        expected_pulse_grams_ = 0.0;
     }
 
     report_.poured_grams = poured(obs);
@@ -581,39 +579,86 @@ PourCommand PourPlanner::step_settle(const PourObservation & obs)
         return finish(false, os.str());
     }
 
-    const double pulse_rate =
-        trim_flow_measured_ > 0.0 ? trim_flow_measured_ : limits_.trim_flow_rate;
-    pulse_sec_ = std::clamp(config_.trim_undershoot * need / pulse_rate,
-                            limits_.trim_pulse_sec,
-                            std::max(config_.max_pulse_sec, limits_.trim_pulse_sec));
-    expected_pulse_grams_ = pulse_rate * pulse_sec_;
-    pulse_running_ = false;
+    trim_need_ = need;
+    trim_start_grams_ = obs.grams;
+    creep_seen_ = 0.0;
+    creep_in_flight_ = 0.0;
+    pulse_sec_ = 0.0;
+    trim_stage_ = TrimStage::Creep;
+    stalled_ = false;
     phase_ = PourPhase::Trim;
     return emit(0.0);
 }
 
+double PourPlanner::creep_rate() const
+{
+    return std::min(tilt_rate_limit(), config_.trim_creep_fraction * limits_.seek_tilt_rate);
+}
+
 PourCommand PourPlanner::step_trim(const PourObservation & obs)
 {
-    if (!pulse_running_) {
-        const double error = trim_tilt_ - obs.tilt;
-        if (std::abs(error) > config_.tilt_epsilon) {
-            return emit(std::copysign(tilt_rate_limit(), error));
+    if (trim_stage_ == TrimStage::Creep) {
+        // Creep up from the park until the flow shows, rather than going to an
+        // angle worked out from the onset the seek found. That onset does not
+        // stay put: a straight-walled vessel has to tilt further the emptier it
+        // gets -- a 100 mL beaker's onset goes from 0.65 to 0.94 rad over a 30 g
+        // pour -- and a pulse aimed at the old angle pours nothing. Creeping
+        // finds the angle wherever it has moved, with no model of the vessel.
+        const double seen = obs.grams - trim_start_grams_;
+        if (seen >= config_.trim_detect_grams || obs.flow_rate > config_.no_flow_epsilon) {
+            // Re-anchor exactly as the seek anchors: the creep kept turning for
+            // a transport delay after the first material left the lip.
+            const double lag = creep_rate() * limits_.transport_delay;
+            set_onset(obs.tilt - lag);
+
+            // What left the lip in that delay has not landed yet. The flow
+            // ramped from nothing to gain * lag, so half of that for a delay.
+            creep_seen_ = seen;
+            creep_in_flight_ =
+                gain_est_ > 0.0 ? 0.5 * gain_est_ * lag * limits_.transport_delay : 0.0;
+
+            const double remaining = trim_need_ - creep_seen_ - creep_in_flight_;
+            const double pulse_rate =
+                trim_flow_measured_ > 0.0 ? trim_flow_measured_ : limits_.trim_flow_rate;
+            // Zero is allowed: when the creep alone has delivered the gap, the
+            // right hold is none at all.
+            pulse_sec_ = remaining > 0.0
+                ? std::clamp(config_.trim_undershoot * remaining / pulse_rate, 0.0,
+                             config_.max_pulse_sec)
+                : 0.0;
+            expected_pulse_grams_ = pulse_rate * pulse_sec_;
+            pulse_started_ = obs.now;
+            trim_stage_ = TrimStage::Hold;
+            return emit(0.0);
         }
-        pulse_running_ = true;
-        pulse_started_ = obs.now;
-        // The dose is set by how long the vessel is held here, not by what the
-        // scale reports during the pulse. At 5 Hz a pulse is a handful of
-        // samples, and the material has not landed yet in any of them.
-        return emit(0.0);
+
+        if (at_tilt_bound(obs, request_.max_tilt, config_.tilt_epsilon)) {
+            if (!stalled_) {
+                stalled_ = true;
+                stall_since_ = obs.now;
+            }
+            if ((obs.now - stall_since_) > config_.stall_timeout) {
+                std::ostringstream os;
+                os << "a trim pulse crept to the tilt bound (" << request_.max_tilt
+                   << " rad) and nothing came out: what is left in the vessel cannot reach its "
+                      "lip at that tilt, so the pour ends "
+                   << (request_.target_grams - poured(obs)) << " g short";
+                return fail_after_retract(os.str(), obs);
+            }
+            return emit(0.0);
+        }
+        return emit(creep_rate());
     }
 
+    // Hold: the dose is set by how long the vessel stays here, not by what the
+    // scale reports meanwhile. At 5 Hz a pulse is a handful of samples, and the
+    // material has not landed in any of them.
     if ((obs.now - pulse_started_) >= pulse_sec_) {
         ++report_.trim_pulses;
-        pulse_running_ = false;
         grams_at_stop_ = obs.grams;
-        // A pulse's own dose is still in the air when it ends, and the tail
-        // follows it. Both are what the next settle grades.
-        predicted_post_stop_ = expected_pulse_grams_ + afterflow_est_;
+        // Still to arrive once the hold ends: the hold's own dose, what the
+        // creep had in the air, and the tail. The settle grades this.
+        predicted_post_stop_ = expected_pulse_grams_ + creep_in_flight_ + afterflow_est_;
         tail_measurable_ = true;
         return enter_retract(hold_tilt_, obs);
     }

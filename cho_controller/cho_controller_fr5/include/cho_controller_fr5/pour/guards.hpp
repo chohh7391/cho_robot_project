@@ -33,6 +33,20 @@ namespace pour {
 std::string pour_guard(const PourObservation & obs, PourPhase phase, bool cancel_requested,
                        double started_at, double timeout);
 
+/**
+ * Whether the tilt is at the goal's bound, to within `epsilon`.
+ *
+ * Not `tilt >= max_tilt`. A law at the bound that eases back by a hair --
+ * any angle law does, as its target drifts -- sits a few microradians under it,
+ * and an exact comparison then resets every stall timer the instant it starts.
+ * That held a 100 mL beaker asked for more than it could give at the bound, with
+ * no flow, for the whole 180 s goal timeout.
+ */
+inline bool at_tilt_bound(const PourObservation & obs, double max_tilt, double epsilon)
+{
+    return obs.tilt >= max_tilt - epsilon;
+}
+
 } // namespace pour
 } // namespace fr5
 } // namespace cho_controller

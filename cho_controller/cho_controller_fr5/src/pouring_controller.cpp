@@ -163,7 +163,8 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("trim_undershoot", d.trim_undershoot);
         auto_declare<int>("max_trim_pulses", d.max_trim_pulses);
         auto_declare<double>("retract_margin", d.retract_margin);
-        auto_declare<double>("trim_tilt_margin", d.trim_tilt_margin);
+        auto_declare<double>("trim_detect_grams", d.trim_detect_grams);
+        auto_declare<double>("trim_creep_fraction", d.trim_creep_fraction);
         auto_declare<double>("tilt_epsilon", d.tilt_epsilon);
         auto_declare<int>("max_park_attempts", d.max_park_attempts);
         auto_declare<double>("retract_slack_sec", d.retract_slack_sec);
@@ -223,7 +224,8 @@ bool PouringController::assign_parameters()
     planner_config_.trim_undershoot = node->get_parameter("trim_undershoot").as_double();
     planner_config_.max_trim_pulses = static_cast<int>(node->get_parameter("max_trim_pulses").as_int());
     planner_config_.retract_margin = node->get_parameter("retract_margin").as_double();
-    planner_config_.trim_tilt_margin = node->get_parameter("trim_tilt_margin").as_double();
+    planner_config_.trim_detect_grams = node->get_parameter("trim_detect_grams").as_double();
+    planner_config_.trim_creep_fraction = node->get_parameter("trim_creep_fraction").as_double();
     planner_config_.tilt_epsilon = node->get_parameter("tilt_epsilon").as_double();
     planner_config_.max_park_attempts = static_cast<int>(node->get_parameter("max_park_attempts").as_int());
     planner_config_.retract_slack_sec = node->get_parameter("retract_slack_sec").as_double();

@@ -834,3 +834,51 @@ TEST(ShapingPourLaw, TheGainsThisControllerShippedWithOutrunTheScaleAt50g)
     EXPECT_FALSE(result.success);
     EXPECT_NE(result.message.find("jumped"), std::string::npos) << result.message;
 }
+
+// ------------------------------------------- a vessel whose onset moves --
+
+namespace {
+
+// The FR5 bench's 100 mL beaker: 50 mm bore, 70 mm to the rim, filled to the
+// 100 mL mark. Its onset is 0.65 rad full and 0.94 rad after 30 g has gone.
+RunOptions hundred_ml_beaker()
+{
+    RunOptions o;
+    o.cylinder_radius_mm = 25.0;
+    o.cylinder_height_mm = 70.0;
+    o.contents_grams = 100.0;
+    o.horizon = 200.0;
+    return o;
+}
+
+}  // namespace
+
+TEST(PourPlanner, FinishesAPourFromABeakerWhoseOnsetRisesAsItEmpties)
+{
+    // Trim pulses used to aim at the onset the seek found. Over a 30 g pour
+    // this beaker's onset rises 0.29 rad, so every pulse aimed at the old one
+    // poured nothing: 8 pulses, 2.74 g short. They now creep up to wherever the
+    // flow actually starts.
+    for (double target : {30.0, 50.0}) {
+        auto planner = make_planner();
+        const auto result = run_pour(planner, water_request(target), hundred_ml_beaker());
+        ASSERT_TRUE(result.finished) << target << " g never terminated";
+        EXPECT_TRUE(result.success) << target << " g: " << result.message;
+        EXPECT_NEAR(result.delivered, target, 0.5) << target << " g";
+        EXPECT_LE(result.trim_pulses, 4) << target << " g";
+    }
+}
+
+TEST(PourPlanner, EndsCleanlyWhenWhatIsLeftCannotReachTheLip)
+{
+    // max_tilt 1.2 rad cannot pour this beaker below ~33 g. Asking for 80 g of
+    // its 100 must end, short, and say so -- not creep at the bound forever.
+    auto planner = make_planner();
+    const auto result = run_pour(planner, water_request(80.0), hundred_ml_beaker());
+    ASSERT_TRUE(result.finished);
+    EXPECT_FALSE(result.success);
+    EXPECT_LT(result.delivered, 80.0);
+    EXPECT_NE(result.message.find("tilt bound"), std::string::npos) << result.message;
+    // It used to wait out the 180 s goal timeout while the last grams trickled.
+    EXPECT_LT(result.seconds, 60.0);
+}

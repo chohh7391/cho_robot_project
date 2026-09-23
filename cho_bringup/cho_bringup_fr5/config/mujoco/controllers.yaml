@@ -262,7 +262,18 @@ pouring_controller:
     # a slow trickle. Measured: below about 1.5 g/s water breaks into drops and
     # 99% of the mass arrives in ~1.2 g lumps whose size the lip decides. A
     # timed pulse is the same quantum with the CONTROLLER deciding it.
-    trim_tilt_margin: 0.02
+    #
+    # Each pulse CREEPS up from the park at the seek rate until the scale shows
+    # flow, then holds there. It does not aim at an angle worked out from the
+    # onset the seek found, because that onset moves: a 100 mL beaker's goes
+    # from 0.65 to 0.94 rad over a 30 g pour, and pulses aimed at the old one
+    # poured nothing -- 8 of them, 2.7 g short, against the simulated beaker.
+    # This is how much has to land during the creep to count as flow [g].
+    trim_detect_grams: 0.05
+    # The creep runs at this fraction of the seek rate. At the full seek rate
+    # the tilt is past the onset by the time the flow shows on a 5 Hz scale:
+    # each pulse let out about 1 g, and a 30 g pour ended 1.84 g over.
+    trim_creep_fraction: 0.33
     # Each pulse is sized to close only this fraction of the gap. A pulse is
     # open-loop by necessity -- at 5 Hz it spans a handful of samples and the
     # material has not landed in any of them -- so it cannot be corrected while

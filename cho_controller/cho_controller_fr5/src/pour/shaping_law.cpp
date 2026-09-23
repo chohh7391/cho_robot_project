@@ -253,7 +253,7 @@ PourCommand ShapingPourLaw::update(const PourObservation & obs)
             commanded_rate_ = shaped_velocity(error);
         }
 
-        if (obs.tilt >= request_.max_tilt) {
+        if (at_tilt_bound(obs, request_.max_tilt, config_.tilt_epsilon)) {
             commanded_rate_ = std::min(commanded_rate_, 0.0);
             if (obs.flow_rate < config_.no_flow_epsilon) {
                 if (!stalled_) {

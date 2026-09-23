@@ -10,6 +10,7 @@
 // question on the rig.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <string>
 #include <utility>
@@ -19,6 +20,88 @@
 #include "cho_controller_fr5/pour/scale_filter.hpp"
 
 namespace pour_sim {
+
+/**
+ * The tilt at which a straight-walled cylinder of water just reaches its rim,
+ * for a given amount left in it: the physics a real beaker adds that a fixed
+ * onset leaves out. As the vessel empties the onset RISES -- for a 100 mL
+ * beaker (50 mm bore, 70 mm to the rim) from 0.65 rad at the 100 mL mark to
+ * 0.94 rad after 30 g has gone -- so a law that finds the onset once and keeps
+ * it is aiming at an angle that has moved.
+ *
+ * Tilting toward the lip, the free surface through the lip is
+ * z = H - (R - x) tan(theta) in the vessel frame. Until it reaches the bottom
+ * the water is a slanted-topped cylinder of volume A (H - R tan theta); after,
+ * it is the wedge under that plane, integrated numerically. Spout ignored.
+ */
+class CylinderOnset
+{
+public:
+    CylinderOnset() = default;
+    CylinderOnset(double radius_mm, double height_mm) : r_(radius_mm), h_(height_mm)
+    {
+        // Onset for every 0.5 g from empty to brim, by bisection, once.
+        const double brim = kPi * r_ * r_ * h_ / 1000.0;
+        for (double g = 0.0; g <= brim + 0.5; g += 0.5) {
+            grams_.push_back(g);
+            onset_.push_back(invert(g * 1000.0));
+        }
+    }
+
+    [[nodiscard]] bool enabled() const { return !grams_.empty(); }
+
+    //: Onset [rad] with `grams` of water left in the vessel.
+    [[nodiscard]] double onset(double grams) const
+    {
+        if (grams <= grams_.front()) {
+            return onset_.front();
+        }
+        if (grams >= grams_.back()) {
+            return onset_.back();
+        }
+        const std::size_t i = static_cast<std::size_t>(grams / 0.5);
+        const double f = (grams - grams_[i]) / 0.5;
+        return onset_[i] + f * (onset_[i + 1] - onset_[i]);
+    }
+
+private:
+    static constexpr double kPi = 3.14159265358979323846;
+
+    [[nodiscard]] double volume_at_spill(double theta) const
+    {
+        const double t = std::tan(theta);
+        if (h_ - 2.0 * r_ * t >= 0.0) {
+            return kPi * r_ * r_ * (h_ - r_ * t);
+        }
+        const double x0 = r_ - h_ / t;
+        constexpr int n = 400;
+        double v = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double x = x0 + (r_ - x0) * (i + 0.5) / n;
+            v += 2.0 * std::sqrt(std::max(r_ * r_ - x * x, 0.0)) * t * (x - x0);
+        }
+        return v * (r_ - x0) / n;
+    }
+
+    [[nodiscard]] double invert(double volume_mm3) const
+    {
+        double lo = 1e-6, hi = kPi / 2.0 - 1e-6;
+        for (int k = 0; k < 60; ++k) {
+            const double mid = 0.5 * (lo + hi);
+            if (volume_at_spill(mid) > volume_mm3) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return 0.5 * (lo + hi);
+    }
+
+    double r_{0.0};
+    double h_{0.0};
+    std::vector<double> grams_;
+    std::vector<double> onset_;
+};
 
 using cho_controller::fr5::pour::PourCommand;
 using cho_controller::fr5::pour::PourLaw;
@@ -46,14 +129,26 @@ struct VesselSim {
     double leak_gps{0.0};
     double leak_after{1e9};
 
+    //: When enabled, the onset follows what is left in the vessel instead of
+    //: staying at onset_tilt, and the vessel can run dry.
+    CylinderOnset cylinder;
+    double contents_grams{0.0};
+
     double landed{0.0};
+    //: Everything that has left the lip, landed or not.
+    double poured_out{0.0};
     double tail_pending{0.0};
     bool was_flowing{false};
     std::deque<std::pair<double, double>> pipe;  // (arrival time, grams)
 
+    [[nodiscard]] double current_onset() const
+    {
+        return cylinder.enabled() ? cylinder.onset(contents_grams - poured_out) : onset_tilt;
+    }
+
     double flow_at(double tilt) const
     {
-        return std::max(0.0, (tilt - onset_tilt)) * gain;
+        return std::max(0.0, (tilt - current_onset())) * gain;
     }
 
     void step(double now, double dt, double tilt)
@@ -61,9 +156,13 @@ struct VesselSim {
         if (now >= leak_after) {
             landed += leak_gps * dt;
         }
-        const double flow = flow_at(tilt);
+        double flow = flow_at(tilt);
+        if (cylinder.enabled()) {
+            flow = std::min(flow, std::max(0.0, contents_grams - poured_out) / dt);
+        }
         if (flow > 0.0) {
             pipe.emplace_back(now + transport_delay, flow * dt);
+            poured_out += flow * dt;
             was_flowing = true;
         } else if (was_flowing) {
             // The stream broke: whatever was clinging to the lip now drains.
@@ -118,6 +217,13 @@ struct RunOptions {
     //: What the vessel on the pan actually weighs. NaN means the one the goal
     //: describes; anything else is a goal describing the wrong vessel.
     double vessel_grams{std::nan("")};
+    //: A real cylinder instead of a fixed onset: bore radius and rim height
+    //: [mm], and how much water it starts with [g]. Radius 0 keeps sim_onset.
+    double cylinder_radius_mm{0.0};
+    double cylinder_height_mm{0.0};
+    double contents_grams{0.0};
+    //: Print the run every this many seconds; 0 is silent.
+    double trace_every{0.0};
 };
 
 /**
@@ -142,6 +248,10 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
     vessel.tail_grams = opt.sim_tail;
     vessel.leak_gps = opt.leak_gps;
     vessel.leak_after = opt.leak_after;
+    if (opt.cylinder_radius_mm > 0.0) {
+        vessel.cylinder = CylinderOnset(opt.cylinder_radius_mm, opt.cylinder_height_mm);
+        vessel.contents_grams = opt.contents_grams;
+    }
 
     ScaleFilter filter;
     ScaleFilter::Config fc;
@@ -195,6 +305,12 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
         obs.last_rejected_step = filter.last_rejected_step();
 
         const auto cmd = planner.update(obs);
+        if (opt.trace_every > 0.0 && std::fmod(now, opt.trace_every) < 1.0 / 125.0) {
+            std::printf("t %6.1f %-8s tilt %.3f onset %.3f flow %6.2f landed %6.2f left %6.2f\n",
+                        now, cho_controller::fr5::pour::to_string(cmd.phase), tilt,
+                        vessel.current_onset(), obs.flow_rate, vessel.landed,
+                        vessel.contents_grams - vessel.poured_out);
+        }
         if (result.phases_seen.empty() || result.phases_seen.back() != cmd.phase) {
             if (cmd.phase == PourPhase::Settle) {
                 result.park_angles.push_back(tilt);

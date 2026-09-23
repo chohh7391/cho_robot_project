@@ -78,8 +78,16 @@ struct PlannerConfig {
     //: costs a few hundred milliseconds of travel on the next pulse, parking too
     //: high dribbles into the target for as long as it takes to notice.
     double retract_margin{0.02};
-    //: A trim pulse tilts this far ABOVE the onset angle [rad].
-    double trim_tilt_margin{0.02};
+    //: Mass that has to land while a trim pulse is creeping up from the park
+    //: before the creep counts as having found the flow [g]. Five counts of the
+    //: indicator's 0.01 g. A fitted flow above no_flow_epsilon also counts.
+    double trim_detect_grams{0.05};
+    //: A trim pulse creeps at this fraction of the material's seek rate. The
+    //: creep only stops once the flow has had a transport delay to reach the
+    //: scale, so it overshoots the onset by rate x delay, and everything that
+    //: overshoot pours is part of the dose whether or not the hold that follows
+    //: is zero. At the full seek rate that came to ~1 g a pulse on water.
+    double trim_creep_fraction{0.33};
     //: How many times the park angle may be lowered when the reading refuses to
     //: settle there. The onset angle is estimated from a delayed signal, so it
     //: can come out too high and leave the "parked" vessel still draining; each
@@ -174,7 +182,9 @@ private:
     //: Tilt that should produce `flow`, from the identified gain. Falls back to
     //: the current tilt while the gain is still unknown.
     [[nodiscard]] double tilt_for_flow(double flow, double current_tilt) const;
-    //: Adopt an onset angle and derive the park and trim-pulse angles from it.
+    //: Tilt rate a trim pulse creeps toward the onset at [rad/s].
+    [[nodiscard]] double creep_rate() const;
+    //: Adopt an onset angle and derive the park angle from it.
     void set_onset(double onset);
     //: The single way into Retract. Bounds the target by max_back_tilt and
     //: arms the deadline, so no entry point can forget either.
@@ -197,7 +207,6 @@ private:
     double baseline_{0.0};
     double onset_tilt_{0.0};
     double hold_tilt_{0.0};
-    double trim_tilt_{0.0};
     double retract_target_{0.0};
     double grams_at_stop_{0.0};
     //: What was expected to still arrive when the stop was decided [g]. The
@@ -214,8 +223,19 @@ private:
     double settle_deadline_{0.0};
     double stall_since_{0.0};
     bool stalled_{false};
+    //: A trim pulse is two moves. It CREEPS up from the park at the seek rate
+    //: until the scale shows the flow has started -- which re-finds the onset
+    //: wherever it has moved to -- and then HOLDS that angle for pulse_sec_.
+    enum class TrimStage { Creep, Hold };
+    TrimStage trim_stage_{TrimStage::Creep};
+    //: What this pulse is meant to deliver, and the reading it started from.
+    double trim_need_{0.0};
+    double trim_start_grams_{0.0};
+    //: What had already landed when the creep found the flow, and what was
+    //: estimated to be in the air behind it.
+    double creep_seen_{0.0};
+    double creep_in_flight_{0.0};
     double pulse_started_{0.0};
-    bool pulse_running_{false};
     double pulse_sec_{0.0};
     int park_attempts_{0};
     //: Outflow per radian above the onset [g/s/rad], identified from the pour
@@ -236,11 +256,6 @@ private:
     double park_ref_grams_{0.0};
     double park_ref_time_{0.0};
     bool park_ref_set_{false};
-    //: Extra tilt added to every trim pulse after one delivered NOTHING AT ALL.
-    //: Bounded, and triggered only by a pulse that moved no measurable mass:
-    //: raising the angle whenever a pulse merely came up short turns a series of
-    //: small corrections into one large dump, which is the opposite of the job.
-    double trim_boost_{0.0};
     //: Outflow a pulse actually produced [g/s], from the last pulse that moved
     //: any. It replaces the profile's guess as soon as there is one measurement,
     //: for the same reason the tail is measured rather than assumed.
