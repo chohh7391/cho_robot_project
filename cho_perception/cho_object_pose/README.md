@@ -364,6 +364,26 @@ load the resource and draws nothing; everything else keeps working.
 > its place, with no error anywhere. `cho_oak`'s launch remaps it to
 > `/<name>/robot_description` for exactly this reason.
 
+### Keeping what was found on screen
+
+```bash
+ros2 launch cho_object_pose display.launch.py      # rviz/object_memory.rviz
+```
+
+Start once and leave it up across task runs. The pose node belongs to the task
+launch and goes when the tree finishes, and its markers expire a second after
+the last detection. `object_marker_memory` republishes them with no lifetime:
+full strength for `hold_sec` (3 s) after the last detection, then dimming over
+`fade_sec` (5 s) to `floor_alpha` (25%) of the object's own alpha, where it
+stays; the label gains its age once stale. `forget_sec` drops it entirely
+(0, the default, never does).
+
+It also draws a line of sight from each camera reporting `STATE_OK` for an
+object on `/perception/object_visibility`, coloured per camera and live only.
+Lines start at the camera's `optical_frame`, or at its `visual.frame` where the
+driver is not running. rviz is pointed at `/perception/object_markers/memory`
+alone, so nothing is drawn twice. The fade schedule is in `memory.py`, ROS-free.
+
 ## Testing without a camera
 
 Two stand-ins, at two different depths.

@@ -1,0 +1,148 @@
+# What the cameras found, kept on screen after they stop seeing it.
+#
+# Started by display.launch.py, which also runs object_marker_memory -- the
+# node this file's Objects display listens to. It is NOT pointed at the pose
+# node's own /perception/object_markers: that topic's markers expire a second
+# after the last detection, and showing both would draw every live vessel
+# twice.
+#
+# What is on the Objects topic:
+#   object_pose   each vessel's body and name. Full strength while detected,
+#                 then dimming; the label says how long ago once it is stale.
+#   cameras       each camera's body, parented to its own TF frame.
+#   sight_lines   one line per camera to every vessel it currently reports
+#                 STATE_OK for. Two lines meeting is fusion, a line going out
+#                 is an occlusion, the wrist's appearing is a recovery.
+#
+# The wrist image is on because the wrist is the camera the recovery sweep
+# looks through. The standing cameras' images are here but off; tick them on
+# if the machine keeps up.
+#
+# Fixed Frame is the FR5's base_link, the frame the object poses are in.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Objects1
+      Splitter Ratio: 0.5
+    Tree Height: 400
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Alpha: 0.3
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Alpha: 1
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Objects
+      Enabled: true
+      Namespaces:
+        {}
+      Topic:
+        Value: /perception/object_markers/memory
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+    # Best Effort takes both a sensor-data and a reliable publisher; which one
+    # the camera driver uses is a driver setting.
+    - Class: rviz_default_plugins/Image
+      Name: Wrist camera
+      Enabled: true
+      Normalize Range: true
+      Median window: 5
+      Min Value: 0
+      Max Value: 1
+      Topic:
+        Value: /wrist/wrist/infra1/image_rect_raw
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Name: Side 1 camera
+      Enabled: false
+      Normalize Range: true
+      Median window: 5
+      Min Value: 0
+      Max Value: 1
+      Topic:
+        Value: /side_1/left/image_raw
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Name: Side 2 camera
+      Enabled: false
+      Normalize Range: true
+      Median window: 5
+      Min Value: 0
+      Max Value: 1
+      Topic:
+        Value: /side_2/side_2/infra1/image_rect_raw
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Marker Scale: 0.1
+      Show Names: true
+      Show Axes: true
+      Show Arrows: false
+      Update Interval: 0
+      Frame Timeout: 5
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: base_link
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 2.2
+      Focal Point:
+        X: 0.25
+        Y: 0
+        Z: 0.1
+      Pitch: 0.75
+      Yaw: 3.9
+      Near Clip Distance: 0.01
+      Target Frame: <Fixed Frame>
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1400
+  Hide Left Dock: false
+  Hide Right Dock: true
+  QMainWindow State: ""

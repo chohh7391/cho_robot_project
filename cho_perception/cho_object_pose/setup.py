@@ -30,6 +30,9 @@ setup(
             # Replaces the DETECTOR, so this package's own node runs for real
             # against it. See config/fake_scene.yaml.
             'fake_detections = cho_object_pose.fake_detections:main',
+            # Display only: keeps detected objects in rviz after the pose node
+            # stops, fading them as they age. See launch/display.launch.py.
+            'object_marker_memory = cho_object_pose.marker_memory:main',
         ],
     },
 )
