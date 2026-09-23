@@ -20,6 +20,8 @@ bool PourPlanner::configure(const PlannerConfig & config, const MaterialProfile 
         {"onset_grams", config.onset_grams},
         {"approach_sec", config.approach_sec},
         {"kp_tilt", config.kp_tilt},
+        {"max_tilt_lead", config.max_tilt_lead},
+        {"flow_deadband", config.flow_deadband},
         {"no_flow_epsilon", config.no_flow_epsilon},
         {"park_check_sec", config.park_check_sec},
         {"park_drip_grams", config.park_drip_grams},
@@ -51,6 +53,11 @@ bool PourPlanner::configure(const PlannerConfig & config, const MaterialProfile 
     if (config.trim_creep_fraction > 1.0) {
         why = "trim_creep_fraction must be at most 1.0: a trim pulse creeping faster than the "
               "seek overshoots the onset by more than the seek does, and pours more for it";
+        return false;
+    }
+    if (config.flow_deadband >= 1.0) {
+        why = "flow_deadband must be below 1.0: at 1.0 the bulk phase never sees a flow short "
+              "enough to tilt for, and holds the onset angle for the whole pour";
         return false;
     }
     if (config.trim_undershoot > 1.0) {
@@ -188,14 +195,6 @@ void PourPlanner::update_gain_estimate(const PourObservation & obs)
     // emptying genuinely changes the coefficient and a jumpy estimate would show
     // up directly as a jumpy wrist.
     gain_est_ = (gain_est_ <= 0.0) ? sample : (0.85 * gain_est_ + 0.15 * sample);
-}
-
-double PourPlanner::tilt_for_flow(double flow, double current_tilt) const
-{
-    if (gain_est_ <= 0.0) {
-        return current_tilt;
-    }
-    return onset_tilt_ + flow / gain_est_;
 }
 
 void PourPlanner::set_onset(double onset)
@@ -406,14 +405,26 @@ PourCommand PourPlanner::step_bulk(const PourObservation & obs)
     const double target_rate = std::clamp((remaining - stop_margin) / config_.approach_sec,
                                           limits_.trim_flow_rate, limits_.max_flow_rate);
 
-    // Command the ANGLE that produces that rate, not a rate correction. With a
-    // delayed measurement the difference is decisive: a rate law keeps tilting
-    // for a whole transport delay after the flow is already right, and the pour
-    // it commanded in the meantime is still in the air.
-    double desired = tilt_for_flow(target_rate, obs.tilt);
-    desired = std::min(desired, request_.max_tilt);
-    double rate = std::clamp(config_.kp_tilt * (desired - obs.tilt), -tilt_rate_limit(),
-                             tilt_rate_limit());
+    // Step toward that flow and let the scale answer before stepping again. The
+    // flow on the scale is what the tilt of one transport delay ago produced, so
+    // that is the last tilt there is any evidence about, and the command never
+    // runs more than max_tilt_lead past it, in either direction.
+    //
+    // This replaced commanding the angle a fitted flow coefficient said would
+    // give the wanted flow. Near the onset that coefficient is a small flow over
+    // a small angle. On the rig (2026-09-24, a 10 g water pour) the stream
+    // thinned at a fixed tilt 5.2 g in, the coefficient collapsed, and the
+    // angle it asked for jumped: the wrist tipped 9.5 deg in 1.1 s before the
+    // scale had shown any of it, and 11 g landed in the next 1.4 s.
+    const double seen = delayed_tilt(obs.now);
+    double rate = 0.0;
+    if (flow < (1.0 - config_.flow_deadband) * target_rate) {
+        const double ceiling = std::min(seen + config_.max_tilt_lead, request_.max_tilt);
+        rate = std::clamp(config_.kp_tilt * (ceiling - obs.tilt), 0.0, tilt_rate_limit());
+    } else if (flow > (1.0 + config_.flow_deadband) * target_rate) {
+        const double floor = seen - config_.max_tilt_lead;
+        rate = std::clamp(config_.kp_tilt * (floor - obs.tilt), -tilt_rate_limit(), 0.0);
+    }
 
     if (at_tilt_bound(obs, request_.max_tilt, config_.tilt_epsilon)) {
         rate = std::min(rate, 0.0);
@@ -472,7 +483,9 @@ PourCommand PourPlanner::step_retract(const PourObservation & obs)
         settle_deadline_ = obs.now + config_.settle_timeout;
         return emit(0.0);
     }
-    return emit(std::copysign(tilt_rate_limit(), error));
+    PourCommand cmd = emit(std::copysign(tilt_rate_limit(), error));
+    cmd.target_tilt = retract_target_;
+    return cmd;
 }
 
 PourCommand PourPlanner::step_settle(const PourObservation & obs)

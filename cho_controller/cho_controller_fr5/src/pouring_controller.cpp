@@ -157,6 +157,7 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("max_back_tilt", max_back_tilt_);
         auto_declare<double>("weight_tolerance", weight_tolerance_);
         auto_declare<double>("max_delta_q", max_delta_q_);
+        auto_declare<double>("tilt_accel", tilt_accel_);
         auto_declare<double>("feedback_period", feedback_period_);
 
         const pour::PlannerConfig d;
@@ -165,6 +166,8 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("onset_grams", d.onset_grams);
         auto_declare<double>("approach_sec", d.approach_sec);
         auto_declare<double>("kp_tilt", d.kp_tilt);
+        auto_declare<double>("max_tilt_lead", d.max_tilt_lead);
+        auto_declare<double>("flow_deadband", d.flow_deadband);
         auto_declare<double>("no_flow_epsilon", d.no_flow_epsilon);
         auto_declare<double>("park_check_sec", d.park_check_sec);
         auto_declare<double>("park_drip_grams", d.park_drip_grams);
@@ -228,6 +231,7 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("geometry.max_carry_lean", max_carry_lean_);
         auto_declare<std::vector<double>>("geometry.hand_boxes", {});
         auto_declare<double>("geometry.align_speed", align_speed_);
+        auto_declare<double>("geometry.align_accel", align_accel_);
         auto_declare<double>("geometry.max_lip_speed", max_lip_speed_);
         auto_declare<double>("geometry.ik_lambda", ik_lambda_);
         auto_declare<double>("geometry.ik_tolerance", ik_tolerance_);
@@ -260,6 +264,7 @@ bool PouringController::assign_parameters()
     max_back_tilt_ = node->get_parameter("max_back_tilt").as_double();
     weight_tolerance_ = node->get_parameter("weight_tolerance").as_double();
     max_delta_q_ = node->get_parameter("max_delta_q").as_double();
+    tilt_accel_ = node->get_parameter("tilt_accel").as_double();
     feedback_period_ = node->get_parameter("feedback_period").as_double();
 
     planner_config_.container_tolerance = node->get_parameter("container_tolerance").as_double();
@@ -267,6 +272,8 @@ bool PouringController::assign_parameters()
     planner_config_.onset_grams = node->get_parameter("onset_grams").as_double();
     planner_config_.approach_sec = node->get_parameter("approach_sec").as_double();
     planner_config_.kp_tilt = node->get_parameter("kp_tilt").as_double();
+    planner_config_.max_tilt_lead = node->get_parameter("max_tilt_lead").as_double();
+    planner_config_.flow_deadband = node->get_parameter("flow_deadband").as_double();
     planner_config_.no_flow_epsilon = node->get_parameter("no_flow_epsilon").as_double();
     planner_config_.park_check_sec = node->get_parameter("park_check_sec").as_double();
     planner_config_.park_drip_grams = node->get_parameter("park_drip_grams").as_double();
@@ -292,6 +299,7 @@ bool PouringController::assign_parameters()
         {"max_tilt", max_tilt_},
         {"weight_tolerance", weight_tolerance_},
         {"max_delta_q", max_delta_q_},
+        {"tilt_accel", tilt_accel_},
         {"feedback_period", feedback_period_},
     };
     for (const auto & [name, value] : positives) {
@@ -429,6 +437,7 @@ bool PouringController::assign_geometry_parameters()
     lip_config_.max_centering_error = node->get_parameter("geometry.max_centering_error").as_double();
     lip_config_.max_tag_distance = node->get_parameter("geometry.max_tag_distance").as_double();
     align_speed_ = node->get_parameter("geometry.align_speed").as_double();
+    align_accel_ = node->get_parameter("geometry.align_accel").as_double();
     max_lip_speed_ = node->get_parameter("geometry.max_lip_speed").as_double();
     ik_lambda_ = node->get_parameter("geometry.ik_lambda").as_double();
     ik_tolerance_ = node->get_parameter("geometry.ik_tolerance").as_double();
@@ -497,6 +506,7 @@ bool PouringController::assign_geometry_parameters()
         {"geometry.vessel_height", vessel_.height},
         {"geometry.receiver_radius", receiver_.radius},
         {"geometry.align_speed", align_speed_},
+        {"geometry.align_accel", align_accel_},
         {"geometry.max_lip_speed", max_lip_speed_},
         {"geometry.ik_lambda", ik_lambda_},
         {"geometry.ik_tolerance", ik_tolerance_},
@@ -787,6 +797,8 @@ bool PouringController::start_goal(double now)
     }
     theta_start_ = q_ref_(pour_index_);
     tilt_ = 0.0;
+    tilt_ramp_.reset();
+    law_target_tilt_ = std::numeric_limits<double>::quiet_NaN();
     peak_tilt_ = 0.0;
     elapsed_ = 0.0;
     feedback_accumulator_ = 0.0;
@@ -802,6 +814,7 @@ bool PouringController::start_goal(double now)
         measure_started_ = now;
         q_start_ = q_ref_;
         align_s_ = 0.0;
+        align_ramp_.reset();
         inset_cmd_ = 0.0;
         ik_lagging_ = false;
         ik_bad_since_ = -1.0;
@@ -843,11 +856,20 @@ double PouringController::step_law(double now)
 
     const pour::PourCommand cmd = law_->update(obs);
     last_phase_ = static_cast<std::uint8_t>(cmd.phase);
+    law_target_tilt_ = cmd.target_tilt;
     if (cmd.finished) {
         begin_untilt(cmd.success, cmd.message);
         return 0.0;
     }
     return cmd.tilt_rate;
+}
+
+double PouringController::shaped_law_step(double rate, double dt)
+{
+    if (std::isfinite(law_target_tilt_)) {
+        return tilt_ramp_.reach(tilt_, law_target_tilt_, std::abs(rate), tilt_accel_, dt);
+    }
+    return tilt_ramp_.follow(rate, tilt_accel_, dt);
 }
 
 void PouringController::publish_feedback_if_due(double dt)
@@ -907,17 +929,22 @@ controller_interface::return_type PouringController::update(
         return update_measured(now, dt);
     }
 
-    double commanded_rate = 0.0;
+    const double tilt_before = tilt_;
+    double step = 0.0;
 
     if (phase_ == Phase::Pouring) {
-        commanded_rate = step_law(now);
+        const double rate = step_law(now);
+        if (phase_ == Phase::Pouring) {
+            step = shaped_law_step(rate, dt);
+        }
     }
 
     if (phase_ == Phase::Untilt) {
         last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
-        const double step = std::abs(goal_direction_) * max_delta_q_ / std::max(dt, 1e-9);
-        const double rate = std::min(law_->return_tilt_rate(), step);
-        if (std::abs(tilt_) <= rate * dt) {
+        const double bound = std::abs(goal_direction_) * max_delta_q_ / std::max(dt, 1e-9);
+        const double rate = std::min(law_->return_tilt_rate(), bound);
+        step = tilt_ramp_.reach(tilt_, 0.0, rate, tilt_accel_, dt);
+        if (tilt_ + step == 0.0) {
             tilt_ = 0.0;
             Eigen::VectorXd q_cmd = q_ref_;
             q_cmd(pour_index_) = theta_start_;
@@ -926,10 +953,9 @@ controller_interface::return_type PouringController::update(
             finish();
             return controller_interface::return_type::OK;
         }
-        commanded_rate = -std::copysign(rate, tilt_);
     }
 
-    tilt_ += commanded_rate * dt;
+    tilt_ += step;
 
     // Tilt range, measured from the attitude the pour started in, and BOTH ends
     // of it. The laws have their own bounds and normally stay inside; this is
@@ -966,8 +992,9 @@ controller_interface::return_type PouringController::update(
     write_command(q_cmd);
     // The tilt follows the CLAMPED command, so a joint limit or the per-cycle
     // bound cannot leave the planner reasoning about an angle the arm was never
-    // asked to reach.
+    // asked to reach -- nor the ramp accelerating from a speed it never had.
     tilt_ = goal_direction_ * (q_cmd(pour_index_) - theta_start_);
+    tilt_ramp_.observed(tilt_ - tilt_before, dt);
 
     publish_feedback_if_due(dt);
     return controller_interface::return_type::OK;
@@ -1233,7 +1260,10 @@ controller_interface::return_type PouringController::update_measured(double now,
             start_pour(now);
         } else {
             if (!ik_lagging_) {
-                align_s_ = std::min(lip_path_.align_length(), align_s_ + align_speed_ * dt);
+                align_s_ += align_ramp_.reach(align_s_, lip_path_.align_length(), align_speed_,
+                                              align_accel_, dt);
+            } else {
+                align_ramp_.reset();
             }
             if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
                 fail_geometric(why, Phase::Return);
@@ -1244,25 +1274,31 @@ controller_interface::return_type PouringController::update_measured(double now,
     }
 
     if (phase_ == Phase::Pouring || phase_ == Phase::Untilt) {
+        const double tilt_before = tilt_;
         double proposed = tilt_;
         if (phase_ == Phase::Pouring) {
             const double rate = step_law(now);
             if (phase_ == Phase::Pouring) {
-                proposed = std::clamp(tilt_ + rate * dt, -max_back_tilt_, tilt_bound_);
+                proposed = std::clamp(tilt_ + shaped_law_step(rate, dt), -max_back_tilt_,
+                                      tilt_bound_);
             }
         }
         if (phase_ == Phase::Untilt) {
             last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
-            const double step = std::min(law_->return_tilt_rate(),
-                                         max_delta_q_ / std::max(dt, 1e-9)) * dt;
-            proposed = std::abs(tilt_) <= step ? 0.0 : tilt_ - std::copysign(step, tilt_);
+            const double rate = std::min(law_->return_tilt_rate(),
+                                         max_delta_q_ / std::max(dt, 1e-9));
+            proposed = tilt_ + tilt_ramp_.reach(tilt_, 0.0, rate, tilt_accel_, dt);
         }
         advance_tilt(proposed, dt);
+        // advance_tilt holds the tilt back while the IK lags or the lip backs
+        // out; the ramp carries on from what it actually did.
+        tilt_ramp_.observed(tilt_ - tilt_before, dt);
 
         const bool home = phase_ == Phase::Untilt && tilt_ == 0.0 && !ik_lagging_ &&
                           inset_cmd_ >= lip_path_.inset_limit(0.0) - 1e-9;
         if (home) {
             align_s_ = lip_path_.align_length();
+            align_ramp_.reset();
             phase_ = Phase::Unalign;
         } else {
             if (!track(lip_path_.ee_pose(tilt_, inset_cmd_), now, why)) {
@@ -1279,7 +1315,9 @@ controller_interface::return_type PouringController::update_measured(double now,
             phase_ = Phase::Return;
         } else {
             if (!ik_lagging_) {
-                align_s_ = std::max(0.0, align_s_ - align_speed_ * dt);
+                align_s_ += align_ramp_.reach(align_s_, 0.0, align_speed_, align_accel_, dt);
+            } else {
+                align_ramp_.reset();
             }
             if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
                 fail_geometric(why, Phase::Return);

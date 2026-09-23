@@ -20,6 +20,7 @@
 
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
+#include "cho_controller_fr5/pour/ramp.hpp"
 #include "cho_controller_fr5/pour/scale_filter.hpp"
 #include "cho_controller_fr5/pour/shaping_law.hpp"
 #include "cho_controller_fr5/pour/guards.hpp"
@@ -881,4 +882,160 @@ TEST(PourPlanner, EndsCleanlyWhenWhatIsLeftCannotReachTheLip)
     EXPECT_NE(result.message.find("tilt bound"), std::string::npos) << result.message;
     // It used to wait out the 180 s goal timeout while the last grams trickled.
     EXPECT_LT(result.seconds, 60.0);
+}
+
+// ------------------------------------------------- a stream that thins --
+
+TEST(PourPlanner, AThinningStreamRaisesTheTiltNoFasterThanTheScaleCanAnswer)
+{
+    // The rig, 2026-09-24, 10 g of water: the stream thinned to 0.2 g/s at a
+    // fixed tilt 5.2 g in. The bulk phase then commanded the angle its fitted
+    // flow coefficient said would restore the flow -- and that coefficient, a
+    // small flow over a small angle, had collapsed. The wrist tipped 9.5 deg in
+    // 1.1 s with nothing on the scale to show for it, and 11 g landed after.
+    //
+    // Scripted rather than simulated, so the flow the planner sees is exactly
+    // that one: whatever it does with the tilt, the scale keeps saying 0.2 g/s.
+    auto planner = make_planner();
+    planner.begin(water_request(50.0, 0.0), 0.0);
+
+    constexpr double dt = 1.0 / 125.0;
+    const double transport_delay = planner.limits().transport_delay;
+    const double lead = PlannerConfig{}.max_tilt_lead;
+    double tilt = 0.0;
+    double grams = 0.0;
+    double flow = 0.0;
+    double bulk_since = -1.0;
+    double worst_lead = 0.0;
+    std::deque<std::pair<double, double>> history;  // (time, tilt) during the bulk
+
+    for (double now = 0.0; now < 60.0; now += dt) {
+        if (planner.phase() == PourPhase::Seek && tilt >= 0.5) {
+            // The onset: a gram lands and the scale shows 2 g/s.
+            grams = 1.0;
+            flow = 2.0;
+        }
+        if (bulk_since >= 0.0 && now - bulk_since > 1.0) {
+            // A second in, the stream thins, and the scale says so from then on.
+            flow = 0.2;
+        }
+        if (bulk_since >= 0.0 && now - bulk_since > 10.0) {
+            break;
+        }
+
+        PourObservation obs;
+        obs.now = now;
+        obs.has_reading = true;
+        obs.scale_fresh = true;
+        obs.settled = planner.phase() == PourPhase::Verify;
+        obs.grams = grams;
+        obs.flow_rate = flow;
+        obs.tilt = tilt;
+
+        const auto cmd = planner.update(obs);
+        ASSERT_FALSE(cmd.finished) << cmd.message;
+        if (cmd.phase == PourPhase::Bulk) {
+            if (bulk_since < 0.0) {
+                bulk_since = now;
+            }
+            history.emplace_back(now, tilt);
+            while (history.size() > 1 && history.front().first < now - transport_delay) {
+                history.pop_front();
+            }
+            worst_lead = std::max(worst_lead, tilt - history.front().second);
+        } else {
+            ASSERT_LT(bulk_since, 0.0) << "left the bulk phase for "
+                                       << cho_controller::fr5::pour::to_string(cmd.phase);
+        }
+        tilt += cmd.tilt_rate * dt;
+    }
+    ASSERT_GE(bulk_since, 0.0) << "the seek never found the onset";
+    // It may climb -- a thinning stream from an emptying vessel does need more
+    // tilt -- but never by more than the scale has had time to answer for.
+    EXPECT_LE(worst_lead, lead + 0.002)
+        << "the bulk phase tipped " << worst_lead << " rad within one transport delay";
+    EXPECT_GT(tilt, 0.5 + lead) << "a stream that thinned must still be followed up";
+}
+
+// ------------------------------------------------------------------ ramp --
+
+TEST(Ramp, ReachesATargetAtRestWithoutOvershootOrAJump)
+{
+    // A retract from a creep: moving up at 0.0045 rad/s, told to go 0.07 rad
+    // back at up to 0.15 rad/s. It used to reverse in one cycle.
+    using cho_controller::fr5::pour::Ramp;
+    constexpr double dt = 1.0 / 125.0;
+    constexpr double accel = 0.4;
+    Ramp ramp;
+    ramp.reset(0.0045);
+    double x = 0.80;
+    const double target = 0.73;
+    double v_prev = ramp.velocity();
+    double lowest = x;
+    int cycles = 0;
+    while (x != target && cycles < 10000) {
+        x += ramp.reach(x, target, 0.15, accel, dt);
+        EXPECT_LE(std::abs(ramp.velocity()), 0.15 + 1e-12);
+        if (x != target) {
+            EXPECT_LE(std::abs(ramp.velocity() - v_prev), accel * dt + 1e-12)
+                << "the speed jumped at cycle " << cycles;
+        }
+        v_prev = ramp.velocity();
+        lowest = std::min(lowest, x);
+        ++cycles;
+    }
+    EXPECT_EQ(x, target) << "never arrived";
+    EXPECT_DOUBLE_EQ(ramp.velocity(), 0.0);
+    EXPECT_GE(lowest, target - 1e-12) << "went past the park";
+    // A trapezoid of 0.07 rad at 0.4 rad/s^2 with a 0.15 rad/s cap: ~0.84 s.
+    EXPECT_LT(cycles * dt, 1.2);
+}
+
+TEST(Ramp, FollowsARateAtTheBoundedAccelerationAndCarriesOnFromWhatHappened)
+{
+    using cho_controller::fr5::pour::Ramp;
+    constexpr double dt = 1.0 / 125.0;
+    Ramp ramp;
+    double step = 0.0;
+    for (int i = 0; i < 10; ++i) {
+        step = ramp.follow(0.15, 0.4, dt);
+    }
+    EXPECT_NEAR(ramp.velocity(), 10 * 0.4 * dt, 1e-12) << "reached the rate faster than allowed";
+    EXPECT_NEAR(step, ramp.velocity() * dt, 1e-15);
+    // Something downstream held it back to a third of the step: the next cycle
+    // accelerates from that speed, not from the one it was handed.
+    ramp.observed(step / 3.0, dt);
+    EXPECT_NEAR(ramp.velocity(), step / 3.0 / dt, 1e-12);
+    // Garbage in stops it rather than propagating.
+    EXPECT_DOUBLE_EQ(ramp.follow(std::nan(""), 0.4, dt), 0.0);
+    EXPECT_DOUBLE_EQ(ramp.velocity(), 0.0);
+}
+
+TEST(PourPlanner, ARetractSaysWhereItIsGoingSoTheControllerCanBrakeIntoIt)
+{
+    // The controller brakes into the park only if the law names it; a retract
+    // that only gave a rate would be stopped dead on the park, or run past it.
+    auto probe = make_planner();
+    probe.begin(water_request(20.0, 0.0), 0.0);
+    PourObservation obs;
+    obs.has_reading = true;
+    obs.scale_fresh = true;
+    obs.settled = true;
+    probe.update(obs);  // verify -> seek
+    obs.settled = false;
+    obs.tilt = 0.4;
+    obs.grams = 1.0;
+    obs.flow_rate = 2.0;
+    obs.now = 0.1;
+    probe.update(obs);  // seek -> bulk
+    obs.grams = 19.0;   // within the stop margin at once
+    obs.now = 0.2;
+    auto cmd = probe.update(obs);  // bulk -> retract
+    ASSERT_EQ(cmd.phase, PourPhase::Retract);
+    obs.now = 0.3;
+    cmd = probe.update(obs);
+    ASSERT_EQ(cmd.phase, PourPhase::Retract);
+    EXPECT_TRUE(std::isfinite(cmd.target_tilt));
+    EXPECT_LT(cmd.target_tilt, obs.tilt);
+    EXPECT_LT(cmd.tilt_rate, 0.0);
 }

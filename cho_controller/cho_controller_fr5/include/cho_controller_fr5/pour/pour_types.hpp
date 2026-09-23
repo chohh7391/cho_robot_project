@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 
 #include "cho_controller_fr5/pour/material_profile.hpp"
@@ -67,6 +68,10 @@ struct PourCommand {
     //: Commanded tilt rate [rad/s]. The controller integrates it, clamps it to
     //: the joint limits, and feeds the achieved tilt back in.
     double tilt_rate{0.0};
+    //: Where the law is taking the tilt, when it is going somewhere rather than
+    //: at some rate -- a retract to its park. The controller then brakes to
+    //: arrive there at rest, at no more than |tilt_rate|. NaN: just the rate.
+    double target_tilt{std::numeric_limits<double>::quiet_NaN()};
     PourPhase phase{PourPhase::Verify};
     //: The law is done. The controller still owes the vessel its return to the
     //: carried attitude before the goal reports.

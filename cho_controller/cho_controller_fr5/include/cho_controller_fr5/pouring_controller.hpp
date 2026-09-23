@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 
 #include <realtime_tools/realtime_buffer.hpp>
@@ -10,6 +11,7 @@
 #include "cho_controller_fr5/pour/lip_path.hpp"
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
+#include "cho_controller_fr5/pour/ramp.hpp"
 #include "cho_controller_fr5/pour/shaping_law.hpp"
 #include "cho_controller_fr5/pour/scale_filter.hpp"
 #include "cho_controller_fr5/servers/pour_action_server.hpp"
@@ -142,8 +144,12 @@ private:
     bool assign_geometry_parameters();
     [[nodiscard]] pour::PourRequest make_request() const;
     //: One law step: the tilt rate it asks for, or 0 once it has finished (in
-    //: which case begin_untilt() has been called).
+    //: which case begin_untilt() has been called). Where it is headed, when it
+    //: is headed somewhere, is left in law_target_tilt_.
     double step_law(double now);
+    //: The tilt step the law's command comes to once the tilt's speed and
+    //: acceleration are bounded: a rate is followed, a target is braked into.
+    double shaped_law_step(double rate, double dt);
     //: False when the goal was refused before anything moved.
     bool start_goal(double now);
     void start_pour(double now);
@@ -190,6 +196,10 @@ private:
     double max_back_tilt_{0.3};
     double weight_tolerance_{0.5};
     double max_delta_q_{0.005};
+    //: Bound on how fast the tilt's rate may change [rad/s^2]. Every tilt the
+    //: pour makes -- the law's, and the way back to the carried attitude --
+    //: goes through tilt_ramp_ with it.
+    double tilt_accel_{0.4};
     double feedback_period_{0.1};
     //: Largest believable jump between two scale samples, as a multiple of what
     //: the fastest configured flow could deliver in one sample period.
@@ -207,6 +217,8 @@ private:
     double vessel_pose_max_age_{1.0};
     double vessel_pose_timeout_{5.0};
     double align_speed_{0.02};
+    //: The same bound for the lip's run along the align path [m/s^2].
+    double align_accel_{0.02};
     double max_lip_speed_{0.03};
     double ik_lambda_{0.02};
     double ik_tolerance_{0.002};
@@ -247,6 +259,10 @@ private:
     //: way the joint actually turns. Everything in pour/ works in these, and
     //: pour_direction_ is applied only where a joint angle is formed.
     double tilt_{0.0};
+    pour::Ramp tilt_ramp_;
+    //: Where the law's last command was taking the tilt; NaN when it asked for
+    //: a rate and nothing more.
+    double law_target_tilt_{std::numeric_limits<double>::quiet_NaN()};
     double theta_start_{0.0};
     double peak_tilt_{0.0};
     double elapsed_{0.0};
@@ -271,6 +287,7 @@ private:
     double measure_started_{0.0};
     Eigen::VectorXd q_start_;
     double align_s_{0.0};
+    pour::Ramp align_ramp_;
     //: How far past the receiver's near rim the lip is being held. Lags the
     //: path's limit by at most max_lip_speed, and the tilt waits for it
     //: whenever the limit requires the lip to back out.

@@ -26,12 +26,21 @@ struct PlannerConfig {
     //: the point: the stop error is proportional to the flow rate at the moment
     //: the tilt stops.
     double approach_sec{2.0};
-    //: Tilt rate commanded per unit of tilt error [1/s]. The bulk phase drives
-    //: an ANGLE, not a flow: a rate law fed a delayed flow measurement keeps
-    //: tilting while the pour it already commanded is still in the air, and the
-    //: result is a flow well past the profile's ceiling by the time the
-    //: measurement catches up.
+    //: Tilt rate commanded per radian of distance to the bulk phase's current
+    //: bound [1/s]. Kept below 1 / transport_delay's worth of overshoot by the
+    //: bound itself (max_tilt_lead), not by this gain.
     double kp_tilt{2.0};
+    //: How far the bulk phase may tilt past the angle the scale has already
+    //: answered for [rad]. The flow on the scale is what the tilt of one
+    //: transport delay ago produced; anything past that tilt is unobserved, and
+    //: this is how much of it the law is allowed to have in the air at once.
+    //: It bounds the climb to about max_tilt_lead / transport_delay however the
+    //: flow behaves.
+    double max_tilt_lead{0.02};
+    //: The bulk phase holds its angle while the flow is within this fraction of
+    //: the flow it wants, either side. Outside it, it steps -- up when short,
+    //: down when over -- one lead at a time.
+    double flow_deadband{0.3};
     //: Flow below this counts as none [g/s]. Used to decide that a parked vessel
     //: really has stopped, and that a tilt bound really has produced nothing.
     double no_flow_epsilon{0.15};
@@ -179,9 +188,6 @@ private:
     //: flow the scale is reporting now.
     [[nodiscard]] double delayed_tilt(double now) const;
     void update_gain_estimate(const PourObservation & obs);
-    //: Tilt that should produce `flow`, from the identified gain. Falls back to
-    //: the current tilt while the gain is still unknown.
-    [[nodiscard]] double tilt_for_flow(double flow, double current_tilt) const;
     //: Tilt rate a trim pulse creeps toward the onset at [rad/s].
     [[nodiscard]] double creep_rate() const;
     //: Adopt an onset angle and derive the park angle from it.
@@ -239,9 +245,9 @@ private:
     double pulse_sec_{0.0};
     int park_attempts_{0};
     //: Outflow per radian above the onset [g/s/rad], identified from the pour
-    //: itself. It is the flow coefficient a tilting-ladle model would call c,
-    //: and estimating it is what lets the bulk phase command the angle that
-    //: produces a wanted flow instead of hunting for it.
+    //: itself. Only the trim creep uses it, to size what is still in the air
+    //: when the flow shows. The bulk phase used to command the angle it said
+    //: would give the wanted flow; see step_bulk for why it no longer does.
     double gain_est_{0.0};
     double park_entered_{0.0};
     //: The margin the onset estimate earned, resolved once when the onset is

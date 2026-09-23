@@ -243,6 +243,12 @@ pouring_controller:
     # the pour instead.
     max_back_tilt: 0.3
     max_delta_q: 0.005
+    # How fast the tilt's rate may change [rad/s^2]. Every tilt goes through
+    # it -- the law's and the way back -- so no move starts, stops or reverses
+    # in one cycle: a retract reaches its 0.15 rad/s in 0.38 s and brakes into
+    # its park instead of stopping dead on it. It used to go from a 0.26 deg/s
+    # creep to an 8.6 deg/s retract between two cycles.
+    tilt_accel: 0.4
     feedback_period: 0.1
 
     # ---- where the lip goes ------------------------------------------------
@@ -347,6 +353,9 @@ pouring_controller:
       # thinks.
       max_align_distance: 0.400
       align_speed: 0.02
+      # The same for the run along the align path [m/s^2]: up to speed over
+      # the first 10 mm, and down again over the last.
+      align_accel: 0.02
       max_lip_speed: 0.03
       max_axis_elevation: 0.35
       # The jaws centre what they grip, so a vessel measured off their centre
@@ -385,12 +394,21 @@ pouring_controller:
     # stop error is the transport delay's uncertainty times the flow rate at the
     # moment the tilt stops, so arriving fast costs grams no gain can recover.
     approach_sec: 2.0
-    # Tilt rate per unit of TILT error [1/s]. The bulk phase drives an angle,
-    # derived from a flow coefficient it identifies from the pour itself. A rate
-    # law on flow error cannot work here: fed a measurement that is a transport
-    # delay old, it keeps tilting while the pour it already commanded is still
-    # in the air, and the flow lands well past the profile's ceiling.
+    # The bulk phase steps toward the flow it wants and lets the scale answer
+    # before stepping again: it never tilts more than max_tilt_lead past the
+    # tilt of one transport delay ago, which is the last one the scale has
+    # reported on. It used to command the angle a fitted flow coefficient
+    # asked for instead; on 2026-09-24 that coefficient collapsed when the
+    # stream thinned 5.2 g into a 10 g pour, the wrist tipped 9.5 deg in 1.1 s
+    # with nothing on the scale yet, and 17 g landed.
+    #
+    # The climb is about kp_tilt * lead / (1 + kp_tilt * transport_delay):
+    # 0.4 deg/s here. Water past its onset gave ~4 g/s per degree on this
+    # beaker, so 0.01 rad (0.57 deg) is ~2 g/s the scale has not yet seen.
     kp_tilt: 2.0
+    max_tilt_lead: 0.01
+    # Hold the angle while the flow is within 30% of the wanted one.
+    flow_deadband: 0.3
     # Stop this many times the controller's own estimate of what is still
     # coming. Above 1.0 on purpose -- the flow estimate is fitted over past
     # samples of a delayed signal, so it lags a rising pour. Stopping early
@@ -441,7 +459,12 @@ pouring_controller:
     # The creep runs at this fraction of the seek rate. At the full seek rate
     # the tilt is past the onset by the time the flow shows on a 5 Hz scale:
     # each pulse let out about 1 g, and a 30 g pour ended 1.84 g over.
-    trim_creep_fraction: 0.33
+    # Halved again after the lip-pivot pour of 2026-09-24: at 0.33 of a 0.03
+    # rad/s seek, with the scale 1.0 s behind, a pulse asked for 0.97 g let out
+    # 2.65 g -- water hangs on the lip and lets go at once, 0.92 g inside one
+    # 0.2 s sample, and the creep had gone 0.57 deg past the onset by the time
+    # the scale showed any. The overshoot scales with this rate.
+    trim_creep_fraction: 0.15
     # Each pulse is sized to close only this fraction of the gap. A pulse is
     # open-loop by necessity -- at 5 Hz it spans a handful of samples and the
     # material has not landed in any of them -- so it cannot be corrected while
@@ -501,7 +524,13 @@ pouring_controller:
         max_flow_rate: 3.0
         trim_flow_rate: 2.0
         trim_pulse_sec: 0.15
-        transport_delay: 0.4
+        # Tilt to scale, measured on the lip-pivot pour (2026-09-24): the tilt
+        # started rising at 35.1 s and the reading first moved at 36.1 s. The
+        # 0.4 s this was is the pipe alone; the 5 Hz stream and the flow fit
+        # over three samples add the rest. Everything that pairs a reading
+        # with the tilt that produced it -- the onset, the park, the bulk's
+        # lead bound, what is still in the air -- reads this number.
+        transport_delay: 1.0
         afterflow_grams: 0.3
         settle_hold_sec: 1.2
         tilt_rate: 0.15
