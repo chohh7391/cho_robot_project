@@ -32,8 +32,9 @@
 #
 # --------------------------------------------------------------- how to redo
 #
-# `ros2 run cho_camera_calibration solve_hand_eye.py` -- see that package's
-# README. Both entries below come from one run of it.
+# `python3 $(ros2 pkg prefix --share cho_camera_calibration)/scripts/solve_hand_eye.py`
+# -- see that package's README (its `ros2 run` form finds nothing: the scripts
+# install to share/, not lib/). All three entries below come from one run.
 #
 # THE BOARD'S OWN POSE IS AN OUTPUT, NOT AN INPUT. The earlier procedure put
 # one tag at a surveyed point and solved the camera against it, which made
@@ -49,21 +50,28 @@ transforms:
   # `wrist3_link` and the robot's FK carries it. The bringup must therefore be
   # running for any wrist detection to resolve into the base frame.
   #
-  # SOLVED from eight arm poses viewing the tag board (2026-09-22, evening).
+  # SOLVED from eight arm poses viewing the tag board (2026-09-23), the run
+  # that re-placed both standing cameras after they were moved.
   # ALL THREE CAMERAS BELOW COME FROM THAT ONE RUN, which is the point of doing
   # it that way: they are placed against ONE board pose, so a disagreement
   # between them is a real disagreement rather than two different boards.
   #
   # What says this one is right:
   #
-  #   reprojection over board corners      0.112-0.201 px across the eight poses
-  #   the board's pose, pose to pose       0.99 mm mean, 1.92 mm worst
-  #   the board's height                   came out at -0.0111 against a bench
-  #                                        at -0.013 -- 1.9 mm, and NOTHING in
+  #   reprojection over board corners      0.147-0.346 px across the eight poses
+  #   the board's pose, pose to pose       0.53 mm mean, 0.70 mm worst
+  #   the board's height                   came out at -0.0113 against a bench
+  #                                        at -0.013 -- 1.7 mm, and NOTHING in
   #                                        the solve knows the bench height
-  #   the board's plane                    0.16 deg off level
+  #   the board's plane                    0.35 deg off level
   #   relative rotation between poses      77.4 deg median, 26 of 28 pairs
-  #                                        past 30 deg
+  #                                        past 30 deg (config/real/handeye_poses.yaml)
+  #
+  # Nobody touched this camera between 2026-09-22 and this run, and it came out
+  # 0.2 mm and 0.97 deg from that evening's solve. It is re-entered anyway: the
+  # standing cameras below were placed against the board pose THIS hand-eye
+  # produced, and keeping the older wrist value would leave the wrist and them
+  # about 9 mm apart at 0.5 m.
   #
   # Every one of those is better than the morning's run on this same bench, and
   # the reason is not the procedure. This camera's firmware was 5.9.2, which
@@ -77,10 +85,10 @@ transforms:
   - name: wrist
     parent_frame: wrist3_link
     child_frame: wrist_link
-    xyz: [0.00033, 0.04869, 0.23250]
+    xyz: [0.00025, 0.04850, 0.23261]
     # x, y, z, w -- the order geometry_msgs uses, NOT the w-first order some
     # CAD tools print.
-    quaternion: [0.542211, -0.525794, 0.456376, 0.470393]
+    quaternion: [0.536962, -0.530907, 0.459547, 0.467576]
 
   # ----------------------------------------------------------------- side_1
   # Eye-to-hand: the OAK stands beside the bench and does not move, so this is
@@ -94,37 +102,41 @@ transforms:
   # SOLVED from the same run as the wrist, off the board pose that run
   # produced:
   #
-  #   reprojection over board corners      0.290-0.422 px
-  #   camera position across eight views   5.17 mm of spread
+  #   reprojection over board corners      0.396-0.420 px
+  #   camera position across eight views   0.43 mm of spread
   #
-  # THAT SPREAD IS THE WEAKEST NUMBER IN THIS FILE, and the reason matters more
-  # than the number: at one of the eight poses the ARM STOOD BETWEEN THIS CAMERA
-  # AND THE BOARD and it saw three tags instead of six. A three-tag fit is a
-  # much poorer fit and it is in the average. side_2, never blocked, came out at
-  # 0.23 mm from the same recording. If this becomes the limit, re-run with
-  # poses chosen to keep the arm out of this camera's line.
+  # It saw all six board tags at all eight poses. The previous solve had 5.17 mm
+  # of spread because at one pose the ARM STOOD BETWEEN THIS CAMERA AND THE
+  # BOARD and it saw three tags instead of six; from where it stands now the
+  # same eight poses never block it. If a future position brings that back,
+  # re-run with poses chosen to keep the arm out of this camera's line.
   #
-  # The tripod was moved before this run, about 108 mm from where the morning
-  # had it. Re-run after anything touches it and watch those two numbers --
-  # they are what tells you it has been touched.
+  # The camera was moved before this run (2026-09-23), 182 mm and 11.0 deg from
+  # the previous entry. Re-run after anything touches it and watch those two
+  # numbers -- they are what tells you it has been touched.
   - name: side_1
     parent_frame: base_link
     child_frame: side_1_mount
-    xyz: [0.39347, 0.52347, 0.52624]
-    quaternion: [0.381282, 0.281938, -0.690415, 0.546317]
+    xyz: [0.52138, 0.65273, 0.52293]
+    quaternion: [0.378580, 0.199000, -0.735016, 0.526144]
 
   # ----------------------------------------------------------------- side_2
-  # The second standing camera, and the best-conditioned entry in this file:
+  # The second standing camera:
   #
-  #   reprojection over board corners      0.119-0.123 px
-  #   camera position across eight views   0.23 mm of spread
+  #   reprojection over board corners      0.236-0.256 px
+  #   camera position across eight views   1.25 mm of spread
   #
-  # It saw all six board tags at all eight poses, which is the entire
-  # difference between it and side_1 above.
+  # It saw all six board tags at all eight poses. Moved before this run
+  # (2026-09-23), 364 mm and 11.9 deg from the previous entry.
+  #
+  # Its view is oblique, and that costs pixels in one direction: the board
+  # tags' SHORT edge measures 23-32 px from here, against cho_object_pose's
+  # 25 px floor. The corners solve fine; a 70 mm vessel tag at the same range
+  # and angle will sit on that floor.
   #
   # ITS ANGLE TO side_1 IS THE POINT OF IT. The two stand on opposite sides of
-  # the bench and their lines of sight to the board cross at 89.0 degrees, at
-  # 0.751 m and 0.699 m -- near-orthogonal, and neither dominating the other by
+  # the bench and their lines of sight to the board cross at 88.5 degrees, at
+  # 0.863 m and 0.928 m -- near-orthogonal, and neither dominating the other by
   # range. Crossing two lines of sight is only worth anything when there is an
   # angle between them: cho_object_pose's `fusion_mode: intersect` stops
   # crossing below `min_ray_angle_deg` and falls back to a weighted mean,
@@ -134,5 +146,5 @@ transforms:
   - name: side_2
     parent_frame: base_link
     child_frame: side_2_link
-    xyz: [0.50381, -0.49779, 0.45737]
-    quaternion: [-0.239090, 0.278605, 0.750274, 0.549823]
+    xyz: [0.85497, -0.57537, 0.51592]
+    quaternion: [-0.176785, 0.303620, 0.799049, 0.487938]
