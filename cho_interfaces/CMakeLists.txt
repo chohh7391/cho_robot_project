@@ -31,6 +31,7 @@ set(MSG_FILES
   "msg/ObjectVisibility.msg"
   "msg/ObjectVisibilityArray.msg"
   "msg/PoseLog.msg"
+  "msg/ScaleReading.msg"
   "msg/VlaTelemetry.msg"
 )
 
