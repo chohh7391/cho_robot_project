@@ -69,7 +69,10 @@ def test_fr5_metadata_loader_runs_without_registry_or_other_robot_metadata(monke
 
     config = config_loader_for('fr5')('fr5')
     assert config['robot_type'] == 'fr5'
-    assert config['poses']['home']['1'][2] == -1.5707963268
+    # The registry's j3 at the ready pose, spot-checked so the bundled copy
+    # cannot quietly drift from cho_robot_config/config/fr5.yaml. The value
+    # itself is not the point; that it matches the registry is.
+    assert config['poses']['home']['1'][2] == -2.0723
     assert 'cho_control_tools.clients.fr5.metadata' in sys.modules
     assert 'cho_control_tools.clients.franka.metadata' not in sys.modules
     assert 'cho_control_tools.clients.openarm.metadata' not in sys.modules
