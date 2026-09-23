@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
+#include <vector>
 
 namespace cho_controller {
 namespace fr5 {
@@ -79,6 +82,14 @@ PourLimits granular_resistant_defaults()
     l.seek_tilt_rate = 0.05;
     l.dose_quantum = 2.0;
     return l;
+}
+
+Eigen::Isometry3d to_isometry(const pinocchio::SE3 & H)
+{
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.linear() = H.rotation();
+    T.translation() = H.translation();
+    return T;
 }
 }  // namespace
 
@@ -181,6 +192,40 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("shaping.kernel_alpha", sd.kernel_alpha);
         auto_declare<double>("shaping.max_tilt_rate", sd.max_tilt_rate);
         auto_declare<double>("shaping.settle_hold_sec", sd.settle_hold_sec);
+
+        // ---- where the lip goes: `joint` or `measured` ----
+        auto_declare<std::string>("pour_geometry", "joint");
+        auto_declare<std::string>("geometry.vessel_pose_topic", "");
+        auto_declare<std::string>("geometry.vessel_pose_frame", vessel_pose_frame_);
+        auto_declare<double>("geometry.vessel_settle_sec", vessel_settle_sec_);
+        auto_declare<double>("geometry.vessel_pose_max_age", vessel_pose_max_age_);
+        auto_declare<double>("geometry.vessel_pose_timeout", vessel_pose_timeout_);
+        auto_declare<double>("geometry.vessel_radius", vessel_.radius);
+        auto_declare<double>("geometry.vessel_height", vessel_.height);
+        // No defaults that would pass for measurements: where the marker is
+        // stuck and where the receiver stands are facts about this bench.
+        auto_declare<std::vector<double>>("geometry.tag_in_vessel", {});
+        auto_declare<std::vector<double>>("geometry.receiver_rim_center", {});
+        auto_declare<double>("geometry.receiver_radius", receiver_.radius);
+        const pour::LipPathConfig ld;
+        auto_declare<double>("geometry.lip_clearance", ld.clearance);
+        auto_declare<double>("geometry.lip_max_height", ld.max_height);
+        auto_declare<double>("geometry.lip_inset", ld.inset);
+        auto_declare<double>("geometry.lip_gap", ld.gap);
+        auto_declare<double>("geometry.landing_margin", ld.landing_margin);
+        auto_declare<double>("geometry.landing_by_tilt", ld.landing_by_tilt);
+        auto_declare<double>("geometry.max_align_distance", ld.max_align_distance);
+        auto_declare<double>("geometry.max_axis_elevation", ld.max_axis_elevation);
+        auto_declare<double>("geometry.max_centering_error", ld.max_centering_error);
+        auto_declare<double>("geometry.max_tag_distance", ld.max_tag_distance);
+        auto_declare<std::vector<double>>("geometry.closing_axis_in_ee", {1.0, 0.0, 0.0});
+        auto_declare<std::vector<double>>("geometry.hand_boxes", {});
+        auto_declare<double>("geometry.align_speed", align_speed_);
+        auto_declare<double>("geometry.max_lip_speed", max_lip_speed_);
+        auto_declare<double>("geometry.ik_lambda", ik_lambda_);
+        auto_declare<double>("geometry.ik_tolerance", ik_tolerance_);
+        auto_declare<double>("geometry.ik_rot_tolerance", ik_rot_tolerance_);
+        auto_declare<double>("geometry.ik_fail_sec", ik_fail_sec_);
 
         declare_limits("liquid.free", liquid_free_defaults());
         declare_limits("liquid.resistant", liquid_resistant_defaults());
@@ -323,6 +368,138 @@ bool PouringController::assign_parameters()
             "better on this cell is what running both is for", law_name_.c_str());
         return false;
     }
+
+    const std::string geometry = node->get_parameter("pour_geometry").as_string();
+    if (geometry == "joint") {
+        measured_geometry_ = false;
+    } else if (geometry == "measured") {
+        measured_geometry_ = true;
+        if (!assign_geometry_parameters()) {
+            return false;
+        }
+    } else {
+        RCLCPP_ERROR(logger,
+            "pour_geometry must be 'joint' or 'measured' (got '%s'): turn the pour joint alone, "
+            "or measure where the vessel sits in the gripper and tip it about its lip",
+            geometry.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool PouringController::assign_geometry_parameters()
+{
+    auto node = get_node();
+    auto logger = node->get_logger();
+
+    const auto vec3 = [&](const char * name, const char * meaning, Eigen::Vector3d & out) {
+        const auto v = node->get_parameter(name).as_double_array();
+        if (v.size() != 3 || !std::all_of(v.begin(), v.end(), [](double x) { return std::isfinite(x); })) {
+            RCLCPP_ERROR(logger, "%s must be three finite numbers: %s", name, meaning);
+            return false;
+        }
+        out = Eigen::Vector3d(v[0], v[1], v[2]);
+        return true;
+    };
+
+    vessel_pose_topic_ = node->get_parameter("geometry.vessel_pose_topic").as_string();
+    vessel_pose_frame_ = node->get_parameter("geometry.vessel_pose_frame").as_string();
+    vessel_settle_sec_ = node->get_parameter("geometry.vessel_settle_sec").as_double();
+    vessel_pose_max_age_ = node->get_parameter("geometry.vessel_pose_max_age").as_double();
+    vessel_pose_timeout_ = node->get_parameter("geometry.vessel_pose_timeout").as_double();
+    vessel_.radius = node->get_parameter("geometry.vessel_radius").as_double();
+    vessel_.height = node->get_parameter("geometry.vessel_height").as_double();
+    receiver_.radius = node->get_parameter("geometry.receiver_radius").as_double();
+    lip_config_.clearance = node->get_parameter("geometry.lip_clearance").as_double();
+    lip_config_.max_height = node->get_parameter("geometry.lip_max_height").as_double();
+    lip_config_.inset = node->get_parameter("geometry.lip_inset").as_double();
+    lip_config_.gap = node->get_parameter("geometry.lip_gap").as_double();
+    lip_config_.landing_margin = node->get_parameter("geometry.landing_margin").as_double();
+    lip_config_.landing_by_tilt = node->get_parameter("geometry.landing_by_tilt").as_double();
+    lip_config_.max_align_distance = node->get_parameter("geometry.max_align_distance").as_double();
+    lip_config_.max_axis_elevation = node->get_parameter("geometry.max_axis_elevation").as_double();
+    lip_config_.max_centering_error = node->get_parameter("geometry.max_centering_error").as_double();
+    lip_config_.max_tag_distance = node->get_parameter("geometry.max_tag_distance").as_double();
+    align_speed_ = node->get_parameter("geometry.align_speed").as_double();
+    max_lip_speed_ = node->get_parameter("geometry.max_lip_speed").as_double();
+    ik_lambda_ = node->get_parameter("geometry.ik_lambda").as_double();
+    ik_tolerance_ = node->get_parameter("geometry.ik_tolerance").as_double();
+    ik_rot_tolerance_ = node->get_parameter("geometry.ik_rot_tolerance").as_double();
+    ik_fail_sec_ = node->get_parameter("geometry.ik_fail_sec").as_double();
+
+    if (vessel_pose_topic_.empty() || vessel_pose_frame_.empty()) {
+        RCLCPP_ERROR(logger,
+            "geometry.vessel_pose_topic and geometry.vessel_pose_frame must be set under "
+            "pour_geometry: measured -- the PoseStamped of the held vessel's marker, and the "
+            "frame it has to be in (the arm's base; nothing here transforms it)");
+        return false;
+    }
+    if (!vec3("geometry.tag_in_vessel",
+              "where the marker's centre is stuck on the held vessel, in its frame (x toward "
+              "the lip, z up from the centre of its bottom). Measure it", vessel_.tag_in_vessel) ||
+        !vec3("geometry.receiver_rim_center",
+              "the centre of the receiver's rim in the arm's base frame -- the scale's centre, "
+              "at the rim's height", receiver_.rim_center) ||
+        !vec3("geometry.closing_axis_in_ee", "the direction the jaws close along, in the EE frame",
+              lip_config_.closing_axis_in_ee)) {
+        return false;
+    }
+    const auto boxes = node->get_parameter("geometry.hand_boxes").as_double_array();
+    if (boxes.size() % 6 != 0) {
+        RCLCPP_ERROR(logger,
+            "geometry.hand_boxes must be a flat list of six numbers per box (min x y z, max x y "
+            "z, EE frame); got %zu numbers", boxes.size());
+        return false;
+    }
+    lip_config_.hand_boxes.clear();
+    for (std::size_t i = 0; i < boxes.size(); i += 6) {
+        pour::HandBox box;
+        box.min = Eigen::Vector3d(boxes[i], boxes[i + 1], boxes[i + 2]);
+        box.max = Eigen::Vector3d(boxes[i + 3], boxes[i + 4], boxes[i + 5]);
+        lip_config_.hand_boxes.push_back(box);
+    }
+
+    const std::pair<const char *, double> positives[] = {
+        {"geometry.vessel_settle_sec", vessel_settle_sec_},
+        {"geometry.vessel_pose_max_age", vessel_pose_max_age_},
+        {"geometry.vessel_pose_timeout", vessel_pose_timeout_},
+        {"geometry.vessel_radius", vessel_.radius},
+        {"geometry.vessel_height", vessel_.height},
+        {"geometry.receiver_radius", receiver_.radius},
+        {"geometry.align_speed", align_speed_},
+        {"geometry.max_lip_speed", max_lip_speed_},
+        {"geometry.ik_lambda", ik_lambda_},
+        {"geometry.ik_tolerance", ik_tolerance_},
+        {"geometry.ik_rot_tolerance", ik_rot_tolerance_},
+        {"geometry.ik_fail_sec", ik_fail_sec_},
+    };
+    for (const auto & [name, value] : positives) {
+        if (!std::isfinite(value) || value <= 0.0) {
+            RCLCPP_ERROR(logger, "%s must be positive (got %f)", name, value);
+            return false;
+        }
+    }
+    // The tolerance is how far off the path the arm may be and still count as
+    // on it. The lip path keeps `gap` from the receiver, so a tolerance that is
+    // not well inside it spends the gap on tracking error.
+    if (ik_tolerance_ >= lip_config_.gap) {
+        RCLCPP_ERROR(logger,
+            "geometry.ik_tolerance (%f m) must be under geometry.lip_gap (%f m): the arm "
+            "would be allowed off the path by more than the clearance the path keeps",
+            ik_tolerance_, lip_config_.gap);
+        return false;
+    }
+    std::string why;
+    if (!lip_config_.validate(why)) {
+        RCLCPP_ERROR(logger, "geometry rejected: %s", why.c_str());
+        return false;
+    }
+    if (lip_config_.hand_boxes.empty()) {
+        RCLCPP_WARN(logger,
+            "geometry.hand_boxes is empty, so the lip path keeps only the vessel itself out of "
+            "the receiver. Under the side grasp the pour tips the vessel toward a jaw, which "
+            "hangs just below the lip and past it: declare the jaws");
+    }
     return true;
 }
 
@@ -379,6 +556,25 @@ CallbackReturn PouringController::on_configure(const rclcpp_lifecycle::State & p
             scale_buffer_.writeFromNonRT(sample);
         });
 
+    vessel_sub_.reset();
+    if (measured_geometry_) {
+        vessel_buffer_.writeFromNonRT(VesselSample{});
+        vessel_sub_ = get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
+            vessel_pose_topic_, rclcpp::SensorDataQoS(),
+            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+                VesselSample sample;
+                // Arrival, on this node's clock, for the same reason as the
+                // scale -- and because what invalidates a pose is the arm
+                // moving, which is timed on this clock too.
+                sample.stamp = get_node()->now().seconds();
+                sample.position = Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y,
+                                                  msg->pose.position.z);
+                sample.frame_ok = msg->header.frame_id == vessel_pose_frame_;
+                sample.finite = sample.position.allFinite();
+                vessel_buffer_.writeFromNonRT(sample);
+            });
+    }
+
     action_server_ = std::make_shared<FR5PourActionServer>(
         get_node(), "/controller_action_server/pouring_controller", num_dof_);
     action_server_->init();
@@ -391,9 +587,11 @@ CallbackReturn PouringController::on_configure(const rclcpp_lifecycle::State & p
 
     RCLCPP_INFO(get_node()->get_logger(),
         "PouringController configured: law '%s', pour joint '%s' (direction %+.0f), weight "
-        "from %s, outlier bound %.1f g/sample",
+        "from %s, outlier bound %.1f g/sample, geometry '%s'%s%s",
         law_->name(), joint_names_[pour_index_].c_str(), pour_direction_, scale_topic_.c_str(),
-        filter_config.max_step_grams);
+        filter_config.max_step_grams, measured_geometry_ ? "measured" : "joint",
+        measured_geometry_ ? ", vessel from " : "",
+        measured_geometry_ ? vessel_pose_topic_.c_str() : "");
     return CallbackReturn::SUCCESS;
 }
 
@@ -412,6 +610,11 @@ CallbackReturn PouringController::on_activate(const rclcpp_lifecycle::State & pr
     filter_.reset();
     last_pushed_stamp_ = 0.0;
     scale_buffer_.writeFromNonRT(pour::ScaleFilter::Sample{});
+    // Whatever arrived before now was measured under another controller, which
+    // may have been moving the arm.
+    vessel_buffer_.writeFromNonRT(VesselSample{});
+    quiet_since_ = get_node()->now().seconds();
+    law_started_ = false;
     return CallbackReturn::SUCCESS;
 }
 
@@ -429,6 +632,9 @@ CallbackReturn PouringController::on_deactivate(const rclcpp_lifecycle::State & 
 
 void PouringController::write_command(const Eigen::VectorXd & q_cmd)
 {
+    if (q_ref_.size() == q_cmd.size() && (q_cmd - q_ref_).cwiseAbs().maxCoeff() > 1e-9) {
+        quiet_since_ = now_;
+    }
     for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(q_cmd(i));
     }
@@ -461,7 +667,8 @@ void PouringController::begin_untilt(bool succeeded, const std::string & reason)
 
 void PouringController::finish()
 {
-    const auto & report = law_->report();
+    const pour::PourReport none;
+    const auto & report = law_started_ ? law_->report() : none;
     if (pending_success_) {
         action_server_->succeed(report.poured_grams, peak_tilt_, elapsed_, report.trim_pulses,
                                 report.measured_afterflow);
@@ -471,6 +678,98 @@ void PouringController::finish()
                                           report.measured_afterflow);
     }
     phase_ = Phase::Idle;
+}
+
+pour::PourRequest PouringController::make_request() const
+{
+    const auto & bounds = action_server_->bounds();
+    pour::PourRequest request;
+    request.target_grams = bounds.target_grams;
+    request.container_grams = bounds.container_grams;
+    request.tolerance = bounds.tolerance;
+    request.timeout = bounds.timeout;
+    request.max_tilt = bounds.max_tilt;
+    request.max_tilt_rate = bounds.max_tilt_rate;
+    request.material = bounds.material == 1 ? MaterialClass::Granular : MaterialClass::Liquid;
+    request.flow_index = bounds.flow_index;
+    request.max_back_tilt = max_back_tilt_;
+    return request;
+}
+
+void PouringController::start_goal(double now)
+{
+    theta_start_ = q_ref_(pour_index_);
+    tilt_ = 0.0;
+    peak_tilt_ = 0.0;
+    elapsed_ = 0.0;
+    feedback_accumulator_ = 0.0;
+    last_phase_ = 0;
+    filter_.reset();
+    last_pushed_stamp_ = 0.0;
+    law_started_ = false;
+    pending_success_ = false;
+    pending_reason_.clear();
+
+    if (measured_geometry_) {
+        phase_ = Phase::Measure;
+        measure_started_ = now;
+        q_start_ = q_ref_;
+        align_s_ = 0.0;
+        inset_cmd_ = 0.0;
+        ik_lagging_ = false;
+        ik_bad_since_ = -1.0;
+        return;
+    }
+    start_pour(now);
+}
+
+void PouringController::start_pour(double now)
+{
+    pour::PourRequest request = make_request();
+    if (measured_geometry_) {
+        // Past this the lip would have to leave the mouth to keep the jaws off
+        // the rim, and the stream would leave with it.
+        request.max_tilt = std::min(request.max_tilt, lip_path_.last_landing_tilt());
+    }
+    tilt_bound_ = request.max_tilt;
+    law_->begin(request, now);
+    law_started_ = true;
+    phase_ = Phase::Pouring;
+}
+
+double PouringController::step_law(double now)
+{
+    if (action_server_->is_canceling()) {
+        law_->cancel();
+    }
+    pour::PourObservation obs;
+    obs.now = now;
+    obs.has_reading = filter_.has_sample();
+    obs.scale_fresh = obs.has_reading && filter_.age(now) <= scale_timeout_;
+    obs.grams = filter_.grams();
+    obs.flow_rate = filter_.flow_rate();
+    obs.settled = filter_.settled(now, law_->settle_hold());
+    obs.tilt = tilt_;
+    obs.consecutive_rejects = filter_.consecutive_rejects();
+    obs.last_rejected_step = filter_.last_rejected_step();
+
+    const pour::PourCommand cmd = law_->update(obs);
+    last_phase_ = static_cast<std::uint8_t>(cmd.phase);
+    if (cmd.finished) {
+        begin_untilt(cmd.success, cmd.message);
+        return 0.0;
+    }
+    return cmd.tilt_rate;
+}
+
+void PouringController::publish_feedback_if_due(double dt)
+{
+    feedback_accumulator_ += dt;
+    if (feedback_accumulator_ >= feedback_period_) {
+        feedback_accumulator_ -= feedback_period_;
+        const double poured = law_started_ ? last_grams_ - law_->baseline_grams() : 0.0;
+        action_server_->publish_feedback(poured, tilt_, elapsed_, last_flow_, last_phase_);
+    }
 }
 
 controller_interface::return_type PouringController::update(
@@ -483,20 +782,21 @@ controller_interface::return_type PouringController::update(
     if (q_ref_.size() != num_dof_) {
         q_ref_ = state_.q.head(num_dof_);
     }
+    now_ = time.seconds();
 
     const bool running = action_server_ && action_server_->is_running();
-    if (!running && phase_ != Phase::Untilt) {
+    const bool returning =
+        phase_ == Phase::Untilt || phase_ == Phase::Unalign || phase_ == Phase::Return;
+    if (!running && !returning) {
         // Idle: freeze the reference. Re-deriving a hold from the measured
         // position would feed servo droop back into the command.
-        if (phase_ != Phase::Idle) {
-            phase_ = Phase::Idle;
-        }
+        phase_ = Phase::Idle;
         hold_reference();
         return controller_interface::return_type::OK;
     }
 
     const double dt = nominal_period(period);
-    const double now = time.seconds();
+    const double now = now_;
 
     // Take whatever the subscription left, but only once. Re-pushing the same
     // sample every cycle would make the least-squares fit see 125 identical
@@ -508,58 +808,21 @@ controller_interface::return_type PouringController::update(
     }
 
     if (phase_ == Phase::Idle) {
-        phase_ = Phase::Pouring;
-        theta_start_ = q_ref_(pour_index_);
-        tilt_ = 0.0;
-        peak_tilt_ = 0.0;
-        elapsed_ = 0.0;
-        feedback_accumulator_ = 0.0;
-        last_phase_ = 0;
-        filter_.reset();
-        last_pushed_stamp_ = 0.0;
-
-        const auto & bounds = action_server_->bounds();
-        pour::PourRequest request;
-        request.target_grams = bounds.target_grams;
-        request.container_grams = bounds.container_grams;
-        request.tolerance = bounds.tolerance;
-        request.timeout = bounds.timeout;
-        request.max_tilt = bounds.max_tilt;
-        request.max_tilt_rate = bounds.max_tilt_rate;
-        request.material = bounds.material == 1 ? MaterialClass::Granular : MaterialClass::Liquid;
-        request.flow_index = bounds.flow_index;
-        request.max_back_tilt = max_back_tilt_;
-        law_->begin(request, now);
+        start_goal(now);
     }
 
     elapsed_ += dt;
     last_grams_ = filter_.grams();
     last_flow_ = filter_.flow_rate();
 
+    if (measured_geometry_) {
+        return update_measured(now, dt);
+    }
+
     double commanded_rate = 0.0;
 
     if (phase_ == Phase::Pouring) {
-        if (action_server_->is_canceling()) {
-            law_->cancel();
-        }
-        pour::PourObservation obs;
-        obs.now = now;
-        obs.has_reading = filter_.has_sample();
-        obs.scale_fresh = obs.has_reading && filter_.age(now) <= scale_timeout_;
-        obs.grams = filter_.grams();
-        obs.flow_rate = filter_.flow_rate();
-        obs.settled = filter_.settled(now, law_->settle_hold());
-        obs.tilt = tilt_;
-        obs.consecutive_rejects = filter_.consecutive_rejects();
-        obs.last_rejected_step = filter_.last_rejected_step();
-
-        const pour::PourCommand cmd = law_->update(obs);
-        last_phase_ = static_cast<std::uint8_t>(cmd.phase);
-        if (cmd.finished) {
-            begin_untilt(cmd.success, cmd.message);
-        } else {
-            commanded_rate = cmd.tilt_rate;
-        }
+        commanded_rate = step_law(now);
     }
 
     if (phase_ == Phase::Untilt) {
@@ -586,9 +849,8 @@ controller_interface::return_type PouringController::update(
     // law driving a negative error backwards through upright. Bounding only the
     // pour side (what this did after the rewrite) left the other direction
     // limited by nothing short of the joint limit.
-    const double bound = action_server_->bounds().max_tilt;
     if (phase_ == Phase::Pouring) {
-        tilt_ = std::clamp(tilt_, -max_back_tilt_, bound);
+        tilt_ = std::clamp(tilt_, -max_back_tilt_, tilt_bound_);
     }
     peak_tilt_ = std::max(peak_tilt_, std::abs(tilt_));
 
@@ -619,12 +881,276 @@ controller_interface::return_type PouringController::update(
     // asked to reach.
     tilt_ = pour_direction_ * (q_cmd(pour_index_) - theta_start_);
 
-    feedback_accumulator_ += dt;
-    if (feedback_accumulator_ >= feedback_period_) {
-        feedback_accumulator_ -= feedback_period_;
-        action_server_->publish_feedback(last_grams_ - law_->baseline_grams(), tilt_, elapsed_,
-                                         last_flow_, last_phase_);
+    publish_feedback_if_due(dt);
+    return controller_interface::return_type::OK;
+}
+
+// ---------------------------------------------------------------- measured
+
+bool PouringController::vessel_sample_usable(const VesselSample & sample, double now) const
+{
+    return sample.stamp > 0.0 && sample.frame_ok && sample.finite &&
+           now - sample.stamp <= vessel_pose_max_age_ &&
+           sample.stamp >= quiet_since_ + vessel_settle_sec_;
+}
+
+std::string PouringController::vessel_sample_problem(const VesselSample & sample, double now) const
+{
+    std::ostringstream os;
+    if (sample.stamp <= 0.0) {
+        os << "nothing has arrived on " << vessel_pose_topic_ << " since the controller was "
+           << "activated. Is cho_object_pose running with the held vessel's marker in its "
+              "table, and can a side camera see the marker from where the vessel is held?";
+    } else if (!sample.frame_ok) {
+        os << "the poses on " << vessel_pose_topic_ << " are not in '" << vessel_pose_frame_
+           << "', and nothing here transforms them";
+    } else if (!sample.finite) {
+        os << "the latest pose on " << vessel_pose_topic_ << " is not finite";
+    } else if (now - sample.stamp > vessel_pose_max_age_) {
+        os << "the latest pose on " << vessel_pose_topic_ << " is " << std::fixed
+           << std::setprecision(1) << now - sample.stamp << " s old: the marker has gone out "
+              "of view, or the pose node has stopped trusting it";
+    } else if (sample.stamp < quiet_since_ + vessel_settle_sec_) {
+        os << "every pose so far may have been averaged over the arm's last move; none has "
+              "arrived vessel_settle_sec after it stopped";
     }
+    return os.str();
+}
+
+void PouringController::abort_before_motion(const std::string & reason)
+{
+    RCLCPP_WARN(get_node()->get_logger(), "Pour refused before anything moved: %s",
+                reason.c_str());
+    action_server_->abort_active_goal(reason, 0.0, 0.0, elapsed_);
+    phase_ = Phase::Idle;
+    hold_reference();
+}
+
+void PouringController::fail_geometric(const std::string & reason, Phase via)
+{
+    if (phase_ == Phase::Unalign || phase_ == Phase::Return) {
+        // Already on the way back with a reason of its own. Only a failure to
+        // follow the way back changes anything: it goes to joint space.
+        if (via == Phase::Return) {
+            phase_ = Phase::Return;
+        }
+        return;
+    }
+    const bool poured = phase_ == Phase::Untilt && pending_success_;
+    pending_reason_ = poured ? "the pour reached its target, but then " + reason : reason;
+    pending_success_ = false;
+    RCLCPP_WARN(get_node()->get_logger(),
+        "Pour ending without reaching the target (%s); returning the arm to where the goal "
+        "started first", pending_reason_.c_str());
+    ik_lagging_ = false;
+    ik_bad_since_ = -1.0;
+    phase_ = via;
+}
+
+bool PouringController::track(const Eigen::Isometry3d & target, double now, std::string & why)
+{
+    Eigen::VectorXd q_full = state_.q;
+    q_full.head(num_dof_) = q_ref_;
+    pinocchio::SE3 H;
+    Eigen::MatrixXd J;
+    compute_arm_kinematics(q_full, H, J);
+
+    // Local-frame task error against the COMMAND, like the task-space IK: the
+    // measured joints never enter it, so servo noise is not fed back.
+    Eigen::Matrix<double, 6, 1> error;
+    error.head<3>() = H.rotation().transpose() * (target.translation() - H.translation());
+    error.tail<3>() = pinocchio::log3(H.rotation().transpose() * target.linear());
+    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
+    JJt.diagonal().array() += ik_lambda_ * ik_lambda_;
+    Eigen::VectorXd dq = J.transpose() * JJt.ldlt().solve(error);
+    if (!dq.allFinite()) {
+        why = "the lip path's IK solve went non-finite";
+        return false;
+    }
+    dq = dq.array().max(-max_delta_q_).min(max_delta_q_);
+    Eigen::VectorXd q_cmd = q_ref_ + dq;
+    clamp_to_joint_limits(q_cmd);
+
+    q_full.head(num_dof_) = q_cmd;
+    compute_arm_kinematics(q_full, H, J);
+    const double pos_err = (target.translation() - H.translation()).norm();
+    const double rot_err =
+        pinocchio::log3(H.rotation().transpose() * target.linear()).norm();
+    if (!q_cmd.allFinite() || !std::isfinite(pos_err) || !std::isfinite(rot_err)) {
+        why = "the lip path's IK produced a non-finite command";
+        return false;
+    }
+    write_command(q_cmd);
+
+    ik_lagging_ = pos_err > ik_tolerance_ || rot_err > ik_rot_tolerance_;
+    if (!ik_lagging_) {
+        ik_bad_since_ = -1.0;
+        return true;
+    }
+    if (ik_bad_since_ < 0.0) {
+        ik_bad_since_ = now;
+    }
+    if (now - ik_bad_since_ > ik_fail_sec_) {
+        std::ostringstream os;
+        os << "the arm could not follow the lip path: " << std::fixed << std::setprecision(1)
+           << pos_err * 1000.0 << " mm and " << std::setprecision(3) << rot_err
+           << " rad off it for longer than ik_fail_sec. A joint limit or a singularity is in "
+              "the way of tipping the vessel about its lip from this pose";
+        why = os.str();
+        return false;
+    }
+    return true;
+}
+
+void PouringController::advance_tilt(double proposed, double dt)
+{
+    // Nothing advances while the arm is behind the path: the next target would
+    // only be further from where it is.
+    if (ik_lagging_) {
+        return;
+    }
+    const double goal = lip_path_.inset_limit(proposed);
+    const double step = max_lip_speed_ * dt;
+    if (goal < inset_cmd_ - step) {
+        // At the proposed tilt the lip has to be further out than it is. Back
+        // it out first and tip once it is there: tipping first would carry the
+        // jaw or the wall into the receiver while the lip caught up.
+        inset_cmd_ -= step;
+    } else {
+        inset_cmd_ = std::min(goal, inset_cmd_ + step);
+        tilt_ = proposed;
+    }
+    peak_tilt_ = std::max(peak_tilt_, std::abs(tilt_));
+}
+
+controller_interface::return_type PouringController::update_measured(double now, double dt)
+{
+    std::string why;
+
+    if (phase_ == Phase::Measure) {
+        hold_reference();
+        last_phase_ = static_cast<std::uint8_t>(PourPhase::Verify);
+        if (action_server_->is_canceling()) {
+            abort_before_motion("the goal was cancelled before the pour began");
+            return controller_interface::return_type::OK;
+        }
+        const VesselSample sample = *vessel_buffer_.readFromRT();
+        if (!vessel_sample_usable(sample, now)) {
+            if (now - measure_started_ > vessel_pose_timeout_) {
+                std::ostringstream os;
+                os << "no usable pose of the held vessel within vessel_pose_timeout ("
+                   << vessel_pose_timeout_ << " s): " << vessel_sample_problem(sample, now);
+                abort_before_motion(os.str());
+                return controller_interface::return_type::OK;
+            }
+            publish_feedback_if_due(dt);
+            return controller_interface::return_type::OK;
+        }
+
+        // The grasp, from the command the arm is holding and the marker.
+        Eigen::VectorXd q_full = state_.q;
+        q_full.head(num_dof_) = q_ref_;
+        pinocchio::SE3 H;
+        Eigen::MatrixXd J;
+        compute_arm_kinematics(q_full, H, J);
+        // The local Jacobian's angular column for a revolute joint is its axis
+        // in the EE frame.
+        const Eigen::Vector3d axis =
+            pour_direction_ * (H.rotation() * J.col(pour_index_).tail<3>());
+        if (!lip_path_.plan(to_isometry(H), axis, sample.position,
+                            action_server_->bounds().max_tilt, vessel_, receiver_, lip_config_,
+                            why)) {
+            abort_before_motion("the pour was not started: " + why);
+            return controller_interface::return_type::OK;
+        }
+        RCLCPP_INFO(get_node()->get_logger(), "Pour geometry: %s", lip_path_.summary().c_str());
+        align_s_ = 0.0;
+        phase_ = Phase::Align;
+    }
+
+    if (phase_ == Phase::Align) {
+        last_phase_ = static_cast<std::uint8_t>(PourPhase::Verify);
+        if (action_server_->is_canceling()) {
+            fail_geometric("the goal was cancelled before the pour began", Phase::Unalign);
+        } else if (align_s_ >= lip_path_.align_length() && !ik_lagging_) {
+            inset_cmd_ = lip_path_.inset_limit(0.0);
+            start_pour(now);
+        } else {
+            if (!ik_lagging_) {
+                align_s_ = std::min(lip_path_.align_length(), align_s_ + align_speed_ * dt);
+            }
+            if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
+                fail_geometric(why, Phase::Return);
+            }
+            publish_feedback_if_due(dt);
+            return controller_interface::return_type::OK;
+        }
+    }
+
+    if (phase_ == Phase::Pouring || phase_ == Phase::Untilt) {
+        double proposed = tilt_;
+        if (phase_ == Phase::Pouring) {
+            const double rate = step_law(now);
+            if (phase_ == Phase::Pouring) {
+                proposed = std::clamp(tilt_ + rate * dt, -max_back_tilt_, tilt_bound_);
+            }
+        }
+        if (phase_ == Phase::Untilt) {
+            last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
+            const double step = std::min(law_->return_tilt_rate(),
+                                         max_delta_q_ / std::max(dt, 1e-9)) * dt;
+            proposed = std::abs(tilt_) <= step ? 0.0 : tilt_ - std::copysign(step, tilt_);
+        }
+        advance_tilt(proposed, dt);
+
+        const bool home = phase_ == Phase::Untilt && tilt_ == 0.0 && !ik_lagging_ &&
+                          inset_cmd_ >= lip_path_.inset_limit(0.0) - 1e-9;
+        if (home) {
+            align_s_ = lip_path_.align_length();
+            phase_ = Phase::Unalign;
+        } else {
+            if (!track(lip_path_.ee_pose(tilt_, inset_cmd_), now, why)) {
+                fail_geometric(why, Phase::Return);
+            }
+            publish_feedback_if_due(dt);
+            return controller_interface::return_type::OK;
+        }
+    }
+
+    if (phase_ == Phase::Unalign) {
+        last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
+        if (align_s_ <= 0.0 && !ik_lagging_) {
+            phase_ = Phase::Return;
+        } else {
+            if (!ik_lagging_) {
+                align_s_ = std::max(0.0, align_s_ - align_speed_ * dt);
+            }
+            if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
+                fail_geometric(why, Phase::Return);
+            }
+            publish_feedback_if_due(dt);
+            return controller_interface::return_type::OK;
+        }
+    }
+
+    if (phase_ == Phase::Return) {
+        // Joint space, to the configuration the goal started in. After a clean
+        // unalign this is the IK's residual, a fraction of a milliradian; after
+        // a failure to follow the path it is the whole way back.
+        last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
+        Eigen::VectorXd delta = q_start_ - q_ref_;
+        if (delta.cwiseAbs().maxCoeff() <= 1e-9) {
+            write_command(q_start_);
+            finish();
+            return controller_interface::return_type::OK;
+        }
+        delta = delta.array().max(-max_delta_q_).min(max_delta_q_);
+        write_command(q_ref_ + delta);
+        publish_feedback_if_due(dt);
+        return controller_interface::return_type::OK;
+    }
+
+    hold_reference();
     return controller_interface::return_type::OK;
 }
 

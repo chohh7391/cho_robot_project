@@ -1,0 +1,50 @@
+# Object table for the FR5 pour: the marker ON the held beaker, which the
+# pouring controller's `pour_geometry: measured` reads to work out where the
+# beaker sits in the jaws. Not in vessel_detect.yaml: that table's tags stand on
+# stalks beside the vessels and stay on the bench when a vessel is lifted, and
+# perceived_replay checks the layout against exactly the objects there.
+#
+#   ros2 launch cho_object_pose detectors.launch.py objects_config:=<this> \
+#     cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
+#   ros2 launch cho_object_pose object_pose.launch.py robot_type:=fr5 \
+#     objects_config:=<this> cameras_config:=... min_cameras:=1
+#
+# Two cameras if at all possible (then min_cameras:=2). One camera's range error lies
+# along its line of sight -- 10-16 mm on this bench -- and goes straight into
+# where the controller believes the lip is; two lines of sight crossed (the
+# pose node's default `intersect`) leave a fraction of a millimetre. With one
+# camera the only check left is the jaws' centre line, which sees the error's
+# component along the direction the jaws close and nothing else.
+#
+# With side_2 alone (min_cameras:=1), which is what this bench can see the
+# beaker from: dry-run with the beaker EMPTY first and hold a ruler to the
+# controller's "Pour geometry" log line -- the jaws' height above the beaker's
+# bottom and the lip's height above the rim are what a range error moves.
+#
+# A 70 mm tag at side_2's ~0.9 m clears the 25 px edge gate facing it squarely
+# (fx 424 px: ~33 px); turned 45 degrees away it does not. On a 50 mm beaker
+# that is a flag, not a sticker -- a card on the side away from the lip,
+# standing clear of the jaws, facing side_2.
+#
+# The published pose is the marker's centre: no offset, and only the POSITION
+# is used downstream. Where the marker sits on the beaker is the controller's
+# `geometry.tag_in_vessel`, measured once, in the beaker's own frame.
+objects:
+  - name: held_beaker
+    # The beaker's own tag, MOVED off its stalk onto the beaker. Left on the
+    # stalk it stays on the bench when the beaker is lifted, and this would
+    # measure the stalk: the vessel would come out wherever the stalk is, which
+    # the centring and alignment checks will usually -- not certainly --
+    # refuse. Same id as vessel_detect.yaml's `beaker`, so never load the two
+    # tables into one pose node.
+    tag_id: 0
+    # The 2026-09-22 reprint, as vessel_detect.yaml has it.
+    tag_size: 0.070
+    topic: /perception/object_pose/held_beaker
+    grasp_offset:
+      position: [0.0, 0.0, 0.0]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    # Orientation is not used, and for a marker standing upright it is also the
+    # part that flips; keeping only the yaw costs nothing here.
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]

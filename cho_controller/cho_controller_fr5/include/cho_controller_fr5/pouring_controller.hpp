@@ -4,7 +4,10 @@
 
 #include <realtime_tools/realtime_buffer.hpp>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+
 #include "cho_controller_fr5/base_controller.hpp"
+#include "cho_controller_fr5/pour/lip_path.hpp"
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
 #include "cho_controller_fr5/pour/shaping_law.hpp"
@@ -55,8 +58,30 @@ namespace fr5 {
  * has to turn to bring the lip down, because no amount of feedback discovers
  * that safely -- guessing wrong tips the vessel away from the scale. And a grasp
  * rotated about a DIFFERENT axis than the pour axis is out of scope: the joint
- * would swing the lip sideways instead of tipping it, and the fix is a
- * task-space rotation about the lip, not a gain here.
+ * would swing the lip sideways instead of tipping it.
+ *
+ * TWO GEOMETRIES, chosen by `pour_geometry`:
+ *
+ *   joint     the pour joint alone turns; the lip swings on an arc about the
+ *             grasp. Where the stream lands then depends on where the jaws
+ *             closed, and the pre-pour pose has to have allowed for it.
+ *   measured  the vessel's position in the gripper is MEASURED when a goal
+ *             starts -- a marker on it, located by the side cameras through
+ *             cho_object_pose -- and the whole arm moves so that the vessel
+ *             tips about its LIP, held at one height above a receiver fixed at
+ *             a configured place. pour/lip_path.hpp decides how far in over
+ *             the mouth the lip may come at each tilt; this class only follows
+ *             it, by damped least-squares IK on the command, never on the
+ *             measured joints.
+ *
+ * In `measured` a goal runs Measure -> Align -> the law -> Untilt -> Unalign ->
+ * Return, and the arm finishes in exactly the joint configuration it started
+ * in. Measure waits for a marker pose that arrived at least vessel_settle_sec
+ * after the arm last moved, because the pose node aggregates over a window and
+ * a window that straddles a motion describes nowhere the vessel ever was. The
+ * law is told nothing new: its tilt is still the rotation from the carried
+ * attitude, and its tilt bound is capped where the lip stops being over the
+ * mouth.
  *
  * Safety, in the order it is checked every cycle:
  *   - a run of physically impossible readings stops the tilt. The pan being
@@ -89,9 +114,44 @@ private:
     //: vessel home) -> Idle. The planner never commands the final return: it has
     //: finished deciding by then, and the return is a safety obligation rather
     //: than part of the law.
-    enum class Phase { Idle, Pouring, Untilt };
+    //: `measured` adds Measure (wait for the marker, plan the lip path) and
+    //: Align (move the lip to where the tilt starts) before the law, and
+    //: Unalign and Return (joint space, to the exact start configuration)
+    //: after the untilt. Any failure after Measure goes through them too.
+    enum class Phase { Idle, Measure, Align, Pouring, Untilt, Unalign, Return };
+
+    //: Latest marker pose, stamped on arrival on this node's clock -- the same
+    //: clock the motion that invalidates it is timed on.
+    struct VesselSample {
+        double stamp{0.0};
+        Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+        bool frame_ok{false};
+        bool finite{false};
+    };
 
     bool assign_parameters();
+    bool assign_geometry_parameters();
+    [[nodiscard]] pour::PourRequest make_request() const;
+    //: One law step: the tilt rate it asks for, or 0 once it has finished (in
+    //: which case begin_untilt() has been called).
+    double step_law(double now);
+    void start_goal(double now);
+    void start_pour(double now);
+    controller_interface::return_type update_measured(double now, double dt);
+    //: Why `sample` cannot be planned from yet; empty when it can.
+    [[nodiscard]] std::string vessel_sample_problem(const VesselSample & sample, double now) const;
+    //: One DLS step of the command toward `target`. False when the arm has
+    //: failed to follow for ik_fail_sec, or the solve went non-finite.
+    bool track(const Eigen::Isometry3d & target, double now, std::string & why);
+    //: Move the tilt to `proposed` and the lip toward the path's limit there,
+    //: holding the tilt instead while the lip still has to back out.
+    void advance_tilt(double proposed, double dt);
+    [[nodiscard]] bool vessel_sample_usable(const VesselSample & sample, double now) const;
+    void publish_feedback_if_due(double dt);
+    //: A failure after Measure: the arm is somewhere else by now, so it goes
+    //: back the way it came before the goal reports.
+    void fail_geometric(const std::string & reason, Phase via);
+    void abort_before_motion(const std::string & reason);
     bool read_profile(const std::string & prefix, pour::MaterialProfile & out, std::string & why);
     pour::PourLimits read_limits(const std::string & prefix) const;
     void declare_limits(const std::string & prefix, const pour::PourLimits & defaults);
@@ -122,6 +182,26 @@ private:
     pour::PlannerConfig planner_config_;
     pour::MaterialProfile liquid_;
     pour::MaterialProfile granular_;
+
+    // ---- measured geometry ----
+    bool measured_geometry_{false};
+    std::string vessel_pose_topic_;
+    std::string vessel_pose_frame_{"base_link"};
+    double vessel_settle_sec_{1.0};
+    double vessel_pose_max_age_{1.0};
+    double vessel_pose_timeout_{5.0};
+    double align_speed_{0.02};
+    double max_lip_speed_{0.03};
+    double ik_lambda_{0.02};
+    double ik_tolerance_{0.002};
+    double ik_rot_tolerance_{0.02};
+    double ik_fail_sec_{0.5};
+    pour::HeldVessel vessel_;
+    pour::Receiver receiver_;
+    pour::LipPathConfig lip_config_;
+    pour::LipPath lip_path_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr vessel_sub_;
+    realtime_tools::RealtimeBuffer<VesselSample> vessel_buffer_;
 
     // ---- scale ----
     rclcpp::Subscription<cho_interfaces::msg::ScaleReading>::SharedPtr scale_sub_;
@@ -156,6 +236,27 @@ private:
     std::uint8_t last_phase_{0};
     bool pending_success_{false};
     std::string pending_reason_;
+    //: Whether the law ran in this goal: a goal that ends in Measure or Align
+    //: has no report of its own, and the law's is the previous goal's.
+    bool law_started_{false};
+    //: The tilt bound the law was given: the goal's, capped in `measured` by
+    //: where the lip leaves the mouth.
+    double tilt_bound_{0.0};
+
+    // ---- measured goal state ----
+    double now_{0.0};
+    //: When the command last changed. A marker pose measured before this plus
+    //: vessel_settle_sec may have been averaged over a motion.
+    double quiet_since_{0.0};
+    double measure_started_{0.0};
+    Eigen::VectorXd q_start_;
+    double align_s_{0.0};
+    //: How far past the receiver's near rim the lip is being held. Lags the
+    //: path's limit by at most max_lip_speed, and the tilt waits for it
+    //: whenever the limit requires the lip to back out.
+    double inset_cmd_{0.0};
+    bool ik_lagging_{false};
+    double ik_bad_since_{-1.0};
 };
 
 } // namespace fr5

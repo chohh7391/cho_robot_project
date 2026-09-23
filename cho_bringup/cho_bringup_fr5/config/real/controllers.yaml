@@ -236,6 +236,93 @@ pouring_controller:
     max_delta_q: 0.005
     feedback_period: 0.1
 
+    # ---- where the lip goes ------------------------------------------------
+    # joint     the pour joint alone turns, as above. The lip swings on an arc
+    #           about the grasp -- from a 30-50 mm grasp on a 100 mL beaker it
+    #           drops 30-39 mm and moves 5-22 mm out over the working range --
+    #           so where the stream lands depends on where the jaws closed.
+    # measured  a marker ON the held vessel is located by the side cameras when
+    #           a goal starts, the vessel's place in the jaws is worked out from
+    #           it, and the whole arm tips the vessel about its lip, held at one
+    #           height above the receiver below. On mock hardware against a
+    #           synthetic bench (2026-09-23): 20 g delivered as 20.00 g, lip
+    #           held within 0.5 mm of one height, nothing outside the rim, arm
+    #           back at its exact start joints. From the same pre-pour pose
+    #           `joint` put 6.3 g outside the rim -- and reported success, since
+    #           the scale only weighs what lands.
+    #
+    # Left at `joint` until the marker exists. To switch:
+    #   1. move tag 0 off its stalk onto the beaker, facing side_2, and measure
+    #      tag_in_vessel;
+    #   2. run cho_object_pose with cho_task_manager's
+    #      config/perception/pour_vessel.yaml. Two cameras if they can both see
+    #      it: one camera's range error lies along its line of sight -- 10-16 mm
+    #      on this bench -- and a lip held 10 mm lower than believed puts a jaw
+    #      on the rim. With side_2 alone, check the "Pour geometry" log line
+    #      against a ruler on an empty-beaker dry run first;
+    #   3. measure the jaws and replace hand_boxes;
+    #   4. set pour_geometry: measured.
+    pour_geometry: joint
+    geometry:
+      vessel_pose_topic: /perception/object_pose/held_beaker
+      # Nothing here transforms a pose: it has to arrive in the arm's base.
+      vessel_pose_frame: base_link
+      # The pose node averages over window_sec (0.5 s). A pose counts only if
+      # it arrived this long after the arm last moved; before that the window
+      # may straddle the motion and describe nowhere the vessel ever was.
+      vessel_settle_sec: 1.0
+      vessel_pose_max_age: 1.0
+      vessel_pose_timeout: 5.0
+      # The 100 mL beaker: 50 mm across, 70 mm tall.
+      vessel_radius: 0.025
+      vessel_height: 0.070
+      # Where the marker's centre is on the vessel, in the vessel's frame: x
+      # toward the lip, z up from the centre of its bottom. MEASURE IT. Left
+      # out until then, and `measured` refuses to configure without it:
+      #   tag_in_vessel: [x, y, z]
+      # The receiver is fixed at the scale's centre, rim at 180 mm (measured on
+      # the cell, 2026-09-23). Not perceived.
+      receiver_rim_center: [0.520, 0.320, 0.180]
+      receiver_radius: 0.025
+      # The lip is held at the height it was brought in at, clamped to these,
+      # and comes in over the mouth only as far as the tilt swings the glass
+      # and the jaws below it back out past the rim, `lip_gap` clear.
+      lip_clearance: 0.020
+      lip_max_height: 0.080
+      lip_inset: 0.012
+      lip_gap: 0.005
+      landing_margin: 0.005
+      # Held too low, the jaw below the lip keeps it outside the rim until late
+      # in the tilt, and a fuller beaker starts pouring before then -- onto the
+      # rim. The lip is lifted until the stream lands inside from this tilt on:
+      # 0.5 rad covers this beaker up to about 110 g of water.
+      landing_by_tilt: 0.5
+      # The largest correction made before tilting. The pre-pour pose is still
+      # the task's: bring the lip about 20 mm short of the rim.
+      max_align_distance: 0.060
+      align_speed: 0.02
+      max_lip_speed: 0.03
+      max_axis_elevation: 0.35
+      # The jaws centre what they grip, so a vessel measured off their centre
+      # line along the direction they close is a measurement that far wrong.
+      max_centering_error: 0.008
+      max_tag_distance: 0.5
+      closing_axis_in_ee: [1.0, 0.0, 0.0]
+      # The AG-95's jaws closed on a 50 mm vessel, in the EE (wrist3_link)
+      # frame, min x y z then max x y z per jaw. ESTIMATED, NOT MEASURED: 20 mm
+      # past the glass, +-20 mm about the grasp, and the URDF's jaw sweep
+      # (190-301 mm) along the approach. The jaw on the lip side hangs just
+      # below the lip; these boxes are all that keeps it off the rim.
+      hand_boxes: [0.025, -0.020, 0.1904, 0.045, 0.020, 0.3008,
+                   -0.045, -0.020, 0.1904, -0.025, 0.020, 0.3008]
+      # Damped least squares on the COMMAND, like task_space_ik_controller. The
+      # tolerance must stay well inside lip_gap: it is how far off the path the
+      # arm may be and still count as on it.
+      ik_lambda: 0.02
+      ik_tolerance: 0.002
+      ik_rot_tolerance: 0.02
+      ik_fail_sec: 0.5
+
     # ---- the vessel on the pan -------------------------------------------
     # How far the first settled reading may sit from the goal's container_grams
     # before the pour is refused. Not optional: the same flask read 139.15 g dry

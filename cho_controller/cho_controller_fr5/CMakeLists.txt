@@ -22,6 +22,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
 find_package(cho_interfaces REQUIRED)
@@ -33,6 +34,7 @@ add_library(${PROJECT_NAME} SHARED
     src/pouring_controller.cpp
     src/pour/container_gate.cpp
     src/pour/guards.cpp
+    src/pour/lip_path.cpp
     src/pour/material_profile.cpp
     src/pour/pour_planner.cpp
     src/pour/pour_types.cpp
@@ -56,6 +58,7 @@ ament_target_dependencies(${PROJECT_NAME}
     rclcpp_lifecycle
     realtime_tools
     control_msgs
+    geometry_msgs
     std_msgs
     cho_controller_common
     cho_interfaces
@@ -92,6 +95,13 @@ if(BUILD_TESTING)
         src/pour/shaping_law.cpp
     )
     target_include_directories(test_pour PRIVATE include test)
+
+    # Where the lip goes, from where the vessel sits in the gripper. Eigen only.
+    ament_add_gtest(test_lip_path
+        test/test_lip_path.cpp
+        src/pour/lip_path.cpp
+    )
+    target_include_directories(test_lip_path PRIVATE include ${EIGEN3_INCLUDE_DIRS})
 
     # Not a test: prints both laws' results on pour_sim.hpp's vessels, which is
     # where the comparison quoted in controllers.yaml comes from. Built with the
