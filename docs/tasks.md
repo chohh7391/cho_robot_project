@@ -228,6 +228,8 @@ a rebuild or before real experiments.
 | `trajectory_replay` | replays a recorded waypoint CSV; refuses a cell that does not match the declared layout | same, plus `replay_trajectory:=` and `replay_layout:=` |
 | `perceived_replay` | the same replay, gated on what the cameras measure instead of a declared layout, optionally watched while it runs | same, plus `object_pose_config:=` and a running detector stack |
 | `vessel_detect` | latches the beaker's and the flask's detected poses. **Commands nothing** — no controller switch, no motion, no bringup needed | `object_pose_config:=` and a running detector stack |
+| `occlusion_recovery` | latches each vessel, sweeping the wrist camera over the bench for any the standing cameras cannot see -- one pass for all of them, or one sweep per vessel with `sweep_mode:=per_object` | the plain bringup, `object_pose_config:=`, `object_pose_cameras_config:=`, `sweep_config:=` and a running detector stack |
+| `occlusion_replay` | `occlusion_recovery`'s locating, then `trajectory_replay`'s motion, in one mission. The perception is shown, not used: the declared layout gates the replay | both sets of arguments, plus `home_via:=direct` on the plain bringup; `cho_object_pose display.launch.py` to watch it |
 
 Every FR5 bringup is `control_mode:=position`, which is also the only mode
 `fr5.yaml` declares a hold controller for.

@@ -528,6 +528,49 @@ def parse_sweeps(document, joint_names=None):
     return sweeps
 
 
+#: What one pass over several objects drives: a single waypoint list, the dwell
+#: at each, and the ceiling on the whole pass.
+SharedRaster = namedtuple('SharedRaster', 'waypoints dwell_sec timeout_sec')
+
+
+def shared_raster(sweeps):
+    """The one raster a single pass drives for all of *sweeps*.
+
+    A single pass judges every object from the same viewpoints, so it can only
+    be built over sweeps that name THE SAME WAYPOINTS -- names, joint
+    configurations and durations, in the same order. The FR5 table is solved
+    from one area raster and meets that by construction. A table with a raster
+    per object does not, and is refused rather than merged: deciding whose
+    waypoints win is deciding which object gets looked for badly.
+
+    The dwell is the longest any of them asks for, because a viewpoint is judged
+    once for all of them. The ceiling is the most generous, not the sum: the
+    raster is driven at most once however many objects are on it.
+    """
+    sweeps = list(sweeps)
+    if not sweeps:
+        raise ValueError('a single pass needs at least one sweep')
+    first = sweeps[0]
+    if not first.waypoints:
+        raise ValueError(f"the sweep for '{first.object}' has no waypoints")
+    for other in sweeps[1:]:
+        if other.waypoints == first.waypoints:
+            continue
+        where = next((index for index, (mine, theirs)
+                      in enumerate(zip(first.waypoints, other.waypoints))
+                      if mine != theirs),
+                     min(len(first.waypoints), len(other.waypoints)))
+        raise ValueError(
+            f"'{first.object}' and '{other.object}' are swept over different waypoints "
+            f'(first difference at waypoint {where + 1}; {len(first.waypoints)} against '
+            f'{len(other.waypoints)}), so one pass cannot look for both. Sweep them '
+            'one object at a time instead.')
+    return SharedRaster(
+        waypoints=first.waypoints,
+        dwell_sec=max(sweep.dwell_sec for sweep in sweeps),
+        timeout_sec=max(sweep.timeout_sec for sweep in sweeps))
+
+
 def load_sweeps(path, joint_names=None):
     """``parse_sweeps`` over a YAML file. Kept apart so the parser stays pure."""
     import yaml

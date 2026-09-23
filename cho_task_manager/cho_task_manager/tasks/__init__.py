@@ -16,6 +16,7 @@ from cho_task_manager.tasks.franka import (
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
     create_fr5_occlusion_recovery_tree,
+    create_fr5_occlusion_replay_tree,
     create_fr5_perceived_replay_tree,
     create_fr5_trajectory_replay_tree,
     create_fr5_vessel_detect_tree,
@@ -68,6 +69,10 @@ _TASK_REGISTRY = {
         # any vessel the standing camera cannot currently see. See
         # tasks/fr5/occlusion_recovery.py.
         'occlusion_recovery': create_fr5_occlusion_recovery_tree,
+        # occlusion_recovery's locating, then trajectory_replay's motion, in one
+        # mission. The perception is shown, not used: the declared layout still
+        # gates the replay. See tasks/fr5/occlusion_replay.py.
+        'occlusion_replay': create_fr5_occlusion_replay_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,

@@ -117,6 +117,11 @@ def generate_launch_description():
                         'cho_task_manager/config/sweep/). Empty for any task that does '
                         'not recover.'),
         DeclareLaunchArgument(
+            'sweep_mode', default_value='',
+            description='How the recovery looks for several objects: single_pass (the '
+                        'default when empty) drives the raster once for all of them, '
+                        'per_object sweeps and returns home once per object.'),
+        DeclareLaunchArgument(
             'visibility_topic', default_value='',
             description="Where cho_object_pose says what each camera can see. Empty "
                         "keeps its default, /perception/object_visibility. Set it only "
@@ -193,6 +198,7 @@ def generate_launch_description():
                 'home_via': LaunchConfiguration('home_via'),
                 'replay_watch': LaunchConfiguration('replay_watch'),
                 'sweep_config': LaunchConfiguration('sweep_config'),
+                'sweep_mode': LaunchConfiguration('sweep_mode'),
                 'visibility_topic': LaunchConfiguration('visibility_topic'),
             }]
         )

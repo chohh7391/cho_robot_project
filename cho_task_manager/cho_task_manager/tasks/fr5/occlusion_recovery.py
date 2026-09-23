@@ -25,6 +25,21 @@ the camera looking down at it, which is the OAK's view of everything else
 blocked, so a sweep that stayed would occlude the next vessel it went to look
 for.
 
+That is ``sweep_mode:=per_object``. The default, ``single_pass``, looks for
+every vessel in ONE pass over the raster and comes home once::
+
+    2_Locate_Vessels
+      Recover_Vessels  SinglePassSweepBehavior  -- latches each vessel where it is found
+      Return_Vessels   JointSpaceActionBehavior -- back to the home pose
+
+Both vessels are planning targets on the FR5 bench, so going home between them
+bought nothing: the second sweep had to go out and look anyway, and began again
+from the first waypoint. Measured 2026-09-23, that was about 33 s of a 74 s
+locate. The latch moves inside the sweep leaf, for the reason the order above
+matters -- see ``behaviors/action/single_pass_sweep.py``. It needs every vessel
+swept over the same waypoints, which the FR5 table is by construction; a table
+that is not is refused at build time.
+
 The sweep itself stays high and sweeps SIDEWAYS before it comes down -- the
 raster, and the prior work it follows, are documented in the spec the sweep
 table is solved from, ``config/sweep/fr5_bench.raster.yaml``.
@@ -85,6 +100,8 @@ from cho_task_manager.behaviors.action import (
     DEFAULT_VISIBILITY_TOPIC,
     JointSpaceActionBehavior,
     OcclusionSweepBehavior,
+    SinglePassSweepBehavior,
+    SweepTarget,
 )
 from cho_task_manager.behaviors.topic import PoseTargetBehavior
 from cho_task_manager.subtrees import guarded_mission, home_subtree
@@ -109,6 +126,14 @@ HOME_DURATION_SEC = 8.0
 #: (cho_moveit_fr5/config/joint_limits.yaml).
 RETURN_DURATION_SEC = 12.0
 
+#: How the vessels are looked for: ``single_pass`` drives the raster once for
+#: all of them and returns home once; ``per_object`` is one Recover -> Detect ->
+#: Return per vessel. See the module docstring for why the default changed.
+SWEEP_MODE_SINGLE_PASS = 'single_pass'
+SWEEP_MODE_PER_OBJECT = 'per_object'
+SWEEP_MODES = (SWEEP_MODE_SINGLE_PASS, SWEEP_MODE_PER_OBJECT)
+DEFAULT_SWEEP_MODE = SWEEP_MODE_SINGLE_PASS
+
 
 def sweep_config_path(robot_config):
     """The sweep table this tree was given, checked to exist."""
@@ -124,16 +149,21 @@ def sweep_config_path(robot_config):
     return value
 
 
-def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
-    """Home, then locate every vessel the sweep table covers, sweeping when blind."""
-    robot_config = robot_config or load_robot_config('fr5')
+def resolve_sweep_mode(robot_config):
+    """``sweep_mode`` from the config, defaulted and checked."""
+    mode = (robot_config.get('sweep_mode') or DEFAULT_SWEEP_MODE).strip().lower()
+    if mode not in SWEEP_MODES:
+        raise ValueError('sweep_mode must be one of %s; got %r' % (list(SWEEP_MODES), mode))
+    return mode
 
-    base_frame = robot_config['arm_base_link']
-    controller = robot_config['joint_space']
-    joint_names = load_registry_config(
-        robot_config['robot_type'],
-        robot_config.get('profile', 'single'))['model']['joints']
 
+def recovery_plan(robot_config, joint_names):
+    """``(sweeps, vessels, visibility_topic)`` for this bench, checked at build time.
+
+    Shared with ``occlusion_replay``, which locates the vessels exactly this way
+    before it replays: two copies of the joins between the sweep table and the
+    object table would be two places for a vessel name to go stale.
+    """
     # The joint count is checked against this robot's own list, so a table
     # written for a 7-axis arm fails here rather than reaching an action server
     # that fills a goal in by position.
@@ -149,19 +179,22 @@ def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.
 
     visibility_topic = (robot_config.get('visibility_topic')
                         or DEFAULT_VISIBILITY_TOPIC)
+    return sweeps, vessels, visibility_topic
 
-    mission = py_trees.composites.Sequence(
-        name='FR5_Occlusion_Recovery_Sequence', memory=True)
-    mission.add_child(home_subtree(
-        robot_config, home_joint_state(robot_config), controller,
-        duration=HOME_DURATION_SEC, name='1_Initialize',
-        # The gripper is not part of looking at anything, and opening it is one
-        # more piece of hardware that has to be present for a perception run.
-        open_gripper=False))
 
+def locate_sequences(robot_config, sweeps, vessels, visibility_topic, first_index=2):
+    """One ``Recover -> Detect -> Return`` sequence per vessel, in order.
+
+    ``first_index`` numbers them after whatever the calling tree put first, so
+    the step names in a log still count up.
+    """
+    base_frame = robot_config['arm_base_link']
+    controller = robot_config['joint_space']
+    sequences = []
     for index, vessel in enumerate(vessels):
         locate = py_trees.composites.Sequence(
-            name='%d_Locate_%s' % (index + 2, vessel.name.capitalize()), memory=True)
+            name='%d_Locate_%s' % (index + first_index, vessel.name.capitalize()),
+            memory=True)
         locate.add_children([
             OcclusionSweepBehavior(
                 name='Recover_%s' % vessel.name.capitalize(),
@@ -186,20 +219,52 @@ def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.
                 timeout_sec=RETURN_DURATION_SEC + 20.0,
             ),
         ])
-        mission.add_child(locate)
+        sequences.append(locate)
+    return sequences
 
-    # Back to a known pose, so the arm does not end a perception run parked
-    # over a beaker with the camera 30 cm off the glass.
-    mission.add_child(home_subtree(
-        robot_config, home_joint_state(robot_config), controller,
-        duration=HOME_DURATION_SEC,
-        name='%d_Finish' % (len(vessels) + 2), suffix='_Final',
-        open_gripper=False))
 
-    root = guarded_mission(
-        mission, robot_config, CONTROL_MODE,
-        name='FR5_Occlusion_Recovery_Root')
-    root.recovery_summary = {
+def single_pass_sequence(robot_config, sweeps, vessels, visibility_topic, index=2):
+    """One ``Recover -> Return`` over every vessel: the raster driven once."""
+    controller = robot_config['joint_space']
+    try:
+        recover = SinglePassSweepBehavior(
+            name='Recover_Vessels',
+            targets=[SweepTarget(sweeps[vessel.name], vessel.key, vessel.topic)
+                     for vessel in vessels],
+            required_frame=robot_config['arm_base_link'],
+            controller_name=controller,
+            visibility_topic=visibility_topic,
+        )
+    except ValueError as error:
+        raise ValueError('%s (sweep_mode:=%s)' % (error, SWEEP_MODE_PER_OBJECT)) from error
+    locate = py_trees.composites.Sequence(name='%d_Locate_Vessels' % index, memory=True)
+    locate.add_children([
+        recover,
+        # After the leaf has latched every vessel, so the windows may expire.
+        JointSpaceActionBehavior(
+            name='Return_Vessels',
+            target_joints=home_joint_state(robot_config),
+            controller_name=controller,
+            duration=RETURN_DURATION_SEC,
+            timeout_sec=RETURN_DURATION_SEC + 20.0,
+        ),
+    ])
+    return locate
+
+
+def locate_children(robot_config, sweeps, vessels, visibility_topic, first_index=2):
+    """The locate blocks for this config's ``sweep_mode``, numbered from *first_index*."""
+    if resolve_sweep_mode(robot_config) == SWEEP_MODE_PER_OBJECT:
+        return locate_sequences(robot_config, sweeps, vessels, visibility_topic,
+                                first_index=first_index)
+    return [single_pass_sequence(robot_config, sweeps, vessels, visibility_topic,
+                                 index=first_index)]
+
+
+def recovery_summary(sweeps, vessels, visibility_topic, mode=DEFAULT_SWEEP_MODE):
+    """What the recovery half of a tree covers, for the node to report."""
+    return {
+        'sweep_mode': mode,
         'vessels': [vessel.name for vessel in vessels],
         'min_decision_margin': {name: sweep.min_decision_margin
                                 for name, sweep in sweeps.items()},
@@ -212,11 +277,55 @@ def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.
                              for name, sweep in sweeps.items()},
         'visibility_topic': visibility_topic,
     }
+
+
+def create_fr5_occlusion_recovery_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
+    """Home, then locate every vessel the sweep table covers, sweeping when blind."""
+    robot_config = robot_config or load_robot_config('fr5')
+
+    controller = robot_config['joint_space']
+    joint_names = load_registry_config(
+        robot_config['robot_type'],
+        robot_config.get('profile', 'single'))['model']['joints']
+
+    sweeps, vessels, visibility_topic = recovery_plan(robot_config, joint_names)
+    mode = resolve_sweep_mode(robot_config)
+
+    mission = py_trees.composites.Sequence(
+        name='FR5_Occlusion_Recovery_Sequence', memory=True)
+    mission.add_child(home_subtree(
+        robot_config, home_joint_state(robot_config), controller,
+        duration=HOME_DURATION_SEC, name='1_Initialize',
+        # The gripper is not part of looking at anything, and opening it is one
+        # more piece of hardware that has to be present for a perception run.
+        open_gripper=False))
+
+    locate = locate_children(robot_config, sweeps, vessels, visibility_topic)
+    mission.add_children(locate)
+
+    # Back to a known pose, so the arm does not end a perception run parked
+    # over a beaker with the camera 30 cm off the glass.
+    mission.add_child(home_subtree(
+        robot_config, home_joint_state(robot_config), controller,
+        duration=HOME_DURATION_SEC,
+        name='%d_Finish' % (len(locate) + 2), suffix='_Final',
+        open_gripper=False))
+
+    root = guarded_mission(
+        mission, robot_config, CONTROL_MODE,
+        name='FR5_Occlusion_Recovery_Root')
+    root.recovery_summary = recovery_summary(sweeps, vessels, visibility_topic, mode)
     return root
 
 
 __all__ = [
     'create_fr5_occlusion_recovery_tree',
+    'locate_children',
+    'locate_sequences',
+    'recovery_plan',
+    'resolve_sweep_mode',
+    'single_pass_sequence',
+    'recovery_summary',
     'sweep_config_path',
     'LATCH_TIMEOUT_SEC',
     'HOME_DURATION_SEC',

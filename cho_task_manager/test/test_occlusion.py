@@ -640,3 +640,50 @@ def test_a_negative_threshold_is_refused():
             'defaults': {'recovery_camera': 'wrist', 'min_unseen_sec': -1.0},
             'sweeps': [{'object': 'beaker',
                         'waypoints': [{'name': 'survey', 'joints': [0.0] * 6}]}]})
+
+
+# ------------------------------------------------------ one pass, many objects
+
+def _two_vessels(flask_waypoints=None, flask_extra=None):
+    raster = [{'name': 'survey', 'joints': [0.0] * 6},
+              {'name': 'close', 'joints': [0.1] * 6, 'duration': 2.0}]
+    flask = {'object': 'flask', 'waypoints': flask_waypoints or raster}
+    flask.update(flask_extra or {})
+    return occlusion.parse_sweeps({
+        'defaults': {'recovery_camera': 'wrist'},
+        'sweeps': [{'object': 'beaker', 'waypoints': raster}, flask]})
+
+
+def test_objects_swept_over_the_same_raster_share_one_pass():
+    sweeps = _two_vessels()
+    raster = occlusion.shared_raster(sweeps.values())
+    assert [point.name for point in raster.waypoints] == ['survey', 'close']
+
+
+def test_the_shared_pass_dwells_as_long_as_its_slowest_object_and_is_capped_once():
+    # A viewpoint is judged once for every object, so it has to wait for the
+    # one that asks longest; the raster is driven once, so the ceiling is not
+    # a sum.
+    raster = occlusion.shared_raster(
+        _two_vessels(flask_extra={'dwell_sec': 2.5, 'timeout_sec': 200.0}).values())
+    assert raster.dwell_sec == 2.5
+    assert raster.timeout_sec == 200.0
+
+
+def test_objects_with_different_rasters_cannot_share_a_pass():
+    # Merging them would be choosing which object gets looked for badly.
+    other = [{'name': 'survey', 'joints': [0.0] * 6},
+             {'name': 'close', 'joints': [0.2] * 6, 'duration': 2.0}]
+    with pytest.raises(ValueError, match="'beaker' and 'flask'.*waypoint 2"):
+        occlusion.shared_raster(_two_vessels(flask_waypoints=other).values())
+
+
+def test_a_shorter_raster_is_a_different_raster():
+    with pytest.raises(ValueError, match='one object at a time'):
+        occlusion.shared_raster(_two_vessels(
+            flask_waypoints=[{'name': 'survey', 'joints': [0.0] * 6}]).values())
+
+
+def test_a_pass_over_nothing_is_refused():
+    with pytest.raises(ValueError, match='at least one'):
+        occlusion.shared_raster([])

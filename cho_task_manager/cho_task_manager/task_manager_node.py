@@ -63,6 +63,9 @@ def main():
     # anything derivable from the registry. Empty means "not a recovery task";
     # the tree raises a clear error if it is selected without one.
     node.declare_parameter("sweep_config", "")
+    # single_pass (empty) looks for every object in one pass over the raster;
+    # per_object sweeps and returns once per object.
+    node.declare_parameter("sweep_mode", "")
     # Where cho_object_pose says what each camera can see. Empty keeps the
     # node's own default, which is what its launch publishes on.
     node.declare_parameter("visibility_topic", "")
@@ -104,7 +107,7 @@ def main():
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
     for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via",
-                "replay_watch", "sweep_config", "visibility_topic"):
+                "replay_watch", "sweep_config", "sweep_mode", "visibility_topic"):
         value = node.get_parameter(key).get_parameter_value().string_value
         if value:
             robot_config[key] = value
