@@ -12,6 +12,7 @@
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
 #include "cho_controller_fr5/pour/ramp.hpp"
+#include "cho_controller_fr5/pour/shaker.hpp"
 #include "cho_controller_fr5/pour/shaping_law.hpp"
 #include "cho_controller_fr5/pour/scale_filter.hpp"
 #include "cho_controller_fr5/servers/pour_action_server.hpp"
@@ -173,6 +174,17 @@ private:
     void declare_limits(const std::string & prefix, const pour::PourLimits & defaults);
     void write_command(const Eigen::VectorXd & q_cmd);
     void hold_reference();
+    //: What actually goes to the hardware: `q` with the shaker's tap on the
+    //: pour joint. The IK and the tilt never see the tap -- q_ref_ is the
+    //: untapped command -- so a tap cannot read as the arm falling behind.
+    void send(const Eigen::VectorXd & q);
+    //: The pour joint's velocity limit from the description [rad/s]; infinite
+    //: when it gives none.
+    [[nodiscard]] double pour_joint_velocity_limit() const;
+    //: The fastest the pour joint may be commanded to move [rad/s]: the lower
+    //: of max_delta_q per cycle and its velocity limit. A tap and the tilt it
+    //: rides on share it.
+    [[nodiscard]] double pour_speed_limit(double dt) const;
     void begin_untilt(bool succeeded, const std::string & reason);
     void finish();
 
@@ -185,6 +197,15 @@ private:
     double pour_direction_{1.0};
     //: The one this goal pours with: the goal's, when it gives one.
     double goal_direction_{1.0};
+    //: How a granular pour tips: "goal" as a liquid does -- about the goal's
+    //: reference configuration when it gives one -- or "pour_joint", rolling
+    //: about the pour joint's own axis whatever the goal says; and which way,
+    //: 0 meaning pour_direction.
+    std::string granular_tilt_about_{"goal"};
+    double granular_pour_direction_{0.0};
+    //: The lip's height above the receiver's rim for a granular pour [m]; 0
+    //: is geometry.lip_height, the liquid's.
+    double granular_lip_height_{0.0};
     //: The pour axis in the EE frame, from the goal's reference configuration,
     //: when it gave one (its sign tips the lip down); otherwise unused.
     Eigen::Vector3d reference_axis_ee_{Eigen::Vector3d::UnitZ()};
@@ -280,8 +301,28 @@ private:
     //: has no report of its own, and the law's is the previous goal's.
     bool law_started_{false};
     //: The tilt bound the law was given: the goal's, capped in `measured` by
-    //: where the lip leaves the mouth.
+    //: where the lip leaves the mouth, and then by reach_.
     double tilt_bound_{0.0};
+    //: The furthest tilt the arm has shown it can make from this pose;
+    //: infinite until the IK has been blocked on the way up.
+    double reach_{std::numeric_limits<double>::infinity()};
+    //: The furthest a tap may tip the vessel: the bound as the goal and the lip
+    //: path set it, before reach_ -- which is a joint's limit, not the rim's.
+    double tap_bound_{0.0};
+    //: The law's last tilt rate: a block only says where the reach is when the
+    //: law was asking for more tilt.
+    double last_law_rate_{0.0};
+    //: Taps for a granular bed, and what the law last asked of them.
+    pour::Shaker shaker_;
+    double shake_amplitude_{0.0};
+    double shake_period_{0.0};
+    //: The pour joint's last command as sent, tap included, and the part of it
+    //: that was tap. While a tap is on, the joint's step per cycle is bounded
+    //: by max_delta_q with the tap in it.
+    double sent_pour_{std::numeric_limits<double>::quiet_NaN()};
+    double sent_tap_{0.0};
+    //: This cycle's control period, for send(), which has no period of its own.
+    double nominal_period_{0.008};
 
     // ---- measured goal state ----
     double now_{0.0};
@@ -304,6 +345,17 @@ private:
     //: all of it up to half the tolerance, none of it at the tolerance.
     [[nodiscard]] double ik_speed_scale() const;
     double ik_bad_since_{-1.0};
+    //: Since when the residual has been within reach of the tolerance, lagging
+    //: or not. ik_speed_scale() throttles a path the arm cannot follow to a
+    //: halt at the tolerance's edge, where ik_lagging_ flickers and keeps
+    //: resetting ik_bad_since_; this is the timer the flicker does not reset.
+    double ik_blocked_since_{-1.0};
+    //: Blocked for longer than `factor` x ik_fail_sec.
+    [[nodiscard]] bool ik_blocked(double now, double factor = 1.0) const;
+    //: "j4 at its lower limit"-style list of the joints the command has pinned
+    //: at a limit, for the log; empty when none is.
+    [[nodiscard]] std::string joints_at_limits() const;
+    [[nodiscard]] std::string blocked_reason() const;
 };
 
 } // namespace fr5

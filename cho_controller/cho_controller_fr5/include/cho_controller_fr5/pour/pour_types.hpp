@@ -74,6 +74,12 @@ struct PourObservation {
     //: these are what let the report say which it was.
     int consecutive_rejects{0};
     double last_rejected_step{0.0};
+    //: The furthest tilt the arm has shown it can reach from this pose [rad];
+    //: infinite until it has shown one. A joint at its limit can stop the tilt
+    //: short of max_tilt, and every law takes that as its bound -- see
+    //: at_tilt_bound(). Otherwise it waits forever for a tilt the arm cannot
+    //: make.
+    double reach{std::numeric_limits<double>::infinity()};
 };
 
 struct PourCommand {
@@ -84,6 +90,11 @@ struct PourCommand {
     //: at some rate -- a retract to its park. The controller then brakes to
     //: arrive there at rest, at no more than |tilt_rate|. NaN: just the rate.
     double target_tilt{std::numeric_limits<double>::quiet_NaN()};
+    //: Tap the vessel while this is positive: pour-joint pulses this high
+    //: [rad], one every shake_period [s], on top of the tilt. Only a profile
+    //: with a shake asks for it, and only while it wants material moving.
+    double shake_amplitude{0.0};
+    double shake_period{0.0};
     PourPhase phase{PourPhase::Verify};
     //: The law is done. The controller still owes the vessel its return to the
     //: carried attitude before the goal reports.

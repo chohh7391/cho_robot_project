@@ -12,6 +12,8 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
+#include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -217,6 +219,9 @@ struct RunResult {
     double min_tilt{0.0};
     //: Tilt at every entry into Settle, i.e. every park actually reached.
     std::vector<double> park_angles;
+    //: Seconds the law asked for taps, per phase, and the most it asked for.
+    std::map<PourPhase, double> shake_seconds;
+    double max_shake_amplitude{0.0};
 };
 
 struct RunOptions {
@@ -253,6 +258,11 @@ struct RunOptions {
     double dip_sec{1.0};
     //: Print the run every this many seconds; 0 is silent.
     double trace_every{0.0};
+    //: How far the arm can tilt from its pose; past it the tilt is pinned, and
+    //: after reach_found_sec pinned there the controller would have told the
+    //: law, so this does too.
+    double reach{std::numeric_limits<double>::infinity()};
+    double reach_found_sec{0.5};
 };
 
 /**
@@ -305,6 +315,8 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
 
     planner.begin(request, now);
     RunResult result;
+    double pinned_since = -1.0;
+    double reach_known = std::numeric_limits<double>::infinity();
 
     while (now < opt.horizon) {
         vessel.step(now, kControlDt, tilt + opt.grasp_tilt);
@@ -339,8 +351,13 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
         obs.tilt = tilt;
         obs.consecutive_rejects = filter.consecutive_rejects();
         obs.last_rejected_step = filter.last_rejected_step();
+        obs.reach = reach_known;
 
         const auto cmd = planner.update(obs);
+        if (cmd.shake_amplitude > 0.0) {
+            result.shake_seconds[cmd.phase] += kControlDt;
+            result.max_shake_amplitude = std::max(result.max_shake_amplitude, cmd.shake_amplitude);
+        }
         if (opt.trace_every > 0.0 && std::fmod(now, opt.trace_every) < 1.0 / 125.0) {
             std::printf("t %6.1f %-8s tilt %.3f onset %.3f flow %6.2f landed %6.2f left %6.2f\n",
                         now, cho_controller::fr5::pour::to_string(cmd.phase), tilt,
@@ -370,6 +387,19 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
         // range, then the joint limit.
         tilt = std::clamp(tilt, -request.max_back_tilt, request.max_tilt);
         tilt = std::max(tilt, opt.tilt_floor);
+        if (tilt >= opt.reach) {
+            tilt = opt.reach;
+            if (cmd.tilt_rate > 0.0) {
+                if (pinned_since < 0.0) {
+                    pinned_since = now;
+                }
+                if (now - pinned_since > opt.reach_found_sec) {
+                    reach_known = opt.reach;
+                }
+            }
+        } else {
+            pinned_since = -1.0;
+        }
         result.peak_tilt = std::max(result.peak_tilt, std::abs(tilt));
         result.min_tilt = std::min(result.min_tilt, tilt);
         now += kControlDt;

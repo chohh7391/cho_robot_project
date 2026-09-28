@@ -196,6 +196,12 @@ private:
     //: Park the vessel, then end the goal with this reason.
     PourCommand fail_after_retract(const std::string & reason, const PourObservation & obs);
     PourCommand emit(double tilt_rate) const;
+    //: The same command with this material's taps on it, when it has any.
+    [[nodiscard]] PourCommand shaken(PourCommand cmd) const;
+    //: The nearer of the goal's max_tilt and the arm's reach, and a phrase that
+    //: says which one it was, for the abort messages.
+    [[nodiscard]] double tilt_bound(const PourObservation & obs) const;
+    [[nodiscard]] std::string describe_bound(const PourObservation & obs) const;
     PourCommand finish(bool success, const std::string & message);
     [[nodiscard]] double poured(const PourObservation & obs) const;
     [[nodiscard]] double tilt_rate_limit() const;

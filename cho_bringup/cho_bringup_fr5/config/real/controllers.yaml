@@ -478,7 +478,10 @@ pouring_controller:
       # made the sim worse (2.61 g worst at 10 g, from 0.46).
       min_pairs: 0
     no_flow_epsilon: 0.15
-    stall_timeout: 3.0
+    # How long the vessel waits at its tilt bound with nothing coming before
+    # the pour gives up. 6 s since 2026-09-28, from 3: a granular bed at the
+    # arm's reach is being tapped there, and 3 s is two scale delays.
+    stall_timeout: 6.0
 
     # ---- parking and settling ---------------------------------------------
     # The single most important thing this controller does NOT do: judge whether
@@ -619,6 +622,26 @@ pouring_controller:
         # string IS the smallest amount it can be metered in.
         dose_quantum: 3.0
     granular:
+      # How a granular pour tips. Water is tipped toward the fingertips, the
+      # reference recordings' way: under this grasp that is the wrist pitching,
+      # j2 + j3 + j4, and j4 runs out at 77.7 deg -- sugar (2026-09-28) stopped
+      # there with a third of a 20 g goal still in a full beaker. Beyond it
+      # only j2/j3 could pitch, and they drop the lip ~10 mm per degree.
+      # "pour_joint" rolls the beaker toward a jaw about j6 instead, which has
+      # +-175 deg, whatever reference the goal carries.
+      tilt_about: pour_joint
+      # -1: j6 minus, the jaw on the arm's side goes down, and the spout goes
+      # on that jaw. The align brings the receiver round in front of it. 0
+      # would use pour_direction, the liquid's.
+      pour_direction: -1.0
+      # Rolled toward a jaw, the jaw hangs under the lip -- its lower edge 48
+      # mm below it and 20 mm out -- and at the liquid's 45 mm (lifted to 58)
+      # it met the rim by 0.26 rad. Planned from the rig's grasp (2026-09-28):
+      # 60 mm pours 0.20-1.75 rad, 80 mm 0-1.75, either direction. What falls
+      # is sugar, so the extra height costs nothing. The first pour this way
+      # (sugar crystals, a full beaker, 20 g): onset at 66 deg, one stop at
+      # 18.47 g, settled at 20.54 g in 59.6 s.
+      lip_height: 0.08
       free:              # flow_index 0: dry salt, sugar
         max_flow_rate: 8.0
         trim_flow_rate: 1.5
@@ -633,6 +656,23 @@ pouring_controller:
         tilt_rate: 0.15
         seek_tilt_rate: 0.03
         dose_quantum: 0.5
+        # Dry sugar crystals (2026-09-28, ~50 mL in the 100 mL beaker) did not
+        # come out at 68.8 deg, nor at 77.6 deg where j4 reached its limit. A
+        # granular surface stands at its angle of repose instead of levelling,
+        # so from the same fill it reaches the lip ~35 deg after water would:
+        # ~83 deg at 50 mL. Filled to 1 cm under the lip, where water starts at
+        # ~28, it came out at 64-67 deg in all three pours. The seek covers
+        # seek_fast_until + this at tilt_rate: 49 deg.
+        repose_angle: 0.5
+        # Taps on j6, on top of the lip path, while the pour wants material
+        # moving: out toward more tilt and back, as fast as the joint's bound
+        # allows (0.5 rad/s). Under that bound a tap's peak acceleration is
+        # 2 v^2 / A, so a SMALLER tap is a SHARPER one, and a shorter one fits
+        # more of them in a second. 0.02 rad at 4 Hz (2026-09-28, sg4-sg6) was
+        # tracked to 1.1 deg on j6 but left the operator saying it was too
+        # gentle; 0.012 rad back to back is 12.5 Hz at 1.7x the acceleration.
+        shake_amplitude: 0.012
+        shake_period: 0.08
       resistant:         # flow_index 1: damp, clumping powder
         max_flow_rate: 3.0
         trim_flow_rate: 0.8
@@ -647,3 +687,6 @@ pouring_controller:
         # Damp coffee grounds on this rig did not slide down evenly -- they came
         # away all at once. That lump is the dose quantum, and no gain divides it.
         dose_quantum: 2.0
+        repose_angle: 0.6
+        shake_amplitude: 0.03
+        shake_period: 0.2

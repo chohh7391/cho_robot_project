@@ -378,6 +378,32 @@ PourCommand PourPlanner::emit(double tilt_rate) const
     return cmd;
 }
 
+PourCommand PourPlanner::shaken(PourCommand cmd) const
+{
+    if (limits_.shake_amplitude > 0.0) {
+        cmd.shake_amplitude = limits_.shake_amplitude;
+        cmd.shake_period = limits_.shake_period;
+    }
+    return cmd;
+}
+
+double PourPlanner::tilt_bound(const PourObservation & obs) const
+{
+    return std::min(request_.max_tilt, obs.reach);
+}
+
+std::string PourPlanner::describe_bound(const PourObservation & obs) const
+{
+    std::ostringstream os;
+    if (obs.reach < request_.max_tilt) {
+        os << "as far as the arm reaches from this pose (" << obs.reach
+           << " rad, short of the goal's " << request_.max_tilt << ')';
+    } else {
+        os << "to the tilt bound (" << request_.max_tilt << " rad)";
+    }
+    return os.str();
+}
+
 PourCommand PourPlanner::finish(bool success, const std::string & message)
 {
     phase_ = PourPhase::Done;
@@ -494,21 +520,24 @@ PourCommand PourPlanner::step_seek(const PourObservation & obs)
         }
         if ((obs.now - stall_since_) > config_.stall_timeout) {
             std::ostringstream os;
-            os << "tilted to the bound (" << request_.max_tilt
-               << " rad) and nothing came out: an empty vessel, a blocked spout, or a scale "
+            os << "tilted " << describe_bound(obs)
+               << " and nothing came out: an empty vessel, a blocked spout, or a scale "
                   "that is not under the stream";
             return fail_after_retract(os.str(), obs);
         }
-        return emit(0.0);
+        // Held at the bound, the taps are all that is left to try.
+        return shaken(emit(0.0));
     }
     // Below seek_fast_until nothing can pour, so the seek covers it at the
     // material's tilt rate and only searches for the onset at the seek rate
     // above it. Searching from upright at 0.03 rad/s took 17-28 s of every
-    // rig pour to reach an onset of 28-48 deg.
-    if (obs.tilt < config_.seek_fast_until) {
+    // rig pour to reach an onset of 28-48 deg. A granular surface stands at
+    // its angle of repose rather than levelling, so it reaches the lip that
+    // much further on.
+    if (obs.tilt < config_.seek_fast_until + limits_.repose_angle) {
         return emit(tilt_rate_limit());
     }
-    return emit(limits_.seek_tilt_rate);
+    return shaken(emit(limits_.seek_tilt_rate));
 }
 
 PourCommand PourPlanner::step_bulk(const PourObservation & obs)
@@ -609,8 +638,11 @@ PourCommand PourPlanner::step_bulk(const PourObservation & obs)
         lead = std::clamp(allowed, config_.max_tilt_lead, config_.max_tilt_lead_far);
     }
     double rate = 0.0;
-    if (flow < (1.0 - config_.flow_deadband) * target_rate) {
-        const double ceiling = std::min(seen + lead, request_.max_tilt);
+    // Short of the wanted flow, a granular bed is also tapped: at the bound
+    // it is the only thing left that can move it.
+    const bool wants_more = flow < (1.0 - config_.flow_deadband) * target_rate;
+    if (wants_more) {
+        const double ceiling = std::min(seen + lead, tilt_bound(obs));
         rate = std::clamp(config_.kp_tilt * (ceiling - obs.tilt), 0.0, tilt_rate_limit());
     } else if (flow > (1.0 + config_.flow_deadband) * target_rate) {
         const double floor = seen - lead;
@@ -632,8 +664,8 @@ PourCommand PourPlanner::step_bulk(const PourObservation & obs)
             }
             if ((obs.now - stall_since_) > config_.stall_timeout) {
                 std::ostringstream os;
-                os << "reached the tilt bound (" << request_.max_tilt << " rad) with "
-                   << remaining << " g still to pour, and the flow there had fallen to " << flow
+                os << "tilted " << describe_bound(obs) << " with " << remaining
+                   << " g still to pour, and the flow there had fallen to " << flow
                    << " g/s: what is left in the vessel can barely reach its lip at that tilt";
                 return fail_after_retract(os.str(), obs);
             }
@@ -643,7 +675,7 @@ PourCommand PourPlanner::step_bulk(const PourObservation & obs)
     } else {
         stalled_ = false;
     }
-    return emit(rate);
+    return wants_more ? shaken(emit(rate)) : emit(rate);
 }
 
 PourCommand PourPlanner::step_retract(const PourObservation & obs)
@@ -842,15 +874,15 @@ PourCommand PourPlanner::step_trim(const PourObservation & obs)
             }
             if ((obs.now - stall_since_) > config_.stall_timeout) {
                 std::ostringstream os;
-                os << "a trim pulse crept to the tilt bound (" << request_.max_tilt
-                   << " rad) and nothing came out: what is left in the vessel cannot reach its "
+                os << "a trim pulse crept " << describe_bound(obs)
+                   << " and nothing came out: what is left in the vessel cannot reach its "
                       "lip at that tilt, so the pour ends "
                    << (request_.target_grams - poured(obs)) << " g short";
                 return fail_after_retract(os.str(), obs);
             }
-            return emit(0.0);
+            return shaken(emit(0.0));
         }
-        return emit(creep_rate());
+        return shaken(emit(creep_rate()));
     }
 
     // Hold: sized up front by how long the vessel stays here, and cut short
@@ -870,7 +902,9 @@ PourCommand PourPlanner::step_trim(const PourObservation & obs)
         tail_measurable_ = true;
         return enter_retract(hold_tilt_, obs);
     }
-    return emit(0.0);
+    // A granular bed held at a tilt stops moving once its surface has relaxed;
+    // the hold is only worth its seconds with the taps going.
+    return shaken(emit(0.0));
 }
 
 } // namespace pour

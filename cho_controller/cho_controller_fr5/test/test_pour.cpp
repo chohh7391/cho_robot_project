@@ -22,6 +22,7 @@
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
 #include "cho_controller_fr5/pour/ramp.hpp"
+#include "cho_controller_fr5/pour/shaker.hpp"
 #include "cho_controller_fr5/pour/scale_filter.hpp"
 #include "cho_controller_fr5/pour/shaping_law.hpp"
 #include "cho_controller_fr5/pour/guards.hpp"
@@ -1214,4 +1215,179 @@ TEST(PourPlanner, NothingPoursBelowTheFastSeekSoItIsCrossedAtTheTiltRate)
     EXPECT_TRUE(b.success) << b.message;
     EXPECT_NEAR(b.delivered, 20.0, 0.5);
     EXPECT_LT(b.seconds, a.seconds - 8.0) << a.seconds << " s slow, " << b.seconds << " s fast";
+}
+
+// ------------------------------------------------------------------ shaking --
+
+using cho_controller::fr5::pour::Shaker;
+
+TEST(Shaker, ATapIsARaisedCosineAtTheRateBoundThatNeverUntips)
+{
+    // The sugar profile's taps on the FR5: 0.02 rad, four a second, with 80%
+    // of j6's 0.625 rad/s per-cycle bound.
+    constexpr double dt = 0.008;
+    constexpr double amplitude = 0.02;
+    constexpr double max_rate = 0.5;
+    Shaker shaker;
+    double previous = 0.0;
+    double peak = 0.0;
+    int pulses = 0;
+    for (int i = 0; i < 125; ++i) {
+        const double offset = shaker.step(amplitude, 0.25, max_rate, dt);
+        EXPECT_GE(offset, 0.0);
+        EXPECT_LE(offset, amplitude + 1e-12);
+        EXPECT_LE(std::abs(offset - previous), max_rate * dt + 1e-12) << "cycle " << i;
+        if (previous == 0.0 && offset > 0.0) {
+            ++pulses;
+        }
+        peak = std::max(peak, offset);
+        previous = offset;
+    }
+    EXPECT_EQ(pulses, 4);
+    EXPECT_GT(peak, 0.95 * amplitude);
+}
+
+TEST(Shaker, SwitchedOffMidTapItComesBackDownAndStops)
+{
+    constexpr double dt = 0.008;
+    Shaker shaker;
+    for (int i = 0; i < 5; ++i) {
+        shaker.step(0.02, 0.25, 0.5, dt);
+    }
+    ASSERT_GT(shaker.offset(), 0.0);
+    ASSERT_FALSE(shaker.idle());
+    double previous = shaker.offset();
+    for (int i = 0; i < 125; ++i) {
+        const double offset = shaker.step(0.0, 0.25, 0.5, dt);
+        EXPECT_LE(std::abs(offset - previous), 0.5 * dt + 1e-12);
+        previous = offset;
+    }
+    EXPECT_EQ(shaker.offset(), 0.0);
+    EXPECT_TRUE(shaker.idle());
+}
+
+TEST(MaterialProfile, TheShakeAndReposeMayBeZeroButNotNegativeOrHuge)
+{
+    std::string why;
+    MaterialProfile p = granular_profile();
+    EXPECT_TRUE(p.validate("granular", why)) << why;
+    p.free.shake_amplitude = 0.02;
+    p.free.shake_period = 0.25;
+    p.resistant.shake_amplitude = 0.04;
+    p.resistant.shake_period = 0.15;
+    p.free.repose_angle = 0.5;
+    EXPECT_TRUE(p.validate("granular", why)) << why;
+    EXPECT_NEAR(p.at(0.5).shake_amplitude, 0.03, 1e-12);
+    EXPECT_NEAR(p.at(0.5).shake_period, 0.2, 1e-12);
+    EXPECT_NEAR(p.at(0.5).repose_angle, 0.25, 1e-12);
+
+    MaterialProfile bad = p;
+    bad.free.shake_period = 0.0;  // a tap with no period
+    EXPECT_FALSE(bad.validate("granular", why));
+    bad = p;
+    bad.resistant.shake_amplitude = 0.3;  // the lip would swing with it
+    EXPECT_FALSE(bad.validate("granular", why));
+    bad = p;
+    bad.free.repose_angle = -0.1;
+    EXPECT_FALSE(bad.validate("granular", why));
+}
+
+namespace {
+
+MaterialProfile tapped_granular(double repose)
+{
+    MaterialProfile p = granular_profile();
+    for (PourLimits * l : {&p.free, &p.resistant}) {
+        l->shake_amplitude = 0.02;
+        l->shake_period = 0.25;
+        l->repose_angle = repose;
+    }
+    return p;
+}
+
+PourPlanner make_tapping_planner(double repose, double seek_fast_until = 0.0)
+{
+    PlannerConfig config;
+    config.seek_fast_until = seek_fast_until;
+    PourPlanner planner;
+    std::string why;
+    EXPECT_TRUE(planner.configure(config, liquid_profile(), tapped_granular(repose), why)) << why;
+    return planner;
+}
+
+double shook_in(const RunResult & r, PourPhase phase)
+{
+    const auto it = r.shake_seconds.find(phase);
+    return it == r.shake_seconds.end() ? 0.0 : it->second;
+}
+
+}  // namespace
+
+TEST(PourPlanner, OnlyAGranularProfileWithAShakeTapsAndNeverOnceItHasStopped)
+{
+    auto planner = make_tapping_planner(0.0);
+    PourRequest sugar = water_request(40.0);
+    sugar.material = MaterialClass::Granular;
+    RunOptions opt;
+    opt.sim_gain = 30.0;
+    opt.sim_transport_delay = 0.3;
+    opt.sim_tail = 0.5;
+    const auto tapped = run_pour(planner, sugar, opt);
+    ASSERT_TRUE(tapped.finished);
+    EXPECT_TRUE(tapped.success) << tapped.message;
+    EXPECT_GT(shook_in(tapped, PourPhase::Seek), 0.0);
+    EXPECT_DOUBLE_EQ(tapped.max_shake_amplitude, 0.02);
+    // Tapping a vessel that is meant to have stopped pours into the settle
+    // the target is judged on.
+    EXPECT_EQ(shook_in(tapped, PourPhase::Retract), 0.0);
+    EXPECT_EQ(shook_in(tapped, PourPhase::Settle), 0.0);
+    EXPECT_EQ(shook_in(tapped, PourPhase::Done), 0.0);
+
+    // The same planner pouring water never asks for one.
+    const auto water = run_pour(planner, water_request(40.0), RunOptions{});
+    ASSERT_TRUE(water.finished);
+    EXPECT_TRUE(water.shake_seconds.empty());
+}
+
+TEST(PourPlanner, AnArmThatCannotReachTheBoundEndsTheSeekThereInsteadOfWaiting)
+{
+    // The rig, 2026-09-28: sugar asked for up to 1.75 rad, j4 ran into its
+    // limit at 1.354, and the seek sat there for 140 s -- the bound was never
+    // reached, so no stall rule applied -- until the goal was cancelled.
+    auto planner = make_planner();
+    PourRequest request = water_request(20.0);
+    request.max_tilt = 1.2;
+    RunOptions opt;
+    opt.sim_onset = 0.8;  // past what the arm can do
+    opt.reach = 0.5;
+    const auto result = run_pour(planner, request, opt);
+    ASSERT_TRUE(result.finished) << "still waiting at " << result.seconds << " s";
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.message.find("as far as the arm reaches"), std::string::npos)
+        << result.message;
+    EXPECT_LT(result.seconds, 30.0);
+    EXPECT_LE(result.peak_tilt, 0.5 + 1e-9);
+}
+
+TEST(PourPlanner, AGranularSeekCrossesItsReposeAngleAtTheTiltRate)
+{
+    // Nothing granular reaches the lip until its surface has tipped past its
+    // angle of repose, so that stretch is crossed at the tilt rate like the
+    // rest of seek_fast_until.
+    auto plain = make_tapping_planner(0.0, 0.35);
+    auto repose = make_tapping_planner(0.5, 0.35);
+    PourRequest sugar = water_request(20.0);
+    sugar.material = MaterialClass::Granular;
+    RunOptions opt;
+    opt.sim_gain = 30.0;
+    opt.sim_transport_delay = 0.3;
+    opt.sim_tail = 0.5;
+    opt.sim_onset = 0.95;
+    const auto a = run_pour(plain, sugar, opt);
+    const auto b = run_pour(repose, sugar, opt);
+    ASSERT_TRUE(a.finished && b.finished);
+    EXPECT_TRUE(b.success) << b.message;
+    EXPECT_NEAR(b.delivered, 20.0, 1.5);
+    // 0.35 -> 0.85 rad at salt's 0.35 rad/s instead of its 0.10.
+    EXPECT_LT(b.seconds, a.seconds - 3.0) << a.seconds << " s plain, " << b.seconds << " s";
 }

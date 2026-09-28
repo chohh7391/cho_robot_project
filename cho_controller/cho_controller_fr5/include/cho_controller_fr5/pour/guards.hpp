@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 
 #include "cho_controller_fr5/pour/pour_types.hpp"
@@ -34,7 +35,8 @@ std::string pour_guard(const PourObservation & obs, PourPhase phase, bool cancel
                        double started_at, double timeout);
 
 /**
- * Whether the tilt is at the goal's bound, to within `epsilon`.
+ * Whether the tilt is at the goal's bound, to within `epsilon` -- or at the
+ * arm's reach, when that has turned out to be the nearer of the two.
  *
  * Not `tilt >= max_tilt`. A law at the bound that eases back by a hair --
  * any angle law does, as its target drifts -- sits a few microradians under it,
@@ -44,7 +46,7 @@ std::string pour_guard(const PourObservation & obs, PourPhase phase, bool cancel
  */
 inline bool at_tilt_bound(const PourObservation & obs, double max_tilt, double epsilon)
 {
-    return obs.tilt >= max_tilt - epsilon;
+    return obs.tilt >= std::min(max_tilt, obs.reach) - epsilon;
 }
 
 } // namespace pour

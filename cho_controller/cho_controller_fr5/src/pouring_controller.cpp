@@ -15,6 +15,23 @@ using pour::PourLimits;
 using pour::PourPhase;
 
 namespace {
+// The IK throttle: the path runs at full speed while the residual is under
+// kSlowFrom of the tolerance and slows to a halt at the tolerance. Within
+// kBlockedRatio of it the throttle has all but stopped the path, and held
+// there for ik_fail_sec the arm is not following -- it cannot.
+constexpr double kSlowFrom = 0.5;
+constexpr double kBlockedRatio = 0.95;
+// A tap may use this much of the pour joint's per-cycle bound; the rest is
+// left for the tilt it rides on.
+constexpr double kTapRateShare = 0.8;
+// How far short of the tilt bound a tap stops [rad].
+constexpr double kTapMargin = 0.005;
+// On the way back a block is waited out this many ik_fail_sec before the arm
+// is sent home in joint space. The way back retraces the way in, so a real
+// block there is unlikely, and a false one leaves the lip path beside the
+// receiver.
+constexpr double kReturnBlockFactor = 4.0;
+
 // Seeds, not measurements, except where noted. The liquid/free endpoint is the
 // one with hardware behind it: water on an HS-AA, 2026-09-16, which ran 6-11 g/s
 // continuous, settled 1.0 s after the flow stopped, left <= 0.21 g of tail, and
@@ -66,6 +83,9 @@ PourLimits granular_free_defaults()
     l.tilt_rate = 0.35;
     l.seek_tilt_rate = 0.10;
     l.dose_quantum = 0.5;
+    l.repose_angle = 0.5;
+    l.shake_amplitude = 0.02;
+    l.shake_period = 0.25;
     return l;
 }
 
@@ -81,6 +101,9 @@ PourLimits granular_resistant_defaults()
     l.tilt_rate = 0.18;
     l.seek_tilt_rate = 0.05;
     l.dose_quantum = 2.0;
+    l.repose_angle = 0.6;
+    l.shake_amplitude = 0.03;
+    l.shake_period = 0.2;
     return l;
 }
 
@@ -115,6 +138,9 @@ void PouringController::declare_limits(const std::string & prefix, const PourLim
     auto_declare<double>(prefix + ".tilt_rate", d.tilt_rate);
     auto_declare<double>(prefix + ".seek_tilt_rate", d.seek_tilt_rate);
     auto_declare<double>(prefix + ".dose_quantum", d.dose_quantum);
+    auto_declare<double>(prefix + ".repose_angle", d.repose_angle);
+    auto_declare<double>(prefix + ".shake_amplitude", d.shake_amplitude);
+    auto_declare<double>(prefix + ".shake_period", d.shake_period);
 }
 
 PourLimits PouringController::read_limits(const std::string & prefix) const
@@ -130,6 +156,9 @@ PourLimits PouringController::read_limits(const std::string & prefix) const
     l.tilt_rate = node->get_parameter(prefix + ".tilt_rate").as_double();
     l.seek_tilt_rate = node->get_parameter(prefix + ".seek_tilt_rate").as_double();
     l.dose_quantum = node->get_parameter(prefix + ".dose_quantum").as_double();
+    l.repose_angle = node->get_parameter(prefix + ".repose_angle").as_double();
+    l.shake_amplitude = node->get_parameter(prefix + ".shake_amplitude").as_double();
+    l.shake_period = node->get_parameter(prefix + ".shake_period").as_double();
     return l;
 }
 
@@ -150,6 +179,9 @@ CallbackReturn PouringController::on_init()
         auto_declare<std::string>("scale_topic", scale_topic_);
         auto_declare<std::string>("pour_joint", "");
         auto_declare<double>("pour_direction", pour_direction_);
+        auto_declare<std::string>("granular.tilt_about", granular_tilt_about_);
+        auto_declare<double>("granular.pour_direction", granular_pour_direction_);
+        auto_declare<double>("granular.lip_height", granular_lip_height_);
         auto_declare<double>("scale_timeout", scale_timeout_);
         auto_declare<double>("scale_sample_period", scale_sample_period_);
         auto_declare<double>("outlier_factor", outlier_factor_);
@@ -267,6 +299,9 @@ bool PouringController::assign_parameters()
     scale_topic_ = node->get_parameter("scale_topic").as_string();
     pour_joint_ = node->get_parameter("pour_joint").as_string();
     pour_direction_ = node->get_parameter("pour_direction").as_double();
+    granular_tilt_about_ = node->get_parameter("granular.tilt_about").as_string();
+    granular_pour_direction_ = node->get_parameter("granular.pour_direction").as_double();
+    granular_lip_height_ = node->get_parameter("granular.lip_height").as_double();
     scale_timeout_ = node->get_parameter("scale_timeout").as_double();
     scale_sample_period_ = node->get_parameter("scale_sample_period").as_double();
     outlier_factor_ = node->get_parameter("outlier_factor").as_double();
@@ -349,6 +384,26 @@ bool PouringController::assign_parameters()
             "pour_direction must be exactly 1.0 or -1.0 (got %f): it says which way the pour "
             "joint turns to bring the lip down, and guessing it wrong tips the vessel away "
             "from the scale", pour_direction_);
+        return false;
+    }
+    if (granular_tilt_about_ != "goal" && granular_tilt_about_ != "pour_joint") {
+        RCLCPP_ERROR(logger,
+            "granular.tilt_about must be \"goal\" or \"pour_joint\" (got \"%s\")",
+            granular_tilt_about_.c_str());
+        return false;
+    }
+    if (!std::isfinite(granular_lip_height_) || granular_lip_height_ < 0.0 ||
+        granular_lip_height_ > 0.2) {
+        RCLCPP_ERROR(logger,
+            "granular.lip_height must be 0 (use geometry.lip_height) or up to 0.2 m (got %f)",
+            granular_lip_height_);
+        return false;
+    }
+    if (granular_pour_direction_ != 0.0 && granular_pour_direction_ != 1.0 &&
+        granular_pour_direction_ != -1.0) {
+        RCLCPP_ERROR(logger,
+            "granular.pour_direction must be 0 (use pour_direction), 1.0 or -1.0 (got %f)",
+            granular_pour_direction_);
         return false;
     }
     // The scale's own period has to be shorter than the staleness bound, or a
@@ -670,6 +725,10 @@ CallbackReturn PouringController::on_activate(const rclcpp_lifecycle::State & pr
     q_ref_ = FR5BaseController::held_command_position();
     phase_ = Phase::Idle;
     tilt_ = 0.0;
+    shaker_.reset();
+    shake_amplitude_ = 0.0;
+    sent_pour_ = std::numeric_limits<double>::quiet_NaN();
+    sent_tap_ = 0.0;
     filter_.reset();
     last_pushed_stamp_ = 0.0;
     scale_buffer_.writeFromNonRT(pour::ScaleFilter::Sample{});
@@ -698,19 +757,41 @@ void PouringController::write_command(const Eigen::VectorXd & q_cmd)
     if (q_ref_.size() == q_cmd.size() && (q_cmd - q_ref_).cwiseAbs().maxCoeff() > 1e-9) {
         quiet_since_ = now_;
     }
-    for (int i = 0; i < num_dof_; ++i) {
-        command_interfaces_[i].set_value(q_cmd(i));
-    }
-    state_.q_des = q_cmd;
     q_ref_ = q_cmd;
+    send(q_cmd);
 }
 
 void PouringController::hold_reference()
 {
-    state_.q_des = q_ref_;
-    for (int i = 0; i < num_dof_; ++i) {
-        command_interfaces_[i].set_value(q_ref_(i));
+    send(q_ref_);
+}
+
+void PouringController::send(const Eigen::VectorXd & q)
+{
+    Eigen::VectorXd out = q;
+    if (pour_index_ >= 0 && pour_index_ < out.size()) {
+        const double untapped = out(pour_index_);
+        const double tap = goal_direction_ * shaker_.offset();
+        double sent = untapped + tap;
+        // Bounded only while a tap is on or still being unwound, so a command
+        // with no tap in it is sent exactly as given. The bound is the tilt's
+        // and the tap's together: one step of the joint, whatever it is made of.
+        if ((tap != 0.0 || sent_tap_ != 0.0) && std::isfinite(sent_pour_)) {
+            const double step = pour_speed_limit(nominal_period_) * nominal_period_;
+            sent = std::clamp(sent, sent_pour_ - step, sent_pour_ + step);
+        }
+        out(pour_index_) = sent;
+        clamp_to_joint_limits(out);
+        sent_pour_ = out(pour_index_);
+        sent_tap_ = sent_pour_ - untapped;
+        if (std::abs(sent_tap_) < 1e-12) {
+            sent_tap_ = 0.0;
+        }
     }
+    for (int i = 0; i < num_dof_; ++i) {
+        command_interfaces_[i].set_value(out(i));
+    }
+    state_.q_des = out;
 }
 
 void PouringController::begin_untilt(bool succeeded, const std::string & reason)
@@ -765,19 +846,36 @@ pour::PourRequest PouringController::make_request() const
 
 bool PouringController::start_goal(double now)
 {
+    // A granular bed and a liquid are not tipped the same way. Tipped toward
+    // the fingertips -- the reference recordings' way, and water's -- the tilt
+    // is the wrist pitching, which on this arm is j2 + j3 + j4, and sugar
+    // (2026-09-28) needed more of it than j4's range has left: the pour
+    // stopped at 77.7 deg with j4 at its limit and a third of the goal still
+    // in the beaker. Rolled toward a jaw instead, the tilt is the pour joint's
+    // own, and j6 has +-175 deg.
+    const bool granular =
+        action_server_->bounds().material == PourAction::Goal::MATERIAL_GRANULAR;
+    const bool roll = granular && granular_tilt_about_ == "pour_joint";
+    const double configured =
+        (granular && granular_pour_direction_ != 0.0) ? granular_pour_direction_ : pour_direction_;
     const int asked = action_server_->bounds().pour_direction;
-    goal_direction_ = asked != 0 ? static_cast<double>(asked) : pour_direction_;
-    if (asked != 0 && goal_direction_ != pour_direction_) {
+    goal_direction_ = asked != 0 ? static_cast<double>(asked) : configured;
+    if (asked != 0 && goal_direction_ != configured) {
         RCLCPP_INFO(get_node()->get_logger(),
             "This goal pours with direction %+.0f, not the configured %+.0f",
-            goal_direction_, pour_direction_);
+            goal_direction_, configured);
     }
 
     // How the goal says to tip: the axis the EE turns about from here to the
     // reference configuration, in this controller's own kinematics.
     reference_axis_valid_ = false;
     const auto & reference = action_server_->bounds().pour_reference_joints;
-    if (!reference.empty()) {
+    if (!reference.empty() && roll) {
+        RCLCPP_INFO(get_node()->get_logger(),
+            "Granular: tipping about the pour joint (direction %+.0f), not the goal's reference "
+            "configuration (granular.tilt_about: pour_joint)", goal_direction_);
+    }
+    if (!reference.empty() && !roll) {
         Eigen::VectorXd q_now = state_.q;
         q_now.head(num_dof_) = q_ref_;
         Eigen::VectorXd q_deep = state_.q;
@@ -828,6 +926,10 @@ bool PouringController::start_goal(double now)
     logged_stops_ = 0;
     stop_graded_ = true;
     law_target_tilt_ = std::numeric_limits<double>::quiet_NaN();
+    reach_ = std::numeric_limits<double>::infinity();
+    last_law_rate_ = 0.0;
+    shake_amplitude_ = 0.0;
+    ik_blocked_since_ = -1.0;
     peak_tilt_ = 0.0;
     elapsed_ = 0.0;
     feedback_accumulator_ = 0.0;
@@ -863,6 +965,7 @@ void PouringController::start_pour(double now)
         request.max_tilt = std::min(request.max_tilt, lip_path_.last_landing_tilt());
     }
     tilt_bound_ = request.max_tilt;
+    tap_bound_ = request.max_tilt;
     law_->begin(request, now);
     law_started_ = true;
     phase_ = Phase::Pouring;
@@ -884,8 +987,12 @@ double PouringController::step_law(double now)
     obs.tilt = tilt_;
     obs.consecutive_rejects = filter_.consecutive_rejects();
     obs.last_rejected_step = filter_.last_rejected_step();
+    obs.reach = reach_;
 
     const pour::PourCommand cmd = law_->update(obs);
+    last_law_rate_ = cmd.tilt_rate;
+    shake_amplitude_ = cmd.finished ? 0.0 : cmd.shake_amplitude;
+    shake_period_ = cmd.shake_period;
     last_phase_ = static_cast<std::uint8_t>(cmd.phase);
     // One line per stop, and one per settle after it: what the forecast said
     // was still coming, then what actually came. That pair is the only grade
@@ -947,6 +1054,20 @@ controller_interface::return_type PouringController::update(
         q_ref_ = state_.q.head(num_dof_);
     }
     now_ = time.seconds();
+
+    // Before anything is sent this cycle, idle included: a tap that is under
+    // way when the pour stops still has to come back down.
+    nominal_period_ = nominal_period(period);
+    // A tap tips the vessel past the tilt it is at, so it may only go as far
+    // as the tilt itself could: at the lip path's bound -- where a jaw comes
+    // onto the rim -- the taps fall silent. On the rig (2026-09-28) taps held
+    // at that bound put a jaw on the receiver. The arm's reach is not such a
+    // bound: a joint at its limit is not the vessel at the rim, and the taps
+    // are j6's alone.
+    const double tap_room = std::max(0.0, tap_bound_ - kTapMargin - tilt_);
+    shaker_.step(phase_ == Phase::Pouring ? std::min(shake_amplitude_, tap_room) : 0.0,
+                 shake_period_, kTapRateShare * pour_speed_limit(nominal_period_),
+                 nominal_period_);
 
     const bool running = action_server_ && action_server_->is_running();
     const bool returning =
@@ -1113,6 +1234,7 @@ void PouringController::fail_geometric(const std::string & reason, Phase via)
         "started first", pending_reason_.c_str());
     ik_lagging_ = false;
     ik_bad_since_ = -1.0;
+    ik_blocked_since_ = -1.0;
     phase_ = via;
 }
 
@@ -1174,6 +1296,13 @@ bool PouringController::track(const Eigen::Isometry3d & target, double now, std:
 
     ik_lagging_ = pos_err > ik_tolerance_ || rot_err > ik_rot_tolerance_;
     ik_lag_ratio_ = std::max(pos_err / ik_tolerance_, rot_err / ik_rot_tolerance_);
+    if (ik_lag_ratio_ >= kBlockedRatio) {
+        if (ik_blocked_since_ < 0.0) {
+            ik_blocked_since_ = now;
+        }
+    } else {
+        ik_blocked_since_ = -1.0;
+    }
     if (!ik_lagging_) {
         ik_bad_since_ = -1.0;
         return true;
@@ -1203,8 +1332,59 @@ double PouringController::ik_speed_scale() const
     // Slowing down as the residual grows lets the path settle at the speed
     // the IK can follow; the hard stop is left for a residual that grows
     // regardless.
-    constexpr double kSlowFrom = 0.5;
     return std::clamp((1.0 - ik_lag_ratio_) / (1.0 - kSlowFrom), 0.0, 1.0);
+}
+
+double PouringController::pour_joint_velocity_limit() const
+{
+    if (pour_index_ < 0 || pour_index_ >= model_.velocityLimit.size()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double v = model_.velocityLimit(pour_index_);
+    return (std::isfinite(v) && v > 0.0) ? v : std::numeric_limits<double>::infinity();
+}
+
+double PouringController::pour_speed_limit(double dt) const
+{
+    // The per-cycle bound every command here already keeps to, and the joint's
+    // own velocity limit from the description, whichever is lower. On the FR5
+    // that is 0.625 rad/s against j6's 3.2: max_delta_q is the one that binds.
+    const double per_cycle = dt > 0.0 ? max_delta_q_ / dt : 0.0;
+    return std::min(per_cycle, pour_joint_velocity_limit());
+}
+
+bool PouringController::ik_blocked(double now, double factor) const
+{
+    return ik_blocked_since_ >= 0.0 && now - ik_blocked_since_ > factor * ik_fail_sec_;
+}
+
+std::string PouringController::blocked_reason() const
+{
+    const std::string pinned = joints_at_limits();
+    std::ostringstream os;
+    os << "the arm could not follow the lip path: the path was held for it at the edge of "
+          "the IK tolerance for longer than ik_fail_sec and it did not catch up ("
+       << (pinned.empty() ? "no joint at a limit: a singularity" : pinned) << ')';
+    return os.str();
+}
+
+std::string PouringController::joints_at_limits() const
+{
+    constexpr double kNear = 0.01;
+    std::ostringstream os;
+    if (q_lower_limits_.size() != q_ref_.size()) {
+        return "";
+    }
+    for (int i = 0; i < q_ref_.size(); ++i) {
+        const bool low = q_ref_(i) <= q_lower_limits_(i) + kNear;
+        const bool high = q_ref_(i) >= q_upper_limits_(i) - kNear;
+        if (low || high) {
+            os << (os.str().empty() ? "" : ", ")
+               << (i < static_cast<int>(joint_names_.size()) ? joint_names_[i] : std::to_string(i))
+               << " at its " << (low ? "lower" : "upper") << " limit";
+        }
+    }
+    return os.str();
 }
 
 void PouringController::advance_tilt(double proposed, double dt)
@@ -1319,8 +1499,19 @@ controller_interface::return_type PouringController::update_measured(double now,
         const Eigen::Vector3d axis = reference_axis_valid_
             ? Eigen::Vector3d(H.rotation() * reference_axis_ee_)
             : Eigen::Vector3d(goal_direction_ * (H.rotation() * J.col(pour_index_).tail<3>()));
+        // Rolled toward a jaw, the jaw hangs under the lip: on this gripper its
+        // lower edge is 48 mm below it and 20 mm out, and held at 45-58 mm it
+        // came onto the receiver's rim by 0.26 rad (2026-09-28) -- far short of
+        // sugar's ~1.1 rad onset. A granular pour can hold its lip higher; what
+        // it pours does not splash.
+        pour::LipPathConfig lip_config = lip_config_;
+        if (action_server_->bounds().material == PourAction::Goal::MATERIAL_GRANULAR &&
+            granular_lip_height_ > 0.0) {
+            lip_config.lip_height = granular_lip_height_;
+            lip_config.max_height = std::max(lip_config.max_height, granular_lip_height_);
+        }
         if (!lip_path_.plan(to_isometry(H), axis, sample.position,
-                            action_server_->bounds().max_tilt, vessel_, receiver_, lip_config_,
+                            action_server_->bounds().max_tilt, vessel_, receiver_, lip_config,
                             why)) {
             abort_before_motion("the pour was not started: " + why);
             return controller_interface::return_type::OK;
@@ -1348,6 +1539,8 @@ controller_interface::return_type PouringController::update_measured(double now,
             }
             if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
                 fail_geometric(why, Phase::Return);
+            } else if (ik_blocked(now)) {
+                fail_geometric(blocked_reason(), Phase::Return);
             }
             publish_feedback_if_due(dt);
             return controller_interface::return_type::OK;
@@ -1357,6 +1550,22 @@ controller_interface::return_type PouringController::update_measured(double now,
     if (phase_ == Phase::Pouring || phase_ == Phase::Untilt) {
         const double tilt_before = tilt_;
         double proposed = tilt_;
+        // Blocked on the way UP is the arm's reach from this pose, not a
+        // failure: the tilt stops there and the law is told, so its own rules
+        // for a vessel at its bound take over -- the stall, the taps, the park.
+        // Without this a seek sat at 77.6 deg for 140 s (2026-09-28), j4 0.6
+        // deg from its limit, until the goal was cancelled by hand.
+        if (phase_ == Phase::Pouring && last_law_rate_ > 0.0 && ik_blocked(now) &&
+            tilt_ < reach_) {
+            reach_ = tilt_;
+            tilt_bound_ = std::min(tilt_bound_, reach_);
+            ik_blocked_since_ = -1.0;
+            const std::string pinned = joints_at_limits();
+            RCLCPP_WARN(get_node()->get_logger(),
+                "The arm reaches no further than %.3f rad (%.1f deg) of tilt from this pose (%s); "
+                "the pour takes that as its bound", reach_, reach_ * 180.0 / M_PI,
+                pinned.empty() ? "no joint at a limit: a singularity" : pinned.c_str());
+        }
         if (phase_ == Phase::Pouring) {
             const double rate = step_law(now);
             if (phase_ == Phase::Pouring) {
@@ -1386,6 +1595,10 @@ controller_interface::return_type PouringController::update_measured(double now,
         } else {
             if (!track(lip_path_.ee_pose(tilt_, inset_cmd_), now, why)) {
                 fail_geometric(why, Phase::Return);
+            } else if (phase_ == Phase::Untilt && ik_blocked(now, kReturnBlockFactor)) {
+                // On the way back the path retraces the way in, so a block
+                // here is not a reach: it is the old failure to follow.
+                fail_geometric(blocked_reason(), Phase::Return);
             }
             publish_feedback_if_due(dt);
             return controller_interface::return_type::OK;
@@ -1405,6 +1618,8 @@ controller_interface::return_type PouringController::update_measured(double now,
             }
             if (!track(lip_path_.ee_pose_aligning(align_s_), now, why)) {
                 fail_geometric(why, Phase::Return);
+            } else if (ik_blocked(now, kReturnBlockFactor)) {
+                fail_geometric(blocked_reason(), Phase::Return);
             }
             publish_feedback_if_due(dt);
             return controller_interface::return_type::OK;

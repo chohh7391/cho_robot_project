@@ -34,6 +34,9 @@ PourLimits MaterialProfile::at(double flow_index) const
     out.tilt_rate = lerp(free.tilt_rate, resistant.tilt_rate, s);
     out.seek_tilt_rate = lerp(free.seek_tilt_rate, resistant.seek_tilt_rate, s);
     out.dose_quantum = lerp(free.dose_quantum, resistant.dose_quantum, s);
+    out.repose_angle = lerp(free.repose_angle, resistant.repose_angle, s);
+    out.shake_amplitude = lerp(free.shake_amplitude, resistant.shake_amplitude, s);
+    out.shake_period = lerp(free.shake_period, resistant.shake_period, s);
     return out;
 }
 
@@ -61,6 +64,35 @@ bool MaterialProfile::validate(const std::string & label, std::string & why) con
                 why = os.str();
                 return false;
             }
+        }
+    }
+
+    // Zero is legitimate for these -- it is what every liquid has -- so they
+    // are only held to finite, not negative, and bounded where a typo would
+    // do harm. A tap is the pour joint moving with nothing planned for it, so
+    // it stays a few degrees: the lip swings with it.
+    constexpr double kMaxShake = 0.1;
+    constexpr double kMaxRepose = 1.2;
+    for (const auto & [endpoint, limits] : {std::pair<const char *, const PourLimits *>{"free", &free},
+                                            std::pair<const char *, const PourLimits *>{"resistant", &resistant}}) {
+        const std::string where = label + '.' + endpoint + '.';
+        std::ostringstream os;
+        if (!std::isfinite(limits->repose_angle) || limits->repose_angle < 0.0 ||
+            limits->repose_angle > kMaxRepose) {
+            os << where << "repose_angle must be in [0, " << kMaxRepose << "] rad (got "
+               << limits->repose_angle << ')';
+        } else if (!std::isfinite(limits->shake_amplitude) || limits->shake_amplitude < 0.0 ||
+                   limits->shake_amplitude > kMaxShake) {
+            os << where << "shake_amplitude must be in [0, " << kMaxShake << "] rad (got "
+               << limits->shake_amplitude << ')';
+        } else if (!std::isfinite(limits->shake_period) || limits->shake_period < 0.0 ||
+                   (limits->shake_amplitude > 0.0 && limits->shake_period <= 0.0)) {
+            os << where << "shake_period must be finite, not negative, and positive when "
+               << "shake_amplitude is (got " << limits->shake_period << ')';
+        }
+        if (!os.str().empty()) {
+            why = os.str();
+            return false;
         }
     }
 

@@ -58,6 +58,19 @@ struct PourLimits {
     //: the drop, measured at 1.2 g on the test rig -- so it floors the goal's
     //: tolerance instead of being chased.
     double dose_quantum{0.0};
+
+    // The three below may be zero: zero is what a liquid has.
+
+    //: How much later than a liquid this material reaches the lip [rad]. A
+    //: granular surface stands at its angle of repose instead of levelling, so
+    //: from the same fill it has to tip about that much further. The seek
+    //: covers seek_fast_until plus this at tilt_rate, because nothing can pour
+    //: below it.
+    double repose_angle{0.0};
+    //: Taps that shake a granular bed loose [rad of the pour joint], and how
+    //: often one starts [s]. Zero amplitude is off. See Shaker.
+    double shake_amplitude{0.0};
+    double shake_period{0.0};
 };
 
 /**
@@ -82,8 +95,9 @@ struct MaterialProfile {
     //: nobody characterised, and a guess should not be allowed to keep growing.
     [[nodiscard]] PourLimits at(double flow_index) const;
 
-    //: Every field of both endpoints must be finite and positive, and the
-    //: resistant endpoint must actually be the slower one. Checked at configure
+    //: Every field of both endpoints must be finite and positive -- except
+    //: repose_angle and the shake, which may be zero -- and the resistant
+    //: endpoint must actually be the slower one. Checked at configure
     //: so a transposed pair is refused with a vessel still on the bench rather
     //: than discovered with one in the gripper.
     [[nodiscard]] bool validate(const std::string & label, std::string & why) const;
