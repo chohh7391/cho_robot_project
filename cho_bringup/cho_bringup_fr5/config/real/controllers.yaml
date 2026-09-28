@@ -336,7 +336,16 @@ pouring_controller:
       # below the rim, where a few centimetres of error in where the side
       # camera put it was enough to knock the receiver off the scale. Above the
       # rim, a position error can spill; it cannot collide.
-      lip_height: 0.085
+      #
+      # 45 mm since 2026-09-28, 40 mm lower in two steps at the operator's
+      # call, with side_1 and side_2 re-solved and agreeing to 4.7 mm. At 65
+      # the pour started 5 mm outside the near rim and landed in the mouth
+      # from 0.18 rad. At 45, upright, the held beaker's bottom is ~25 mm
+      # below the rim: it goes down BESIDE the receiver, and only the lip path's
+      # inset limit -- the lip enters the mouth only as far as the tilt has
+      # carried the wall and jaws out of the rim -- keeps it off. A few
+      # millimetres of error toward the receiver is a contact, not a spill.
+      lip_height: 0.045
       lip_inset: 0.012
       lip_gap: 0.005
       landing_margin: 0.005
@@ -352,10 +361,12 @@ pouring_controller:
       # off still works up to this; beyond it the vessel is not where the task
       # thinks.
       max_align_distance: 0.400
-      align_speed: 0.02
+      # 40 mm/s since 2026-09-28, from 20: the ~190 mm align and the same back
+      # took ~10 s each way. The path slows itself when the IK falls behind.
+      align_speed: 0.04
       # The same for the run along the align path [m/s^2]: up to speed over
-      # the first 10 mm, and down again over the last.
-      align_accel: 0.02
+      # the first 20 mm, and down again over the last.
+      align_accel: 0.04
       max_lip_speed: 0.03
       max_axis_elevation: 0.35
       # The jaws centre what they grip, so a vessel measured off their centre
@@ -407,14 +418,65 @@ pouring_controller:
     # beaker, so 0.01 rad (0.57 deg) is ~2 g/s the scale has not yet seen.
     kp_tilt: 2.0
     max_tilt_lead: 0.01
+    # ...near the target. Far from it the lead opens with what remains: held
+    # to lead_fraction of the remaining mass in the air (gain x lead x delay),
+    # up to max_tilt_lead_far, once the pour has shown its own gain. "Fast
+    # while much is left, slow as it runs out" -- in the sim 50 g went from
+    # 118 s to ~55 s and from 0.62 g mean error to 0.09-0.35, 10 g unchanged.
+    max_tilt_lead_far: 0.05
+    lead_fraction: 0.15
+    # Nothing pours below 20 deg from this bench's 100 mL beaker however full
+    # it is -- the fullest onset seen was 28 deg, at ~95 g -- so the seek covers
+    # that at tilt_rate and searches above it at seek_tilt_rate. It took 17-28
+    # s of every pour to search from upright; in the sim this cut ~10 s from
+    # every pour. Lower it before pouring from anything fuller.
+    seek_fast_until: 0.35
     # Hold the angle while the flow is within 30% of the wanted one.
     flow_deadband: 0.3
-    # Stop this many times the controller's own estimate of what is still
-    # coming. Above 1.0 on purpose -- the flow estimate is fitted over past
-    # samples of a delayed signal, so it lags a rising pour. Stopping early
-    # leaves a gap the trim pulses close; stopping late leaves an overshoot
-    # nothing can.
-    stop_margin_factor: 1.5
+    # Every stop is decided from a FORECAST of what the scale has not seen:
+    # what has left the lip since the reading's delay, and what leaves on the
+    # way back down to the park. The forecast comes from a model of this vessel
+    # fitted as it pours -- each flow the scale reports paired with the tilt of
+    # one transport delay before it:
+    #
+    #   outflow = gain * max(0, tilt - onset0 - rise * poured)
+    #
+    # It replaced flow x delay x 1.5, which on 2026-09-24 stopped the bulk
+    # 0.2-0.4 s in and left most of a 10 g pour to trim pulses, each of which
+    # let 2.7-3.2 g off the lip at once. Against a simulated 100 mL beaker with
+    # a 0.9 s pipe and a lip that holds water back, 10 g landed within 0.46 g in
+    # all 27 cases (0.14 g mean), every one in a single stop with no trim --
+    # where the old stop was 2.42 g worst. On the arm (2026-09-28, water, a
+    # vaselined lip): 50 g landed at 50.19 in 57.9 s, one stop, no trim, 1.38 g
+    # forecast after the stop and 1.56 came.
+    #
+    # 1.0: the forecast is the model's honest number. Above it stops early, and
+    # a stop short of the target is closed by trim pulses, which on this beaker
+    # overshoot; 1.2 was worse than 1.0 in the same sweep (2.08 g worst).
+    stop_margin_factor: 1.0
+    flow_model:
+      # Priors, before the pour has shown its own. Water past its onset gave
+      # ~4 g/s per degree near the onset on this beaker, less further on.
+      # 50, down from 200 in two steps (2026-09-28), from the rig's own stop
+      # log. At 200 the forecast two samples after the onset said ~8 g was
+      # coming when 2.3 g was; at 120 a stop just past the onset forecast 9.39 g
+      # and 4.07 g came, and a later one 2.47 g against 1.77. Re-run on that
+      # stop's tilt history, 50 forecasts ~4.1 g. The sim cannot tell 30-200
+      # apart -- its lip lets go without the collapse the rig's does after --
+      # so this number is the rig's, not the sim's.
+      prior_gain: 50.0
+      prior_gain_sd: 150.0
+      # The seek stops a delay after the flow started, and a lip that holds
+      # water back moves the start past the onset proper.
+      prior_onset_sd: 0.05
+      # rad of onset per gram poured: 0.0053 measured (pt3, 44.4 -> ~47 deg over
+      # 8.6 g). This is what makes a flow held at one tilt die away.
+      prior_rise: 0.006
+      prior_rise_sd: 0.005
+      flow_noise: 0.5
+      # Off: waiting for the pour's own pairs before trusting the forecast
+      # made the sim worse (2.61 g worst at 10 g, from 0.46).
+      min_pairs: 0
     no_flow_epsilon: 0.15
     stall_timeout: 3.0
 
@@ -520,8 +582,14 @@ pouring_controller:
         # past the onset before a 5 Hz scale showed anything, the first
         # reading was 5.28 g and a 5 g pour ended at 17.45 g. Slow enough now
         # for the scale to steer the pour rather than report it: onset sought
-        # at 0.03 rad/s, bulk held to 3 g/s, bulk and trim tilting at 0.15.
-        max_flow_rate: 3.0
+        # at 0.03 rad/s, bulk and trim tilting at 0.15.
+        #
+        # 8 g/s since 2026-09-28: the bulk's wanted flow is (remaining - what
+        # is coming) / approach_sec, so a large pour wants a fast stream and a
+        # nearly finished one a slow one, and 3 g/s capped every pour at the
+        # slow end. The stop is decided from the flow model's forecast, which
+        # counts what a fast stream has in the air.
+        max_flow_rate: 8.0
         trim_flow_rate: 2.0
         trim_pulse_sec: 0.15
         # Tilt to scale, measured on the lip-pivot pour (2026-09-24): the tilt
@@ -555,21 +623,27 @@ pouring_controller:
         max_flow_rate: 8.0
         trim_flow_rate: 1.5
         trim_pulse_sec: 0.2
-        transport_delay: 0.3
+        # Brought to what water taught on this scale (2026-09-28), before the
+        # first sugar pour: 1.0 s from tilt to reading is mostly the 5 Hz
+        # stream and the three-sample flow fit, not the fall, and the seek and
+        # retract rates water settled on. Every other number here is a seed.
+        transport_delay: 1.0
         afterflow_grams: 0.5
         settle_hold_sec: 1.5
-        tilt_rate: 0.35
-        seek_tilt_rate: 0.10
+        tilt_rate: 0.15
+        seek_tilt_rate: 0.03
         dose_quantum: 0.5
       resistant:         # flow_index 1: damp, clumping powder
         max_flow_rate: 3.0
         trim_flow_rate: 0.8
         trim_pulse_sec: 0.5
-        transport_delay: 0.6
+        # Kept slower and later than the free endpoint's, as the profile check
+        # requires, after that endpoint was brought to the rig's timing.
+        transport_delay: 1.2
         afterflow_grams: 3.0
         settle_hold_sec: 3.0
-        tilt_rate: 0.18
-        seek_tilt_rate: 0.05
+        tilt_rate: 0.10
+        seek_tilt_rate: 0.02
         # Damp coffee grounds on this rig did not slide down evenly -- they came
         # away all at once. That lump is the dose quantum, and no gain divides it.
         dose_quantum: 2.0

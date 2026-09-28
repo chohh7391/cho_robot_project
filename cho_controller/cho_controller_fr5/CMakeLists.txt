@@ -33,6 +33,7 @@ add_library(${PROJECT_NAME} SHARED
     src/task_space_ik_controller.cpp
     src/pouring_controller.cpp
     src/pour/container_gate.cpp
+    src/pour/flow_model.cpp
     src/pour/guards.cpp
     src/pour/lip_path.cpp
     src/pour/material_profile.cpp
@@ -87,6 +88,7 @@ if(BUILD_TESTING)
     ament_add_gtest(test_pour
         test/test_pour.cpp
         src/pour/container_gate.cpp
+        src/pour/flow_model.cpp
         src/pour/guards.cpp
         src/pour/material_profile.cpp
         src/pour/pour_planner.cpp
@@ -109,6 +111,7 @@ if(BUILD_TESTING)
     add_executable(pour_ab
         test/pour_ab.cpp
         src/pour/container_gate.cpp
+        src/pour/flow_model.cpp
         src/pour/guards.cpp
         src/pour/material_profile.cpp
         src/pour/pour_planner.cpp

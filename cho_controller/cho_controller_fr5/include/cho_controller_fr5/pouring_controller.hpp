@@ -270,6 +270,10 @@ private:
     double last_grams_{0.0};
     double last_flow_{0.0};
     std::uint8_t last_phase_{0};
+    //: Which stops the log has already reported, and whether the latest has
+    //: been graded against its settle.
+    int logged_stops_{0};
+    bool stop_graded_{true};
     bool pending_success_{false};
     std::string pending_reason_;
     //: Whether the law ran in this goal: a goal that ends in Measure or Align
@@ -293,6 +297,12 @@ private:
     //: whenever the limit requires the lip to back out.
     double inset_cmd_{0.0};
     bool ik_lagging_{false};
+    //: The last IK step's residual as a fraction of its tolerance, the larger
+    //: of position and rotation. 1 is where ik_lagging_ trips.
+    double ik_lag_ratio_{0.0};
+    //: How much of its speed the path may use given how far the IK is behind:
+    //: all of it up to half the tolerance, none of it at the tolerance.
+    [[nodiscard]] double ik_speed_scale() const;
     double ik_bad_since_{-1.0};
 };
 

@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include "cho_controller_fr5/pour/flow_model.hpp"
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_planner.hpp"
 #include "cho_controller_fr5/pour/ramp.hpp"
@@ -1028,7 +1029,7 @@ TEST(PourPlanner, ARetractSaysWhereItIsGoingSoTheControllerCanBrakeIntoIt)
     obs.flow_rate = 2.0;
     obs.now = 0.1;
     probe.update(obs);  // seek -> bulk
-    obs.grams = 19.0;   // within the stop margin at once
+    obs.grams = 20.0;   // at the target: stops whatever the forecast says
     obs.now = 0.2;
     auto cmd = probe.update(obs);  // bulk -> retract
     ASSERT_EQ(cmd.phase, PourPhase::Retract);
@@ -1038,4 +1039,179 @@ TEST(PourPlanner, ARetractSaysWhereItIsGoingSoTheControllerCanBrakeIntoIt)
     EXPECT_TRUE(std::isfinite(cmd.target_tilt));
     EXPECT_LT(cmd.target_tilt, obs.tilt);
     EXPECT_LT(cmd.tilt_rate, 0.0);
+}
+
+// ------------------------------------------ the rig's delay, forecast --
+
+namespace {
+
+// The FR5 cell as the sim can play it, with the rig's own configuration as of
+// 2026-09-28: a second from tilt to reading, the flow model seeded for its
+// 100 mL beaker, and a bulk whose lead and flow scale with what remains.
+PourPlanner make_rig_planner(double seek_fast_until = 0.0)
+{
+    MaterialProfile liquid;
+    liquid.free = {8.0, 2.0, 0.15, 1.0, 0.3, 1.2, 0.15, 0.03, 0.3};
+    liquid.resistant = {2.0, 0.5, 0.4, 1.2, 4.0, 3.0, 0.1, 0.02, 3.0};
+    PlannerConfig config;
+    config.max_tilt_lead = 0.01;
+    config.max_tilt_lead_far = 0.05;
+    config.lead_fraction = 0.15;
+    config.trim_creep_fraction = 0.15;
+    config.stop_margin_factor = 1.0;
+    config.flow_model.prior_gain = 50.0;
+    config.seek_fast_until = seek_fast_until;
+    config.flow_model.prior_gain_sd = 150.0;
+    config.flow_model.prior_rise = 0.006;
+    config.flow_model.prior_rise_sd = 0.005;
+    PourPlanner planner;
+    std::string why;
+    EXPECT_TRUE(planner.configure(config, liquid, liquid, why)) << why;
+    return planner;
+}
+
+// A 100 mL beaker partly full, a 0.9 s pipe, and a lip that holds the water
+// back past the onset and then lets go.
+RunOptions rig_beaker(double gain, double sticky)
+{
+    RunOptions o;
+    o.sim_transport_delay = 0.9;
+    o.sim_gain = gain;
+    o.cylinder_radius_mm = 25.0;
+    o.cylinder_height_mm = 70.0;
+    o.contents_grams = 70.0;
+    o.sticky_excess = sticky;
+    o.horizon = 240.0;
+    return o;
+}
+
+}  // namespace
+
+TEST(PourPlanner, ForecastingWhatIsInTheAirStopsTenGramsOnceWithTheRigsDelay)
+{
+    // With flow x delay x 1.5 for a stop margin, the rig's pours stopped the
+    // bulk a fraction of a second in and left the rest to trim pulses, each of
+    // which let 2.7-3.2 g off the lip at once: 11.27 and 12.61 g of 10. The
+    // forecast lets the bulk run to the target and stop once.
+    for (double gain : {120.0, 230.0, 350.0}) {
+        for (double sticky : {0.0, 0.02}) {
+            auto planner = make_rig_planner();
+            const auto result = run_pour(planner, water_request(10.0), rig_beaker(gain, sticky));
+            ASSERT_TRUE(result.finished) << gain << "/" << sticky;
+            EXPECT_TRUE(result.success) << gain << "/" << sticky << ": " << result.message;
+            EXPECT_NEAR(result.delivered, 10.0, 0.5) << gain << "/" << sticky;
+            EXPECT_EQ(result.trim_pulses, 0) << gain << "/" << sticky;
+        }
+    }
+}
+
+TEST(PourPlanner, AReadingThatSpikesAndFallsBackDuringTheSeekIsNotTheOnset)
+{
+    // The rig, 2026-09-28, 50 g of water: 0 -> 0.99 -> 3.67 -> 0.20 g at 8.6
+    // deg, far below where the beaker pours. The seek took the 0.99 g for the
+    // onset; the pour ended 23.6 g short after eight trim pulses and 324 s.
+    auto planner = make_rig_planner();
+    RunOptions o = rig_beaker(230.0, 0.01);
+    o.dip_at = 15.0;
+    o.dip_grams = -3.5;  // up, not down
+    o.dip_sec = 0.6;
+    const auto result = run_pour(planner, water_request(20.0), o);
+    ASSERT_TRUE(result.finished);
+    EXPECT_TRUE(result.success) << result.message;
+    EXPECT_NEAR(result.delivered, 20.0, 0.5);
+    EXPECT_LE(result.trim_pulses, 1);
+}
+
+TEST(PourPlanner, AReadingThatDipsAndRecoversDuringTheSeekIsNotTheOnset)
+{
+    // The rig, 2026-09-28: 0.07 -> -0.22 -> -0.10 g during the seek fitted a
+    // +0.17 g/s flow, the seek called the onset 14 deg early, the flow model
+    // was seeded with it, and the pour stopped at a third of its target. In
+    // the sim the same dip early in the seek ended pours 8 g short on average.
+    auto planner = make_rig_planner();
+    RunOptions o = rig_beaker(230.0, 0.01);
+    o.dip_at = 15.0;
+    o.dip_grams = 0.29;
+    o.dip_sec = 1.0;
+    const auto result = run_pour(planner, water_request(10.0), o);
+    ASSERT_TRUE(result.finished);
+    EXPECT_TRUE(result.success) << result.message;
+    EXPECT_NEAR(result.delivered, 10.0, 0.5);
+}
+
+TEST(FlowModel, RecoversTheVesselFromPairsAndHoldsItsPriorWithoutThem)
+{
+    using cho_controller::fr5::pour::FlowModel;
+    using cho_controller::fr5::pour::FlowModelConfig;
+    FlowModelConfig c;
+    c.prior_gain = 100.0;
+    c.prior_gain_sd = 100.0;
+    c.prior_onset_sd = 0.05;
+    c.prior_rise = 0.0;
+    c.prior_rise_sd = 0.02;
+    c.flow_noise = 0.2;
+
+    FlowModel model;
+    model.begin(c, 0.80);
+    // Nothing observed: the prior, exactly.
+    EXPECT_NEAR(model.outflow(0.85, 0.0), 100.0 * 0.05, 1e-9);
+    EXPECT_DOUBLE_EQ(model.outflow(0.70, 0.0), 0.0) << "below the onset nothing pours";
+
+    // A vessel that pours 230 g/s per rad past 0.83, rising 0.006 rad per gram.
+    const double gain = 230.0, onset = 0.83, rise = 0.006;
+    for (int i = 0; i < 40; ++i) {
+        const double left = 0.25 * i;
+        const double tilt = onset + rise * left + 0.004 + 0.0005 * (i % 7);
+        model.observe(tilt, left, gain * (tilt - onset - rise * left));
+    }
+    EXPECT_NEAR(model.gain(), gain, 0.15 * gain);
+    EXPECT_NEAR(model.onset(0.0), onset, 0.01);
+    EXPECT_NEAR(model.onset(10.0), onset + rise * 10.0, 0.01);
+}
+
+TEST(PourPlanner, TheBulkParksUnderTheOnsetItPouredAtNotTheOneItStartedAt)
+{
+    // The rig, 2026-09-28, 50 g: the onset climbed from 28 to ~50 deg as the
+    // beaker emptied, the bulk stopped at 51 deg and parked at 24.7 -- below
+    // the SEEK's onset -- and the one trim pulse then crept 107 s back up.
+    auto planner = make_rig_planner();
+    RunOptions o = rig_beaker(230.0, 0.02);
+    o.contents_grams = 95.0;
+    const auto result = run_pour(planner, water_request(50.0), o);
+    ASSERT_TRUE(result.finished);
+    ASSERT_FALSE(result.park_angles.empty());
+    // Within a few degrees of the deepest tilt the bulk reached, not a
+    // quarter of a radian under it.
+    EXPECT_GT(result.park_angles.front(), result.peak_tilt - 0.12)
+        << "parked at " << result.park_angles.front() << " after a peak of " << result.peak_tilt;
+    EXPECT_NEAR(result.delivered, 50.0, 1.0);
+}
+
+TEST(Ramp, AThrottleToNothingBrakesInsteadOfStoppingDead)
+{
+    // The controller throttles a path's speed by how far the IK is behind; at
+    // the far end of that the cap is zero, and a cap of zero used to set the
+    // speed to zero in one cycle.
+    using cho_controller::fr5::pour::Ramp;
+    constexpr double dt = 1.0 / 125.0;
+    Ramp ramp;
+    ramp.reset(0.15);
+    const double v0 = ramp.velocity();
+    ramp.reach(0.0, 1.0, 0.0, 0.4, dt);
+    EXPECT_NEAR(ramp.velocity(), v0 - 0.4 * dt, 1e-12);
+}
+
+TEST(PourPlanner, NothingPoursBelowTheFastSeekSoItIsCrossedAtTheTiltRate)
+{
+    // Searching for the onset from upright at the seek rate took 17-28 s of
+    // every rig pour; below seek_fast_until nothing can pour, and the seek
+    // crosses it at the material's tilt rate.
+    auto slow = make_rig_planner(0.0);
+    auto fast = make_rig_planner(0.35);
+    const auto a = run_pour(slow, water_request(20.0), rig_beaker(230.0, 0.01));
+    const auto b = run_pour(fast, water_request(20.0), rig_beaker(230.0, 0.01));
+    ASSERT_TRUE(a.finished && b.finished);
+    EXPECT_TRUE(b.success) << b.message;
+    EXPECT_NEAR(b.delivered, 20.0, 0.5);
+    EXPECT_LT(b.seconds, a.seconds - 8.0) << a.seconds << " s slow, " << b.seconds << " s fast";
 }

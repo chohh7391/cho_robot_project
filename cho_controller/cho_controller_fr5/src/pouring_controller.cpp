@@ -167,11 +167,21 @@ CallbackReturn PouringController::on_init()
         auto_declare<double>("approach_sec", d.approach_sec);
         auto_declare<double>("kp_tilt", d.kp_tilt);
         auto_declare<double>("max_tilt_lead", d.max_tilt_lead);
+        auto_declare<double>("max_tilt_lead_far", d.max_tilt_lead_far);
+        auto_declare<double>("lead_fraction", d.lead_fraction);
+        auto_declare<double>("seek_fast_until", d.seek_fast_until);
         auto_declare<double>("flow_deadband", d.flow_deadband);
         auto_declare<double>("no_flow_epsilon", d.no_flow_epsilon);
         auto_declare<double>("park_check_sec", d.park_check_sec);
         auto_declare<double>("park_drip_grams", d.park_drip_grams);
         auto_declare<double>("stop_margin_factor", d.stop_margin_factor);
+        auto_declare<double>("flow_model.prior_gain", d.flow_model.prior_gain);
+        auto_declare<double>("flow_model.prior_gain_sd", d.flow_model.prior_gain_sd);
+        auto_declare<double>("flow_model.prior_onset_sd", d.flow_model.prior_onset_sd);
+        auto_declare<double>("flow_model.prior_rise", d.flow_model.prior_rise);
+        auto_declare<double>("flow_model.prior_rise_sd", d.flow_model.prior_rise_sd);
+        auto_declare<double>("flow_model.flow_noise", d.flow_model.flow_noise);
+        auto_declare<int>("flow_model.min_pairs", d.flow_model.min_pairs);
         auto_declare<double>("settle_timeout", d.settle_timeout);
         auto_declare<double>("stall_timeout", d.stall_timeout);
         auto_declare<double>("trim_undershoot", d.trim_undershoot);
@@ -273,11 +283,24 @@ bool PouringController::assign_parameters()
     planner_config_.approach_sec = node->get_parameter("approach_sec").as_double();
     planner_config_.kp_tilt = node->get_parameter("kp_tilt").as_double();
     planner_config_.max_tilt_lead = node->get_parameter("max_tilt_lead").as_double();
+    planner_config_.max_tilt_lead_far = node->get_parameter("max_tilt_lead_far").as_double();
+    planner_config_.lead_fraction = node->get_parameter("lead_fraction").as_double();
+    planner_config_.seek_fast_until = node->get_parameter("seek_fast_until").as_double();
     planner_config_.flow_deadband = node->get_parameter("flow_deadband").as_double();
     planner_config_.no_flow_epsilon = node->get_parameter("no_flow_epsilon").as_double();
     planner_config_.park_check_sec = node->get_parameter("park_check_sec").as_double();
     planner_config_.park_drip_grams = node->get_parameter("park_drip_grams").as_double();
     planner_config_.stop_margin_factor = node->get_parameter("stop_margin_factor").as_double();
+    {
+        auto & fm = planner_config_.flow_model;
+        fm.prior_gain = node->get_parameter("flow_model.prior_gain").as_double();
+        fm.prior_gain_sd = node->get_parameter("flow_model.prior_gain_sd").as_double();
+        fm.prior_onset_sd = node->get_parameter("flow_model.prior_onset_sd").as_double();
+        fm.prior_rise = node->get_parameter("flow_model.prior_rise").as_double();
+        fm.prior_rise_sd = node->get_parameter("flow_model.prior_rise_sd").as_double();
+        fm.flow_noise = node->get_parameter("flow_model.flow_noise").as_double();
+        fm.min_pairs = static_cast<int>(node->get_parameter("flow_model.min_pairs").as_int());
+    }
     planner_config_.settle_timeout = node->get_parameter("settle_timeout").as_double();
     planner_config_.stall_timeout = node->get_parameter("stall_timeout").as_double();
     planner_config_.trim_undershoot = node->get_parameter("trim_undershoot").as_double();
@@ -733,6 +756,10 @@ pour::PourRequest PouringController::make_request() const
     request.material = bounds.material == 1 ? MaterialClass::Granular : MaterialClass::Liquid;
     request.flow_index = bounds.flow_index;
     request.max_back_tilt = max_back_tilt_;
+    request.tilt_accel = tilt_accel_;
+    // The filter fits its flow over three sample periods; the flow it reports
+    // belongs to the middle of that window.
+    request.flow_fit_lag = 1.5 * scale_sample_period_;
     return request;
 }
 
@@ -798,6 +825,8 @@ bool PouringController::start_goal(double now)
     theta_start_ = q_ref_(pour_index_);
     tilt_ = 0.0;
     tilt_ramp_.reset();
+    logged_stops_ = 0;
+    stop_graded_ = true;
     law_target_tilt_ = std::numeric_limits<double>::quiet_NaN();
     peak_tilt_ = 0.0;
     elapsed_ = 0.0;
@@ -817,6 +846,7 @@ bool PouringController::start_goal(double now)
         align_ramp_.reset();
         inset_cmd_ = 0.0;
         ik_lagging_ = false;
+        ik_lag_ratio_ = 0.0;
         ik_bad_since_ = -1.0;
         return true;
     }
@@ -849,6 +879,7 @@ double PouringController::step_law(double now)
     obs.scale_fresh = obs.has_reading && filter_.age(now) <= scale_timeout_;
     obs.grams = filter_.grams();
     obs.flow_rate = filter_.flow_rate();
+    obs.sample_stamp = filter_.stamp();
     obs.settled = filter_.settled(now, law_->settle_hold());
     obs.tilt = tilt_;
     obs.consecutive_rejects = filter_.consecutive_rejects();
@@ -856,6 +887,29 @@ double PouringController::step_law(double now)
 
     const pour::PourCommand cmd = law_->update(obs);
     last_phase_ = static_cast<std::uint8_t>(cmd.phase);
+    // One line per stop, and one per settle after it: what the forecast said
+    // was still coming, then what actually came. That pair is the only grade
+    // the forecast gets on the rig.
+    const auto & report = law_->report();
+    if (report.stops > logged_stops_) {
+        logged_stops_ = report.stops;
+        stop_graded_ = false;
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Stop %d at %.2f g landed: forecast %.2f g in the air + %.2f g on the way "
+                    "down + %.2f g tail = %.2f g",
+                    report.stops, report.stop_landed, report.stop_in_flight,
+                    report.stop_during_retract, report.stop_afterflow,
+                    report.stop_landed + report.stop_in_flight + report.stop_during_retract +
+                        report.stop_afterflow);
+    }
+    if (report.stops > 0 && !stop_graded_ && cmd.phase != pour::PourPhase::Retract &&
+        cmd.phase != pour::PourPhase::Settle) {
+        stop_graded_ = true;
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Stop %d settled at %.2f g: %.2f g came after it, forecast %.2f g",
+                    report.stops, report.poured_grams, report.poured_grams - report.stop_landed,
+                    report.stop_in_flight + report.stop_during_retract + report.stop_afterflow);
+    }
     law_target_tilt_ = cmd.target_tilt;
     if (cmd.finished) {
         begin_untilt(cmd.success, cmd.message);
@@ -1119,6 +1173,7 @@ bool PouringController::track(const Eigen::Isometry3d & target, double now, std:
     write_command(q_cmd);
 
     ik_lagging_ = pos_err > ik_tolerance_ || rot_err > ik_rot_tolerance_;
+    ik_lag_ratio_ = std::max(pos_err / ik_tolerance_, rot_err / ik_rot_tolerance_);
     if (!ik_lagging_) {
         ik_bad_since_ = -1.0;
         return true;
@@ -1138,6 +1193,20 @@ bool PouringController::track(const Eigen::Isometry3d & target, double now, std:
     return true;
 }
 
+double PouringController::ik_speed_scale() const
+{
+    // The path used to run at full speed until the IK fell a tolerance behind
+    // and then stop dead until it caught up. At the 0.15 rad/s the vessel is
+    // tipped back upright at, that was a cycle every 0.5-0.9 s on the rig
+    // (2026-09-28): accelerate, trip, chatter on and off for 60-120 ms at the
+    // control rate, restart from rest -- a knock the operator could hear.
+    // Slowing down as the residual grows lets the path settle at the speed
+    // the IK can follow; the hard stop is left for a residual that grows
+    // regardless.
+    constexpr double kSlowFrom = 0.5;
+    return std::clamp((1.0 - ik_lag_ratio_) / (1.0 - kSlowFrom), 0.0, 1.0);
+}
+
 void PouringController::advance_tilt(double proposed, double dt)
 {
     // Nothing advances while the arm is behind the path: the next target would
@@ -1148,9 +1217,21 @@ void PouringController::advance_tilt(double proposed, double dt)
     const double goal = lip_path_.inset_limit(proposed);
     const double step = max_lip_speed_ * dt;
     if (goal < inset_cmd_ - step) {
-        // At the proposed tilt the lip has to be further out than it is. Back
-        // it out first and tip once it is there: tipping first would carry the
-        // jaw or the wall into the receiver while the lip caught up.
+        // At the proposed tilt the lip has to be further out than it is, by
+        // more than it can move in a cycle. Tipping the whole way first would
+        // carry the jaw or the wall into the receiver while the lip caught up,
+        // so the tilt takes only the share of its step the lip can keep pace
+        // with. It used to take none of it and wait for the lip, which on the
+        // way back upright alternated tip / back out / tip every cycle at the
+        // boundary: a knock every half-second on the rig (2026-09-28).
+        const double need = inset_cmd_ - goal;
+        // 0.9: a share cut exactly to the boundary lands on either side of it
+        // by rounding and the path's curvature, which is the alternation again.
+        const double share = std::clamp(0.9 * step / need, 0.0, 1.0);
+        const double partial = tilt_ + share * (proposed - tilt_);
+        if (lip_path_.inset_limit(partial) >= inset_cmd_ - step) {
+            tilt_ = partial;
+        }
         inset_cmd_ -= step;
     } else {
         inset_cmd_ = std::min(goal, inset_cmd_ + step);
@@ -1260,8 +1341,8 @@ controller_interface::return_type PouringController::update_measured(double now,
             start_pour(now);
         } else {
             if (!ik_lagging_) {
-                align_s_ += align_ramp_.reach(align_s_, lip_path_.align_length(), align_speed_,
-                                              align_accel_, dt);
+                align_s_ += align_ramp_.reach(align_s_, lip_path_.align_length(),
+                                              align_speed_ * ik_speed_scale(), align_accel_, dt);
             } else {
                 align_ramp_.reset();
             }
@@ -1279,7 +1360,8 @@ controller_interface::return_type PouringController::update_measured(double now,
         if (phase_ == Phase::Pouring) {
             const double rate = step_law(now);
             if (phase_ == Phase::Pouring) {
-                proposed = std::clamp(tilt_ + shaped_law_step(rate, dt), -max_back_tilt_,
+                proposed = std::clamp(tilt_ + shaped_law_step(rate * ik_speed_scale(), dt),
+                                      -max_back_tilt_,
                                       tilt_bound_);
             }
         }
@@ -1287,7 +1369,8 @@ controller_interface::return_type PouringController::update_measured(double now,
             last_phase_ = static_cast<std::uint8_t>(PourPhase::Done);
             const double rate = std::min(law_->return_tilt_rate(),
                                          max_delta_q_ / std::max(dt, 1e-9));
-            proposed = tilt_ + tilt_ramp_.reach(tilt_, 0.0, rate, tilt_accel_, dt);
+            proposed = tilt_ + tilt_ramp_.reach(tilt_, 0.0, rate * ik_speed_scale(),
+                                                tilt_accel_, dt);
         }
         advance_tilt(proposed, dt);
         // advance_tilt holds the tilt back while the IK lags or the lip backs
@@ -1315,7 +1398,8 @@ controller_interface::return_type PouringController::update_measured(double now,
             phase_ = Phase::Return;
         } else {
             if (!ik_lagging_) {
-                align_s_ += align_ramp_.reach(align_s_, 0.0, align_speed_, align_accel_, dt);
+                align_s_ += align_ramp_.reach(align_s_, 0.0, align_speed_ * ik_speed_scale(),
+                                              align_accel_, dt);
             } else {
                 align_ramp_.reset();
             }

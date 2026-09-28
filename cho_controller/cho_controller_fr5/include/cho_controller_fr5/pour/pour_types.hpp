@@ -40,6 +40,14 @@ struct PourRequest {
     //: attitude -- a vessel handed over already leaning pours at or below it --
     //: but never further than this.
     double max_back_tilt{0.3};
+    //: How fast the controller lets the tilt's rate change [rad/s^2]; 0 is
+    //: instantly. Filled by the controller, like max_back_tilt: a retract that
+    //: takes time to get going pours while it does, and the stop has to count
+    //: that.
+    double tilt_accel{0.0};
+    //: How far behind its sample the scale's fitted flow sits [s] -- half the
+    //: fit's window. Filled by the controller, which owns the filter.
+    double flow_fit_lag{0.0};
     MaterialClass material{MaterialClass::Liquid};
     double flow_index{0.0};
 };
@@ -52,6 +60,10 @@ struct PourObservation {
     //: Absolute scale reading [g], vessel included.
     double grams{0.0};
     double flow_rate{0.0};
+    //: When the newest accepted sample was taken, on the control clock. A new
+    //: value is a new pair for the flow model: that reading and the tilt one
+    //: transport delay before it.
+    double sample_stamp{0.0};
     //: ScaleFilter::settled() with this material's settle_hold.
     bool settled{false};
     //: Current tilt relative to the attitude the vessel was carried in [rad].
@@ -89,6 +101,15 @@ struct PourReport {
     //: What the tolerance actually was after the material's dose quantum floored
     //: the goal's request [g].
     double effective_tolerance{0.0};
+    //: Stops decided so far, and what the latest one was decided on: what had
+    //: landed, and what the forecast said was still in the air and would leave
+    //: on the way down [g]. Kept so the forecast can be graded against what the
+    //: settle then measures -- on the rig, not only in the sim.
+    int stops{0};
+    double stop_landed{0.0};
+    double stop_in_flight{0.0};
+    double stop_during_retract{0.0};
+    double stop_afterflow{0.0};
 };
 
 /**

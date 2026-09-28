@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "cho_controller_fr5/pour/flow_model.hpp"
 #include "cho_controller_fr5/pour/material_profile.hpp"
 #include "cho_controller_fr5/pour/pour_types.hpp"
 
@@ -37,6 +38,20 @@ struct PlannerConfig {
     //: It bounds the climb to about max_tilt_lead / transport_delay however the
     //: flow behaves.
     double max_tilt_lead{0.02};
+    //: How far the bound may open when much is still to pour [rad], and the
+    //: share of what is still to pour an unseen lead may put in the air at
+    //: once. The lead actually used is lead_fraction x remaining /
+    //: (gain x transport_delay), between max_tilt_lead and this: a pour with
+    //: 45 g to go climbs to a fast stream, and the same pour 3 g from its
+    //: target climbs no faster than before.
+    double max_tilt_lead_far{0.02};
+    double lead_fraction{0.25};
+    //: Tilt below which the vessel cannot pour however full it is [rad]; the
+    //: seek covers it at the material's tilt rate. 0 seeks the whole way at
+    //: the seek rate. It has to stay under the onset of the fullest vessel
+    //: the bench pours from: an onset below it is found at the fast rate, a
+    //: delay late, with that much more in the air.
+    double seek_fast_until{0.0};
     //: The bulk phase holds its angle while the flow is within this fraction of
     //: the flow it wants, either side. Outside it, it steps -- up when short,
     //: down when over -- one lead at a time.
@@ -44,12 +59,13 @@ struct PlannerConfig {
     //: Flow below this counts as none [g/s]. Used to decide that a parked vessel
     //: really has stopped, and that a tilt bound really has produced nothing.
     double no_flow_epsilon{0.15};
-    //: The bulk phase stops this many times its own estimate of what is still
-    //: coming. Deliberately greater than one: the flow estimate is fitted over
-    //: past samples of a signal that is itself delayed, so it lags a rising pour
-    //: and under-reports what is in the air. Stopping early leaves a gap the
-    //: trim pulses close; stopping late leaves an overshoot nothing can.
+    //: A stop is decided this many times the flow model's forecast of what is
+    //: still coming -- in the air, and out of the lip on the way back down.
+    //: Above one leaves a gap the trim pulses close; below one leaves an
+    //: overshoot nothing can.
     double stop_margin_factor{1.5};
+    //: Priors for the flow model the stop decisions forecast with.
+    FlowModelConfig flow_model;
     //: How long a settle may take before the pour is failed [s]. A reading that
     //: never settles at rest means something is still moving, and certifying a
     //: mass from it would be a guess.
@@ -187,7 +203,21 @@ private:
     //: What the tilt was one transport delay ago -- the tilt that produced the
     //: flow the scale is reporting now.
     [[nodiscard]] double delayed_tilt(double now) const;
-    void update_gain_estimate(const PourObservation & obs);
+    //: The tilt at `t`, interpolated from the recorded history.
+    [[nodiscard]] double tilt_at(double t) const;
+    //: Feed the flow model the newest sample, paired with the tilt that made it.
+    void fit_flow_model(const PourObservation & obs);
+    //: What will still land if the vessel is parked now [g], by the flow model:
+    //: what left the lip since the reading was taken's delay -- the scale has
+    //: not seen any of it -- and what leaves on the way down to the park.
+    struct Forecast {
+        double in_flight{0.0};
+        double during_retract{0.0};
+        [[nodiscard]] double total() const { return in_flight + during_retract; }
+    };
+    [[nodiscard]] Forecast forecast(const PourObservation & obs) const;
+    //: Write a stop decision into the report, for the log and for grading.
+    void record_stop(const PourObservation & obs, const Forecast & coming);
     //: Tilt rate a trim pulse creeps toward the onset at [rad/s].
     [[nodiscard]] double creep_rate() const;
     //: Adopt an onset angle and derive the park angle from it.
@@ -244,11 +274,13 @@ private:
     double pulse_started_{0.0};
     double pulse_sec_{0.0};
     int park_attempts_{0};
-    //: Outflow per radian above the onset [g/s/rad], identified from the pour
-    //: itself. Only the trim creep uses it, to size what is still in the air
-    //: when the flow shows. The bulk phase used to command the angle it said
-    //: would give the wanted flow; see step_bulk for why it no longer does.
-    double gain_est_{0.0};
+    //: How this vessel pours, fitted from this pour. Every stop is decided
+    //: from its forecast of what the scale has not seen yet.
+    FlowModel model_;
+    double last_fit_stamp_{0.0};
+    //: The most the first bulk has seen landed [g]. A reading that falls back
+    //: halfway from it before any stop sends the pour back to seeking.
+    double bulk_peak_{0.0};
     double park_entered_{0.0};
     //: The margin the onset estimate earned, resolved once when the onset is
     //: found. Every re-park is a whole multiple of it.
@@ -266,8 +298,6 @@ private:
     //: any. It replaces the profile's guess as soon as there is one measurement,
     //: for the same reason the tail is measured rather than assumed.
     double trim_flow_measured_{0.0};
-    //: What the last pulse was expected to deliver [g], to judge the next one.
-    double expected_pulse_grams_{0.0};
     //: (time, tilt) recent enough to look up what the tilt was when the flow
     //: being reported now actually left the lip.
     std::deque<std::pair<double, double>> tilt_history_;

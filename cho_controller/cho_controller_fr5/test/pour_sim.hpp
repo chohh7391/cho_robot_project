@@ -134,6 +134,13 @@ struct VesselSim {
     CylinderOnset cylinder;
     double contents_grams{0.0};
 
+    //: How far past the onset the lip holds the water back once it has stopped
+    //: [rad]. What the rig's beaker did (2026-09-24): a parked vessel tipped
+    //: back up poured nothing until well past where it had stopped, then let
+    //: go at once -- 0.9-1.5 g inside one 0.2 s sample. 0 is a lip that lets go
+    //: at the onset, which is what every test before this assumed.
+    double sticky_excess{0.0};
+
     double landed{0.0};
     //: Everything that has left the lip, landed or not.
     double poured_out{0.0};
@@ -148,7 +155,22 @@ struct VesselSim {
 
     double flow_at(double tilt) const
     {
-        return std::max(0.0, (tilt - current_onset())) * gain;
+        const double excess = tilt - current_onset();
+        if (!was_flowing && excess <= sticky_excess) {
+            return 0.0;
+        }
+        return std::max(0.0, excess) * gain;
+    }
+
+    //: What has left the lip and not landed yet [g]: the quantity a stop
+    //: decision has to predict, which only the simulation can show.
+    [[nodiscard]] double in_flight() const
+    {
+        double grams = tail_pending;
+        for (const auto & [arrival, g] : pipe) {
+            grams += g;
+        }
+        return grams;
     }
 
     void step(double now, double dt, double tilt)
@@ -222,6 +244,13 @@ struct RunOptions {
     double cylinder_radius_mm{0.0};
     double cylinder_height_mm{0.0};
     double contents_grams{0.0};
+    double sticky_excess{0.0};
+    //: The reading knocked down by dip_grams at dip_at and recovering linearly
+    //: over dip_sec -- the bench bumped, the receiver touched. Nothing lands
+    //: or leaves; only the indicator moves.
+    double dip_at{-1.0};
+    double dip_grams{0.0};
+    double dip_sec{1.0};
     //: Print the run every this many seconds; 0 is silent.
     double trace_every{0.0};
 };
@@ -252,6 +281,7 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
         vessel.cylinder = CylinderOnset(opt.cylinder_radius_mm, opt.cylinder_height_mm);
         vessel.contents_grams = opt.contents_grams;
     }
+    vessel.sticky_excess = opt.sticky_excess;
 
     ScaleFilter filter;
     ScaleFilter::Config fc;
@@ -259,6 +289,8 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
     fc.rate_window_sec = 3.0 * kScaleDt;
     fc.history = 8;
     filter.configure(fc);
+    // What the controller fills from its own filter.
+    request.flow_fit_lag = 0.5 * fc.rate_window_sec;
 
     double now = 0.0;
     // The tilt the planner reasons about is measured from the carried attitude,
@@ -279,7 +311,10 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
 
         if (now >= next_sample && now < opt.scale_dies_at) {
             next_sample += kScaleDt;
-            const double raw = on_pan + vessel.landed;
+            double raw = on_pan + vessel.landed;
+            if (opt.dip_at >= 0.0 && now >= opt.dip_at && now < opt.dip_at + opt.dip_sec) {
+                raw -= opt.dip_grams * (1.0 - (now - opt.dip_at) / opt.dip_sec);
+            }
             const double quantised = std::round(raw / kResolution) * kResolution;
             ScaleFilter::Sample s;
             s.grams = quantised;
@@ -299,6 +334,7 @@ inline RunResult run_pour(PourLaw & planner, const PourRequest & goal, const Run
         obs.scale_fresh = obs.has_reading && filter.age(now) <= 0.5;
         obs.grams = filter.grams();
         obs.flow_rate = filter.flow_rate();
+        obs.sample_stamp = filter.stamp();
         obs.settled = filter.settled(now, planner.settle_hold());
         obs.tilt = tilt;
         obs.consecutive_rejects = filter.consecutive_rejects();

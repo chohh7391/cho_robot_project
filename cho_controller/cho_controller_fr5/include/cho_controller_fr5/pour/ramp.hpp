@@ -47,13 +47,17 @@ public:
     double reach(double position, double target, double max_rate, double accel, double dt)
     {
         const double error = target - position;
-        if (!std::isfinite(error) || !(max_rate > 0.0) || !(accel > 0.0) || !(dt > 0.0)) {
+        if (!std::isfinite(error) || !(accel > 0.0) || !(dt > 0.0)) {
             v_ = 0.0;
             return 0.0;
         }
+        // A cap of zero is "stop", and stopping is braked like anything else:
+        // a caller throttling the speed down to nothing gets a deceleration,
+        // not a step to rest.
+        const double cap = std::isfinite(max_rate) ? std::max(0.0, max_rate) : 0.0;
         // The speed from which `accel` just stops the coordinate on the target.
         const double braking = std::sqrt(2.0 * accel * std::abs(error));
-        const double step = follow(std::copysign(std::min(max_rate, braking), error), accel, dt);
+        const double step = follow(std::copysign(std::min(cap, braking), error), accel, dt);
         if (std::abs(error) <= std::abs(step) + 1e-12 && step * error >= 0.0) {
             v_ = 0.0;
             return error;
