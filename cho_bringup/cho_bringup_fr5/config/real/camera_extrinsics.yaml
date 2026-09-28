@@ -99,57 +99,52 @@ transforms:
   # its surveyed spot, tilted the bench plane 19.3 degrees off level and spread
   # six coplanar tags over 60 mm of height. A board notices; one tag cannot.
   #
-  # SOLVED from the same run as the wrist, off the board pose that run
-  # produced:
+  # SOLVED 2026-09-28, with side_2, off the board pose the wrist's eight views
+  # produced (board 0.43 mm across them, z -0.0113 against a bench at -0.013;
+  # the wrist hand-eye came out 1.2 mm and 0.57 deg from its entry above, so
+  # that entry stands):
   #
-  #   reprojection over board corners      0.396-0.420 px
-  #   camera position across eight views   0.43 mm of spread
+  #   reprojection over board corners      0.307-0.321 px
+  #   camera position across eight views   0.11 mm of spread
   #
-  # It saw all six board tags at all eight poses. The previous solve had 5.17 mm
-  # of spread because at one pose the ARM STOOD BETWEEN THIS CAMERA AND THE
-  # BOARD and it saw three tags instead of six; from where it stands now the
-  # same eight poses never block it. If a future position brings that back,
-  # re-run with poses chosen to keep the arm out of this camera's line.
+  # It saw all six board tags at all eight poses, 46-56 px on the short edge.
+  # A solve on 2026-09-22 had 5.17 mm of spread because at one pose the ARM
+  # STOOD BETWEEN THIS CAMERA AND THE BOARD and it saw three tags instead of
+  # six; if a future position brings that back, re-run with poses chosen to
+  # keep the arm out of this camera's line.
   #
-  # The camera was moved before this run (2026-09-23), 182 mm and 11.0 deg from
-  # the previous entry. Re-run after anything touches it and watch those two
+  # The camera was moved before this run, 383.8 mm and 46.6 deg from the
+  # previous entry. Re-run after anything touches it and watch those two
   # numbers -- they are what tells you it has been touched.
   - name: side_1
     parent_frame: base_link
     child_frame: side_1_mount
-    xyz: [0.52138, 0.65273, 0.52293]
-    quaternion: [0.378580, 0.199000, -0.735016, 0.526144]
+    xyz: [0.70842, 0.32134, 0.47292]
+    quaternion: [0.336035, 0.077731, -0.919145, 0.190295]
 
   # ----------------------------------------------------------------- side_2
-  # The second standing camera. RE-SOLVED the evening of 2026-09-23, after it
-  # was moved 112.8 mm and 15.7 deg to bring the riser off the bottom edge of
-  # its view: the held beaker's marker had sat at y 483 of 480 px there, and
-  # left the frame altogether when the jaws turned the beaker on closing.
+  # The second standing camera. SOLVED 2026-09-28 in the same run as side_1,
+  # after both were repositioned: 244.8 mm and 23.0 deg from the previous
+  # entry.
   #
-  #   reprojection over board corners      0.240-0.256 px
-  #   camera position across eight views   1.37 mm of spread
+  #   reprojection over board corners      0.154-0.165 px
+  #   camera position across eight views   0.23 mm of spread
   #
-  # The same eight poses, with side_1 left out (its OAK had dropped off USB).
-  # It is still placed against the same board as the two above: this run's
-  # board came out 0.12 mm from the morning's, and its wrist hand-eye 0.2 mm
-  # and 0.00 deg from the entry above, so neither of those was re-entered.
+  # It saw all six board tags at all eight poses, 33-40 px on the short edge
+  # against cho_object_pose's 25 px floor -- oblique, which costs pixels in
+  # one direction, but no longer on the floor as it was (23-32 px) before.
   #
-  # Its view is oblique, and that costs pixels in one direction: the board
-  # tags' SHORT edge measures 23-32 px from here, against cho_object_pose's
-  # 25 px floor. The corners solve fine. The 70 mm marker on the riser's
-  # beaker, nearer, spans about 70 px.
-  #
-  # ITS ANGLE TO side_1 IS THE POINT OF IT. The two stand on opposite sides of
-  # the bench and their lines of sight to the board cross at 91.4 degrees, at
-  # 0.863 m and 0.874 m -- near-orthogonal, and neither dominating the other by
-  # range. Crossing two lines of sight is only worth anything when there is an
-  # angle between them: cho_object_pose's `fusion_mode: intersect` stops
-  # crossing below `min_ray_angle_deg` and falls back to a weighted mean,
-  # saying so in the object's status. 89 degrees is about as good as a bench
-  # this size allows, so know what you are giving up before moving either of
-  # them -- side by side, the fusion quietly becomes an average again.
+  # ITS ANGLE TO side_1 IS THE POINT OF IT. Crossing two lines of sight is
+  # only worth anything when there is an angle between them: cho_object_pose's
+  # `fusion_mode: intersect` stops crossing below `min_ray_angle_deg` (10) and
+  # falls back to a weighted mean, saying so in the object's status. Where
+  # they stand now, both on the far side of the bench, their lines of sight
+  # cross at 54.6 deg at the board (0.68 / 0.71 m), 56.3 at the receiver's rim
+  # and 64.3 at the pour start (0.30 / 0.70 m). The previous layout had 91.4 at
+  # the board; the error the crossing leaves grows as the angle closes, so this
+  # layout trades some of that for seeing the pour.
   - name: side_2
     parent_frame: base_link
     child_frame: side_2_link
-    xyz: [0.74391, -0.58947, 0.50241]
-    quaternion: [-0.303286, 0.256268, 0.779330, 0.484756]
+    xyz: [0.71539, -0.34709, 0.48364]
+    quaternion: [-0.394449, 0.185682, 0.836787, 0.331238]
