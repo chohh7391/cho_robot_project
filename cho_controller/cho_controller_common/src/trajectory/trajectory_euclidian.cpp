@@ -7,177 +7,137 @@
 // cho_robot_project. Full license text: LICENSES/BSD-2-Clause-TSID.txt
 //
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
-#include <algorithm>
-#include <iostream>
 
-using namespace std;
+#include "point_to_point.hpp"
+
 namespace cho_controller {
 namespace common {
 namespace trajectory {
 
-TrajectoryEuclidianConstant::TrajectoryEuclidianConstant(const std::string & name)
+TrajectoryEuclidianRuckig::TrajectoryEuclidianRuckig(const std::string & name)
   :TrajectoryBase(name)
 {}
 
-TrajectoryEuclidianConstant::TrajectoryEuclidianConstant(const std::string & name,
-                                                          ConstRefVector ref)
+TrajectoryEuclidianRuckig::TrajectoryEuclidianRuckig(const std::string & name, ConstRefVector init_M,
+                                                     ConstRefVector goal_M, const double & duration,
+                                                     const double & stime)
   :TrajectoryBase(name)
-{
-  setReference(ref);
-}
-
-void TrajectoryEuclidianConstant::setReference(ConstRefVector ref)
-{
-  m_sample.pos = ref;
-  m_sample.vel.setZero(ref.size());
-  m_sample.acc.setZero(ref.size());
-}
-
-unsigned int TrajectoryEuclidianConstant::size() const
-{
-  return (unsigned int)m_sample.pos.size();
-}
-
-const TrajectorySample & TrajectoryEuclidianConstant::operator()(double )
-{
-  return m_sample;
-}
-
-const TrajectorySample & TrajectoryEuclidianConstant::computeNext()
-{
-  return m_sample;
-}
-
-void TrajectoryEuclidianConstant::getLastSample(TrajectorySample & sample) const
-{
-  sample = m_sample;
-}
-
-bool TrajectoryEuclidianConstant::has_trajectory_ended() const
-{
-  return true;
-}
-const std::vector<Eigen::VectorXd> & TrajectoryEuclidianConstant::getWholeTrajectory(){
-  traj_.clear();
-  traj_.push_back(m_sample.pos);
-  return traj_;
-}
-
-
-
-//// Trj cubic
-TrajectoryEuclidianCubic::TrajectoryEuclidianCubic(const std::string & name)
-  :TrajectoryBase(name)
-{}
-
-TrajectoryEuclidianCubic::TrajectoryEuclidianCubic(const std::string & name, ConstRefVector init_M, ConstRefVector goal_M, const double & duration, const double & stime)
-    :TrajectoryBase(name)
 {
   setGoalSample(goal_M);
   setInitSample(init_M);
   setDuration(duration);
   setStartTime(stime);
 }
-unsigned int TrajectoryEuclidianCubic::size() const
+
+TrajectoryEuclidianRuckig::~TrajectoryEuclidianRuckig() = default;
+
+unsigned int TrajectoryEuclidianRuckig::size() const
 {
   return (unsigned int)m_sample.pos.size();
 }
 
-const TrajectorySample & TrajectoryEuclidianCubic::operator()(double)
+const TrajectorySample & TrajectoryEuclidianRuckig::operator()(double)
 {
   return m_sample;
 }
 
-const TrajectorySample & TrajectoryEuclidianCubic::computeNext()
+void TrajectoryEuclidianRuckig::plan()
 {
-  const Eigen::Index n = m_init.size();
-  // vel/acc are the feed-forward terms the impedance/QP tasks already consume.
-  // Keep pos/vel/acc sized to the trajectory and zeroed outside the active window.
+  m_dirty = false;
+  const Eigen::Index n = m_goal.size();
+  if (!m_motion || m_motion->dofs() != n) {
+    // Allocates; normally on the executor, where setGoalSample() first sees the size.
+    m_motion = std::make_unique<PointToPoint>(n);
+  }
+  m_motion->set_limits(m_limits.max_velocity, m_limits.max_acceleration, m_limits.max_jerk);
+  m_motion->plan(m_init, m_goal, m_duration);
+}
+
+const TrajectorySample & TrajectoryEuclidianRuckig::computeNext()
+{
+  const Eigen::Index n = m_goal.size();
+  // vel/acc are the feed-forward the impedance/QP tasks consume; zero outside the motion.
   if (m_sample.pos.size() != n) m_sample.pos.setZero(n);
   if (m_sample.vel.size() != n) m_sample.vel.setZero(n);
   if (m_sample.acc.size() != n) m_sample.acc.setZero(n);
-
-  if (m_time < m_stime) {
-    m_sample.pos = m_init;
-    m_sample.vel.setZero(n);
-    m_sample.acc.setZero(n);
-    return m_sample;
+  if (n == 0) {
+    return m_sample;  // no goal yet
   }
-  else if (m_time > m_stime + m_duration) {
-    m_sample.pos = m_goal;
-    m_sample.vel.setZero(n);
-    m_sample.acc.setZero(n);
-    return m_sample;
+  if (m_dirty) {
+    plan();
   }
-  else {
-    // Cubic with zero boundary velocity:
-    //   pos = init + a2 t^2 + a3 t^3,  a2 = 3 d / T^2,  a3 = -2 d / T^3,  d = goal-init
-    //   vel = 2 a2 t + 3 a3 t^2,       acc = 2 a2 + 6 a3 t
-    // The analytic vel/acc are the feed-forward the tasks were wired to consume but
-    // previously always received as zero -> pure PD, so tracking lagged during motion.
-    // Written straight into m_sample (no per-cycle heap temporaries -> RT-clean).
-    const double t = m_time - m_stime;
-    const double T = std::max(m_duration, 1e-6);  // guard 1/T^k; servers already reject T<=0
-    for (Eigen::Index i = 0; i < n; i++) {
-      const double d  = m_goal(i) - m_init(i);
-      const double a2 = 3.0 * d / (T * T);
-      const double a3 = -2.0 * d / (T * T * T);
-
-      m_sample.pos(i) = m_init(i) + a2 * t * t + a3 * t * t * t;
-      m_sample.vel(i) = 2.0 * a2 * t + 3.0 * a3 * t * t;
-      m_sample.acc(i) = 2.0 * a2 + 6.0 * a3 * t;
-    }
-    return m_sample;
-  }
+  m_motion->sample(m_time - m_stime, m_sample.pos, m_sample.vel, m_sample.acc);
+  return m_sample;
 }
 
-void TrajectoryEuclidianCubic::getLastSample(TrajectorySample & sample) const
+void TrajectoryEuclidianRuckig::getLastSample(TrajectorySample & sample) const
 {
   sample = m_sample;
 }
 
-bool TrajectoryEuclidianCubic::has_trajectory_ended() const
+bool TrajectoryEuclidianRuckig::has_trajectory_ended() const
 {
-  return true;
+  return m_motion && !m_dirty && m_time - m_stime >= m_motion->duration();
 }
 
-void TrajectoryEuclidianCubic::setGoalSample(ConstRefVector goal_M)
+void TrajectoryEuclidianRuckig::setGoalSample(ConstRefVector goal_M)
 {
   m_goal = goal_M;
+  m_dirty = true;
   this->setReference(m_goal);
+  if (!m_motion || m_motion->dofs() != m_goal.size()) {
+    m_motion = std::make_unique<PointToPoint>(m_goal.size());
+  }
 }
-void TrajectoryEuclidianCubic::setInitSample(ConstRefVector init_M)
+void TrajectoryEuclidianRuckig::setInitSample(ConstRefVector init_M)
 {
   m_init = init_M;
+  m_dirty = true;
 }
-void TrajectoryEuclidianCubic::setDuration(const double & duration)
+void TrajectoryEuclidianRuckig::setDuration(const double & duration)
 {
   m_duration = duration;
+  m_dirty = true;
 }
-void TrajectoryEuclidianCubic::setCurrentTime(const double & time)
+void TrajectoryEuclidianRuckig::setCurrentTime(const double & time)
 {
   m_time = time;
 }
-void TrajectoryEuclidianCubic::setStartTime(const double & time)
+void TrajectoryEuclidianRuckig::setStartTime(const double & time)
 {
   m_stime = time;
 }
-
-void TrajectoryEuclidianCubic::setReference(const ConstRefVector ref) {
-    m_sample.pos = ref;
-    m_sample.vel.setZero(ref.size());
-    m_sample.acc.setZero(ref.size());
+void TrajectoryEuclidianRuckig::setLimits(const JointMotionLimits & limits)
+{
+  m_limits = limits;
+  m_dirty = true;
 }
-const std::vector<Eigen::VectorXd> & TrajectoryEuclidianCubic::getWholeTrajectory(){
+
+double TrajectoryEuclidianRuckig::getDuration()
+{
+  if (m_goal.size() == 0) {
+    return m_duration;
+  }
+  if (m_dirty) {
+    plan();
+  }
+  return m_motion->duration();
+}
+
+void TrajectoryEuclidianRuckig::setReference(ConstRefVector ref) {
+  m_sample.pos = ref;
+  m_sample.vel.setZero(ref.size());
+  m_sample.acc.setZero(ref.size());
+}
+
+const std::vector<Eigen::VectorXd> & TrajectoryEuclidianRuckig::getWholeTrajectory(){
   traj_.clear();
-  double time = m_stime;
-  while (time <= m_stime + m_duration){
+  const double end = m_stime + getDuration();
+  for (double time = m_stime; time <= end; time += 0.001) {
     this->setCurrentTime(time);
     this->computeNext();
     traj_.push_back(m_sample.pos);
-    time += 0.001;
   }
-
   return traj_;
 }
 

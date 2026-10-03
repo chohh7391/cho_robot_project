@@ -77,6 +77,9 @@ bool URTaskSpaceActionServer::compute(const rclcpp::Time & current_time, URState
         initialized_ = true;
     }
     trajectory_->setCurrentTime(current_time.seconds());
+    // The joint/Cartesian limits can make the motion take longer than the
+    // goal asked for; time success and timeout from what it will take.
+    const double duration = trajectory_->getDuration();
 
     if (goal_handle_->is_canceling()) {
         result_msg_->is_completed = false;
@@ -88,14 +91,14 @@ bool URTaskSpaceActionServer::compute(const rclcpp::Time & current_time, URState
 
     double elapsed = (current_time - start_time_).seconds();
     feedback_msg_->percent_complete = static_cast<float>(
-        std::min(100.0, elapsed / duration_ * 100.0));
+        std::min(100.0, elapsed / duration * 100.0));
 
     double pos_err = (state.H_ee_ref.translation() - state.H_ee.translation()).norm();
     Eigen::Vector3d rot_err = pinocchio::log3(
         state.H_ee.rotation().transpose() * state.H_ee_ref.rotation());
     double ori_err = rot_err.norm();
 
-    if (elapsed > duration_ + 1.0 && pos_err < 2e-2 && ori_err < 5e-2) {
+    if (elapsed > duration + 1.0 && pos_err < 2e-2 && ori_err < 5e-2) {
         RCLCPP_INFO(node_->get_logger(),
             "[%s] Succeeded. pos_err=%.4f ori_err=%.4f", action_name_.c_str(), pos_err, ori_err);
         result_msg_->is_completed = true;
@@ -105,7 +108,7 @@ bool URTaskSpaceActionServer::compute(const rclcpp::Time & current_time, URState
         goal_handle_.reset();
         return true;
     }
-    if (elapsed > duration_ + 2.0) {
+    if (elapsed > duration + 2.0) {
         RCLCPP_WARN(node_->get_logger(),
             "[%s] Aborted (timeout). pos_err=%.4f ori_err=%.4f", action_name_.c_str(), pos_err, ori_err);
         result_msg_->is_completed = false;

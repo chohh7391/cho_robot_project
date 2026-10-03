@@ -9,7 +9,7 @@ namespace ur {
 
 using TaskSpaceAction = cho_interfaces::action::TaskSpace;
 using TaskSpaceGoalHandle = rclcpp_action::ServerGoalHandle<TaskSpaceAction>;
-using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Cubic;
+using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 
 class URTaskSpaceActionServer : public URBaseActionServer<TaskSpaceAction, TaskTrajectory>
 {

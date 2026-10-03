@@ -1,0 +1,12 @@
+# Franka's Cartesian limits, from libfranka (franka/rate_limiting.h:
+# kMaxTranslationalVelocity/Acceleration, kMaxRotationalVelocity/Acceleration).
+# The cho controllers' Cartesian point-to-point trajectories read them too
+# (cho_robot_config.motion_limit_parameters). No jerk, for the reason in
+# joint_limits.yaml: libfranka's 4500 m/s^3 / 8500 rad/s^3 are rejection
+# limits, and unset the trajectories ramp over 0.04 s instead.
+cartesian_limits:
+  max_trans_vel: 3.0
+  max_trans_acc: 9.0
+  max_trans_dec: -9.0
+  max_rot_vel: 2.5
+  max_rot_acc: 17.0

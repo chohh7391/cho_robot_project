@@ -129,6 +129,9 @@ bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & s
         state.H_ee_init = state.H_ee;
     }
     trajectory_->setCurrentTime(current_time.seconds());
+    // The joint/Cartesian limits can make the motion take longer than the
+    // goal asked for; time success and timeout from what it will take.
+    const double duration = trajectory_->getDuration();
 
     if (cancel_requested_.load()) {
         finish_from_rt(GoalPhase::kFinishCanceled);
@@ -137,7 +140,7 @@ bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & s
 
     double elapsed_time_sec = (current_time - start_time_).seconds();
     feedback_msg_->percent_complete = static_cast<float>(
-        std::min(100.0, (elapsed_time_sec / duration_) * 100.0));
+        std::min(100.0, (elapsed_time_sec / duration) * 100.0));
 
     // success condition
     double translation_error_norm = (state.H_ee_ref.translation() - state.H_ee.translation()).norm();
@@ -145,14 +148,14 @@ bool TaskSpaceActionServer::compute(const rclcpp::Time & current_time, State & s
     Eigen::Vector3d rot_error_vec = pinocchio::log3(R_diff);
     double rotation_error_norm = rot_error_vec.norm();
 
-    if (elapsed_time_sec > duration_ + 1.0 && translation_error_norm < success_translation_threshold_ && rotation_error_norm < success_rotation_threshold_) {
+    if (elapsed_time_sec > duration + 1.0 && translation_error_norm < success_translation_threshold_ && rotation_error_norm < success_rotation_threshold_) {
         state.H_ee_init = state.H_ee;
         finish_from_rt(GoalPhase::kFinishSucceeded);
         return true;
     }
 
     // time-out condition
-    if (elapsed_time_sec > duration_ + 2.0) {
+    if (elapsed_time_sec > duration + 2.0) {
         state.H_ee_init = state.H_ee;
         finish_from_rt(GoalPhase::kFinishAborted);
         return false;

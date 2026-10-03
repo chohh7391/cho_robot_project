@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from copy import deepcopy
 import os
 import tempfile
 import yaml
@@ -19,6 +20,8 @@ import yaml
 from launch.actions import OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
+
+from cho_robot_config import motion_limit_parameters
 
 
 ALWAYS_ACTIVE_CONTROLLERS = [
@@ -113,6 +116,7 @@ def create_runtime_param_file(
     dynamic_params = load_yaml(payload_config_path) or {}
     wildcard_params = dynamic_params.setdefault('/**', {})
     internal_control_mode = 'effort' if control_mode == 'torque' else control_mode
+    limits = motion_limit_parameters('franka')
 
     for controller_name in unique_names(controller_names):
         controller_params = wildcard_params.setdefault(
@@ -123,6 +127,9 @@ def create_runtime_param_file(
         ros_params['bringup_type'] = bringup_type
         ros_params['control_mode'] = internal_control_mode
         ros_params['ee_name'] = ee_name
+        # FR3's MoveIt joint/Cartesian limits bound the point-to-point goals. A copy
+        # each: rcl's params parser rejects the YAML alias a shared dict dumps as.
+        ros_params.update(deepcopy(limits))
 
     # Write under ROS_HOME (defaults to ~/.ros) instead of the system /tmp.
     # The file is read by the local controller_manager (ros2_control_node /

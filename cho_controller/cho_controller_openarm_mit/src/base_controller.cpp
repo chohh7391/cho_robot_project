@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "cho_controller_openarm_mit/base_controller.hpp"
+#include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -598,6 +599,16 @@ void OpenArmBaseController::log_joint_pos()
         Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v_arm;
         ctrl_state_rt_pub_->unlockAndPublish();
     }
+}
+
+cho_controller::common::trajectory::JointMotionLimits OpenArmBaseController::joint_motion_limits()
+{
+    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), joint_names_);
+}
+
+cho_controller::common::trajectory::CartesianMotionLimits OpenArmBaseController::cartesian_motion_limits()
+{
+    return cho_controller::common::trajectory::load_cartesian_motion_limits(get_node());
 }
 
 }  // namespace openarm

@@ -1,4 +1,5 @@
 #include "cho_controller_fr5/base_controller.hpp"
+#include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -285,6 +286,16 @@ Eigen::VectorXd FR5BaseController::held_command_position() const
         if (usable) return q_cmd;
     }
     return measured;
+}
+
+cho_controller::common::trajectory::JointMotionLimits FR5BaseController::joint_motion_limits()
+{
+    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), joint_names_);
+}
+
+cho_controller::common::trajectory::CartesianMotionLimits FR5BaseController::cartesian_motion_limits()
+{
+    return cho_controller::common::trajectory::load_cartesian_motion_limits(get_node());
 }
 
 } // namespace fr5

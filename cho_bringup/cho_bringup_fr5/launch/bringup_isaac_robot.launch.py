@@ -47,6 +47,7 @@ Build the USD asset once before the first run:
         --require-link wrist3_link
 """
 
+from copy import deepcopy
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -63,6 +64,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 import xacro
+from cho_robot_config import motion_limit_parameters
 
 SWITCHABLE_CONTROLLERS = [
     'joint_trajectory_controller',
@@ -106,6 +108,11 @@ def create_runtime_controller_params(ee_name, bringup_type):
             },
         },
     }
+    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
+    limits = motion_limit_parameters('fr5')
+    for controller in params['/**'].values():
+        controller['ros__parameters'].update(deepcopy(limits))
     with os.fdopen(fd, 'w') as runtime_file:
         yaml.safe_dump(params, runtime_file)
     return runtime_path

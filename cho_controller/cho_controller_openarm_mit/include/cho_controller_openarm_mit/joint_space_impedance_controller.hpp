@@ -69,7 +69,7 @@ private:
     // measured position on activation would then quietly adopt the fallen pose
     // as the target. Ramping to a configured pose instead makes that first
     // motion deliberate and repeatable.
-    std::shared_ptr<cho_controller::common::trajectory::TrajectoryEuclidianCubic> home_trajectory_;
+    std::shared_ptr<cho_controller::common::trajectory::TrajectoryEuclidianRuckig> home_trajectory_;
     Eigen::VectorXd home_position_;
     double home_duration_{3.0};
     bool homing_{false};

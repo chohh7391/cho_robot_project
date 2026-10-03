@@ -76,7 +76,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   task_joint_posture_->Kp(kp_joint_full);
   task_joint_posture_->Kd(kd_joint_full);
 
-  traj_posture_cubic_ = std::make_shared<TrajectoryEuclidianCubic>("traj_posture");
+  traj_posture_ = std::make_shared<TrajectoryEuclidianRuckig>("traj_posture");
   control_mode_ = QPControlMode::DEFAULT;
 
   // task space inverse dynamics
@@ -91,6 +91,7 @@ CallbackReturn TaskSpaceQPController::on_configure(
   // action server
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_qp_controller");
   action_server_->init();
+  action_server_->trajectory_->setLimits(cartesian_motion_limits());
   action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;
@@ -218,10 +219,10 @@ void TaskSpaceQPController::switch_to_action_control(const rclcpp::Time & time)
     // task stays exact while the posture task resolves the redundant DoF toward
     // the configuration held when this motion started.
     tsid_->addMotionTask(*task_joint_posture_, nullspace_posture_weight_, 1);
-    traj_posture_cubic_->setInitSample(state_.q_arm);
-    traj_posture_cubic_->setDuration(0.1);
-    traj_posture_cubic_->setStartTime(time.seconds());
-    traj_posture_cubic_->setGoalSample(state_.q_arm);
+    traj_posture_->setInitSample(state_.q_arm);
+    traj_posture_->setDuration(0.1);
+    traj_posture_->setStartTime(time.seconds());
+    traj_posture_->setGoalSample(state_.q_arm);
   }
   control_mode_ = QPControlMode::ACTION;
   RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control%s.",
@@ -234,10 +235,10 @@ void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
   tsid_->removeTask("task-posture");
   tsid_->addMotionTask(*task_joint_posture_, 1e-5, 0);
 
-  traj_posture_cubic_->setInitSample(state_.q_arm);
-  traj_posture_cubic_->setDuration(0.1);
-  traj_posture_cubic_->setStartTime(time.seconds());
-  traj_posture_cubic_->setGoalSample(state_.q_arm);
+  traj_posture_->setInitSample(state_.q_arm);
+  traj_posture_->setDuration(0.1);
+  traj_posture_->setStartTime(time.seconds());
+  traj_posture_->setGoalSample(state_.q_arm);
 
   control_mode_ = QPControlMode::DEFAULT;
   RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP default posture hold.");
@@ -245,8 +246,8 @@ void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
 
 void TaskSpaceQPController::update_default_control_reference(const rclcpp::Time & time)
 {
-  traj_posture_cubic_->setCurrentTime(time.seconds());
-  auto sample_posture_7d = traj_posture_cubic_->computeNext();
+  traj_posture_->setCurrentTime(time.seconds());
+  auto sample_posture_7d = traj_posture_->computeNext();
 
   int model_na = robot_->na();
   cho_controller::common::trajectory::TrajectorySample sample_posture_full(model_na);

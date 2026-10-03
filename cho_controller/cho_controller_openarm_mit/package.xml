@@ -9,6 +9,7 @@
   <!-- Merged in with the former cho_controller_openarm sources. -->
   <depend>ament_index_cpp</depend>
   <depend>cho_controller_common</depend>
+  <depend>joint_limits</depend>
   <depend>eigen</depend>
   <depend>geometry_msgs</depend>
   <depend>cho_openarm_mit_core</depend>

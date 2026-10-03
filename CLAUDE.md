@@ -247,6 +247,17 @@ and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replac
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 
+Their point-to-point motion is `cho_controller_common`'s `TrajectoryEuclidianRuckig` /
+`TrajectorySE3Ruckig`: Ruckig's fastest motion within the robot's limits, slowed
+uniformly to the goal's `duration`. The duration is therefore a minimum, and a goal
+faster than the limits allow takes longer; the servers time success and timeout from
+`trajectory_->getDuration()`, never from the goal's `duration`. The limits are the
+robot's MoveIt files, not a controllers.yaml: `joint_limits.yaml` (ros2_control's
+`joint_limits.<joint>.*` schema) and, if present, `pilz_cartesian_limits.yaml`, which
+each bringup's runtime-params helper merges in through
+`cho_robot_config.motion_limit_parameters()`. A joint with no `max_acceleration`
+leaves its goals exactly as long as requested; the controller logs which applies.
+
 **Controllers that advance their own trajectory clock or integrate an open-loop
 reference** (`joint_space_position`, `joint_space_velocity`, `task_space_velocity`,
 `task_space_ik`, `vla_controller` in its position/velocity modes) must take the
@@ -347,6 +358,11 @@ adapters, cho_vla_core) builds at default optimisation and is safe.
 `cho_vla_core` pins `-fno-finite-math-only` explicitly, which beats `-Ofast`
 regardless of flag order (also measured), and `test_finite_math_guard` fails the
 build if that flag is ever removed.
+
+One file inside `cho_controller_common` makes the same exception:
+`src/trajectory/point_to_point.cpp`, the only file there that instantiates Ruckig,
+whose templates rely on `isnan()`/`isinf()`. `test_point_to_point` fails if its
+`-fno-finite-math-only` goes (verified both ways).
 
 ### Frame Conventions
 

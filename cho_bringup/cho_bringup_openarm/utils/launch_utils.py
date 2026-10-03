@@ -19,12 +19,15 @@ purpose: cho_bringup_ur copies the same runtime-param logic into each of its
 three launch files, and the copies have already drifted apart.
 """
 
+from copy import deepcopy
 import os
 import tempfile
 
 from launch.actions import OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
+
+from cho_robot_config import motion_limit_parameters
 
 import yaml
 
@@ -330,6 +333,12 @@ def create_runtime_param_file(controller_names, bringup_type, control_mode, ee_n
     """
     internal_control_mode = 'effort' if control_mode == 'torque' else control_mode
     wildcard_params = {}
+    # OpenArm's MoveIt joint limits bound the point-to-point goals. The single-arm
+    # and bimanual files name different joints, so both are loaded and each
+    # controller finds its own.
+    limits = motion_limit_parameters('openarm')
+    limits['joint_limits'].update(
+        motion_limit_parameters('openarm', 'joint_limits_bimanual.yaml')['joint_limits'])
 
     for controller_name in unique_names(controller_names):
         params = {
@@ -340,6 +349,8 @@ def create_runtime_param_file(controller_names, bringup_type, control_mode, ee_n
         # file; overriding it from here would point both arms at one hand.
         if ee_name:
             params['ee_name'] = ee_name
+        # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
+        params.update(deepcopy(limits))
         if controller_overrides and controller_name in controller_overrides:
             params.update(controller_overrides[controller_name])
         wildcard_params[controller_name] = {'ros__parameters': params}

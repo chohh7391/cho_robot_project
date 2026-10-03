@@ -104,6 +104,7 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
             ki_joint_(0), integral_clamp_);
     }
 
+    const auto motion_limits = joint_motion_limits();
     const auto home = get_node()->get_parameter("home_position").as_double_array();
     home_duration_ = get_node()->get_parameter("home_duration").as_double();
     if (!home.empty()) {
@@ -115,7 +116,8 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
         home_position_ = Eigen::Map<const Eigen::VectorXd>(home.data(), num_dof_);
         clamp_to_joint_limits(home_position_);
         home_trajectory_ =
-            std::make_shared<cho_controller::common::trajectory::TrajectoryEuclidianCubic>("home");
+            std::make_shared<cho_controller::common::trajectory::TrajectoryEuclidianRuckig>("home");
+        home_trajectory_->setLimits(motion_limits);
         RCLCPP_INFO(get_node()->get_logger(),
             "Homing enabled: ramping to the configured pose over %.1f s on activation.",
             home_duration_);
@@ -124,6 +126,7 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     action_server_ = std::make_shared<JointSpaceActionServer>(
         get_node(), action_server_name(), num_dof_);
     action_server_->init();
+    action_server_->trajectory_->setLimits(motion_limits);
     action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
     action_server_->attach_activity_flag(&controller_active_);
 
@@ -171,7 +174,8 @@ controller_interface::return_type JointSpaceImpedanceController::update(
         const auto sample = home_trajectory_->computeNext();
         state_.q_arm_des = sample.pos;
         state_.v_arm_des = sample.vel;
-        if ((time - home_start_time_).seconds() > home_duration_) {
+        // At least home_duration_; longer if the joint limits require it.
+        if ((time - home_start_time_).seconds() > home_trajectory_->getDuration()) {
             homing_ = false;
             state_.v_arm_des.setZero();
         }

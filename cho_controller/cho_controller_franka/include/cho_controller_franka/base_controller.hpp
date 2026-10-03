@@ -17,6 +17,7 @@
 // for robot wrapper
 #include "cho_controller_common/robot/robot_wrapper.hpp"
 #include "cho_controller_common/math/fwd.hpp"
+#include "cho_controller_common/trajectory/motion_limits.hpp"
 #include "cho_controller_common/math/util.hpp"
 
 #include <controller_interface/controller_interface.hpp>
@@ -149,6 +150,13 @@ public:
     virtual bool should_publish_arm_log() const { return true; }
 
 protected:
+    // Bounds for the action-server trajectories, from the controller_manager's
+    // joint_limits / cartesian_limits parameters (MoveIt's joint_limits.yaml and
+    // pilz_cartesian_limits.yaml); see motion_limits_params.hpp. Call after
+    // on_configure() has resolved the joint names.
+    cho_controller::common::trajectory::JointMotionLimits joint_motion_limits();
+    cho_controller::common::trajectory::CartesianMotionLimits cartesian_motion_limits();
+
     std::string robot_type_;
     std::string robot_description_;
 

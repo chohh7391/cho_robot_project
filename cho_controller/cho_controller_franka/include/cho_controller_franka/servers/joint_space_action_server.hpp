@@ -9,7 +9,7 @@ namespace franka {
 
 using JointSpaceAction = cho_interfaces::action::JointSpace;
 using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
-using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianCubic;
+using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianRuckig;
 
 class JointSpaceActionServer : public BaseActionServer<JointSpaceAction, JointTrajectory>
 {

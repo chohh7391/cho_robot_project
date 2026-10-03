@@ -1,4 +1,5 @@
 #include "cho_controller_ur/base_controller.hpp"
+#include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <cassert>
 #include <string>
@@ -215,6 +216,16 @@ void URBaseController::log_joint_pos()
     cs.feedback.velocities.resize(num_dof_);
     Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v.head(num_dof_);
     ctrl_state_pub_->publish(cs);
+}
+
+cho_controller::common::trajectory::JointMotionLimits URBaseController::joint_motion_limits()
+{
+    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), joint_names_);
+}
+
+cho_controller::common::trajectory::CartesianMotionLimits URBaseController::cartesian_motion_limits()
+{
+    return cho_controller::common::trajectory::load_cartesian_motion_limits(get_node());
 }
 
 } // namespace ur

@@ -5,10 +5,11 @@ from .registry import (CONTROL_MODES, available_profiles, available_robot_types,
                        hold_controllers_for_control_mode,
                        home_pose_policy, load_moveit_metadata,
                        load_robot_config, validate_robot_config)
+from .motion_limits import motion_limit_parameters
 
 __all__ = [
     'CONTROL_MODES',
     'available_profiles', 'available_robot_types', 'blocked_home_joint_goals',
     'declared_hold_control_modes', 'hold_controllers_for_control_mode', 'home_pose_policy',
-    'load_moveit_metadata', 'load_robot_config', 'validate_robot_config',
+    'load_moveit_metadata', 'load_robot_config', 'motion_limit_parameters', 'validate_robot_config',
 ]

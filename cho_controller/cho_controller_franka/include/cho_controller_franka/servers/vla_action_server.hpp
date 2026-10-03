@@ -30,7 +30,7 @@ namespace franka {
 using VLAAction = cho_interfaces::action::VisionLanguageAction;
 using VLAGoalHandle = rclcpp_action::ServerGoalHandle<VLAAction>;
 using GripperAction = cho_interfaces::action::Gripper;
-using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Cubic;
+using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 
 // Franka's adapter over cho_vla_core.
 //

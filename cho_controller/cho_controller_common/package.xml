@@ -16,6 +16,9 @@
   <build_depend>eiquadprog</build_depend>
   <build_depend>eigen</build_depend>
   <build_depend>boost</build_depend>
+  <build_depend>ruckig</build_depend>
+  <build_depend>joint_limits</build_depend>
+  <build_depend>rclcpp_lifecycle</build_depend>
 
   <!-- Execution dependencies -->
   <exec_depend>rclcpp</exec_depend>
@@ -23,6 +26,11 @@
   <exec_depend>eiquadprog</exec_depend>
   <exec_depend>eigen</exec_depend>
   <exec_depend>boost</exec_depend>
+  <exec_depend>ruckig</exec_depend>
+  <build_export_depend>ruckig</build_export_depend>
+  <build_export_depend>joint_limits</build_export_depend>
+  <build_export_depend>rclcpp_lifecycle</build_export_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

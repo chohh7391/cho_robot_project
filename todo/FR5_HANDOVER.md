@@ -24,7 +24,7 @@ Existing robots: **franka** (torque-controlled, the most mature — QP/impedance
 **Franka control patterns**.
 
 Shared code lives in `cho_controller/cho_controller_common` (Pinocchio FK/IK/dynamics,
-the `TrajectoryEuclidianCubic` / `TrajectorySE3Cubic` used by all action servers).
+the `TrajectoryEuclidianRuckig` / `TrajectorySE3Ruckig` used by all action servers).
 
 Build alias (`~/.bashrc`): `cbp` = `colcon build ... --packages-select`.
 Always `source ~/ros2_ws/install/setup.bash` after a build.

@@ -9,7 +9,7 @@ namespace fr5 {
 
 using JointSpaceAction = cho_interfaces::action::JointSpace;
 using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
-using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianCubic;
+using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianRuckig;
 
 class FR5JointSpaceActionServer : public FR5BaseActionServer<JointSpaceAction, JointTrajectory>
 {

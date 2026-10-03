@@ -11,6 +11,7 @@
 
 #include "cho_controller_common/robot/robot_wrapper.hpp"
 #include "cho_controller_common/math/fwd.hpp"
+#include "cho_controller_common/trajectory/motion_limits.hpp"
 
 #include <Eigen/Eigen>
 #include <cho_interfaces/msg/pose_log.hpp>
@@ -55,6 +56,13 @@ public:
     void log_joint_pos();
 
 protected:
+    // Bounds for the action-server trajectories, from the controller_manager's
+    // joint_limits / cartesian_limits parameters (MoveIt's joint_limits.yaml and
+    // pilz_cartesian_limits.yaml); see motion_limits_params.hpp. Call after
+    // on_configure() has resolved the joint names.
+    cho_controller::common::trajectory::JointMotionLimits joint_motion_limits();
+    cho_controller::common::trajectory::CartesianMotionLimits cartesian_motion_limits();
+
     std::string robot_description_;
     std::vector<std::string> joint_names_;
     int num_dof_{6};

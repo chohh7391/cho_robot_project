@@ -1,5 +1,12 @@
 default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
+# No max_jerk on purpose. libfranka's (franka/rate_limiting.h, kMaxJointJerk:
+# 5000 rad/s^3) is the rate at which the robot rejects a command, not a planning
+# bound: the cho point-to-point trajectories planned with it ramp in ~1 ms and
+# come out as rough as the cubic they replaced. Unset, they ramp over 0.04 s
+# (acceleration / 0.04 s), as every other robot here does. MuJoCo, 0.6 rad in 3 s
+# on joint impedance: reference rms jerk 13.6 (cubic) / 11.4 (5000) / 1.7 (unset)
+# rad/s^3, tracking unchanged at 10.3 mrad rms.
 joint_limits:
   fr3_joint1: {has_velocity_limits: true, max_velocity: 2.62, has_acceleration_limits: true, max_acceleration: 3.0}
   fr3_joint2: {has_velocity_limits: true, max_velocity: 2.62, has_acceleration_limits: true, max_acceleration: 2.0}

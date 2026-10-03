@@ -64,6 +64,7 @@ CallbackReturn TaskSpaceIKController::on_configure(
     action_server_ = std::make_shared<FR5TaskSpaceActionServer>(
         get_node(), "/controller_action_server/task_space_ik_controller", num_dof_);
     action_server_->init();
+    action_server_->trajectory_->setLimits(cartesian_motion_limits());
     return CallbackReturn::SUCCESS;
 }
 

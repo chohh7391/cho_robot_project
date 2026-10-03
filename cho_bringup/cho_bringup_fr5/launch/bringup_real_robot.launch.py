@@ -36,6 +36,7 @@ activates, so a run starts from a known opening. Clear the jaws before
 launching, or set it false to activate in place.
 """
 
+from copy import deepcopy
 import os
 import tempfile
 
@@ -56,6 +57,7 @@ from launch_ros.actions import Node
 
 
 import importlib.util
+from cho_robot_config import motion_limit_parameters
 
 package_share = get_package_share_directory('cho_bringup_fr5')
 # launch_utils is installed under lib/, not as an importable python package, so
@@ -127,6 +129,11 @@ def create_runtime_controller_params(ee_name, bringup_type, gripper='none'):
             },
         },
     }
+    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
+    limits = motion_limit_parameters('fr5')
+    for controller in params['/**'].values():
+        controller['ros__parameters'].update(deepcopy(limits))
     with os.fdopen(fd, 'w') as runtime_file:
         yaml.safe_dump(params, runtime_file)
     return runtime_path

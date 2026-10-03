@@ -63,6 +63,7 @@ CallbackReturn TaskSpaceVelocityController::on_configure(
   action_server_ = std::make_shared<TaskSpaceActionServer>(
       get_node(), "/controller_action_server/task_space_velocity_controller");
   action_server_->init();
+  action_server_->trajectory_->setLimits(cartesian_motion_limits());
   action_server_->attach_activity_flag(&controller_active_);
 
   return CallbackReturn::SUCCESS;

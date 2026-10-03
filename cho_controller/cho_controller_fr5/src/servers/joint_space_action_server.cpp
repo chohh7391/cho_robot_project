@@ -66,6 +66,9 @@ bool FR5JointSpaceActionServer::compute(const rclcpp::Time & current_time, FR5St
         initialized_ = true;
     }
     trajectory_->setCurrentTime(current_time.seconds());
+    // The joint/Cartesian limits can make the motion take longer than the
+    // goal asked for; time success and timeout from what it will take.
+    const double duration = trajectory_->getDuration();
 
     if (goal_handle_->is_canceling()) {
         result_msg_->is_completed = false;
@@ -77,11 +80,11 @@ bool FR5JointSpaceActionServer::compute(const rclcpp::Time & current_time, FR5St
 
     double elapsed = (current_time - start_time_).seconds();
     feedback_msg_->percent_complete = static_cast<float>(
-        std::min(100.0, elapsed / std::max(duration_, 0.001) * 100.0));
+        std::min(100.0, elapsed / std::max(duration, 0.001) * 100.0));
 
     double error = (q_goal_ - state.q.head(num_dof_)).norm();
 
-    if (elapsed > duration_ && error < 5e-2) {
+    if (elapsed > duration && error < 5e-2) {
         RCLCPP_INFO(node_->get_logger(), "[%s] Succeeded. Error: %f", action_name_.c_str(), error);
         result_msg_->is_completed = true;
         goal_handle_->succeed(result_msg_);
@@ -89,7 +92,7 @@ bool FR5JointSpaceActionServer::compute(const rclcpp::Time & current_time, FR5St
         goal_handle_.reset();
         return true;
     }
-    if (elapsed > duration_ + 2.0) {
+    if (elapsed > duration + 2.0) {
         RCLCPP_WARN(node_->get_logger(), "[%s] Aborted (timeout). Error: %f",
             action_name_.c_str(), error);
         result_msg_->is_completed = false;

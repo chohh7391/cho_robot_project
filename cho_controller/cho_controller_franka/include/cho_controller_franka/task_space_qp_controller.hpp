@@ -53,7 +53,7 @@ private:
 
   std::shared_ptr<TaskSE3Equality> task_se3_equality_;
   std::shared_ptr<TaskJointPosture> task_joint_posture_; // for default control
-  std::shared_ptr<TrajectoryEuclidianCubic> traj_posture_cubic_;
+  std::shared_ptr<TrajectoryEuclidianRuckig> traj_posture_;
 
   std::shared_ptr<InverseDynamicsFormulationAccForce> tsid_; 
   SolverHQPBase * solver_;

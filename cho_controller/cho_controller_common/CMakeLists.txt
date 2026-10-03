@@ -9,13 +9,21 @@ find_package(rclcpp REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(eiquadprog REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(ruckig REQUIRED)
+# Used only by the header-only trajectory/motion_limits_params.hpp, which the
+# controller packages compile; exported below so they find it.
+find_package(joint_limits REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
 
 file(GLOB_RECURSE PROJECT_HEADERS include/${PROJECT_NAME}/*.hpp include/${PROJECT_NAME}/*.hh)
 file(GLOB_RECURSE PROJECT_SOURCES src/*.cpp)
 
-# Source and header files
-file(GLOB_RECURSE PROJECT_HEADERS include/${PROJECT_NAME}/*.hpp include/${PROJECT_NAME}/*.hh)
-file(GLOB_RECURSE PROJECT_SOURCES src/*.cpp)
+# Ruckig's templates rely on isnan()/isinf(), which -Ofast folds away; the
+# one file that instantiates them opts out. -fno-finite-math-only beats -Ofast
+# whatever the order (measured for cho_vla_core), and test_point_to_point fails
+# if this line goes.
+set_source_files_properties(src/trajectory/point_to_point.cpp
+  PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
 
 # Build shared library
 add_library(${PROJECT_NAME} SHARED
@@ -49,6 +57,10 @@ target_link_libraries(${PROJECT_NAME}
   # pinocchio::pinocchio bundles default + parsers + collision (and headers).
   pinocchio::pinocchio
 )
+# No installed header includes Ruckig, but this file links with the plain
+# signature, which makes every link transitive: ruckig is exported below so a
+# consumer's find_package(cho_controller_common) defines ruckig::ruckig.
+target_link_libraries(${PROJECT_NAME} ruckig::ruckig)
 
 # Install
 install(DIRECTORY include/
@@ -72,10 +84,30 @@ ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(
   rclcpp
+  rclcpp_lifecycle
+  ruckig
+  joint_limits
   pinocchio
   eiquadprog
   Eigen3
 )
 ament_export_targets(export_${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  # Built from the trajectory sources rather than linked to the library: the
+  # library leaves its qpOASES symbols for the controller packages to resolve,
+  # which an executable cannot do (see cho_controller_openarm_mit's CMakeLists).
+  # point_to_point.cpp keeps its -fno-finite-math-only here too, so the guard
+  # test still checks the flag.
+  ament_add_gtest(test_point_to_point
+    test/test_point_to_point.cpp
+    src/trajectory/point_to_point.cpp
+    src/trajectory/trajectory_euclidian.cpp
+    src/trajectory/trajectory_se3.cpp)
+  set_source_files_properties(test/test_point_to_point.cpp PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
+  target_include_directories(test_point_to_point PRIVATE include src)
+  target_link_libraries(test_point_to_point Eigen3::Eigen pinocchio::pinocchio ruckig::ruckig)
+endif()
 
 ament_package()

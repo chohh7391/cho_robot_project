@@ -10,6 +10,8 @@ find_package(cho_openarm_mit_core REQUIRED)
 # Pulled in with the merged cho_controller_openarm sources.
 find_package(ament_index_cpp REQUIRED)
 find_package(cho_controller_common REQUIRED)
+# cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
+find_package(joint_limits REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(controller_interface REQUIRED)
@@ -74,7 +76,7 @@ target_include_directories(${OPENARM_SHARED_LIB} PUBLIC
   $<INSTALL_INTERFACE:include>
   ${EIGEN3_INCLUDE_DIRS})
 ament_target_dependencies(${OPENARM_SHARED_LIB}
-  ament_index_cpp cho_controller_common cho_interfaces control_msgs controller_interface
+  ament_index_cpp cho_controller_common cho_interfaces control_msgs controller_interface joint_limits
   geometry_msgs hardware_interface pinocchio pluginlib rclcpp rclcpp_action
   rclcpp_lifecycle realtime_tools)
 target_link_libraries(${OPENARM_SHARED_LIB} pinocchio::pinocchio)

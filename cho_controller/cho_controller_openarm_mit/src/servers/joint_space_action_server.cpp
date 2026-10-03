@@ -145,6 +145,9 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, OpenArmS
         initialized_ = true;
     }
     trajectory_->setCurrentTime(current_time.seconds());
+    // The joint/Cartesian limits can make the motion take longer than the
+    // goal asked for; time success and timeout from what it will take.
+    const double duration = trajectory_->getDuration();
 
     if (cancel_requested_.load()) {
         finish_from_rt(GoalPhase::kFinishCanceled);
@@ -154,16 +157,16 @@ bool JointSpaceActionServer::compute(const rclcpp::Time & current_time, OpenArmS
     const double elapsed_time_sec = (current_time - start_time_).seconds();
 
     feedback_msg_->percent_complete = static_cast<float>(
-        std::min(100.0, (elapsed_time_sec / std::max(duration_, 0.001)) * 100.0));
+        std::min(100.0, (elapsed_time_sec / std::max(duration, 0.001)) * 100.0));
 
     const double error_norm = (q_goal_ - state.q_arm).norm();
 
-    if (elapsed_time_sec > duration_ && error_norm < success_threshold_) {
+    if (elapsed_time_sec > duration && error_norm < success_threshold_) {
         finish_from_rt(GoalPhase::kFinishSucceeded);
         return true;
     }
 
-    if (elapsed_time_sec > duration_ + 2.0) {
+    if (elapsed_time_sec > duration + 2.0) {
         finish_from_rt(GoalPhase::kFinishAborted);
         return false;
     }

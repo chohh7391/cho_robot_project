@@ -23,6 +23,8 @@ find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
+# cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
+find_package(joint_limits REQUIRED)
 find_package(cho_interfaces REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
@@ -40,6 +42,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 ament_target_dependencies(${PROJECT_NAME}
     controller_interface
+    joint_limits
     hardware_interface
     pinocchio
     pluginlib

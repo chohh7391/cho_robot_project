@@ -9,7 +9,7 @@ namespace ur {
 
 using JointSpaceAction = cho_interfaces::action::JointSpace;
 using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
-using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianCubic;
+using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianRuckig;
 
 class URJointSpaceActionServer : public URBaseActionServer<JointSpaceAction, JointTrajectory>
 {

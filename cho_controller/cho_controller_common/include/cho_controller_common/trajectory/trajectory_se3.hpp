@@ -8,53 +8,39 @@
 //
 #pragma once
 
+#include <memory>
+
+#include "cho_controller_common/trajectory/motion_limits.hpp"
 #include "cho_controller_common/trajectory/trajectory_base.hpp"
 
-#include <pinocchio/spatial.hpp>
+#include <pinocchio/spatial/se3.hpp>
 
 
 namespace cho_controller {
 namespace common {
 namespace trajectory {
-class TrajectorySE3Constant : public TrajectoryBase
-{
-	public:
-	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-	typedef pinocchio::SE3 SE3;
+class PointToPoint;
 
-	TrajectorySE3Constant(const std::string & name);
-
-	TrajectorySE3Constant(const std::string & name, const SE3 & M);
-
-	unsigned int size() const;
-
-	void setReference(const SE3 & M);
-
-	const TrajectorySample & operator()(double time);
-
-	const TrajectorySample & computeNext();
-
-	void getLastSample(TrajectorySample & sample) const;
-
-	bool has_trajectory_ended() const;
-
-	const std::vector<Eigen::VectorXd> & getWholeTrajectory();
-
-	protected:
-		SE3    m_M;
-		std::vector<Eigen::VectorXd> traj_;
-
-};
-
-class TrajectorySE3Cubic : public TrajectoryBase
+// Rest-to-rest pose motion: a straight line in translation and the geodesic in
+// rotation, R(t) = R_init exp(axis * angle(t)). Ruckig plans two coordinates,
+// the distance along the line and the angle about the axis, within the
+// Cartesian limits, phase-synchronised so both arrive together and in
+// proportion, and the plan is slowed uniformly to the requested duration (see
+// point_to_point.hpp). The duration is a minimum, as for the joint version.
+//
+// Sample layout: pos = [translation; rotation column-major (9)], vel/acc =
+// [linear; angular], all world-aligned: the twist TaskSE3Equality expects.
+class TrajectorySE3Ruckig : public TrajectoryBase
 {
 public:
 	EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 	typedef pinocchio::SE3 SE3;
 
-	TrajectorySE3Cubic(const std::string & name);
-	TrajectorySE3Cubic(const std::string & name, const SE3 & init_M, const SE3 & goal_M, const double & duration, const double & stime);
+	TrajectorySE3Ruckig(const std::string & name);
+	TrajectorySE3Ruckig(const std::string & name, const SE3 & init_M, const SE3 & goal_M, const double & duration,
+						const double & stime);
+	~TrajectorySE3Ruckig();
 
 	unsigned int size() const;
 	const TrajectorySample & operator()(double time);
@@ -67,52 +53,25 @@ public:
 	void setDuration(const double & duration);
 	void setCurrentTime(const double & time);
 	void setStartTime(const double & time);
+	// Unset (0) bounds leave the requested duration exact.
+	void setLimits(const CartesianMotionLimits & limits);
+	// The duration the motion will take; plans first if anything changed.
+	double getDuration();
 	const std::vector<Eigen::VectorXd> & getWholeTrajectory();
 
-	double cubic(double time,    ///< Current time
-				double time_0,  ///< Start time
-				double time_f,  ///< End time
-				double x_0,     ///< Start state
-				double x_f,     ///< End state
-				double x_dot_0, ///< Start state dot
-				double x_dot_f  ///< End state dot
-	)
-	{
-		double x_t;
-
-		if (time < time_0)
-		{
-		x_t = x_0;
-		}
-		else if (time > time_f)
-		{
-		x_t = x_f;
-		}
-		else
-		{
-		double elapsed_time = time - time_0;
-		double total_time = time_f - time_0;
-		double total_time2 = total_time * total_time;  // pow(t,2)
-		double total_time3 = total_time2 * total_time; // pow(t,3)
-		double total_x = x_f - x_0;
-
-		x_t = x_0 + x_dot_0 * elapsed_time
-
-				+ (3 * total_x / total_time2 - 2 * x_dot_0 / total_time - x_dot_f / total_time) * elapsed_time * elapsed_time
-
-				+ (-2 * total_x / total_time3 +
-				(x_dot_0 + x_dot_f) / total_time2) *
-					elapsed_time * elapsed_time * elapsed_time;
-		}
-		return x_t;
-	}
-	
 protected:
-	SE3 m_ref;
-	SE3 m_init, m_goal, m_cubic;
-	double m_duration, m_stime, m_time;
-	std::vector<Eigen::VectorXd> traj_;
+	void plan();
 
+	SE3 m_init {SE3::Identity()}, m_goal {SE3::Identity()};
+	double m_duration {0.0}, m_stime {0.0}, m_time {0.0};
+	CartesianMotionLimits m_limits;
+	bool m_dirty {true};
+	// The line and the geodesic of the current plan, unit vectors.
+	Eigen::Vector3d m_direction {Eigen::Vector3d::Zero()}, m_axis {Eigen::Vector3d::Zero()};
+	std::unique_ptr<PointToPoint> m_motion;
+	// Scratch for sampling the two coordinates without allocating.
+	Eigen::Vector2d m_s, m_sd, m_sdd;
+	std::vector<Eigen::VectorXd> traj_;
 };
 
 } // namespace trajectory

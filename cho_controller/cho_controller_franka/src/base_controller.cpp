@@ -1,5 +1,6 @@
 #include "cho_controller_franka/robot_utils.hpp"
 #include "cho_controller_franka/base_controller.hpp"
+#include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -541,6 +542,20 @@ void FrankaBaseController::log_joint_pos()
         Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v_arm;
         ctrl_state_rt_pub_->unlockAndPublish();
     }
+}
+
+cho_controller::common::trajectory::JointMotionLimits FrankaBaseController::joint_motion_limits()
+{
+    std::vector<std::string> joints;
+    for (int i = 1; i <= num_dof_; ++i) {
+        joints.push_back(robot_type_ + "_joint" + std::to_string(i));
+    }
+    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), joints);
+}
+
+cho_controller::common::trajectory::CartesianMotionLimits FrankaBaseController::cartesian_motion_limits()
+{
+    return cho_controller::common::trajectory::load_cartesian_motion_limits(get_node());
 }
 
 } // namespace franka

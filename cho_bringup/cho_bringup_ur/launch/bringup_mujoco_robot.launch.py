@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os
 import tempfile
 
@@ -10,6 +11,7 @@ from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+from cho_robot_config import motion_limit_parameters
 
 
 SWITCHABLE_CONTROLLERS = [
@@ -43,6 +45,11 @@ def create_runtime_controller_params(ee_name, bringup_type):
             },
         },
     }
+    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
+    limits = motion_limit_parameters('ur5e')
+    for controller in params['/**'].values():
+        controller['ros__parameters'].update(deepcopy(limits))
     with os.fdopen(fd, 'w') as runtime_file:
         yaml.safe_dump(params, runtime_file)
     return runtime_path
