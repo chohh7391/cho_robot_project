@@ -71,10 +71,12 @@ public:
 
     bool compute(const rclcpp::Time & current_time, State & state) override;
 
-    // Action space of the reference currently being produced. Read by the
-    // controller on the same RT thread immediately after compute(), so a plain
-    // member is sufficient.
-    const std::string & action_space() const { return active_action_space_; }
+    // Action space of the reference currently being produced, and its desired
+    // twist (world-aligned; zero in joint space and while holding). The desired
+    // joint rate goes out in State::v_arm_des. Read by the controller on the same
+    // RT thread immediately after compute(), so plain members are sufficient.
+    cho_vla_core::ActionSpace action_space() const { return active_action_space_; }
+    const Vector6d & twist_des() const { return twist_des_; }
 
 protected:
     void finish_goal_rt(GoalPhase terminal, State & state);
@@ -120,8 +122,6 @@ private:
     // cross-chunk EMA. A readFromRT() here would violate RealtimeBuffer's
     // single-RT-reader contract by swapping the pointer out from under the
     // control loop -- the same trap the previous implementation documented.
-    cho_vla_core::Waypoint ema_seed_ {};
-    bool have_ema_seed_ {false};
 
     // ---- executor -> RT ----------------------------------------------------
     // Bumped once per ACCEPTED chunk. The watchdog lives on the RT side, so it
@@ -183,7 +183,11 @@ private:
     double stream_timeout_sec_ {0.0};
     double hold_timeout_sec_ {0.0};
 
-    std::string active_action_space_ {"task"};
+    // RT-only. Telemetry reads the atomic copy: the executor thread publishing
+    // it while the control loop rewrites a std::string was a data race.
+    cho_vla_core::ActionSpace active_action_space_ {cho_vla_core::ActionSpace::kTask};
+    std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};
+    Vector6d twist_des_ {Vector6d::Zero()};
 
     // RT-only hold state.
     bool hold_latched_ {false};

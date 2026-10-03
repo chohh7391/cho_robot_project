@@ -130,8 +130,6 @@ private:
   cho_vla_core::StreamWatchdog watchdog_;            // RT
   cho_vla_core::GripperDispatch gripper_dispatch_;   // RT
   realtime_tools::RealtimeBuffer<cho_vla_core::Timeline> timeline_buffer_;
-  cho_vla_core::Waypoint ema_seed_ {};
-  bool have_ema_seed_ {false};
   cho_vla_core::Telemetry telemetry_ {};
 
   // ---- goal plumbing ----------------------------------------------------
@@ -172,7 +170,9 @@ private:
   // from releasing_on_hold_, which a new chunk clears before the cycle knows
   // whether a reference could be sampled.
   bool limiter_resume_pending_ {false};
-  std::string active_action_space_ {"task"};
+  // Written by the control loop, read by the telemetry timer: atomic, because
+  // a std::string shared that way was a data race.
+  std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};
 
   // ---- parameters -------------------------------------------------------
   std::string chunk_time_source_ {"arrival"};

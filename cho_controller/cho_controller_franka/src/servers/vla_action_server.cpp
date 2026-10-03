@@ -22,7 +22,9 @@ void VLAActionServer::init()
 
     // Guarded declares: init() reruns on controller re-configure.
     goal_timeout_sec_ = declare_or_get_double("goal_timeout_sec", 60.0);
-    ema_factor_ = declare_or_get_double("chunk_ema_factor", 0.2);
+    // 1.0 = no input low-pass: chained across chunks it trails the policy by
+    // ~4 waypoints. See cho_vla_core::apply_ema.
+    ema_factor_ = declare_or_get_double("chunk_ema_factor", 1.0);
     // Three times a 15 Hz inference period: long enough that a normal gap is not
     // a fault, short enough that a dead policy is caught in a fifth of a second.
     stream_timeout_sec_ = declare_or_get_double("stream_timeout_sec", 0.2);
@@ -35,6 +37,10 @@ void VLAActionServer::init()
     limiter.max_linear_acceleration = declare_or_get_double("max_task_lin_acc", 1.0);
     limiter.max_joint_velocity.setConstant(declare_or_get_double("max_joint_ref_vel", 1.0));
     limiter.max_joint_acceleration.setConstant(declare_or_get_double("max_joint_ref_acc", 4.0));
+    // Both velocity and acceleration are bounded here, so every joint is planned
+    // by Ruckig; 0 ramps the acceleration over 40 ms (jerk = acc / 0.04 s). See
+    // cho_vla_core::ReferenceLimiter.
+    limiter.max_joint_jerk.setConstant(declare_or_get_double("max_joint_ref_jerk", 0.0));
     limiter_.set_params(limiter);
 
     cho_vla_core::ActionBuffer::Params buffer;
@@ -42,7 +48,23 @@ void VLAActionServer::init()
     // averaging two chunks lands between modes where neither is valid; weighted
     // aggregation is for ACT-style checkpoints. See cho_vla_core/DESIGN.md.
     buffer.aggregate_weight = declare_or_get_double("chunk_aggregate_weight", 1.0);
-    buffer.blend_duration = declare_or_get_double("chunk_blend_duration", 0.0);
+    // A min-jerk crossfade into each new chunk rather than a hard splice.
+    buffer.blend_duration = declare_or_get_double("chunk_blend_duration", 0.1);
+    // How the reference moves between the policy's waypoints: "spline" (C2,
+    // closest to a smooth policy's path), "pchip" (C1, never past a waypoint) or
+    // "linear" (the historical sampler: its velocity steps at every waypoint).
+    // See cho_vla_core::Interpolation.
+    if (!node_->has_parameter("chunk_interpolation")) {
+        node_->declare_parameter<std::string>("chunk_interpolation", "spline");
+    }
+    const std::string interpolation = node_->get_parameter("chunk_interpolation").as_string();
+    // parse_interpolation() leaves buffer.interpolation at its spline default
+    // when it refuses the string.
+    if (!cho_vla_core::parse_interpolation(interpolation, buffer.interpolation)) {
+        RCLCPP_ERROR(node_->get_logger(),
+            "chunk_interpolation '%s' is not 'spline', 'pchip' or 'linear'; using 'spline'.",
+            interpolation.c_str());
+    }
     buffer_.set_params(buffer);
 
     cho_vla_core::StreamWatchdog::Params watchdog;
@@ -112,8 +134,8 @@ void VLAActionServer::init()
 
     if (!(ema_factor_ > 0.0 && ema_factor_ <= 1.0)) {
         RCLCPP_WARN(node_->get_logger(),
-            "chunk_ema_factor %.3f out of (0, 1]; falling back to 0.2", ema_factor_);
-        ema_factor_ = 0.2;
+            "chunk_ema_factor %.3f out of (0, 1]; falling back to 1.0 (off)", ema_factor_);
+        ema_factor_ = 1.0;
     }
 
     // Both names stay at their historical globals by default: the behaviour-tree
@@ -231,7 +253,6 @@ void VLAActionServer::handle_accepted(const std::shared_ptr<VLAGoalHandle> goal_
 
     buffer_.reset();
     timeline_buffer_.writeFromNonRT(cho_vla_core::Timeline{});
-    have_ema_seed_ = false;
     telemetry_ = cho_vla_core::Telemetry{};
     accepted_count_.store(0);
     pending_gripper_.store(0);
@@ -365,11 +386,14 @@ void VLAActionServer::process_vla_action(
     // Cross-chunk EMA is only valid when consecutive chunks share a frame.
     // Relative chunks are each expressed against their own observation-time
     // anchor, so blending offsets from different anchors distorts the command.
+    // Chained from where the timeline already is just before this chunk starts
+    // (see cho_vla_core::ema_seed). Relative chunks are each expressed
+    // against their own anchor, so blending one into another is meaningless.
+    cho_vla_core::Waypoint seed;
     const bool chainable =
-        have_ema_seed_ && chunk.relative == cho_vla_core::RelativeMode::kAbsolute;
-    cho_vla_core::apply_ema(waypoints, ema_factor_, chainable ? &ema_seed_ : nullptr);
-    ema_seed_ = waypoints.back();
-    have_ema_seed_ = true;
+        chunk.relative == cho_vla_core::RelativeMode::kAbsolute &&
+        cho_vla_core::ema_seed(buffer_.timeline(), waypoints, chunk.space, chunk.control_dt, seed);
+    cho_vla_core::apply_ema(waypoints, ema_factor_, chainable ? &seed : nullptr);
 
     const cho_vla_core::ActionBuffer::SpliceResult spliced =
         buffer_.splice(waypoints, chunk.space, arrival, chunk.control_dt);
@@ -440,7 +464,9 @@ void VLAActionServer::non_rt_tick_impl()
     msg.header.stamp = now;
     msg.stream_state = cho_vla_core::stream_state_name(
         static_cast<cho_vla_core::StreamState>(rt_stream_state_.load()));
-    msg.action_space = active_action_space_;
+    msg.action_space =
+        static_cast<cho_vla_core::ActionSpace>(rt_action_space_.load()) ==
+            cho_vla_core::ActionSpace::kJoint ? "joint" : "task";
     msg.chunks_accepted = telemetry_.chunks_accepted;
     msg.chunks_rejected = telemetry_.chunks_rejected;
     msg.waypoints_dropped_past = telemetry_.waypoints_dropped_past;
@@ -587,15 +613,23 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         // sag instead of arresting it.
         latch_hold(state);
         apply_hold(state);
+        state.v_arm_des.setZero();
+        twist_des_.setZero();
         rt_remaining_horizon_.store(0.0);
         return true;
     }
 
+    const bool resuming = hold_latched_;
     hold_latched_ = false;
-    active_action_space_ =
-        (reference.space == cho_vla_core::ActionSpace::kJoint) ? "joint" : "task";
+    active_action_space_ = reference.space;
+    rt_action_space_.store(static_cast<int>(reference.space));
 
-    if (!limiter_seeded_) {
+    if (!limiter_seeded_ || resuming) {
+        // Goal start, and every resume out of hold -- ReferenceLimiter's contract
+        // asks for both. Seeding only at goal start left the limiter's clock at
+        // the last cycle before the hold, so the first cycle after it planned
+        // over the whole hold: in MuJoCo a 0.3 s gap moved the joint reference
+        // 0.12 rad in one 1 ms cycle. The OpenArm host already re-seeds here.
         // Seed from what the controller is already commanding, so the first
         // limited cycle is continuous.
         cho_vla_core::Reference seed = reference;
@@ -608,6 +642,15 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 
     state.H_ee_des = reference.pose;
     state.q_arm_des = reference.joints;
+    // The limiter's own derivative of what it emitted: the rate the reference
+    // moves at, for the control law's velocity feed-forward.
+    if (reference.space == cho_vla_core::ActionSpace::kJoint) {
+        state.v_arm_des = reference.joint_velocity;
+        twist_des_.setZero();
+    } else {
+        state.v_arm_des.setZero();
+        twist_des_ = reference.twist;
+    }
 
     if (reference.has_gripper) {
         // Edge-detect on the SAMPLED value, so the gripper fires at the

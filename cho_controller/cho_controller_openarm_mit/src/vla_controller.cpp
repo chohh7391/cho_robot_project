@@ -52,10 +52,12 @@ controller_interface::CallbackReturn VlaController::on_init()
   auto_declare<double>("telemetry_period_sec", 0.1);
   auto_declare<double>("chunk_aggregate_weight", 1.0);
   auto_declare<double>("chunk_blend_duration", 0.1);
+  auto_declare<std::string>("chunk_interpolation", "spline");
   auto_declare<double>("chunk_max_control_dt", 1.0);
   auto_declare<bool>("enable_gripper", false);
   auto_declare<std::vector<double>>("max_joint_ref_vel", std::vector<double>{});
   auto_declare<std::vector<double>>("max_joint_ref_acc", std::vector<double>{});
+  auto_declare<std::vector<double>>("max_joint_ref_jerk", std::vector<double>{});
   auto_declare<double>("max_task_lin_vel", 0.25);
   auto_declare<double>("max_task_ang_vel", 1.5);
   auto_declare<double>("max_task_lin_acc", 1.0);
@@ -134,6 +136,7 @@ controller_interface::CallbackReturn VlaController::on_configure(
   limiter.max_linear_acceleration = get_node()->get_parameter("max_task_lin_acc").as_double();
   const auto ref_vel = get_node()->get_parameter("max_joint_ref_vel").as_double_array();
   const auto ref_acc = get_node()->get_parameter("max_joint_ref_acc").as_double_array();
+  const auto ref_jerk = get_node()->get_parameter("max_joint_ref_jerk").as_double_array();
   for (std::size_t joint = 0; joint < 7; ++joint) {
     // Default to the safety profile's own command velocity: the profile is the
     // authority on how fast this joint may be asked to move, and a VLA reference
@@ -143,6 +146,10 @@ controller_interface::CallbackReturn VlaController::on_configure(
                             : command_velocity_[joint];
     limiter.max_joint_acceleration(static_cast<Eigen::Index>(joint)) =
       (ref_acc.size() == 7) ? ref_acc[joint] : 0.0;
+    // Ruckig plans a joint only where velocity AND acceleration are bounded;
+    // jerk is then optional (unset ramps the acceleration over 40 ms).
+    limiter.max_joint_jerk(static_cast<Eigen::Index>(joint)) =
+      (ref_jerk.size() == 7) ? ref_jerk[joint] : 0.0;
     limiter.joint_lower(static_cast<Eigen::Index>(joint)) = position_lower_[joint];
     limiter.joint_upper(static_cast<Eigen::Index>(joint)) = position_upper_[joint];
   }
@@ -152,6 +159,17 @@ controller_interface::CallbackReturn VlaController::on_configure(
   cho_vla_core::ActionBuffer::Params buffer;
   buffer.aggregate_weight = get_node()->get_parameter("chunk_aggregate_weight").as_double();
   buffer.blend_duration = get_node()->get_parameter("chunk_blend_duration").as_double();
+  // How the reference moves between the policy's waypoints: "spline" (C2),
+  // "pchip" (C1, never past a waypoint) or "linear" (the historical sampler,
+  // whose velocity steps at every waypoint -- one acceleration impulse per
+  // action step on this torque-controlled arm). See cho_vla_core::Interpolation.
+  const auto interpolation = get_node()->get_parameter("chunk_interpolation").as_string();
+  if (!cho_vla_core::parse_interpolation(interpolation, buffer.interpolation)) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "chunk_interpolation must be 'spline', 'pchip' or 'linear' (got '%s')",
+      interpolation.c_str());
+    return CallbackReturn::ERROR;
+  }
   buffer_.set_params(buffer);
 
   cho_vla_core::StreamWatchdog::Params watchdog;
@@ -241,9 +259,10 @@ controller_interface::CallbackReturn VlaController::on_configure(
 
   RCLCPP_INFO(get_node()->get_logger(),
     "VLA MIT reference source ready: chunk_topic=%s time_source=%s stream_timeout=%.3f "
-    "hold_timeout=%.3f blend=%.3f ema=%.3f. Both action spaces are impedance.",
+    "hold_timeout=%.3f blend=%.3f interpolation=%s ema=%.3f. Both action spaces are "
+    "impedance.",
     chunk_topic_.c_str(), chunk_time_source_.c_str(), stream_timeout_sec_,
-    hold_timeout_sec_, buffer.blend_duration, ema_factor_);
+    hold_timeout_sec_, buffer.blend_duration, interpolation.c_str(), ema_factor_);
   return CallbackReturn::SUCCESS;
 }
 
@@ -258,7 +277,6 @@ controller_interface::CallbackReturn VlaController::on_activate(
   buffer_.reset();
   history_.reset();
   timeline_buffer_.writeFromNonRT(cho_vla_core::Timeline{});
-  have_ema_seed_ = false;
   telemetry_ = cho_vla_core::Telemetry{};
   accepted_count_.store(0);
   rt_seen_accepted_ = 0;
@@ -334,7 +352,6 @@ void VlaController::vla_accepted_callback(const std::shared_ptr<VlaGoalHandle> &
 
   buffer_.reset();
   timeline_buffer_.writeFromNonRT(cho_vla_core::Timeline{});
-  have_ema_seed_ = false;
   telemetry_ = cho_vla_core::Telemetry{};
   accepted_count_.store(0);
   vla_success_flag_.store(false);
@@ -435,7 +452,9 @@ void VlaController::vla_non_rt_tick_impl()
     message.header.stamp = now;
     message.stream_state = cho_vla_core::stream_state_name(
       static_cast<cho_vla_core::StreamState>(rt_stream_state_.load()));
-    message.action_space = active_action_space_;
+    message.action_space =
+      static_cast<cho_vla_core::ActionSpace>(rt_action_space_.load()) ==
+      cho_vla_core::ActionSpace::kJoint ? "joint" : "task";
     message.chunks_accepted = telemetry_.chunks_accepted;
     message.chunks_rejected = telemetry_.chunks_rejected;
     message.waypoints_dropped_past = telemetry_.waypoints_dropped_past;
@@ -586,11 +605,14 @@ void VlaController::on_action_chunk(
     return;
   }
 
+  // Chained from where the timeline already is just before this chunk starts
+  // (see cho_vla_core::ema_seed). Relative chunks are each expressed
+  // against their own anchor, so blending one into another is meaningless.
+  cho_vla_core::Waypoint seed;
   const bool chainable =
-    have_ema_seed_ && chunk.relative == cho_vla_core::RelativeMode::kAbsolute;
-  cho_vla_core::apply_ema(waypoints, ema_factor_, chainable ? &ema_seed_ : nullptr);
-  ema_seed_ = waypoints.back();
-  have_ema_seed_ = true;
+    chunk.relative == cho_vla_core::RelativeMode::kAbsolute &&
+    cho_vla_core::ema_seed(buffer_.timeline(), waypoints, chunk.space, chunk.control_dt, seed);
+  cho_vla_core::apply_ema(waypoints, ema_factor_, chainable ? &seed : nullptr);
 
   const auto spliced =
     buffer_.splice(waypoints, chunk.space, arrival, chunk.control_dt);
@@ -802,8 +824,7 @@ bool VlaController::write_task_target(
   }
 
   releasing_on_hold_ = false;
-  active_action_space_ =
-    (reference.space == cho_vla_core::ActionSpace::kJoint) ? "joint" : "task";
+  rt_action_space_.store(static_cast<int>(reference.space));
 
   // Goal start, and every resume out of hold. ReferenceLimiter's own contract
   // asks for both; only goal start was honoured, so a stream gap left the rate

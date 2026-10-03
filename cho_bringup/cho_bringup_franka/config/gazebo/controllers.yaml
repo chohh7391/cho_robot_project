@@ -188,6 +188,11 @@
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
       default_kp_task: [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
       default_kd_task: [3.46410162, 3.46410162, 3.46410162, 0.89442719, 0.89442719, 0.89442719]
+      # Chunk smoothing (cho_vla_core/DESIGN.md). EMA off: chained across chunks
+      # it trails the policy by ~4 waypoints (60 mrad off its path in MuJoCo).
+      # Blend: a 0.1 s min-jerk crossfade into each new chunk, not a hard splice.
+      chunk_ema_factor: 1.0
+      chunk_blend_duration: 0.1
 
 /**:
   moveit_joint_trajectory_controller:
