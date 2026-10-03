@@ -6,9 +6,8 @@
      merge had to happen rather than a deletion - every MIT bringup config
      spawns it, and the MIT controllers have no broadcaster of their own.
 
-     Its own library, in the same package: these link cho_controller_common,
-     whose .so leaves qpOASES symbols undefined, and that hole is unfillable in
-     an executable. See the CMakeLists note. -->
+     Its own library, in the same package: these link cho_controller_common and
+     the MIT controllers do not. See the CMakeLists note. -->
 <library path="cho_controller_openarm_shared">
   <class name="cho_controller_openarm_mit/EEStateBroadcaster"
          type="cho_controller::openarm::EEStateBroadcaster"

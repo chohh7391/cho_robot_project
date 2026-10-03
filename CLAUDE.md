@@ -214,7 +214,6 @@ cho_perception/              # Perception that knows a robot; grouping directory
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)
   mujoco_ros2_control/       # MuJoCo hardware interface (do not edit)
-  qpOASES/                   # QP solver used by QP controllers
 ```
 
 ### Controller Plugin Architecture

@@ -95,19 +95,11 @@ ament_export_targets(export_${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  # Built from the trajectory sources rather than linked to the library: the
-  # library leaves its qpOASES symbols for the controller packages to resolve,
-  # which an executable cannot do (see cho_controller_openarm_mit's CMakeLists).
-  # point_to_point.cpp keeps its -fno-finite-math-only here too, so the guard
-  # test still checks the flag.
-  ament_add_gtest(test_point_to_point
-    test/test_point_to_point.cpp
-    src/trajectory/point_to_point.cpp
-    src/trajectory/trajectory_euclidian.cpp
-    src/trajectory/trajectory_se3.cpp)
+  ament_add_gtest(test_point_to_point test/test_point_to_point.cpp)
   set_source_files_properties(test/test_point_to_point.cpp PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
-  target_include_directories(test_point_to_point PRIVATE include src)
-  target_link_libraries(test_point_to_point Eigen3::Eigen pinocchio::pinocchio ruckig::ruckig)
+  # The private planner header lives in src/.
+  target_include_directories(test_point_to_point PRIVATE src)
+  target_link_libraries(test_point_to_point ${PROJECT_NAME} pinocchio::pinocchio)
 endif()
 
 ament_package()

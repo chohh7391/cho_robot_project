@@ -50,16 +50,12 @@ target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 # broadcaster every OpenArm bringup spawns, plus joint-space
 # impedance/position/velocity and the JointSpace action server.
 #
-# ONE PACKAGE, TWO LIBRARIES, and the reason is a link surface rather than
-# taste. These need cho_controller_common, whose own .so leaves the qpOASES
-# symbols of its HQP solver UNDEFINED - it links eiquadprog and pinocchio and
-# never qpOASES, because libqpOASES.a is built without -fPIC and so cannot go
-# into a shared object at all. A shared library tolerates that hole, which is
-# how this code has always shipped and how controller_manager still dlopens it;
-# an EXECUTABLE that links it must fill the hole, and cannot. Folding these
-# sources into ${PROJECT_NAME} therefore broke every gtest binary in this
-# package, which links that library. Keeping them apart also leaves the MIT
-# plugin .so byte-for-byte the dependency set it had before the merge.
+# ONE PACKAGE, TWO LIBRARIES. These need cho_controller_common; the MIT
+# controllers in ${PROJECT_NAME} do not, and keeping them apart leaves the MIT
+# plugin .so the dependency set it had before the merge. (The split was first
+# forced by cho_controller_common's .so leaving its qpOASES solver's symbols
+# undefined, a hole no executable linking it could fill. That unused solver has
+# since been removed.)
 #
 # Not compiled with -Ofast, deliberately: these carry isfinite() guards, which
 # -ffinite-math-only folds to true. See the CLAUDE.md note on that trap.

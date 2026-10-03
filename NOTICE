@@ -73,8 +73,4 @@ own licenses in their own repositories:
     extern/franka_ros2                    Franka Robotics GmbH, Apache-2.0
     extern/Universal_Robots_ROS2_Driver   Universal Robots A/S, BSD-3-Clause
     extern/mujoco_ros2_control            ros-controls, Apache-2.0
-    extern/qpOASES                        COIN-OR, LGPL-2.1
     extern/bota_driver_ros2               Bota Systems AG
-
-    Note: qpOASES is LGPL-2.1. It is consumed as a separate library; if you
-    distribute binaries that link it, review the LGPL linking requirements.

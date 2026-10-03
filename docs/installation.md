@@ -52,15 +52,6 @@ echo 'export PATH=$PATH:$MUJOCO_DIR/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-## qpOASES
-
-```bash
-cd ~/ros2_ws/src/cho_robot_project/extern/qpOASES
-mkdir build && cd build
-cmake ..
-sudo make install
-```
-
 ## OpenArm
 
 `cho_description_openarm` is a vendored fork (URDF/xacro, meshes and MJCF all
