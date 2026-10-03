@@ -32,18 +32,6 @@ cho_controller/cho_controller_common/include/cho_controller_common/util/stop_wat
     University of Udine
     License: MIT  ->  LICENSES/MIT-stop-watch.txt
 
-cho_controller/utils/cho_trajectory_smoother/
-    Derived from the reference implementation of
-    "Time-Optimal Trajectory Generation for Path Following with Bounded
-     Acceleration and Velocity" (Kunz & Stilman, RSS 2012)
-    https://github.com/tobiaskunz/trajectories
-    Copyright (c) 2012 Georgia Tech Research Corporation
-    Author: Tobias Kunz <tobias@gatech.edu>
-    License: BSD-style  ->  LICENSES/BSD-Kunz-trajectories.txt
-
-    Modified for cho_robot_project (namespace and packaging changes).
-
-
 ================================================================================
 Forked upstream packages (retain their original license and authorship)
 ================================================================================

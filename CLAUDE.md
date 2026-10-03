@@ -64,7 +64,6 @@ export IGN_IP=127.0.0.1
 cho_controller/
   cho_controller_common/     # Shared C++ math: Pinocchio FK/IK/dynamics, Eigen utilities
   cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
-  utils/cho_trajectory_smoother/  # Time-optimal trajectory generation
   utils/cho_vla_core/        # Robot-independent VLA action-chunk pipeline: chunk
                              # validation, observation-time splicing, reference
                              # sampling/limiting, stream watchdog, gripper edge

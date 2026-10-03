@@ -9,7 +9,6 @@ find_package(rclcpp REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(eiquadprog REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(cho_trajectory_smoother REQUIRED)
 
 file(GLOB_RECURSE PROJECT_HEADERS include/${PROJECT_NAME}/*.hpp include/${PROJECT_NAME}/*.hh)
 file(GLOB_RECURSE PROJECT_SOURCES src/*.cpp)
@@ -29,7 +28,6 @@ ament_target_dependencies(${PROJECT_NAME}
   pinocchio
   eiquadprog
   Eigen3
-  cho_trajectory_smoother
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -77,7 +75,6 @@ ament_export_dependencies(
   pinocchio
   eiquadprog
   Eigen3
-  cho_trajectory_smoother
 )
 ament_export_targets(export_${PROJECT_NAME})
 

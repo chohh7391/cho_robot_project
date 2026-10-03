@@ -24,7 +24,6 @@ defaults:
 env:
   BUILD_PACKAGES: >-
     cho_interfaces
-    cho_trajectory_smoother
     cho_controller_common
     cho_controller_ur
     cho_description_franka
@@ -47,7 +46,6 @@ env:
   # environment.
   TEST_PACKAGES: >-
     cho_interfaces
-    cho_trajectory_smoother
     cho_controller_common
     cho_controller_ur
     cho_description_openarm
@@ -102,7 +100,6 @@ jobs:
           source /opt/ros/humble/setup.bash
           rosdep install -y --rosdistro humble --ignore-src --from-paths \
             src/cho_robot_project/cho_interfaces \
-            src/cho_robot_project/cho_controller/utils/cho_trajectory_smoother \
             src/cho_robot_project/cho_controller/cho_controller_common \
             src/cho_robot_project/cho_controller/cho_controller_ur \
             src/cho_robot_project/cho_controller/cho_controller_openarm \
