@@ -128,6 +128,13 @@ struct Waypoint
   // dispatcher never have to remember which mode the producing chunk used. A
   // mid-goal mode switch then cannot mis-read waypoints from the older chunk.
   GripperMode gripper_mode {GripperMode::kBinary};
+  // Slopes of the interpolating curve AT this waypoint, written by
+  // ActionBuffer::splice() from the chunk the waypoint came in with: a cubic
+  // spline is a property of a whole chunk, not of two neighbouring waypoints.
+  // Angular is world-aligned, like Reference::twist.
+  Vector7 joint_tangent {Vector7::Zero()};
+  Eigen::Vector3d linear_tangent {Eigen::Vector3d::Zero()};
+  Eigen::Vector3d angular_tangent {Eigen::Vector3d::Zero()};
 };
 
 // What the sampler hands the control law each cycle.

@@ -4,6 +4,7 @@
 
 #include <vector>
 
+#include "cho_vla_core/action_buffer.hpp"
 #include "cho_vla_core/types.hpp"
 
 namespace cho_vla_core
@@ -26,5 +27,19 @@ namespace cho_vla_core
 //
 // factor <= 0 or > 1 is treated as 1.0 (no filtering).
 void apply_ema(std::vector<Waypoint> & waypoints, double factor, const Waypoint * seed);
+
+// The seed that chains apply_ema() across a chunk boundary: the timeline's own
+// value one waypoint before `incoming` begins, i.e. the sample the filter would
+// have seen last. False -- do not chain -- when the timeline is empty or in
+// another action space.
+//
+// Both hosts used to chain from the PREVIOUS chunk's last waypoint, which lies a
+// whole horizon ahead of where the new chunk starts playing, so every chunk's
+// first waypoints were pulled toward a pose 0.5-1 s in the future. Under a
+// limiter that chased the reference that hid behind its lag; under one that
+// tracks it, it put the reference 92 mrad RMS off the policy's path in MuJoCo.
+bool ema_seed(
+  const Timeline & timeline, const std::vector<Waypoint> & incoming, ActionSpace space,
+  double control_dt, Waypoint & seed);
 
 }  // namespace cho_vla_core

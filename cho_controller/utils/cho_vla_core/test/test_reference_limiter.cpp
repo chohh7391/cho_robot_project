@@ -1,5 +1,6 @@
 // Copyright 2026 Hyunho Cho
 // SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
 #include <cmath>
 
 #include <gtest/gtest.h>
@@ -54,10 +55,11 @@ TEST(ReferenceLimiter, JointAccelerationLimitsTheOnset) {
   ReferenceLimiter limiter(params);
   limiter.seed(joint_reference(0.0), 0.0);
 
-  // First cycle can only reach a*dt = 0.01 rad/s, so the step is 1e-4.
+  // From rest, an unset jerk bound ramps the acceleration over 40 ms, so the
+  // first 10 ms covers j*t^3/6 with j = 1 / 0.04 = 25 rad/s^3.
   Reference reference = joint_reference(100.0);
   limiter.apply(0.01, reference);
-  EXPECT_NEAR(reference.joints(0), 1e-4, 1e-12);
+  EXPECT_NEAR(reference.joints(0), 25.0 * 1e-6 / 6.0, 1e-8);
 
   // Speed builds up over subsequent cycles rather than jumping.
   double previous = reference.joints(0);
@@ -120,19 +122,191 @@ TEST(ReferenceLimiter, AngularVelocityCapBoundsRotation) {
   EXPECT_NEAR(achieved.angle(), 0.01, 1e-9);
 }
 
-TEST(ReferenceLimiter, DecelerationIsAlwaysAllowed) {
+TEST(ReferenceLimiter, DecelerationIsBoundedLikeAcceleration) {
+  // The trapezoid this replaced let a stop be instant -- a velocity step, which
+  // in MuJoCo was the largest acceleration spike in the whole reference. Now a
+  // stop is planned within the same bound as a start.
   ReferenceLimiter::Params params;
   params.max_joint_velocity.setConstant(10.0);
   params.max_joint_acceleration.setConstant(1.0);
   ReferenceLimiter limiter(params);
   limiter.seed(joint_reference(0.0), 0.0);
 
-  Reference moving = joint_reference(100.0);
-  limiter.apply(0.01, moving);
-  // Ask it to stop where it is: the acceleration bound must not force it onward.
-  Reference stop = joint_reference(moving.joints(0));
-  limiter.apply(0.02, stop);
-  EXPECT_NEAR(stop.joints(0), moving.joints(0), 1e-12);
+  constexpr double kDt = 0.001;
+  double now = 0.0;
+  double position = 0.0;
+  double velocity = 0.0;
+  for (int cycle = 0; cycle < 1000; ++cycle) {   // 1 s toward a far target
+    now += kDt;
+    Reference reference = joint_reference(100.0);
+    limiter.apply(now, reference);
+    velocity = (reference.joints(0) - position) / kDt;
+    position = reference.joints(0);
+  }
+  ASSERT_GT(velocity, 0.9);
+
+  // Stop where it is now: it may not stop dead, so it passes the stop point by
+  // about v^2 / 2a and comes back, without the rate ever changing faster than
+  // the bound.
+  const double stop = position;
+  double peak = position;
+  for (int cycle = 0; cycle < 6000; ++cycle) {
+    now += kDt;
+    Reference reference = joint_reference(stop);
+    limiter.apply(now, reference);
+    const double next_velocity = (reference.joints(0) - position) / kDt;
+    EXPECT_LE(std::abs(next_velocity - velocity), 1.0 * kDt + 1e-6) << "cycle=" << cycle;
+    velocity = next_velocity;
+    position = reference.joints(0);
+    peak = std::max(peak, position);
+  }
+  // v^2/(2a) at ~1 rad/s, plus turning the acceleration from +a to -a at the
+  // default jerk (a / 40 ms): ~0.56 rad.
+  EXPECT_GT(peak - stop, 0.45);
+  EXPECT_LT(peak - stop, 0.6);
+  EXPECT_NEAR(position, stop, 1e-6);
+}
+
+TEST(ReferenceLimiter, JointJerkBoundShapesTheAcceleration) {
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(10.0);
+  params.max_joint_acceleration.setConstant(4.0);
+  params.max_joint_jerk.setConstant(20.0);
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.0), 0.0);
+
+  constexpr double kDt = 0.001;
+  double previous_position = 0.0;
+  double previous_velocity = 0.0;
+  double previous_acceleration = 0.0;
+  double now = 0.0;
+  for (int cycle = 0; cycle < 3000; ++cycle) {
+    now += kDt;
+    // A target that jumps back and forth, the shape a disagreeing chunk stream has.
+    Reference reference = joint_reference((cycle / 500) % 2 == 0 ? 1.0 : -1.0);
+    limiter.apply(now, reference);
+    const double velocity = (reference.joints(0) - previous_position) / kDt;
+    const double acceleration = (velocity - previous_velocity) / kDt;
+    if (cycle > 1) {
+      // Finite differences of the emitted samples: one jerk step per cycle, plus
+      // the discretisation of a cubic over one sample.
+      EXPECT_LE(std::abs(acceleration - previous_acceleration), 20.0 * kDt * 1.5 + 1e-6)
+        << "cycle=" << cycle;
+      EXPECT_LE(std::abs(acceleration), 4.0 + 0.05) << "cycle=" << cycle;
+    }
+    previous_position = reference.joints(0);
+    previous_velocity = velocity;
+    previous_acceleration = acceleration;
+  }
+}
+
+TEST(ReferenceLimiter, AMovingTargetInsideTheBoundsIsTrackedWithoutLag) {
+  // The point of tracking rather than chasing: the trapezoid, and a Ruckig that
+  // planned to rest on the sampled position, both followed a moving reference
+  // v^2/(2a) behind. Fed the sampled rate, the gap closes and stays closed --
+  // and the reference never moves against the direction it is going.
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(2.0);
+  params.max_joint_acceleration.setConstant(5.0);
+  params.max_joint_jerk.setConstant(50.0);
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.0), 0.0);
+
+  constexpr double kDt = 0.001;
+  constexpr double kRate = 0.5;
+  double now = 0.0;
+  double previous = 0.0;
+  double lag = 0.0;
+  for (int cycle = 0; cycle < 3000; ++cycle) {
+    now += kDt;
+    Reference reference = joint_reference(kRate * now);
+    reference.joint_velocity.setConstant(kRate);
+    limiter.apply(now, reference);
+    EXPECT_GE(reference.joints(0), previous - 1e-12) << "cycle=" << cycle;
+    previous = reference.joints(0);
+    lag = kRate * now - reference.joints(0);
+  }
+  EXPECT_LT(std::abs(lag), 1e-4);
+}
+
+TEST(ReferenceLimiter, ACurvingReferenceInsideTheBoundsPassesThrough) {
+  // A sinusoid well inside every bound: what comes out is what went in, give or
+  // take the one-cycle discretisation of the feed-forward acceleration.
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(2.0);
+  params.max_joint_acceleration.setConstant(8.0);
+  params.max_joint_jerk.setConstant(400.0);
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.0), 0.0);
+
+  constexpr double kDt = 0.001;
+  const double w = 2.0 * M_PI * 0.5;
+  double worst = 0.0;
+  double now = 0.0;
+  for (int cycle = 0; cycle < 6000; ++cycle) {
+    now += kDt;
+    Reference reference = joint_reference(0.2 * (1.0 - std::cos(w * now)));
+    reference.joint_velocity.setConstant(0.2 * w * std::sin(w * now));
+    limiter.apply(now, reference);
+    if (now > 2.0) {
+      worst = std::max(worst, std::abs(reference.joints(0) - 0.2 * (1.0 - std::cos(w * now))));
+    }
+  }
+  EXPECT_LT(worst, 1e-3);
+}
+
+TEST(ReferenceLimiter, TaskTranslationIsTrackedWithItsNormBounded) {
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = 0.25;
+  params.max_linear_acceleration = 1.0;
+  ReferenceLimiter limiter(params);
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+
+  constexpr double kDt = 0.001;
+  const Eigen::Vector3d rate(0.1, -0.05, 0.08);   // 0.137 m/s, a diagonal
+  double now = 0.0;
+  Eigen::Vector3d previous_velocity = Eigen::Vector3d::Zero();
+  double gap = 0.0;
+  for (int cycle = 0; cycle < 4000; ++cycle) {
+    now += kDt;
+    Reference reference = task_reference(rate * now);
+    reference.twist.head<3>() = rate;
+    limiter.apply(now, reference);
+    const Eigen::Vector3d velocity = reference.twist.head<3>();
+    EXPECT_LE(velocity.norm(), 0.25 + 1e-9) << "cycle=" << cycle;
+    EXPECT_LE((velocity - previous_velocity).norm() / kDt, 1.0 + 1e-6) << "cycle=" << cycle;
+    previous_velocity = velocity;
+    gap = (reference.pose.translation() - rate * now).norm();
+  }
+  EXPECT_LT(gap, 1e-4);
+}
+
+TEST(ReferenceLimiter, AnUnplannedJointCannotStallThePlannedOnes) {
+  // Joint 0 has no bounds and is asked to jump absurdly far; the others are
+  // planned. They share one Ruckig solve, so this pins that the unplanned joint
+  // is kept out of it.
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(1.0);
+  params.max_joint_acceleration.setConstant(4.0);
+  params.max_joint_velocity(0) = 0.0;
+  params.max_joint_acceleration(0) = 0.0;
+  ReferenceLimiter limiter(params);
+  limiter.seed(joint_reference(0.0), 0.0);
+
+  double now = 0.0;
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    now += 0.001;
+    Reference reference = joint_reference(0.5);
+    reference.joints(0) = (cycle % 2 == 0) ? 1e6 : -1e6;
+    limiter.apply(now, reference);
+    EXPECT_NEAR(reference.joints(0), (cycle % 2 == 0) ? 1e6 : -1e6, 1e-6);
+  }
+  Reference reference = joint_reference(0.5);
+  limiter.apply(now + 0.001, reference);
+  // 0.1 s from rest at up to 4 rad/s^2 (after its 40 ms ramp): ~13 mrad, well
+  // under way rather than held.
+  EXPECT_GT(reference.joints(1), 0.01);
+  EXPECT_TRUE(reference.joints.allFinite());
 }
 
 TEST(ReferenceLimiter, ZeroOrBackwardsStepUsesANominalCycle) {

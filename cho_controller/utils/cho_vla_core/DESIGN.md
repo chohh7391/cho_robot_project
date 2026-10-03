@@ -66,6 +66,64 @@ assume the control rate is a fixed multiple of the action rate. The hosts here
 run at 750–1000 Hz against a 30–50 Hz action grid with jitter, so anything
 index-based leaves a visible staircase.
 
+## Interpolation between waypoints
+
+The action grid is 15–50 Hz and the hosts control at 750–1000 Hz, so the
+sampler draws most of every reference: everything between two waypoints.
+Straight segments remove the staircase in position but leave one in velocity:
+the rate steps at every waypoint. In MuJoCo (Franka, 15 Hz waypoints, a path
+that curves between them) that was ±30 rad/s² of desired acceleration at every
+step. `chunk_interpolation` selects one of three samplers:
+
+- `spline` (default) — the cubic spline through the chunk's waypoints with
+  not-a-knot ends, built as scipy's `CubicSpline` builds it: continuous in
+  velocity **and** acceleration, and exact for any cubic. Between waypoints it
+  may swing past them, as any C2 spline does.
+- `pchip` — a cubic Hermite spline with Fritsch–Butland slopes per axis (the
+  interior rule of scipy's `PchipInterpolator`): continuous in velocity only,
+  never past a neighbouring waypoint, and each slope depends only on its two
+  neighbours, so a noisy waypoint stays local.
+- `linear` — the historical sampler.
+
+Both cubics pass through every waypoint at its own time and add no lag.
+Slopes are written per waypoint when a chunk is spliced, from that chunk's own
+waypoints only: a spline is a property of a whole chunk, and a later chunk must
+not reshape the curve still playing from an earlier one. Rotation is a cubic in
+the tangent space at each segment's start, `R(s) = R_a exp(h(s))`, with the end
+slope mapped through the inverse right Jacobian of `exp` so the world angular
+rate leaving one segment equals the one entering the next exactly; the spline's
+rotation slopes come from a spline of the chunk's rotation vectors about its
+first waypoint.
+
+Measured in MuJoCo against the policy's own path (15 Hz waypoints, tracking
+limiter below): `spline` 1.2 mrad RMS with 1 ms of lag, `pchip` 5.4 mrad,
+`linear` 4.8 mrad, and the spline also gave the lowest measured vibration. On a
+noisy stream (25 Hz, jitter) the three were within 10% of each other, `pchip`
+slightly the smoothest.
+
+This is deliberately not deoxys' per-command scheme (reach each new target in a
+fraction of the policy period, then stop): that brings the rate back to zero at
+every waypoint, which on a chunk's dense grid is a stop-and-go at the action
+rate.
+
+## Reference limiting
+
+`ReferenceLimiter` is a safety bound downstream of the interpolation, not a
+smoother. It **tracks** the sampled reference: each cycle it asks Ruckig's
+velocity interface for the reference's own rate plus a correction that closes
+any gap (proportional for a small gap, capped by the braking envelope
+`sqrt(2 a gap)` for a large one), within velocity, acceleration and jerk bounds
+applied in both directions. A reference inside the bounds passes through with
+no lag; only what exceeds them is shaped.
+
+The two limiters it replaced both chased: each cycle they planned to stop at
+where the reference was, so a moving reference was followed `v²/(2a)` behind —
+44–80 ms behind the policy's path in MuJoCo, against 1 ms now — and on a clean
+policy the arm moved most smoothly with no limiter at all, because the
+smoothing they added was a side effect of that lag. The older one (a
+trapezoid) also allowed instant deceleration, which was the largest
+acceleration spike in the whole reference.
+
 ## Chunk combination
 
 A new chunk owns the timeline from its first admitted waypoint onward; buffered
@@ -76,11 +134,14 @@ does the same on an RTC merge).
 Two orthogonal knobs, deliberately separate. `aggregate_weight` decides *what*
 value a slot holds where both chunks cover it — `1.0` is LeRobot's
 `latest_only`, its default `weighted_average` is `0.7`. `blend_duration` decides
-how the reference *reaches* it, as a C1 cubic blend between the outgoing and
-incoming trajectories. Averaging alone still steps; a servo bus absorbs that,
-a torque-controlled arm does not. Blending two trajectories rather than a frozen
-value against a trajectory matters too: freezing would lag the motion for the
-whole window.
+how the reference *reaches* it, as a minimum-jerk blend between the outgoing
+and incoming trajectories: the weight is `10s³ − 15s⁴ + 6s⁵`, the quintic
+deoxys' min-jerk interpolators use, flat in its first and second derivative at
+both ends, so the blend adds neither a velocity nor an acceleration step at
+either boundary (the cubic smoothstep it replaced was flat in velocity only).
+Averaging alone still steps; a servo bus absorbs that, a torque-controlled arm
+does not. Blending two trajectories rather than a frozen value against a
+trajectory matters too: freezing would lag the motion for the whole window.
 
 Default is `latest_only` plus a blend, because flow-matching policies are
 multimodal and averaging two modes lands between them, where neither is valid.

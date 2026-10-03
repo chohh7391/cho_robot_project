@@ -31,4 +31,23 @@ void apply_ema(
   }
 }
 
+bool ema_seed(
+  const Timeline & timeline, const std::vector<Waypoint> & incoming, const ActionSpace space,
+  const double control_dt, Waypoint & seed)
+{
+  if (incoming.empty() || timeline.waypoints.empty() || timeline.space != space) {return false;}
+  Reference reference;
+  if (!sample_timeline(timeline, incoming.front().t - control_dt, reference)) {return false;}
+  seed = Waypoint{};
+  seed.t = incoming.front().t - control_dt;
+  seed.joints = reference.joints;
+  seed.pose = reference.pose;
+  seed.joint_velocity = reference.joint_velocity;
+  seed.has_joint_velocity = incoming.front().has_joint_velocity;
+  seed.gripper = reference.gripper;
+  seed.has_gripper = reference.has_gripper;
+  seed.gripper_mode = reference.gripper_mode;
+  return true;
+}
+
 }  // namespace cho_vla_core

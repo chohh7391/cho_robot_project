@@ -3,12 +3,45 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <string>
 #include <vector>
 
 #include "cho_vla_core/types.hpp"
 
 namespace cho_vla_core
 {
+// How the reference moves BETWEEN two waypoints.
+//
+// The action grid is 15-50 Hz and the hosts control at 750-1000 Hz, so the
+// sampler draws most of every reference: everything between two waypoints.
+//
+//   kLinear - straight segments: joints and translation lerp, the pose follows
+//             a screw. Continuous in position only, so the velocity steps at
+//             every waypoint. Measured in MuJoCo (Franka, 15 Hz waypoints),
+//             +-30 rad/s^2 of desired acceleration at every step.
+//   kPchip  - a cubic Hermite spline with shape-preserving (Fritsch-Butland)
+//             slopes per axis: continuous in velocity, and never past a
+//             neighbouring waypoint, so a joint reference cannot overshoot
+//             toward a limit the waypoints stay inside. Each slope depends only
+//             on its two neighbours, which also keeps a noisy waypoint local.
+//   kSpline - the cubic spline through the chunk's waypoints with
+//             'not-a-knot' ends (scipy CubicSpline's default): continuous in
+//             velocity AND acceleration, and the closest of the three to a
+//             smooth policy's own path (it reproduces any cubic exactly).
+//             Between waypoints it may swing past them, as any C2 spline does.
+//
+// Both cubics pass through every waypoint at its own time and add no lag.
+// Rotation is a cubic in the tangent space of each segment's start with the
+// same kind of slopes (for kSpline, from a spline of the chunk's rotation
+// vectors about its first waypoint), matched exactly in world angular rate at
+// every knot.
+enum class Interpolation : std::uint8_t {kLinear, kPchip, kSpline};
+
+// Fail-closed like the other parse_* functions: "linear", "pchip" or "spline",
+// nothing else.
+bool parse_interpolation(const std::string & text, Interpolation & out);
+
 // Time-indexed action buffer and its sampler.
 //
 // Buffer and sampler are one class on purpose: sampling is a query over the same
@@ -39,6 +72,8 @@ struct Timeline
   double blend_start {0.0};
   double blend_end {0.0};
   ActionSpace space {ActionSpace::kTask};
+  // Carried in the snapshot because sample_timeline() sees nothing else.
+  Interpolation interpolation {Interpolation::kSpline};
 };
 
 // Reference at absolute time `now`. False when `timeline` holds no waypoints.
@@ -64,11 +99,17 @@ public:
     // drive but on a torque-controlled arm is a reference discontinuity.
     double aggregate_weight {1.0};
 
-    // Cubic (C1) blend from the outgoing chunk's trajectory to the new one, over
-    // this many seconds from the splice instant. 0 disables it, giving a hard
-    // splice. This blends two TRAJECTORIES, not a frozen value against a
+    // Minimum-jerk blend from the outgoing chunk's trajectory to the new one,
+    // over this many seconds from the splice instant. 0 disables it, giving a
+    // hard splice. This blends two TRAJECTORIES, not a frozen value against a
     // trajectory: freezing would lag behind the motion for the whole window.
+    // The weight is 10s^3 - 15s^4 + 6s^5 (deoxys' min-jerk interpolator): flat
+    // in its first AND second derivative at both ends, so the blend adds
+    // neither a velocity nor an acceleration step at either boundary.
     double blend_duration {0.0};
+
+    // Between-waypoint interpolation; see Interpolation.
+    Interpolation interpolation {Interpolation::kSpline};
 
     // Slot-match tolerance for aggregation, as a fraction of control_dt. Chunks
     // from different observation times sit on different grids, so exact equality
@@ -87,9 +128,16 @@ public:
   };
 
   ActionBuffer() = default;
-  explicit ActionBuffer(const Params & params) : params_(params) {}
+  explicit ActionBuffer(const Params & params) : params_(params)
+  {
+    timeline_.interpolation = params.interpolation;
+  }
 
-  void set_params(const Params & params) {params_ = params;}
+  void set_params(const Params & params)
+  {
+    params_ = params;
+    timeline_.interpolation = params.interpolation;
+  }
   const Params & params() const {return params_;}
 
   void reset();

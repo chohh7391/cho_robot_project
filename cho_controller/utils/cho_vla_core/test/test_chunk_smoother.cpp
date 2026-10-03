@@ -119,4 +119,41 @@ TEST(ChunkSmoother, EmptyInputIsSafe) {
   apply_ema(waypoints, 0.2, nullptr);
   EXPECT_TRUE(waypoints.empty());
 }
+
+TEST(ChunkSmoother, TheSeedIsTheTimelineJustBeforeTheNewChunkNotThePreviousChunksEnd) {
+  // A ramp 0 -> 1.5 over 1.0 .. 1.3 s, then a chunk that starts at 1.1. The
+  // filter must chain from where the reference was at 1.1 - dt, not from where
+  // the previous chunk ENDED, a horizon ahead.
+  ActionBuffer::Params params;
+  params.interpolation = Interpolation::kLinear;
+  ActionBuffer buffer(params);
+  std::vector<Waypoint> ramp;
+  for (int step = 0; step < 4; ++step) {
+    Waypoint waypoint;
+    waypoint.t = 1.0 + 0.1 * step;
+    waypoint.joints.setConstant(0.5 * step);
+    ramp.push_back(waypoint);
+  }
+  buffer.splice(ramp, ActionSpace::kJoint, 0.9, 0.1);
+
+  std::vector<Waypoint> incoming(3);
+  for (int step = 0; step < 3; ++step) {incoming[step].t = 1.1 + 0.1 * step;}
+  Waypoint seed;
+  ASSERT_TRUE(ema_seed(buffer.timeline(), incoming, ActionSpace::kJoint, 0.05, seed));
+  EXPECT_NEAR(seed.t, 1.05, 1e-12);
+  EXPECT_NEAR(seed.joints(0), 0.25, 1e-12);   // the ramp at 1.05, not its end (1.5)
+}
+
+TEST(ChunkSmoother, NoSeedFromAnEmptyTimelineOrAcrossASpaceSwitch) {
+  std::vector<Waypoint> incoming(2);
+  incoming[0].t = 1.0;
+  incoming[1].t = 1.1;
+  Waypoint seed;
+  EXPECT_FALSE(ema_seed(Timeline{}, incoming, ActionSpace::kJoint, 0.1, seed));
+
+  ActionBuffer buffer;
+  buffer.splice(incoming, ActionSpace::kTask, 0.9, 0.1);
+  EXPECT_FALSE(ema_seed(buffer.timeline(), incoming, ActionSpace::kJoint, 0.1, seed));
+  EXPECT_TRUE(ema_seed(buffer.timeline(), incoming, ActionSpace::kTask, 0.1, seed));
+}
 }  // namespace
