@@ -193,6 +193,10 @@
       # Blend: a 0.1 s min-jerk crossfade into each new chunk, not a hard splice.
       chunk_ema_factor: 1.0
       chunk_blend_duration: 0.1
+      # Effort mode damps toward the reference's own rate, kd*(v_des - v), instead
+      # of toward rest: MuJoCo tracking 20.3 -> 4.4 mrad, lag 52 -> 5 ms, for more
+      # vibration (0.25 -> 0.39). 0 is the old law.
+      velocity_feedforward: 1.0
 
 /**:
   moveit_joint_trajectory_controller:
