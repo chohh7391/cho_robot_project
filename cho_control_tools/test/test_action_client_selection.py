@@ -13,17 +13,37 @@ def bare_shell(robot_type):
 
 def test_wrong_robot_moveit_action_is_never_selected():
     shell = bare_shell('ur5e')
-    wrong = '/fr5/controller_action_server/moveit_joint'
+    wrong = '/fr5_moveit_action_bridge/joint_space'
     available = {wrong: [MODULE.ACTION_TYPE_NAMES['joint']]}
     assert shell._select_action_name('joint', available, {
         'joint_trajectory_controller'}, None) is None
-    generic = '/controller_action_server/moveit_joint'
+    generic = '/moveit_action_bridge/joint_space'
     assert not shell._action_belongs_to_robot(generic)
+
+
+@pytest.mark.parametrize('stale', [
+    '/controller_action_server/joint_space_position_controller',
+    '/ur5e/controller_action_server/moveit_joint',
+])
+def test_a_pre_contract_action_name_is_never_selected(stale):
+    shell = bare_shell('ur5e')
+    available = {stale: [MODULE.ACTION_TYPE_NAMES['joint']]}
+    assert shell._select_action_name(
+        'joint', available, {'joint_space_position_controller'}, None) is None
+
+
+def test_a_controller_name_resolves_to_its_own_action_for_each_space():
+    normalize = MODULE.ControlSuiteShell._normalize_action_name
+    assert normalize('joint_space_qp_controller', 'joint') == (
+        '/joint_space_qp_controller/joint_space')
+    assert normalize('task_space_ik_controller', 'task') == '/task_space_ik_controller/task_space'
+    assert normalize('left_gripper_controller', 'gripper') == '/left_gripper_controller/gripper'
+    assert normalize('/already/absolute', 'joint') == '/already/absolute'
 
 
 def test_robot_scoped_moveit_action_requires_its_backend():
     shell = bare_shell('franka')
-    action = '/franka/controller_action_server/moveit_joint'
+    action = '/franka_moveit_action_bridge/joint_space'
     assert shell._action_has_active_backend(
         action, {'moveit_joint_trajectory_controller'})
     assert not shell._action_has_active_backend(
@@ -32,7 +52,7 @@ def test_robot_scoped_moveit_action_requires_its_backend():
 
 def test_direct_preference_has_no_moveit_startup_delay_dependency():
     shell = bare_shell('ur5e')
-    direct = '/controller_action_server/joint_space_position_controller'
+    direct = '/joint_space_position_controller/joint_space'
     available = {direct: [MODULE.ACTION_TYPE_NAMES['joint']]}
     assert shell._select_action_name(
         'joint', available, {'joint_space_position_controller'}, None) == direct
@@ -41,8 +61,8 @@ def test_direct_preference_has_no_moveit_startup_delay_dependency():
 def test_operator_client_never_selects_available_but_inactive_task_endpoint():
     shell = bare_shell('openarm')
     shell._operator_facing = True
-    task = '/controller_action_server/task_space_impedance_mit_controller'
-    joint = '/controller_action_server/joint_impedance_mit_controller'
+    task = '/task_space_impedance_mit_controller/task_space'
+    joint = '/joint_impedance_mit_controller/joint_space'
     available = {
         task: [MODULE.ACTION_TYPE_NAMES['task']],
         joint: [MODULE.ACTION_TYPE_NAMES['joint']],
@@ -55,7 +75,7 @@ def test_operator_client_never_selects_available_but_inactive_task_endpoint():
 
 def test_openarm_mit_impedance_action_is_selectable_by_canonical_name(monkeypatch):
     shell = bare_shell('openarm')
-    action = '/controller_action_server/joint_impedance_mit_controller'
+    action = '/joint_impedance_mit_controller/joint_space'
     selected_client = object()
     monkeypatch.setattr(shell, '_discover_action_servers', lambda timeout_sec: {
         action: [MODULE.ACTION_TYPE_NAMES['joint']]})
@@ -69,7 +89,7 @@ def test_openarm_mit_impedance_action_is_selectable_by_canonical_name(monkeypatc
 
 def test_openarm_mit_task_impedance_action_is_selectable_by_canonical_name(monkeypatch):
     shell = bare_shell('openarm')
-    action = '/controller_action_server/task_space_impedance_mit_controller'
+    action = '/task_space_impedance_mit_controller/task_space'
     selected_client = object()
     monkeypatch.setattr(shell, '_discover_action_servers', lambda timeout_sec: {
         action: [MODULE.ACTION_TYPE_NAMES['task']]})
@@ -87,7 +107,7 @@ def test_openarm_bimanual_profile_discovers_its_own_direct_mit_task_endpoint(arm
     shell.arm = arm
     shell.robot_config = MODULE.load_robot_config('openarm', arm)
     shell.action_preferences = shell.robot_config['actions']['preferences']
-    endpoint = f'/controller_action_server/{arm}_task_space_impedance_mit_controller'
+    endpoint = f'/{arm}_task_space_impedance_mit_controller/task_space'
     assert endpoint in shell.action_preferences['task']
     assert shell._action_has_active_backend(
         endpoint, {f'{arm}_task_space_impedance_mit_controller'})
@@ -97,7 +117,7 @@ def test_openarm_bimanual_profile_discovers_its_own_direct_mit_task_endpoint(arm
 
 def test_manual_switch_rejects_wrong_robot_moveit_action(monkeypatch, capsys):
     shell = bare_shell('ur5e')
-    wrong = '/fr5/controller_action_server/moveit_joint'
+    wrong = '/fr5_moveit_action_bridge/joint_space'
     monkeypatch.setattr(shell, '_discover_action_servers', lambda timeout_sec: {
         wrong: [MODULE.ACTION_TYPE_NAMES['joint']]})
     monkeypatch.setattr(
@@ -108,7 +128,7 @@ def test_manual_switch_rejects_wrong_robot_moveit_action(monkeypatch, capsys):
 
 def test_manual_switch_rejects_inactive_moveit_backend(monkeypatch, capsys):
     shell = bare_shell('ur5e')
-    action = '/ur5e/controller_action_server/moveit_joint'
+    action = '/ur5e_moveit_action_bridge/joint_space'
     monkeypatch.setattr(shell, '_discover_action_servers', lambda timeout_sec: {
         action: [MODULE.ACTION_TYPE_NAMES['joint']]})
     monkeypatch.setattr(shell, '_active_controllers', lambda timeout_sec: set())
@@ -118,7 +138,7 @@ def test_manual_switch_rejects_inactive_moveit_backend(monkeypatch, capsys):
 
 def test_manual_switch_rejects_generic_moveit_action(monkeypatch, capsys):
     shell = bare_shell('ur5e')
-    generic = '/controller_action_server/moveit_joint'
+    generic = '/moveit_action_bridge/joint_space'
     monkeypatch.setattr(shell, '_discover_action_servers', lambda timeout_sec: {
         generic: [MODULE.ACTION_TYPE_NAMES['joint']]})
     monkeypatch.setattr(
@@ -154,12 +174,14 @@ def test_openarm_single_arm_reach_keeps_task_space_goal_format(arm):
     assert client is shell.task_space_action_client
     assert isinstance(goal, MODULE.TaskSpace.Goal)
     assert goal.relative is motion['relative']
-    assert [goal.target_pose.position.x, goal.target_pose.position.y,
-            goal.target_pose.position.z] == motion['position']
-    assert [goal.target_pose.orientation.x, goal.target_pose.orientation.y,
-            goal.target_pose.orientation.z,
-            goal.target_pose.orientation.w] == motion['orientation']
-    assert goal.duration == 5.0
+    assert [goal.target_pose.pose.position.x, goal.target_pose.pose.position.y,
+            goal.target_pose.pose.position.z] == motion['position']
+    assert [goal.target_pose.pose.orientation.x, goal.target_pose.pose.orientation.y,
+            goal.target_pose.pose.orientation.z,
+            goal.target_pose.pose.orientation.w] == motion['orientation']
+    assert goal.duration_sec == 5.0
+    # Unstamped: the server's base frame (absolute) or EE frame (relative).
+    assert goal.target_pose.header.frame_id == ''
 
 
 def test_task_reach_honors_an_optional_motion_duration():
@@ -173,7 +195,7 @@ def test_task_reach_honors_an_optional_motion_duration():
     shell.do_reach('3')
 
     assert len(sent) == 1
-    assert sent[0][1].duration == 5.0
+    assert sent[0][1].duration_sec == 5.0
 
 
 @pytest.mark.parametrize('arm', ['single', 'left', 'right'])
@@ -198,8 +220,8 @@ def test_openarm_registry_task_reach_is_absolute_and_idempotent_at_action_bounda
     first, second = (item[1] for item in sent)
     assert first.relative is False
     assert second.relative is False
-    assert first.target_pose.position == second.target_pose.position
-    assert first.target_pose.orientation == second.target_pose.orientation
+    assert first.target_pose.pose.position == second.target_pose.pose.position
+    assert first.target_pose.pose.orientation == second.target_pose.pose.orientation
 
 
 @pytest.mark.parametrize('arm', ['single', 'left', 'right'])
@@ -219,7 +241,7 @@ def test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary(monkey
     shell.arm = arm
     shell.robot_config = MODULE.load_robot_config('openarm', arm)
     shell.task_action_name = (
-        f'/controller_action_server/{prefix}task_space_impedance_mit_controller')
+        f'/{prefix}task_space_impedance_mit_controller/task_space')
     shell.task_space_action_client = object()
     shell.joint_space_action_client = None
     shell.gripper_action_client = None
@@ -239,7 +261,7 @@ def test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary(monkey
     assert [goal.relative for goal in sent] == [True, True, False]
     # Identical relative goals: the arm moves the same delta again, it does not
     # return to a fixed world target.
-    assert sent[0].target_pose.position == sent[1].target_pose.position
+    assert sent[0].target_pose.pose.position == sent[1].target_pose.pose.position
 
 
 def test_openarm_both_reach_sends_all_registered_14_joint_goals(capsys):
@@ -279,7 +301,7 @@ def test_openarm_mit_selected_home_and_reach_keep_joint_space_goal_contract():
     for client, goal in sent:
         assert client is shell.joint_space_action_client
         assert isinstance(goal, MODULE.JointSpace.Goal)
-        assert goal.duration == 5.0
+        assert goal.duration_sec == 5.0
         assert len(goal.target_joints.position) == 7
     assert list(sent[0][1].target_joints.position) == shell.robot_config['poses']['home']['1']
     assert list(sent[1][1].target_joints.position) == shell.robot_config['poses']['reach']['1']

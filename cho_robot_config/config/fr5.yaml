@@ -29,10 +29,14 @@ moveit:
     max_velocity_scaling_factor: 0.25
     max_acceleration_scaling_factor: 0.25
 actions:
+  # Action names follow cho_interfaces/CONTRACT.md: /<node>/<kind>, served by
+  # the controller (or the MoveIt bridge) under its own node. The first joint
+  # and task entries are this profile's MoveIt bridge, whose node name is
+  # registry.moveit_bridge_node(); validate_robot_config() checks both.
   preferences:
-    joint: [/fr5/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller]
-    task: [/fr5/controller_action_server/moveit_task, /controller_action_server/task_space_ik_controller]
-    gripper: [/controller_action_server/gripper_controller]
+    joint: [/fr5_moveit_action_bridge/joint_space, /joint_space_position_controller/joint_space]
+    task: [/fr5_moveit_action_bridge/task_space, /task_space_ik_controller/task_space]
+    gripper: [/gripper_controller/gripper]
 poses:
   home:
     '0': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -55,6 +59,11 @@ poses:
     '1': [-0.0836, -1.1209, -2.0723, -1.7125, 1.6049, 0.0798]
     '2': [0.4, -0.7, -1.8, 1.2, 0.4, 1.0]
     '3': [-0.4, -0.7, -1.8, 1.2, -0.4, 1.0]
+  # Where the behaviour-tree tasks start and finish a mission
+  # (cho_robot_config.task_home_pose). Home 1, the recordings' start pose
+  # described above. Never home 0: home_safety below disables it, and the
+  # schema refuses a task home that names a disabled selector.
+  task_home: '1'
   home_safety:
     '0':
       enabled: false

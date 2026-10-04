@@ -10,7 +10,8 @@ def make_pose(position: List, orientation: List = [1.0, 0.0, 0.0, 0.0]):
     """
     p = Pose()
     p.position.x, p.position.y, p.position.z = position[0], position[1], position[2]
-    p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = orientation[0], orientation[1], orientation[2], orientation[3]
+    p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = (
+        orientation[0], orientation[1], orientation[2], orientation[3])
     return p
 
 def make_down_pose(height):

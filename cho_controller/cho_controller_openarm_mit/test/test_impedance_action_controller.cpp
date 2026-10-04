@@ -191,7 +191,7 @@ protected:
     Action::Goal g;
     g.target_joints.position.assign(7, 0.0);
     g.target_joints.position[0] = j1;
-    g.duration = static_cast<float>(seconds);
+    g.duration_sec = seconds;
     return g;
   }
   bool safe_stop()
@@ -227,7 +227,7 @@ protected:
 TEST_F(Fixture, ExistingJointSpaceHomeReachCancelAndPreemptWorkflow)
 {
   auto client = rclcpp_action::create_client<Action>(
-    client_node, "/controller_action_server/joint_impedance_mit_controller");
+    client_node, "/mit_action_test/joint_impedance_mit_controller/joint_space");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
   const auto send = [&](const Action::Goal & g) {
     auto future = client->async_send_goal(g);
@@ -271,7 +271,7 @@ TEST_F(Fixture, ActionImpedanceAddsNonzeroModelFeedforward)
   // state, making this a controller-manager test of the actual action path.
   cycle(30);
   auto client = rclcpp_action::create_client<Action>(
-    client_node, "/controller_action_server/joint_impedance_mit_controller");
+    client_node, "/mit_action_test/joint_impedance_mit_controller/joint_space");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
   auto future = client->async_send_goal(goal(0.01, 0.03));
   while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle();
@@ -286,7 +286,7 @@ TEST_F(Fixture, ActionImpedanceAddsNonzeroModelFeedforward)
 TEST_F(ReturnToZeroFixture, ActionRemainsGatedUntilHighGainsRampDownToNormal)
 {
   auto client = rclcpp_action::create_client<Action>(
-    client_node, "/controller_action_server/joint_impedance_mit_controller");
+    client_node, "/mit_action_test/joint_impedance_mit_controller/joint_space");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
   const auto send = [&](const Action::Goal & g) {
     auto future = client->async_send_goal(g);

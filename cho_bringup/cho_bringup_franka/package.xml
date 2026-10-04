@@ -11,6 +11,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>cho_bringup_common</exec_depend>
+  <exec_depend>cho_controller_franka</exec_depend>
   <exec_depend>cho_description_franka</exec_depend>
   <exec_depend>cho_moveit_franka</exec_depend>
   <exec_depend>cho_robot_config</exec_depend>
@@ -25,6 +27,8 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
+  <!-- simulation_gripper_controller in config/{gazebo,mujoco,isaac}/controllers.yaml -->
+  <exec_depend>forward_command_controller</exec_depend>
   <exec_depend>mujoco_ros2_control</exec_depend>
   <exec_depend>cho_simulation_isaac</exec_depend>
   <exec_depend>topic_based_ros2_control</exec_depend>

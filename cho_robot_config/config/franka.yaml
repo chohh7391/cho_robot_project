@@ -22,6 +22,19 @@ controllers:
   moveit_trajectory: moveit_joint_trajectory_controller
   gripper: gripper_controller
   vla: vla_controller
+  # Arm controllers the Franka bringups load that hold none of the roles above
+  # (cho_bringup_franka/utils/launch_utils.py POSITION_/VELOCITY_/
+  # TORQUE_CONTROLLERS, minus the ones named by a role). They claim the same
+  # arm command interfaces, so an exclusive switch has to take them down too:
+  # cho_task_manager's exclusive_arm_controllers() reads this list rather than
+  # keeping a Franka-only one of its own. Not the gripper, which claims the
+  # finger interfaces and must stay active across an arm switch.
+  additional_arm:
+    - task_space_impedance_controller
+    - operational_space_controller
+    - task_space_ik_controller
+    - task_space_velocity_controller
+    - gravity_compensation_controller
 moveit:
   config_package: cho_moveit_franka
   planning_group: fr3_arm
@@ -29,16 +42,27 @@ moveit:
     max_velocity_scaling_factor: 0.25
     max_acceleration_scaling_factor: 0.25
 actions:
+  # Action names follow cho_interfaces/CONTRACT.md: /<node>/<kind>, served by
+  # the controller (or the MoveIt bridge) under its own node. The first joint
+  # and task entries are this profile's MoveIt bridge, whose node name is
+  # registry.moveit_bridge_node(); validate_robot_config() checks both.
   preferences:
-    joint: [/franka/controller_action_server/moveit_joint, /controller_action_server/joint_space_qp_controller, /controller_action_server/joint_space_impedance_controller]
-    task: [/franka/controller_action_server/moveit_task, /controller_action_server/task_space_qp_controller, /controller_action_server/task_space_impedance_controller, /controller_action_server/operational_space_controller, /controller_action_server/task_space_ik_controller]
-    gripper: [/controller_action_server/gripper_controller]
+    joint: [/franka_moveit_action_bridge/joint_space, /joint_space_qp_controller/joint_space, /joint_space_impedance_controller/joint_space]
+    task: [/franka_moveit_action_bridge/task_space, /task_space_qp_controller/task_space, /task_space_impedance_controller/task_space, /operational_space_controller/task_space, /task_space_ik_controller/task_space]
+    gripper: [/gripper_controller/gripper]
 poses:
   home:
     '0': [0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0, 1.5707963267948966, 0.7853981633974483]
     '1': [0.0, 0.0, 0.0, -1.57, 0.0, 2.355, 0.0]
     '2': [-0.3202889859676361, 0.5399062633514404, 0.3390618860721588, -1.862808346748352, -0.24342849850654602, 2.361226797103882, 0.30928418040275574]
     '3': [-0.46396875381469727, 0.6291446089744568, 0.4975337088108063, -1.9110225439071655, -0.4653533399105072, 2.424884796142578, 0.85429847240448]
+  # Where the behaviour-tree tasks start and finish a mission
+  # (cho_robot_config.task_home_pose). Its own vector, not a home selector:
+  # none of the four operator presets is this pose. TCP shifted forward
+  # (+x ~0.12 m) and down (-z ~0.12 m) with the gripper pointing straight down
+  # (FR3 FK: x=0.427, z=0.367, approach [0, 0, -1]), which is also the
+  # approach tag_reach's top_down_yaw produces.
+  task_home: [0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785]
 motions:
   reach:
     '0': {relative: false, position: [0.2, -0.2, 0.5], orientation: [1.0, 0.0, 0.0, 0.0]}

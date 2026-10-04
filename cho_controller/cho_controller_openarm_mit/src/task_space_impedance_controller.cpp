@@ -1,4 +1,6 @@
 #include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
+#include "cho_controller_base/kinematics.hpp"
+#include "cho_controller_base/task_space_server.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -536,8 +538,9 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
   // diagnostics service; everything after this block (notably the dead-parameter
   // warning, which applies to any law running drive-side impedance) still runs.
   if (uses_task_space_action()) {
-  const auto action_name = std::string("/controller_action_server/") + get_node()->get_name();
-  task_server_ = rclcpp_action::create_server<Action>(get_node(), action_name,
+  task_base_frames_ = cho_controller_base::root_frames(*action_model_);
+  // /<controller>/task_space (cho_interfaces/CONTRACT.md).
+  task_server_ = rclcpp_action::create_server<Action>(get_node(), "~/task_space",
     std::bind(&TaskSpaceImpedanceController::goal_callback, this, std::placeholders::_1, std::placeholders::_2),
     std::bind(&TaskSpaceImpedanceController::cancel_callback, this, std::placeholders::_1),
     std::bind(&TaskSpaceImpedanceController::accepted_callback, this, std::placeholders::_1));
@@ -632,10 +635,10 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_activate(
 
 bool TaskSpaceImpedanceController::finite_pose(const Action::Goal & goal)
 {
-  const auto & p = goal.target_pose.position;
-  const auto & q = goal.target_pose.orientation;
+  const auto & p = goal.target_pose.pose.position;
+  const auto & q = goal.target_pose.pose.orientation;
   const double norm = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
-  return std::isfinite(goal.duration) && goal.duration > 0.0F && std::isfinite(p.x) && std::isfinite(p.y) &&
+  return std::isfinite(goal.duration_sec) && goal.duration_sec > 0.0 && std::isfinite(p.x) && std::isfinite(p.y) &&
     std::isfinite(p.z) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w) && norm > 1e-6;
 }
 
@@ -646,7 +649,16 @@ rclcpp_action::GoalResponse TaskSpaceImpedanceController::goal_callback(
   // Cartesian goals have no independent displacement, orientation, workspace,
   // or path-speed admission cap. The direct torque path remains bounded by
   // max_task_wrench, the final motor torque tuple, and the hardware contract.
-  if (goal->duration < 0.25F) return rclcpp_action::GoalResponse::REJECT;
+  if (goal->duration_sec < 0.25) return rclcpp_action::GoalResponse::REJECT;
+  // This controller transforms nothing: the goal must already be in the frame
+  // its mode is defined in.
+  if (!cho_controller_base::task_goal_frame_allowed(
+      goal->target_pose.header.frame_id, goal->relative, task_base_frames_, ee_frame_))
+  {
+    RCLCPP_ERROR(get_node()->get_logger(), "TaskSpace goal rejected: a %s goal cannot be in frame '%s'.",
+      goal->relative ? "relative" : "absolute", goal->target_pose.header.frame_id.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
   std::lock_guard<std::mutex> lock(task_handles_mutex_);
   return task_handles_.size() < 2U ? rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE : rclcpp_action::GoalResponse::REJECT;
 }
@@ -663,10 +675,11 @@ rclcpp_action::CancelResponse TaskSpaceImpedanceController::cancel_callback(cons
 void TaskSpaceImpedanceController::accepted_callback(const std::shared_ptr<GoalHandle> & handle)
 {
   const auto & in = *handle->get_goal();
-  Goal staged; staged.id = task_next_id_.fetch_add(1, std::memory_order_relaxed); staged.duration = in.duration; staged.relative = in.relative;
-  staged.translation = {in.target_pose.position.x, in.target_pose.position.y, in.target_pose.position.z};
-  staged.rotation = Eigen::Quaterniond(in.target_pose.orientation.w, in.target_pose.orientation.x,
-    in.target_pose.orientation.y, in.target_pose.orientation.z).normalized();
+  Goal staged; staged.id = task_next_id_.fetch_add(1, std::memory_order_relaxed); staged.duration = in.duration_sec; staged.relative = in.relative;
+  const auto & pose = in.target_pose.pose;
+  staged.translation = {pose.position.x, pose.position.y, pose.position.z};
+  staged.rotation = Eigen::Quaterniond(pose.orientation.w, pose.orientation.x,
+    pose.orientation.y, pose.orientation.z).normalized();
   {std::lock_guard<std::mutex> lock(task_handles_mutex_); task_handles_.emplace(staged.id, handle);}
   task_goal_buffer_.writeFromNonRT(staged);
 }

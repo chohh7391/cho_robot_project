@@ -38,42 +38,35 @@ Build the USD asset once before the first run:
     ~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py --help
 """
 
-import importlib.util
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    ExecuteProcess,
-    OpaqueFunction,
-    RegisterEventHandler,
-    Shutdown,
-)
-from launch.event_handlers import OnProcessExit, OnProcessIO, OnShutdown
-from launch.logging import get_logger
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, Shutdown
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-package_share = get_package_share_directory('cho_bringup_openarm')
-launch_utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_openarm', 'utils', 'launch_utils.py')
+from cho_bringup_common import (
+    check_isaac_install,
+    create_controller_spawners,
+    DEFAULT_ISAAC_SIM_PATH,
+    isaac_command_gate,
+    isaac_controller_startup,
+    isaac_sim_command,
+    isaac_sim_process,
+    load_package_utils,
+    runtime_param_cleanup,
+    top_level_spawner,
 )
-spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
-launch_utils = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launch_utils)
 
-# Printed by run_isaac_sim.py once physics is stepping and the ROS 2 bridge is
-# publishing. The spawners key off it; see setup_control_environment.
-ISAAC_READY_MARKER = '[isaac_sim] running:'
+launch_utils = load_package_utils('cho_bringup_openarm')
 
 
 def generate_launch_description():
     description_path = get_package_share_directory('cho_description_openarm')
     bringup_path = get_package_share_directory('cho_bringup_openarm')
-    isaac_path = get_package_share_directory('cho_simulation_isaac')
 
     declared_arguments = [
         DeclareLaunchArgument(
@@ -117,7 +110,7 @@ def generate_launch_description():
                         "importer's own convention: it derives the subdirectory "
                         'and the .usda filename from the URDF basename.'),
         DeclareLaunchArgument(
-            'isaac_sim_path', default_value=os.path.expanduser('~/isaacsim'),
+            'isaac_sim_path', default_value=DEFAULT_ISAAC_SIM_PATH,
             description='Isaac Sim install directory (the one holding python.sh)'),
         DeclareLaunchArgument(
             'physics_rate', default_value='250.0',
@@ -200,65 +193,38 @@ def generate_launch_description():
             control_mode=mode,
             ee_name=ee_name,
         )
-        controller_spawners = launch_utils.create_controller_spawners(
+        controller_spawners = create_controller_spawners(
             always_active=always_active,
             switchable_controllers=switchable_controllers,
             initial_active_controllers=launch_utils.per_arm(ctrl_name, bimanual),
             use_sim_time=use_sim_time,
             timeout=60,
         )
-
-        # create_controller_spawners() returns the active spawner as its only
-        # top-level Node (the inactive one is nested in an event handler). The
-        # gate must not open until that spawner has exited, i.e. until the
+        # The gate must not open until this spawner has exited, i.e. until the
         # requested controller is actually active.
-        spawner_nodes = [action for action in controller_spawners if isinstance(action, Node)]
-        if len(spawner_nodes) != 1:
-            raise RuntimeError(
-                'expected exactly one top-level spawner Node from '
-                f'create_controller_spawners(), got {len(spawner_nodes)}')
-        active_spawner = spawner_nodes[0]
+        active_spawner = top_level_spawner(controller_spawners)
 
-        isaac_python = os.path.join(isaac_sim_path, 'python.sh')
-        if not os.path.exists(isaac_python):
-            raise RuntimeError(
-                f"Isaac Sim interpreter not found at '{isaac_python}'. "
-                'Pass isaac_sim_path:=<isaac sim install dir>.')
-        if not os.path.exists(robot_usd):
-            raise RuntimeError(
-                f"Isaac robot USD not found at '{robot_usd}'.\nBuild it once with:\n"
-                f"  {isaac_python} {os.path.join(isaac_path, 'isaac', 'convert_urdf_to_usd.py')}"
-                f' --urdf {xacro_file}'
-                f' --xacro-arg hardware:=isaac --xacro-arg bimanual:={str(bimanual).lower()}'
-                ' --strip-links "^world$"'
-                ' --strip-links ""'
-                f' --usd-path {os.path.dirname(robot_usd)}'
-                f' --ros-package cho_description_openarm:{description_path}')
-
-        isaac_cmd = [
-            isaac_python,
-            os.path.join(isaac_path, 'isaac', 'run_isaac_sim.py'),
-            '--robot-usd', robot_usd,
-            '--robot-profile', profile,
-            '--control-mode', mode,
-            '--physics-rate', physics_rate,
-            '--device', device,
-            '--physics-engine', physics_engine,
-        ]
-        if headless.lower() == 'true':
-            isaac_cmd.append('--headless')
-
-        isaac_sim = ExecuteProcess(
-            cmd=isaac_cmd,
-            output='screen',
+        # The description bolts the arm (and the bimanual torso) to a `world`
+        # link, which confuses the importer's articulation-root resolution -
+        # fix_base already anchors it - so the build command strips it (see
+        # cho_description_openarm/usd/README.md). One --strip-links: it takes a
+        # single regex, and a second one replaces the first rather than adding to it.
+        isaac_python = check_isaac_install(isaac_sim_path, robot_usd, [
+            '--urdf', xacro_file,
+            '--xacro-arg', 'hardware:=isaac',
+            '--xacro-arg', f'bimanual:={str(bimanual).lower()}',
+            '--strip-links', '^world$',
+            '--usd-path', os.path.dirname(robot_usd),
+            '--ros-package', f'cho_description_openarm:{description_path}',
+        ])
+        isaac_sim = isaac_sim_process(
+            isaac_sim_command(
+                isaac_python, robot_usd, profile, mode, physics_rate, device,
+                headless=headless.lower() == 'true',
+                extra_args=['--physics-engine', physics_engine]),
             # The runner resolves the Newton experience file out of the install
             # directory, which only the launch knows.
             additional_env={'ISAAC_SIM_PATH': isaac_sim_path},
-            # The environment is inherited, which is what makes ROS_DISTRO (so
-            # Isaac binds the system Humble libraries rather than its bundled
-            # ones), ROS_DOMAIN_ID and FASTRTPS_DEFAULT_PROFILES_FILE reach the
-            # simulator.
-            on_exit=Shutdown(),
         )
 
         node_ros2_control = Node(
@@ -275,68 +241,11 @@ def generate_launch_description():
             on_exit=Shutdown(),
         )
 
-        isaac_command_gate = Node(
-            package='cho_simulation_isaac',
-            executable='isaac_command_gate.py',
-            output='screen',
-            parameters=[use_sim_time],
-        )
-
-        # The spawners must not run until Isaac is actually stepping.
-        #
-        # The controller_manager's realtime loop blocks in wait_until_started()
-        # until the first /clock arrives, and Isaac needs tens of seconds to boot.
-        # A spawner started before that gets the controller_manager's services
-        # (they are up immediately) and then asks for a controller switch, which
-        # only completes from inside the realtime loop - so it dies on the switch's
-        # own 5 s timeout long before the simulator is ready:
-        #     [controller_manager] Switch controller timed out after 5.000000 seconds!
-        #     [spawner] Failed to activate controller : joint_state_broadcaster
-        # --controller-manager-timeout does not help; it covers waiting for the
-        # services, not the switch. So key off the simulator announcing itself.
-        started = {'spawners': False}
-
-        def start_spawners_when_isaac_is_ready(event):
-            if started['spawners']:
-                return None
-            if ISAAC_READY_MARKER not in event.text.decode(errors='replace'):
-                return None
-            started['spawners'] = True
-            return controller_spawners
-
-        # OnProcessExit fires however the spawner ended. One that failed leaves the
-        # requested controller inactive, and opening the gate then would hand Isaac
-        # exactly the zero commands the gate exists to keep from it.
-        def on_active_spawner_exit(event, _context):
-            if event.returncode != 0:
-                get_logger('isaac_command_gate').error(
-                    f'controller spawner exited with code {event.returncode}: the requested '
-                    'controller is not active, so the Isaac command gate stays closed and '
-                    'Isaac keeps holding the home pose. See the spawner output above.')
-                return None
-            return [isaac_command_gate]
-
-        return [
-            isaac_sim,
-            node_ros2_control,
-            RegisterEventHandler(
-                event_handler=OnProcessIO(
-                    target_action=isaac_sim,
-                    on_stdout=start_spawners_when_isaac_is_ready,
-                )
-            ),
-            RegisterEventHandler(
-                event_handler=OnProcessExit(
-                    target_action=active_spawner,
-                    on_exit=on_active_spawner_exit,
-                )
-            ),
-            RegisterEventHandler(
-                event_handler=OnShutdown(
-                    on_shutdown=[launch_utils.create_runtime_param_cleanup(runtime_param_file)],
-                )
-            ),
-        ]
+        # Spawners once Isaac is stepping; the command gate once the requested
+        # controller is active (see isaac_controller_startup for both reasons).
+        return [isaac_sim, node_ros2_control] + isaac_controller_startup(
+            isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time)
+        ) + [runtime_param_cleanup(runtime_param_file)]
 
     return LaunchDescription(
         declared_arguments + [

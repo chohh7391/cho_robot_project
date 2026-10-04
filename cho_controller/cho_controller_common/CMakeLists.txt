@@ -25,13 +25,31 @@ find_package(ruckig REQUIRED)
 find_package(joint_limits REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 
-file(GLOB_RECURSE PROJECT_HEADERS include/${PROJECT_NAME}/*.hpp include/${PROJECT_NAME}/*.hh)
-file(GLOB_RECURSE PROJECT_SOURCES src/*.cpp)
-
-# Build shared library
+# Listed, not globbed: a glob is evaluated at configure time, so a source that
+# is added or deleted is missed until someone forces a reconfigure.
 add_library(${PROJECT_NAME} SHARED
-  ${PROJECT_SOURCES}
-  ${PROJECT_HEADERS}
+  src/contact/contact_base.cpp
+  src/formulation/contact_level.cpp
+  src/formulation/inverse_dynamics_formulation_acc.cpp
+  src/formulation/inverse_dynamics_formulation_base.cpp
+  src/math/constraint_base.cpp
+  src/math/constraint_bound.cpp
+  src/math/constraint_equality.cpp
+  src/math/constraint_inequality.cpp
+  src/math/util.cpp
+  src/robot/robot_wrapper.cpp
+  src/solver/solver_HQP_base.cpp
+  src/solver/solver_HQP_eiquadprog.cpp
+  src/solver/solver_HQP_eiquadprog_fast.cpp
+  src/solver/solver_HQP_factory.cpp
+  src/tasks/task_base.cpp
+  src/tasks/task_contact_force.cpp
+  src/tasks/task_joint_posture.cpp
+  src/tasks/task_motion.cpp
+  src/tasks/task_se3_equality.cpp
+  src/trajectory/point_to_point.cpp
+  src/trajectory/trajectory_euclidian.cpp
+  src/trajectory/trajectory_se3.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -98,6 +116,11 @@ ament_export_targets(export_${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Build-file and manifest lint only: the C++ predates any formatter here.
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   ament_add_gtest(test_point_to_point test/test_point_to_point.cpp)
   # The private planner header lives in src/.
   target_include_directories(test_point_to_point PRIVATE src)

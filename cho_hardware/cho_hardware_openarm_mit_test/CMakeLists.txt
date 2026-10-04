@@ -14,8 +14,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED src/fake_mit_system.cpp)
 target_include_directories(${PROJECT_NAME} PRIVATE
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  )
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 ament_target_dependencies(${PROJECT_NAME}
   cho_openarm_mit_core hardware_interface pluginlib rclcpp rclcpp_lifecycle)
 pluginlib_export_plugin_description_file(hardware_interface fake_mit_system.xml)
@@ -28,6 +27,11 @@ install(FILES fake_mit_system.xml DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Build-file and manifest lint only: the C++ predates any formatter here.
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   ament_add_gtest(test_resource_manager test/test_resource_manager.cpp)
   target_link_libraries(test_resource_manager ${PROJECT_NAME})
   ament_target_dependencies(test_resource_manager hardware_interface pluginlib rclcpp)

@@ -91,9 +91,9 @@ FR5 is **position-controlled**: controllers write joint position commands; the p
 Two controllers, each wraps an action server that runs a cubic trajectory from
 `cho_controller_common`:
 - `JointSpacePositionController` ← `cho_interfaces/action/JointSpace`
-  (`/controller_action_server/joint_space_position_controller`).
+  (`/joint_space_position_controller/joint_space`).
 - `TaskSpaceIKController` (DLS differential IK) ← `cho_interfaces/action/TaskSpace`
-  (`/controller_action_server/task_space_ik_controller`).
+  (`/task_space_ik_controller/task_space`).
 
 ### The critical pattern: OPEN-LOOP IK (ported from Franka)
 
@@ -265,7 +265,7 @@ ros2 run cho_control_tools debug_action_client --robot_type fr5 --control_space 
 ```
 `home N` needs `joint_space_position_controller` active; `reach N` needs
 `task_space_ik_controller` active (the WARN about the inactive one is normal).
-Direct one-liner also works: `ros2 action send_goal /controller_action_server/joint_space_position_controller cho_interfaces/action/JointSpace "{target_joints: {position: [...]}, duration: 4.0}"`.
+Direct one-liner also works: `ros2 action send_goal /joint_space_position_controller/joint_space cho_interfaces/action/JointSpace "{target_joints: {position: [...]}, duration_sec: 4.0}"`.
 
 To reproduce the legacy singular zero spawn for diagnostics, add
 `mujoco_initial_keyframe:=zero`. The action-client `home 0` command is intentionally

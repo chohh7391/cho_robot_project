@@ -66,8 +66,10 @@ def generate_launch_description():
                 'ready_service': metadata['ready_service'],
                 'timeout': ParameterValue(
                     LaunchConfiguration('scene_ready_timeout'), value_type=float)}])
+        # The node name scopes ~/joint_space and ~/task_space to this profile;
+        # the bridge refuses to start under any other.
         bridge = Node(package='cho_moveit_common', executable='moveit_action_bridge.py',
-            name=f'openarm_{profile}_moveit_action_bridge', output='screen', parameters=[{
+            name=metadata['action_bridge_node'], output='screen', parameters=[{
                 'use_sim_time': use_sim_time, 'robot_type': 'openarm', 'profile': profile,
                 'ready_service': metadata['ready_service'], 'planning_group': metadata['planning_group'],
                 'ee_link': metadata['ee_link'], 'world_frame': metadata['base_frame'],

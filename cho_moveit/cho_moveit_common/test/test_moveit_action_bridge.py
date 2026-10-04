@@ -4,8 +4,9 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import PoseStamped, Quaternion
 import pytest
+from sensor_msgs.msg import JointState
 
 
 SCRIPT = Path(__file__).parents[1] / 'scripts' / 'moveit_action_bridge.py'
@@ -98,12 +99,66 @@ def test_robot_specific_joint_constraints_and_group(joint_names, group):
 
 
 def test_robot_identity_scopes_action_names():
-    assert MODULE.MoveItActionBridge._action_names('ur5e') == (
-        '/ur5e/controller_action_server/moveit_joint',
-        '/ur5e/controller_action_server/moveit_task')
-    assert MODULE.MoveItActionBridge._action_names('fr5') != (
-        '/ur5e/controller_action_server/moveit_joint',
-        '/ur5e/controller_action_server/moveit_task')
+    # Served relative to the node, like a controller's; the node name is what
+    # carries the robot identity.
+    assert (MODULE.JOINT_ACTION, MODULE.TASK_ACTION) == ('~/joint_space', '~/task_space')
+    assert MODULE.MoveItActionBridge._expected_action_names('ur5e') == (
+        '/ur5e_moveit_action_bridge/joint_space',
+        '/ur5e_moveit_action_bridge/task_space')
+    assert MODULE.MoveItActionBridge._expected_action_names('openarm', 'left') == (
+        '/openarm_left_moveit_action_bridge/joint_space',
+        '/openarm_left_moveit_action_bridge/task_space')
+    assert MODULE.MoveItActionBridge._expected_action_names('fr5') != (
+        MODULE.MoveItActionBridge._expected_action_names('ur5e'))
+
+
+def test_named_joint_goals_are_reordered_into_the_bridges_joint_order():
+    bridge = bare_bridge()
+    goal = JointState(name=['j6', 'j5', 'j4', 'j3', 'j2', 'j1'],
+                      position=[6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
+    assert bridge._ordered_joint_positions(goal) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    # Unnamed goals are already in joint order.
+    assert bridge._ordered_joint_positions(JointState(position=[0.5] * 6)) == [0.5] * 6
+
+
+@pytest.mark.parametrize('names,positions,message', [
+    (['j1', 'j2', 'j3', 'j4', 'j5', 'x'], [0.0] * 6, 'unknown'),
+    (['j1', 'j1', 'j3', 'j4', 'j5', 'j6'], [0.0] * 6, 'more than once'),
+    (['j1', 'j2', 'j3', 'j4', 'j5'], [0.0] * 5, 'does not name'),
+    (['j1', 'j2', 'j3', 'j4', 'j5', 'j6'], [0.0] * 5, 'positions'),
+])
+def test_a_named_joint_goal_that_does_not_name_every_joint_once_is_rejected(
+        names, positions, message):
+    bridge = bare_bridge()
+    goal = JointState(name=names, position=positions)
+    with pytest.raises(ValueError, match=message):
+        bridge._ordered_joint_positions(goal)
+    request = SimpleNamespace(target_joints=goal, duration_sec=5.0)
+    assert bridge._joint_goal_callback(request) == MODULE.GoalResponse.REJECT
+
+
+@pytest.mark.parametrize('relative,frame,honoured', [
+    (False, '', True),
+    (False, 'world', True),
+    (False, 'wrist3_link', False),
+    (False, 'camera_link', False),
+    (True, '', True),
+    (True, 'wrist3_link', True),
+    (True, 'world', False),
+])
+def test_task_goal_frames_follow_the_contract(relative, frame, honoured):
+    bridge = bare_bridge()
+    bridge._world_frame = 'world'
+    bridge._ee_link = 'wrist3_link'
+    request = SimpleNamespace(relative=relative, target_pose=PoseStamped(), duration_sec=5.0)
+    request.target_pose.header.frame_id = frame
+    reason = bridge._unhonoured_frame(request)
+    assert (reason == '') is honoured
+    if not honoured:
+        assert frame in reason
+        # Refused before anything is reserved, rather than planned in the
+        # wrong frame.
+        assert bridge._task_goal_callback(request) == MODULE.GoalResponse.REJECT
 
 
 def test_relative_quaternion_composition_and_normalization():
@@ -123,8 +178,14 @@ def test_concurrent_goal_is_rejected():
     bridge._goal_lock = MODULE.threading.Lock()
     bridge._goal_reserved = True
     bridge._move_client = SimpleNamespace(server_is_ready=lambda: True)
-    request = SimpleNamespace(duration=5.0)
+    request = SimpleNamespace(duration_sec=5.0)
     assert bridge._goal_callback(request) == MODULE.GoalResponse.REJECT
+
+
+def test_non_positive_duration_is_rejected():
+    bridge = bare_bridge()
+    assert bridge._goal_callback(
+        SimpleNamespace(duration_sec=0.0)) == MODULE.GoalResponse.REJECT
 
 
 def test_cancel_requested_before_movegroup_accept_is_forwarded(monkeypatch):
@@ -300,12 +361,12 @@ def test_task_failure_reports_the_resolved_world_target():
     bridge._ee_link = 'wrist3_link'
     request = SimpleNamespace(
         relative=False,
-        target_pose=MODULE.Pose(),
-        duration=5.0)
-    request.target_pose.position.x = -0.0153
-    request.target_pose.position.y = 0.0040
-    request.target_pose.position.z = 0.7249
-    request.target_pose.orientation.w = 1.0
+        target_pose=PoseStamped(),
+        duration_sec=5.0)
+    request.target_pose.pose.position.x = -0.0153
+    request.target_pose.pose.position.y = 0.0040
+    request.target_pose.pose.position.z = 0.7249
+    request.target_pose.pose.orientation.w = 1.0
     summary = bridge._target_summary(bridge._task_constraints(request))
     assert 'x=-0.0153' in summary and 'y=+0.0040' in summary and 'z=+0.7249' in summary
 

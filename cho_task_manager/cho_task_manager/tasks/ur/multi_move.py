@@ -1,10 +1,8 @@
 import py_trees
 from cho_task_manager.behaviors.action import TaskSpaceActionBehavior
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
-from cho_task_manager.subtrees import guarded_mission, home_subtree
-from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
-
-UR5E_HOME_POSITION = make_joint_state([0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
+from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
+from cho_task_manager.utils.msg_utils import make_pose
 
 # See ur/pick_place.py: every UR bringup runs the position interface.
 CONTROL_MODE = 'position'
@@ -28,13 +26,15 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
     """UR5e example task that visits several absolute waypoints in order."""
     joint_controller = robot_config["joint_space"]
     task_controller = robot_config["task_space"]
+    # The registry's poses.task_home (home 1, the ready pose).
+    home = home_joint_state(robot_config)
 
     mission_sequence = py_trees.composites.Sequence(name="UR5e_Multi_Move_Sequence", memory=True)
 
     # 1. Home (joint space). This robot has no gripper step in this task.
     init_seq = home_subtree(
         robot_config,
-        target_joints=UR5E_HOME_POSITION,
+        target_joints=home,
         controller=joint_controller,
         duration=3.0,
         open_gripper=False,
@@ -63,7 +63,7 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
     # 3. Return home (joint space)
     finish_seq = home_subtree(
         robot_config,
-        target_joints=UR5E_HOME_POSITION,
+        target_joints=home,
         controller=joint_controller,
         duration=3.0,
         name="3_Finish",

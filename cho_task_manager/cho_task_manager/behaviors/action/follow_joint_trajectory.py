@@ -18,7 +18,8 @@ from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
-from cho_task_manager.utils.controller_names import follow_joint_trajectory_action_name
+from cho_task_manager.utils.controller_names import controller_action_name
+from cho_task_manager.utils.robot_description import DescriptionPositionLimits
 
 
 class TrajectoryRejected(ValueError):
@@ -151,6 +152,12 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
     The goal is built and validated in ``initialise()`` rather than at
     construction, so a tree can be built (and unit-tested) without a graph and
     a refusal still happens before anything is sent.
+
+    ``position_limits`` is either a ``{joint: (lower, upper)}`` dict or a
+    :class:`~cho_task_manager.utils.robot_description.DescriptionPositionLimits`,
+    which reads them from the running robot description. With the latter a
+    segment is REFUSED while no usable description has arrived: unknown limits
+    are not the same as no limits.
     """
 
     def __init__(self, name, controller, joint_names, times, positions,
@@ -160,7 +167,7 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
         super().__init__(
             name,
             FollowJointTrajectory,
-            follow_joint_trajectory_action_name(controller),
+            controller_action_name(controller, 'follow_joint_trajectory'),
             timeout_sec=duration + timeout_margin_sec,
         )
         self.joint_names = list(joint_names)
@@ -172,14 +179,30 @@ class FollowJointTrajectoryBehavior(BaseActionBehavior):
         self.velocity_limits = velocity_limits or {}
         self.rejection = None
 
+    def setup(self, **kwargs):
+        ok = super().setup(**kwargs)
+        if isinstance(self.position_limits, DescriptionPositionLimits):
+            # Idempotent: one subscription per node, however many segments share it.
+            self.position_limits.setup(self.node)
+        return ok
+
+    def _resolved_position_limits(self):
+        """``(limits, None)``, or ``(None, reason)`` when they cannot be known yet."""
+        if isinstance(self.position_limits, DescriptionPositionLimits):
+            return self.position_limits.resolve()
+        return self.position_limits, None
+
     def initialise(self):
         """Build, validate and send this segment's goal."""
         self.rejection = None
         try:
+            position_limits, unknown = self._resolved_position_limits()
+            if unknown is not None:
+                raise TrajectoryRejected(unknown)
             traj = validate_trajectory(
                 build_trajectory(self.joint_names, self.times, self.positions,
                                  self.time_scale, self.start_delay),
-                position_limits=self.position_limits,
+                position_limits=position_limits,
                 velocity_limits=self.velocity_limits,
             )
         except TrajectoryRejected as error:

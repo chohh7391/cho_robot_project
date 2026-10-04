@@ -1,4 +1,3 @@
-import importlib.util
 import os
 import xacro
 
@@ -12,30 +11,21 @@ from launch.actions import (
     Shutdown,
 )
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart, OnShutdown
+from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-# ---------------------------------------------------------------------------
-# cho_bringup_franka launch utility loading
-# ---------------------------------------------------------------------------
-package_share = get_package_share_directory('cho_bringup_franka')
-utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_franka', 'utils')
+from cho_bringup_common import (
+    as_bool,
+    create_controller_spawners,
+    load_package_utils,
+    load_yaml,
+    runtime_param_cleanup,
 )
-launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
-spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
-launch_utils = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launch_utils)
-load_yaml = launch_utils.load_yaml
-as_bool = launch_utils.as_bool
-create_controller_spawners = launch_utils.create_controller_spawners
-create_runtime_param_file = launch_utils.create_runtime_param_file
-create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
-get_initial_active_controller = launch_utils.get_initial_active_controller
-get_switchable_controllers = launch_utils.get_switchable_controllers
+
+launch_utils = load_package_utils('cho_bringup_franka')
 
 REAL_ALWAYS_ACTIVE_CONTROLLERS = [
     'joint_state_broadcaster',
@@ -61,8 +51,9 @@ def generate_robot_nodes(context):
     # ------------------------------------------------------------------
     # 2. Controller preparation policy
     # ------------------------------------------------------------------
-    initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
-    switchable_controllers = get_switchable_controllers(
+    launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
+    initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_vla)
+    switchable_controllers = launch_utils.get_switchable_controllers(
         control_mode=mode,
         use_vla=use_vla,
         requested_controller=ctrl_name,
@@ -70,7 +61,7 @@ def generate_robot_nodes(context):
 
     pkg_bringup = get_package_share_directory('cho_bringup_franka')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
-    runtime_param_file = create_runtime_param_file(
+    runtime_param_file = launch_utils.create_runtime_param_file(
         payload_config_path=payload_config_path,
         controller_names=REAL_ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers,
         bringup_type=b_type,
@@ -189,9 +180,9 @@ def generate_robot_nodes(context):
             always_active_controllers.insert(0, 'franka_robot_state_broadcaster')
 
         controller_spawners = create_controller_spawners(
-            always_active_controllers=always_active_controllers,
+            always_active=always_active_controllers,
             switchable_controllers=switchable_controllers,
-            initial_active_controller=initial_active_controller,
+            initial_active_controllers=initial_active_controller,
             # runtime params are loaded directly on ros2_control_node above, so
             # no spawner -p file handoff is needed here.
             namespace=namespace,
@@ -221,13 +212,7 @@ def generate_robot_nodes(context):
             output='screen',
         ))
 
-    nodes.append(
-        RegisterEventHandler(
-            event_handler=OnShutdown(
-                on_shutdown=[create_runtime_param_cleanup(runtime_param_file)],
-            )
-        )
-    )
+    nodes.append(runtime_param_cleanup(runtime_param_file))
 
     return nodes
 

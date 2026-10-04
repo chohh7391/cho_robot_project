@@ -3,7 +3,7 @@
 <package format="3">
   <name>cho_controller_franka</name>
   <version>2.2.0</version>
-  <description>cho_controller_franka provides example code for controllingFranka Robotics research robots with ros2_control</description>
+  <description>ros2_control controllers for the Franka FR3: joint- and task-space impedance, QP, IK and velocity control, the VLA action-chunk controller, the gripper relay and the EE state broadcaster</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
   <author email="support@franka.de">Franka Robotics GmbH</author>

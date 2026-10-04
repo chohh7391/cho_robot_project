@@ -1,6 +1,9 @@
 #pragma once
 
+#include <memory>
+
 #include "cho_controller_fr5/base_controller.hpp"
+#include "cho_controller_fr5/fr5_task_space_ik_controller_parameters.hpp"
 #include "cho_controller_fr5/servers/task_space_action_server.hpp"
 
 namespace cho_controller {
@@ -42,6 +45,7 @@ private:
     [[nodiscard]] double lowest_tool_point(const pinocchio::SE3 & pose) const;
 
     std::shared_ptr<FR5TaskSpaceActionServer> action_server_;
+    std::shared_ptr<fr5_task_space_ik_controller::ParamListener> param_listener_;
     double lambda_{0.01};
     double max_delta_q_{0.02};
     bool enforce_workspace_floor_{true};

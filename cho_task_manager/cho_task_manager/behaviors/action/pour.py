@@ -61,8 +61,11 @@ class PourActionBehavior(BaseActionBehavior):
         blackboard_namespace: str = TASK_NAMESPACE,
         timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     ):
+        # 'pour' keeps the pre-contract /controller_action_server/<controller>
+        # name: the pour action is application-specific (CONTRACT.md).
         super().__init__(
-            name, Pour, controller_action_name(controller_name), timeout_sec=timeout_sec)
+            name, Pour, controller_action_name(controller_name, 'pour'),
+            timeout_sec=timeout_sec)
 
         if (target_grams is None) == (target_grams_key is None):
             raise ValueError(

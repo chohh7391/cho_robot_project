@@ -93,6 +93,15 @@ cho_bringup/cho_bringup_franka/
   config/{real,gazebo,mujoco,isaac}/controllers.yaml  # Per-environment controller gains
   config/real/franka.config.yaml               # Robot IP, gripper, FT sensor flags
 
+cho_bringup/cho_bringup_common/  # ament_python; what every bringup shares, imported as
+                                 # `from cho_bringup_common import ...`: the runtime
+                                 # param file (write_runtime_param_file + cleanup),
+                                 # spawners (create_controller_spawners), the Isaac
+                                 # start-up/gate order, search-path prepending, and
+                                 # load_package_utils() for a robot's own
+                                 # lib/<pkg>/utils/launch_utils.py. Robot-specific
+                                 # names and rules stay in those robot utils.
+
 cho_description/cho_description_openarm/   # enactic OpenArm v1.0, vendored fork
   robots/openarm_v10/        # ONE xacro entry point for real/gazebo/mujoco/isaac/mock
   xml/openarm_v10{,_bimanual}/   # MuJoCo scenes, one per control_mode
@@ -159,7 +168,12 @@ cho_task_manager/
     utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
 
 cho_robot_config/
-  config/*.yaml              # Per-robot controller/action role registry
+  config/*.yaml              # Per-robot registry: controller/action roles,
+                             # controllers.additional_arm (arm controllers with
+                             # no role, which an exclusive switch must still take
+                             # down), poses.home (operator presets) and
+                             # poses.task_home (where task trees home; a home
+                             # selector or a vector, read by task_home_pose()).
 
 cho_control_tools/
   cho_control_tools/         # Interactive clients, VLA tools, and bag plotters
@@ -248,7 +262,29 @@ Each arm controller publishes its state on **per-controller namespaced topics** 
 `/<controller>/controller_state` (`control_msgs/JointTrajectoryControllerState`, reference=desired / feedback=current)
 and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replaced the old global `/log/joint_pos` and `/log/ee_pose`. Plot via `ros2 run cho_control_tools plot_joint_pos_log --topic <t>` / `ros2 run cho_control_tools plot_pose_log --topic <t>`.
 
+New or reworked controller parameters are declared with `generate_parameter_library`
+(the pattern: `cho_controller_fr5/src/task_space_ik_controller_parameters.yaml`):
+per-parameter ranges go in the YAML, checks that relate parameters stay in code. Under
+Humble the controller_manager declares parameters from the YAML overrides before the
+listener does, so `ros2 param describe` shows no constraints, but every set is still
+validated (an out-of-range `ros2 param set` is refused). The other controllers still
+declare by hand; convert them when they are next reworked.
+
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
+What every controller serves and a client may rely on is written down in
+`cho_interfaces/CONTRACT.md`: actions are relative to the controller's node
+(`/<controller>/joint_space`, `/task_space`, `/gripper`, `/vla`; the old
+`/controller_action_server/<controller>` namespace is gone except for the FR5 pour
+action), goals take `duration_sec`, JointSpace goals may name their joints, and a
+TaskSpace goal is a `PoseStamped` that must be in the model's root frame (absolute) or
+the EE frame (relative) -- controllers never transform, they reject. Python builds
+every name through `controller_action_name(controller, kind)`, never by hand: the rule
+lives in `cho_robot_config` (which validates `actions.preferences` against it),
+`cho_task_manager/utils/controller_names.py` wraps it, and
+`cho_control_tools/action_names.py` is the operator clients' registry-free copy. The
+MoveIt bridge serves `~/joint_space` / `~/task_space` too, under the node name
+`cho_robot_config.moveit_bridge_node()` gives (`<robot>[_<profile>]_moveit_action_bridge`),
+and refuses to start under any other.
 
 The JointSpace and TaskSpace servers themselves are shared: `cho_controller_base`'s
 `JointSpaceServer` / `TaskSpaceServer` over `GoalPhaseActionServer`, with each robot
@@ -263,9 +299,9 @@ deactivated -- it used to stay active with no result and block every later goal.
 
 Their point-to-point motion is `cho_controller_common`'s `TrajectoryEuclidianRuckig` /
 `TrajectorySE3Ruckig`: Ruckig's fastest motion within the robot's limits, slowed
-uniformly to the goal's `duration`. The duration is therefore a minimum, and a goal
+uniformly to the goal's `duration_sec`. The duration is therefore a minimum, and a goal
 faster than the limits allow takes longer; the servers time success and timeout from
-`trajectory_->getDuration()`, never from the goal's `duration`. The limits are the
+`trajectory_->getDuration()`, never from the goal's `duration_sec`. The limits are the
 robot's MoveIt files, not a controllers.yaml: `joint_limits.yaml` (ros2_control's
 `joint_limits.<joint>.*` schema) and, if present, `pilz_cartesian_limits.yaml`, which
 each bringup's runtime-params helper merges in through
@@ -309,8 +345,9 @@ Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
 
 - `home_subtree()` — the switch → go-home → open-gripper block four trees used to
   carry their own copy of. It takes `robot_config`, which is what makes the
-  exclusive switch derive its deactivate list from the robot's own registry entry
-  instead of the historical hard-coded Franka name list.
+  exclusive switch derive its deactivate list from the robot's own registry entry,
+  and opens that robot's own `robot_config['gripper']`. The pose comes from
+  `home_joint_state(robot_config)`, i.e. the registry's `poses.task_home`.
 - `guarded_mission()` — the standard root, `OneShot -> Selector(mission, safe abort)`.
   A failing leaf used to propagate straight to the root and shut the node down with
   the last-driven controller still active. Now the abort branch runs first: it
@@ -321,6 +358,14 @@ Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
   successful mission.
 - `tare_ft_children()` — FT tare plus its settle wait, spliced ahead of the home
   block by the contact-rich forge tasks.
+
+Robot facts are never written into the task manager. The action leaves, the sweeps
+and `VLACompletionWaiterBehavior` have no default controller (a tree passes the
+robot config's role), an exclusive switch without `robot_config` raises, and
+`ControllerNames` is Franka's names only, kept for the Franka trees and pinned to
+`franka.yaml` by `test_controller_names`. Waits use `behaviors/wait.WaitBehavior`
+(node clock, so sim time under `use_sim_time`), never `py_trees.timers.Timer`,
+which counts wall time.
 
 Motion targets can come from the blackboard instead of being fixed at tree-build
 time. `TaskSpaceActionBehavior(target_pose_key=...)` / `JointSpaceActionBehavior(target_joints_key=...)`

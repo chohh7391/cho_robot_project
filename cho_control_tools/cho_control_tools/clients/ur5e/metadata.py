@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+from cho_control_tools.action_names import controller_action_name, moveit_bridge_node
+
 
 _CONFIG = {
     'robot_type': 'ur5e',
@@ -10,10 +12,10 @@ _CONFIG = {
     'moveit': {},
     'actions': {
         'preferences': {
-            'joint': ['/ur5e/controller_action_server/moveit_joint',
-                      '/controller_action_server/joint_space_position_controller'],
-            'task': ['/ur5e/controller_action_server/moveit_task',
-                     '/controller_action_server/task_space_ik_controller'],
+            'joint': [controller_action_name(node, 'joint') for node in (
+                moveit_bridge_node('ur5e'), 'joint_space_position_controller')],
+            'task': [controller_action_name(node, 'task') for node in (
+                moveit_bridge_node('ur5e'), 'task_space_ik_controller')],
             'gripper': [],
         },
         'gripper_command': {

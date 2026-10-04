@@ -16,6 +16,10 @@ from cho_task_manager.utils.controller_names import load_robot_config
 # destroyed. Wall time: sim time may have stopped along with the simulator.
 CANCEL_FLUSH_SEC = 1.0
 
+# The task run when none is given. run_task_manager.launch.py declares the same
+# default for its `task` argument; test_task_manager_node pins the two together.
+DEFAULT_TASK = "pick_place"
+
 
 class StoppableBehaviourTree(py_trees_ros.trees.BehaviourTree):
     """A BehaviourTree that can be stopped from the main thread without racing a tick.
@@ -90,7 +94,9 @@ def main():
 
     node = rclpy.create_node("task_manager_node")
 
-    node.declare_parameter("task", "peg_insert")
+    # Same default as run_task_manager.launch.py's `task` argument, so starting
+    # the node directly runs what the launch would.
+    node.declare_parameter("task", DEFAULT_TASK)
     node.declare_parameter("robot_type", "franka")
     # Arm profile. A bimanual robot prefixes its controller names per arm, so a
     # task that hard-coded the single-arm name would look for an action server
@@ -127,8 +133,9 @@ def main():
     # How the arm reaches the recording's start pose: "direct" interpolates
     # there through the hold controller and checks nothing, "moveit" plans it
     # and needs move_group plus the MoveIt bridge running. Empty keeps the
-    # task default (direct), which is right for a simulator with no
-    # collisions to check.
+    # task default (moveit, trajectory_replay.DEFAULT_HOME_VIA); a bringup
+    # without MoveIt -- a simulator with no collisions to check -- passes
+    # "direct".
     node.declare_parameter("home_via", "")
     # Vessels the perceived replay keeps a camera on while the arm runs, as a
     # space- or comma-separated list. Empty means no watchdog, which is the

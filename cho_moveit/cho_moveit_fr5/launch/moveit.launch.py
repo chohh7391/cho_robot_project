@@ -112,7 +112,9 @@ def generate_launch_description():
     action_bridge = Node(
         package='cho_moveit_common',
         executable='moveit_action_bridge.py',
-        name='fr5_moveit_action_bridge',
+        # The node name scopes ~/joint_space and ~/task_space to this robot;
+        # the bridge refuses to start under any other.
+        name=metadata['action_bridge_node'],
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,

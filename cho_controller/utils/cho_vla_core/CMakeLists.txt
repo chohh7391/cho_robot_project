@@ -47,6 +47,11 @@ install(FILES DESIGN.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Build-file and manifest lint only: the C++ predates any formatter here.
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   foreach(test_name
       test_finite_math_guard
       test_chunk_validator

@@ -25,8 +25,8 @@
 - 서버가 `State`에서 실제로 읽고 쓰는 필드는 8개뿐: `H_ee, q_arm`(측정), `H_ee_ref, q_arm_ref`(앵커),
   `H_ee_des, q_arm_des`(출력), `H_ee_init, q_arm_init`(종료 시 래치). → 추출 가능.
 - 외부 계약(이 저장소 안): 토픽 `/vla/action/ee_pose`(`ActionChunk`, KeepLast(1) best-effort),
-  액션 `/controller_action_server/vla_controller`(`VisionLanguageAction`), 서비스
-  `/vla/trigger_success`(성공 GUI·BT waiter가 호출), 클라이언트 `.../vla_controller/notify_completion`(BT).
+  액션 `/vla_controller/vla`(`VisionLanguageAction`, 컨트롤러 노드의 `~/vla`), 서비스
+  `/vla/trigger_success`(성공 GUI·BT waiter가 호출), 클라이언트 `/vla_controller/vla/notify_completion`(BT).
   `cho_control_tools/vla/action_client.py`는 from_anchor 상대 원궤적 테스터.
 - `cho_robot_config/config/openarm.yaml`: `controllers.vla: null`, 레지스트리 role에 `vla` 있음.
 - LeRobot 로컬 체크아웃 `~/lerobot` (2026-02-27, `8fff0fde`). `src/lerobot/async_inference/` 5개 파일 1482줄을

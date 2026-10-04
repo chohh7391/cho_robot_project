@@ -58,13 +58,9 @@ namespace cho_controller {
                 pinocchio::computeAllTerms(m_model, data, q, v);
                 data.M.triangularView<Eigen::StrictlyLower>()
                         = data.M.transpose().triangularView<Eigen::StrictlyLower>();
-                // computeAllTerms does not compute the com acceleration, so we need to call centerOfMass
-                // Check this line, calling with zero acceleration at the last phase compute the CoM acceleration.
-                //      pinocchio::centerOfMass(m_model, data, q,v,false);
+                // computeAllTerms already fills com/vcom and the centroidal terms
+                // (Ag, dAg, hg) but not the frame placements (oMf).
                 pinocchio::updateFramePlacements(m_model, data);
-                if (m_a_zero.size() != nv()) m_a_zero = Eigen::VectorXd::Zero(nv());
-                pinocchio::centerOfMass(m_model, data, q, v, m_a_zero);
-                pinocchio::ccrba(m_model, data, q, v);
             }
 
             const Eigen::Vector3d & RobotWrapper::com(const Data & data) const
@@ -72,12 +68,12 @@ namespace cho_controller {
                 return data.com[0];
             }
 
-            Eigen::VectorXd RobotWrapper::nonLinearEffects(const Data & data) 
-            {   
+            const Eigen::VectorXd & RobotWrapper::nonLinearEffects(const Data & data) const
+            {
                 return data.nle;
             }
 
-            Eigen::VectorXd RobotWrapper::GeneralizedGravity(const Data & data)
+            const Eigen::VectorXd & RobotWrapper::GeneralizedGravity(const Data & data) const
             {
                 return data.g;
             }
@@ -108,11 +104,6 @@ namespace cho_controller {
             const Eigen::MatrixXd & RobotWrapper::mass_inverse(const Data & data){
                 m_Minv = this->mass(data).inverse();
                 return m_Minv;
-            }
-
-            const Eigen::MatrixXd & RobotWrapper::coriolis(const Data & data){
-                m_C = data.C;
-                return m_C;
             }
 
             void RobotWrapper::jacobianWorld(const Data & data, const Model::JointIndex index, Data::Matrix6x & J)

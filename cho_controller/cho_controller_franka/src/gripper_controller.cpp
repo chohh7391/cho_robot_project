@@ -82,7 +82,7 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State&) {
   assignGraspGoalOptionsCallbacks();
   assignHomingGoalOptionsCallbacks();
 
-  action_server_ = std::make_shared<GripperActionServer>(get_node(), "/controller_action_server/gripper_controller");
+  action_server_ = std::make_shared<GripperActionServer>(get_node(), "~/gripper");
   action_server_->set_report_failure(get_node()->get_parameter("report_failure").as_bool());
   action_server_->set_result_timeout(get_node()->get_parameter("result_timeout").as_double());
   action_server_->init();

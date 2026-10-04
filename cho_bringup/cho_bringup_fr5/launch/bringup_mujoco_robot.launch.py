@@ -24,32 +24,20 @@ xml/scene_ag95.xml when the gripper is selected),
 then the spawners once the node is up.
 """
 
-from copy import deepcopy
 import os
-import tempfile
 
 import xacro
-import yaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction
-from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
+from cho_bringup_common import chain_spawners, load_package_utils, make_spawner_node, runtime_param_cleanup
 
-import importlib.util
-from cho_robot_config import motion_limit_parameters
-
-package_share = get_package_share_directory('cho_bringup_fr5')
-# Same by-path load the real bringups use: launch_utils lives in lib/.
-_launch_utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_fr5', 'utils', 'launch_utils.py')
-)
-_spec = importlib.util.spec_from_file_location('fr5_launch_utils', _launch_utils_path)
-launch_utils = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(launch_utils)
+launch_utils = load_package_utils('cho_bringup_fr5')
 
 
 SWITCHABLE_CONTROLLERS = [
@@ -61,54 +49,6 @@ SWITCHABLE_CONTROLLERS = [
     # scale simply never gives it a goal.
     'pouring_controller',
 ]
-
-
-def create_runtime_controller_params(ee_name, bringup_type, gripper='none'):
-    runtime_dir = os.environ.get('ROS_HOME') or os.path.join(os.path.expanduser('~'), '.ros')
-    os.makedirs(runtime_dir, exist_ok=True)
-    fd, runtime_path = tempfile.mkstemp(
-        suffix='.yaml',
-        prefix='cho_fr5_mujoco_runtime_params_',
-        dir=runtime_dir,
-    )
-    params = {
-        '/**': {
-            'joint_space_position_controller': {
-                'ros__parameters': {
-                    'bringup_type': bringup_type,
-                    'control_mode': 'position',
-                },
-            },
-            'task_space_ik_controller': {
-                'ros__parameters': dict(
-                    bringup_type=bringup_type,
-                    control_mode='position',
-                    ee_name=ee_name,
-                    # What is bolted to the flange, so the workspace floor guard
-                    # measures the thing that actually reaches the bench rather
-                    # than the flange above it. Absent for a bare one.
-                    **launch_utils.tool_envelope_parameters(gripper),
-                ),
-            },
-        },
-    }
-    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
-    limits = motion_limit_parameters('fr5')
-    for controller in params['/**'].values():
-        controller['ros__parameters'].update(deepcopy(limits))
-    with os.fdopen(fd, 'w') as runtime_file:
-        yaml.safe_dump(params, runtime_file)
-    return runtime_path
-
-
-def cleanup_runtime_controller_params(runtime_path):
-    def cleanup(context, *args, **kwargs):
-        if os.path.exists(runtime_path):
-            os.unlink(runtime_path)
-        return []
-
-    return OpaqueFunction(function=cleanup)
 
 
 def setup_control_environment(context):
@@ -138,7 +78,8 @@ def setup_control_environment(context):
 
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
-    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type, gripper)
+    runtime_param_file = launch_utils.create_runtime_param_file(
+        bringup_type, ee_name, gripper, prefix='cho_fr5_mujoco_runtime_params_')
 
     # fr5.urdf.xacro carries a `hardware` xacro arg so the same file can emit the
     # MuJoCo, Isaac, Gazebo, mock or real ros2_control block. Expand it here with
@@ -183,66 +124,30 @@ def setup_control_environment(context):
     # controller and comes up active alongside whichever one was selected -
     # matching the real bringup. Its on_activate seeds from the measured stroke,
     # so activating it commands no motion. Built before the spawner consumes it:
-    # `*active_controllers` is unpacked when the Node is constructed, so
-    # appending afterwards would silently do nothing.
+    # the spawner copies the list when it is constructed, so appending
+    # afterwards would silently do nothing.
     active_controllers = ['joint_state_broadcaster', controller_name]
     if gripper != 'none':
         active_controllers.append('gripper_controller')
 
-    active_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            *active_controllers,
-            '-p',
-            runtime_param_file,
-            '--controller-manager',
-            '/controller_manager',
-            '--controller-manager-timeout',
-            controller_manager_timeout,
-        ],
-        output='screen',
-    )
-
-    inactive_controllers = [
-        controller for controller in SWITCHABLE_CONTROLLERS
-        if controller != controller_name
-    ]
-
-    inactive_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            *inactive_controllers,
-            '-p',
-            runtime_param_file,
-            '--controller-manager',
-            '/controller_manager',
-            '--controller-manager-timeout',
-            controller_manager_timeout,
-            '--inactive',
-        ],
-        output='screen',
-    )
+    spawner_kwargs = {
+        'runtime_param_file': runtime_param_file,
+        'controller_manager': '/controller_manager',
+        'timeout': controller_manager_timeout,
+    }
+    active_spawner = make_spawner_node(active_controllers, **spawner_kwargs)
+    inactive_spawner = make_spawner_node(
+        [controller for controller in SWITCHABLE_CONTROLLERS if controller != controller_name],
+        active=False, **spawner_kwargs)
 
     event_handlers = [
         RegisterEventHandler(
             event_handler=OnProcessStart(
                 target_action=node_mujoco,
-                on_start=[active_spawner],
+                on_start=chain_spawners(active_spawner, [inactive_spawner]),
             )
         ),
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=active_spawner,
-                on_exit=[inactive_spawner],
-            )
-        ),
-        RegisterEventHandler(
-            event_handler=OnShutdown(
-                on_shutdown=[cleanup_runtime_controller_params(runtime_param_file)],
-            )
-        ),
+        runtime_param_cleanup(runtime_param_file),
     ]
 
     return [node_robot_state_publisher, node_mujoco] + event_handlers

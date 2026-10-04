@@ -65,10 +65,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from cho_task_manager.utils import occlusion
-from cho_task_manager.utils.controller_names import (
-    ControllerNames,
-    controller_action_name,
-)
+from cho_task_manager.utils.controller_names import controller_action_name
 from cho_task_manager.utils.msg_utils import make_joint_state
 
 #: Where cho_object_pose publishes what every camera can see. Its own default.
@@ -118,7 +115,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         self,
         name: str,
         sweep: occlusion.SweepSpec,
-        controller_name: str = ControllerNames.JOINT_QP,
+        controller_name: str = None,
         visibility_topic: str = DEFAULT_VISIBILITY_TOPIC,
         action_name: str = None,
         goal_timeout_sec: float = 30.0,
@@ -131,9 +128,15 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         # a bench is exactly the motion worth planning rather than
         # interpolating. Left unset, the name comes from the controller, which
         # is right for a bench the arm has already been driven across.
+        if not action_name and not controller_name:
+            # No default: which controller drives the sweep is the robot's, and
+            # the old one was a Franka controller no FR5 bringup loads.
+            raise ValueError(
+                f'[{name}] controller_name is required (or action_name for the '
+                "MoveIt bridge's endpoint): pass the robot config's controller")
         super().__init__(
             name, JointSpace,
-            action_name or controller_action_name(controller_name),
+            action_name or controller_action_name(controller_name, 'joint_space'),
             timeout_sec=goal_timeout_sec)
         if not sweep.waypoints:
             raise ValueError(f'[{name}] a sweep with no waypoints looks nowhere')
@@ -403,7 +406,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             f"{len(self.sweep.waypoints)} '{waypoint.name}' "
             f'over {waypoint.duration:.0f}s')
         goal = JointSpace.Goal()
-        goal.duration = waypoint.duration
+        goal.duration_sec = float(waypoint.duration)
         goal.target_joints = make_joint_state(waypoint.joints)
         self.send_action_goal(goal)
         self._phase = 'moving'

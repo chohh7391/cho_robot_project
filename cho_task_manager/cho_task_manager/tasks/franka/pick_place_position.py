@@ -3,12 +3,8 @@ from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
     VLACompletionWaiterBehavior,
 )
-from cho_task_manager.subtrees import guarded_mission, home_subtree
-from cho_task_manager.utils.msg_utils import make_joint_state
+from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
 from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
-
-# Same pose as pick_place.py (TCP forward/down, gripper facing straight down).
-FRANKA_HOME_POSITION = make_joint_state([0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785])
 
 CONTROL_MODE = 'position'
 
@@ -20,6 +16,9 @@ CONTROL_MODE = 'position'
 # is never loaded there.
 def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
     robot_config = robot_config or load_robot_config('franka')
+    # Same pose as pick_place.py: the registry's poses.task_home.
+    home = home_joint_state(robot_config)
+    vla = robot_config['vla']
 
     mission_sequence = py_trees.composites.Sequence(
         name="Franka_Pick_And_Place_Position_Sequence", memory=True
@@ -27,7 +26,7 @@ def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behavi
 
     init_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_POSITION,
         duration=3.0,
     )
@@ -36,15 +35,15 @@ def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behavi
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
-            activate=[ControllerNames.VLA],
+            activate=[vla],
             robot_config=robot_config,
         ),
-        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion"),
+        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion", controller=vla),
     ])
 
     finish_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_POSITION,
         duration=5.0,
         name="3_Finish",

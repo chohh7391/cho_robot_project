@@ -35,6 +35,8 @@ import xml.etree.ElementTree as ElementTree
 
 import numpy as np
 
+from cho_control_tools.action_names import controller_action_name
+
 #: wrist3_link is the controllers' end-effector frame (`ee_name` in
 #: controllers.yaml). Every pose printed here is that frame, so it can be pasted
 #: into a TaskSpace goal unchanged.
@@ -393,7 +395,6 @@ class Probe:
         """Send each safe leg as an absolute TaskSpace goal, stopping on the first failure."""
         import rclpy
         from cho_interfaces.action import TaskSpace
-        from geometry_msgs.msg import Pose
         from rclpy.action import ActionClient
 
         client = ActionClient(self.node, TaskSpace, action_name)
@@ -404,17 +405,16 @@ class Probe:
         quaternion = _quaternion_xyzw(start_pose.rotation)
         for leg in legs:
             goal = TaskSpace.Goal()
-            goal.target_pose = Pose()
-            goal.duration = float(duration)
+            goal.duration_sec = float(duration)
             # Absolute, because the controller resolves a RELATIVE goal against
             # its own reference, which is not where the previous leg was asked
-            # to finish once any of them has been clamped.
+            # to finish once any of them has been clamped. frame_id stays '':
+            # the controller's model root, which is what these poses are in.
             goal.relative = False
-            (goal.target_pose.position.x,
-             goal.target_pose.position.y,
-             goal.target_pose.position.z) = (float(v) for v in leg.target)
-            (goal.target_pose.orientation.x, goal.target_pose.orientation.y,
-             goal.target_pose.orientation.z, goal.target_pose.orientation.w) = quaternion
+            pose = goal.target_pose.pose
+            (pose.position.x, pose.position.y, pose.position.z) = (float(v) for v in leg.target)
+            (pose.orientation.x, pose.orientation.y,
+             pose.orientation.z, pose.orientation.w) = quaternion
 
             print('  %s -> [%+.4f %+.4f %+.4f] ... ' % (leg.name, *leg.target), end='', flush=True)
             send = client.send_goal_async(goal)
@@ -555,8 +555,9 @@ def main(argv=None):
     parser.add_argument('--package-dirs', default=None,
                         help='colon-separated roots for package:// mesh lookup '
                              '(default: AMENT_PREFIX_PATH)')
-    parser.add_argument('--action',
-                        default='/controller_action_server/task_space_ik_controller')
+    parser.add_argument('--action', default=None,
+                        help="TaskSpace action (default: the controller's own "
+                             '/<controller>/task_space)')
     parser.add_argument('--controller', default='task_space_ik_controller')
     parser.add_argument('--execute', action='store_true',
                         help='send the safe legs instead of only printing them')
@@ -625,8 +626,9 @@ def main(argv=None):
                      ''.join(' --deactivate %s' % name for name in blocking)),
                   file=sys.stderr)
             return 3
-        print('\nsending %d legs to %s' % (len(legs), args.action))
-        return 0 if probe.send(args.action, legs, start_pose, args.duration) else 4
+        action = args.action or controller_action_name(args.controller, 'task')
+        print('\nsending %d legs to %s' % (len(legs), action))
+        return 0 if probe.send(action, legs, start_pose, args.duration) else 4
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

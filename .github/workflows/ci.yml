@@ -16,7 +16,7 @@ defaults:
 # Only the packages that build from binary (apt) dependencies alone are covered.
 # hansung_scale_msgs / hansung_scale_driver qualify: rosidl, rclpy and
 # python3-serial are all rosdep keys, so the scale stack builds and tests here.
-# cho_controller_franka, bota_ft_sensor and every cho_bringup_* package need the
+# cho_controller_franka, bota_ft_sensor and every cho_bringup_<robot> package need the
 # extern/ submodules (franka_ros2 + libfranka, mujoco_ros2_control,
 # Universal_Robots_ROS2_Driver, bota_driver_ros2) built from source; there are no
 # Humble debs for franka_msgs / franka_gripper / franka_hardware. Adding them
@@ -37,6 +37,7 @@ env:
     cho_description_ur
     cho_description_openarm
     cho_robot_config
+    cho_bringup_common
     cho_moveit_common
     cho_control_tools
     cho_task_manager
@@ -63,6 +64,7 @@ env:
     cho_controller_openarm_mit
     cho_description_openarm
     cho_robot_config
+    cho_bringup_common
     cho_moveit_common
     cho_control_tools
     cho_task_manager

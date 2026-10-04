@@ -102,12 +102,12 @@ def test_pose_error_reports_translation_and_rotation_angle():
 
 def test_arm_profile_names_follow_the_bringup_conventions():
     right = MODULE.arm_names('right')
-    assert right['action'] == '/controller_action_server/right_task_space_impedance_mit_controller'
+    assert right['action'] == '/right_task_space_impedance_mit_controller/task_space'
     assert right['pose_topic'] == '/ee_state/right/pose'
     assert right['joints'][0] == 'openarm_right_joint1'
     assert right['ee_frame'] == 'openarm_right_hand_tcp'
     single = MODULE.arm_names('single')
-    assert single['action'] == '/controller_action_server/task_space_impedance_mit_controller'
+    assert single['action'] == '/task_space_impedance_mit_controller/task_space'
     assert single['pose_topic'] == '/ee_state/pose'
     with pytest.raises(ValueError):
         MODULE.arm_names('both')

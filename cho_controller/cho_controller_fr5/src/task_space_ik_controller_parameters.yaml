@@ -1,0 +1,76 @@
+# FR5 TaskSpaceIKController parameters (generate_parameter_library).
+#
+# Range checks live here; the two that relate parameters to each other stay in
+# the controller: workspace_floor_tolerance below minimum_ee_height, and the
+# tool envelope (both empty, or 3 values each with min <= max), which needs the
+# model and so is checked in build_tool_envelope() after the base configures.
+fr5_task_space_ik_controller:
+  lambda:
+    type: double
+    default_value: 0.01
+    description: "Damping of the damped-least-squares IK step."
+    validation:
+      gt<>: [0.0]
+  max_delta_q:
+    type: double
+    default_value: 0.02
+    description: "Largest joint step per cycle [rad]; the whole step is scaled down to it."
+    validation:
+      gt<>: [0.0]
+  enforce_workspace_floor:
+    type: bool
+    default_value: true
+    description: "Refuse and abort motion that takes the EE (or the tool) below its floor."
+  minimum_ee_height:
+    type: double
+    default_value: 0.15
+    description: "Lowest the EE frame may go, in the base frame [m]."
+    validation:
+      gt_eq<>: [0.0]
+  tool_envelope_min:
+    type: double_array
+    default_value: []
+    description: >-
+      Lower corner of the volume bolted to the flange, as an axis-aligned box in
+      the EE frame [m]. Empty (with tool_envelope_max) means no tool, which is
+      the behaviour from before the envelope existed.
+  tool_envelope_max:
+    type: double_array
+    default_value: []
+    description: "Upper corner of the tool envelope, in the EE frame [m]."
+  minimum_tool_height:
+    type: double
+    default_value: 0.0
+    description: "Lowest the tool envelope's lowest corner may go, in the base frame [m]."
+  workspace_floor_tolerance:
+    type: double
+    default_value: 0.0001
+    description: "Slack on the floor comparison [m]; must be below minimum_ee_height."
+    validation:
+      gt_eq<>: [0.0]
+  recovery_minimum_height_gain:
+    type: double
+    default_value: 0.01
+    description: >-
+      For an arm that starts below its floor: how far above that start the goal
+      must lie for the move to count as a recovery, the one motion allowed then [m].
+    validation:
+      gt<>: [0.0]
+  recovery_monotonic_tolerance:
+    type: double
+    default_value: 0.00001
+    description: "How much height a recovery step may lose against the best so far and still count as upward [m]."
+    validation:
+      gt_eq<>: [0.0]
+  recovery_maximum_lateral_displacement:
+    type: double
+    default_value: 0.002
+    description: "Largest horizontal travel of the goal (and of each step) during a recovery [m]."
+    validation:
+      gt_eq<>: [0.0]
+  recovery_maximum_orientation_error:
+    type: double
+    default_value: 0.01
+    description: "Largest orientation change of the goal (and of each step) during a recovery [rad]."
+    validation:
+      gt_eq<>: [0.0]

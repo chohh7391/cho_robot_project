@@ -119,9 +119,11 @@ public:
   using Result = typename ActionT::Result;
   using Trajectory = TrajectoryT;
 
+  // action_name is normally relative to the controller's node ("~/joint_space",
+  // see cho_interfaces/CONTRACT.md); it is resolved here so the logs name it.
   GoalPhaseActionServer(
     rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name, int num_dof = 0)
-  : node_(std::move(node)), action_name_(std::move(action_name)), num_dof_(num_dof) {}
+  : node_(std::move(node)), action_name_(resolve_private(*node_, std::move(action_name))), num_dof_(num_dof) {}
 
   virtual ~GoalPhaseActionServer() = default;
 
@@ -184,6 +186,15 @@ protected:
       return false;
     }
     return true;
+  }
+
+  // "~/x" names x in the node's private namespace, /<namespace>/<node>/x.
+  static std::string resolve_private(rclcpp_lifecycle::LifecycleNode & node, std::string name)
+  {
+    if (name.rfind("~/", 0) != 0) {
+      return name;
+    }
+    return std::string(node.get_node_base_interface()->get_fully_qualified_name()) + name.substr(1);
   }
 
   // A goal duration a trajectory can use: finite and positive. `d <= 0` alone

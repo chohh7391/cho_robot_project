@@ -26,9 +26,10 @@ CallbackReturn JointSpacePositionController::on_configure(
         return CallbackReturn::FAILURE;
     }
     action_server_ = std::make_shared<FR5JointSpaceActionServer>(
-        get_node(), "/controller_action_server/joint_space_position_controller", num_dof_);
+        get_node(), "~/joint_space", num_dof_);
     action_server_->init();
     action_server_->trajectory_->setLimits(joint_motion_limits());
+    action_server_->set_joint_names(joint_names_);
     action_server_->attach_activity(&activity_);
     action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
     return CallbackReturn::SUCCESS;

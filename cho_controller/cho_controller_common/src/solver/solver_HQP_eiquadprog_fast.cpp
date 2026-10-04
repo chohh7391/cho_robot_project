@@ -9,7 +9,6 @@
 #include "cho_controller_common/solver/solver_HQP_eiquadprog_fast.hpp"
 #include "cho_controller_common/math/util.hpp"
 #include "eiquadprog/eiquadprog-fast.hpp"
-#include "cho_controller_common/util/stop_watch.hpp"
 
 namespace cho_controller {
 namespace common {

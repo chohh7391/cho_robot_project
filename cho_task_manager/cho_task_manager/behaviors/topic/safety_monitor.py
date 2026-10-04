@@ -31,15 +31,19 @@ import numpy as np
 import py_trees
 from geometry_msgs.msg import WrenchStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from cho_task_manager.utils.controller_names import arm_model
+from cho_task_manager.utils.robot_description import (
+    DEFAULT_ROBOT_DESCRIPTION_TOPIC,
+    LATCHED_QOS,
+    arm_kinematics,
+)
 
 DEFAULT_WRENCH_TOPIC = '/bota_ft_sensor/wrench'
 DEFAULT_JOINT_STATES_TOPIC = '/joint_states'
-DEFAULT_ROBOT_DESCRIPTION_TOPIC = '/robot_description'
 
 # Monitor subscriptions are BEST_EFFORT on purpose, and it is not a
 # reliability preference. A BEST_EFFORT subscription matches a RELIABLE
@@ -51,12 +55,8 @@ DEFAULT_ROBOT_DESCRIPTION_TOPIC = '/robot_description'
 # only the newest sample can trip anything.
 _LATEST = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
 # robot_state_publisher latches the description, so a late subscriber needs
-# TRANSIENT_LOCAL to receive it at all.
-_LATCHED = QoSProfile(
-    depth=1,
-    reliability=ReliabilityPolicy.BEST_EFFORT,
-    durability=DurabilityPolicy.TRANSIENT_LOCAL,
-)
+# TRANSIENT_LOCAL to receive it at all (utils/robot_description.py).
+_LATCHED = LATCHED_QOS
 
 
 class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
@@ -209,40 +209,12 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
     def _build_kinematics(self):
         """Pinocchio model, arm joint indices and limits, from the URDF.
 
-        Imported here rather than at module scope: only the kinematic guards
-        need Pinocchio, and a tree that enables none of them should not pay for
-        loading it.
+        The parsing is utils/robot_description.arm_kinematics(), shared with
+        every other reader of the description so they cannot disagree about
+        what a joint's limits are.
         """
-        import pinocchio as pin
-
-        model = pin.buildModelFromXML(self._urdf)
-        idx_q, idx_v = [], []
-        for name in self.joint_names:
-            if not model.existJointName(name):
-                raise ValueError(
-                    f"joint '{name}' is not in {self.robot_description_topic}; "
-                    'the registry entry and the running description disagree')
-            joint = model.joints[model.getJointId(name)]
-            if joint.nq != 1:
-                raise ValueError(
-                    f"joint '{name}' has nq={joint.nq}; this monitor reads a "
-                    'single bounded coordinate per joint, so an unbounded or '
-                    'multi-DOF joint cannot be checked against a limit')
-            idx_q.append(joint.idx_q)
-            idx_v.append(joint.idx_v)
-        if not model.existFrame(self.ee_link):
-            raise ValueError(
-                f"frame '{self.ee_link}' is not in {self.robot_description_topic}")
-        return {
-            'pin': pin,
-            'model': model,
-            'data': model.createData(),
-            'idx_q': idx_q,
-            'idx_v': idx_v,
-            'frame_id': model.getFrameId(self.ee_link),
-            'lower': [float(model.lowerPositionLimit[i]) for i in idx_q],
-            'upper': [float(model.upperPositionLimit[i]) for i in idx_q],
-        }
+        return arm_kinematics(
+            self._urdf, self.joint_names, self.ee_link, source=self.robot_description_topic)
 
     def _jacobian(self, kin, q):
         pin = kin['pin']

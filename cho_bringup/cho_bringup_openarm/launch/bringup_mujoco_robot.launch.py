@@ -12,29 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib.util
 import os
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, OpaqueFunction,
-                            RegisterEventHandler, Shutdown)
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, Shutdown
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessIO, OnShutdown
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-package_share = get_package_share_directory('cho_bringup_openarm')
-# launch_utils is installed under lib/, not as an importable python package, so
-# it is loaded by path the same way cho_bringup_franka does it.
-launch_utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_openarm', 'utils', 'launch_utils.py')
+from cho_bringup_common import (
+    create_controller_spawners,
+    load_package_utils,
+    runtime_param_cleanup,
+    start_on_output,
 )
-spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
-launch_utils = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launch_utils)
+
+launch_utils = load_package_utils('cho_bringup_openarm')
 
 # Printed by the resource manager once the hardware component is fully up. The
 # component name comes from our own ros2_control block, so it is stable.
@@ -184,8 +180,10 @@ def generate_launch_description():
         if return_to_zero and mit_prototype:
             if mit_controller_base not in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS:
                 raise RuntimeError(
-                    "return_to_zero is supported only with joint_impedance_mit_controller "
-                    "or task_space_impedance_mit_controller.")
+                    "return_to_zero is supported only with "
+                    f"{' or '.join(sorted(launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS))}: "
+                    "nominal zero is a kinematic singularity for this arm, so a Cartesian "
+                    "controller cannot be entered from it.")
         if ctrl_name == 'moveit':
             raise RuntimeError(
                 "'moveit' is not a ros2_control controller. Launch "
@@ -201,7 +199,8 @@ def generate_launch_description():
         # able to stop the arm controller from ever being spawned.
         optional = launch_utils.gripper_controllers(bimanual) if hand else []
         mit_controller_names = (mit_selection['controller_names'] if mit_selection else [])
-        switchable_controllers = (mit_controller_names if mit_prototype else
+        switchable_controllers = (
+            mit_controller_names if mit_prototype else
             launch_utils.get_switchable_controllers(
                 control_mode=mode, requested_controller=ctrl_name, bimanual=bimanual))
 
@@ -215,29 +214,18 @@ def generate_launch_description():
                         description_path, 'config', 'mit_safety_profiles_v1.yaml'),
                     **selection_overrides.get(name, {}),
                 }
-                if return_to_zero and mit_prototype:
+                if return_to_zero:
                     # The direct producer owns the entire trajectory after its
                     # hardware/session handshake, so no second controller can
-                    # race to command these interfaces.
+                    # race to command these interfaces. Only the joint-space
+                    # controllers get here (RETURN_TO_ZERO_MIT_CONTROLLERS, checked
+                    # above), so these are joint-space homing gains.
                     mit_profile_overrides[name].update({
                         'return_to_zero': True,
                         'return_to_zero_duration': 5.0,
+                        'return_to_zero_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
+                        'return_to_zero_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],
                     })
-                    if mit_controller_base == 'task_space_impedance_mit_controller':
-                        # A distinct joint-space initialization phase.  The
-                        # task controller only enables Cartesian actions after
-                        # this phase has converged, then resumes its ordinary
-                        # task gains (no second posture ramp).
-                        mit_profile_overrides[name].update({
-                            'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
-                            'startup_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],
-                            'startup_duration': 5.0,
-                        })
-                    else:
-                        mit_profile_overrides[name].update({
-                            'return_to_zero_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
-                            'return_to_zero_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],
-                        })
 
         runtime_param_file = launch_utils.create_runtime_param_file(
             controller_names=always_active + optional + switchable_controllers,
@@ -252,7 +240,7 @@ def generate_launch_description():
              if mit_prototype else
              ('controllers_bimanual.yaml' if bimanual else 'controllers.yaml')))
 
-        controller_spawners = launch_utils.create_controller_spawners(
+        controller_spawners = create_controller_spawners(
             always_active=always_active,
             optional_controllers=optional,
             switchable_controllers=switchable_controllers,
@@ -286,38 +274,15 @@ def generate_launch_description():
         # on process-start reaches configure_controller during that window and
         # dies outright:
         #     [spawner] Failed to configure controller
-        # --controller-manager-timeout does not help; it covers waiting for the
-        # services, not for the hardware behind them. So key off the resource
-        # manager announcing this hardware component active. Same approach as the
-        # Franka Isaac bringup, which hits the same race for a different reason.
-        started = {'spawners': False}
-
-        def start_spawners_when_hardware_is_active(event):
-            if started['spawners']:
-                return None
-            if HARDWARE_READY_MARKER not in event.text.decode(errors='replace'):
-                return None
-            started['spawners'] = True
-            return controller_spawners
-
-        actions = [
+        # So key off the resource manager announcing this hardware component
+        # active. Same approach as the Isaac bringups, which hit the same race
+        # for a different reason.
+        return [
             node_mujoco_ros2_control,
-            RegisterEventHandler(
-                event_handler=OnProcessIO(
-                    target_action=node_mujoco_ros2_control,
-                    # ROS 2 C++ logging goes to stderr; watch both so this does
-                    # not silently stop working if that ever changes.
-                    on_stdout=start_spawners_when_hardware_is_active,
-                    on_stderr=start_spawners_when_hardware_is_active,
-                )
-            ),
-            RegisterEventHandler(
-                event_handler=OnShutdown(
-                    on_shutdown=[launch_utils.create_runtime_param_cleanup(runtime_param_file)],
-                )
-            ),
+            start_on_output(node_mujoco_ros2_control, HARDWARE_READY_MARKER, controller_spawners,
+                            stdout=True, stderr=True),
+            runtime_param_cleanup(runtime_param_file),
         ]
-        return actions
 
     return LaunchDescription(
         declared_arguments + [

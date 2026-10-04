@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+from cho_control_tools.action_names import controller_action_name, moveit_bridge_node
+
 
 _CONFIG = {
     'robot_type': 'franka',
@@ -9,15 +11,14 @@ _CONFIG = {
     'controllers': {'moveit_trajectory': 'moveit_joint_trajectory_controller'},
     'moveit': {},
     'actions': {'preferences': {
-        'joint': ['/franka/controller_action_server/moveit_joint',
-                  '/controller_action_server/joint_space_qp_controller',
-                  '/controller_action_server/joint_space_impedance_controller'],
-        'task': ['/franka/controller_action_server/moveit_task',
-                 '/controller_action_server/task_space_qp_controller',
-                 '/controller_action_server/task_space_impedance_controller',
-                 '/controller_action_server/operational_space_controller',
-                 '/controller_action_server/task_space_ik_controller'],
-        'gripper': ['/controller_action_server/gripper_controller'],
+        'joint': [controller_action_name(node, 'joint') for node in (
+            moveit_bridge_node('franka'), 'joint_space_qp_controller',
+            'joint_space_impedance_controller')],
+        'task': [controller_action_name(node, 'task') for node in (
+            moveit_bridge_node('franka'), 'task_space_qp_controller',
+            'task_space_impedance_controller', 'operational_space_controller',
+            'task_space_ik_controller')],
+        'gripper': [controller_action_name('gripper_controller', 'gripper')],
     }},
     'poses': {'home': {
         '0': [0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0,

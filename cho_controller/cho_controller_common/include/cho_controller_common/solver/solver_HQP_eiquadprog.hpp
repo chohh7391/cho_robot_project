@@ -57,15 +57,6 @@ protected:
     Eigen::VectorXi m_activeSet;  /// vector containing the indexes of the active inequalities
     cho_controller::common::math::Index m_activeSetSize;
 
-#ifdef ELIMINATE_EQUALITY_CONSTRAINTS
-//      Eigen::FullPivLU<Matrix>                        m_CE_dec;
-//	  Eigen::ColPivHouseholderQR<Matrix>              m_CE_dec; // fast, but difficult to retrieve null space basis
-//      Eigen::FullPivHouseholderQR<Matrix>             m_CE_dec; // doc says it is slow 
-    Eigen::CompleteOrthogonalDecomposition<Matrix>  m_CE_dec; // available from Eigen 3.3.0, 40 us for decomposition, 40 us to get null space basis, 40 us to project Hessian
-//      Eigen::JacobiSVD<Matrix, Eigen::HouseholderQRPreconditioner> m_CE_dec; // too slow
-    Matrix m_ZT_H_Z;
-    Matrix m_CI_Z;
-#endif
 
     unsigned int m_neq;  /// number of equality constraints
     unsigned int m_nin;  /// number of inequality constraints

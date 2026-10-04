@@ -8,8 +8,10 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
-# launch_utils is shared by the real bringups. It goes to lib/ (not share/) and
-# is loaded by absolute path, matching cho_bringup_franka and _openarm.
+# launch_utils holds the FR5-specific launch helpers. It goes to lib/ (not
+# share/) and the launch files load it with
+# cho_bringup_common.load_package_utils('cho_bringup_fr5'); the robot-independent
+# helpers are cho_bringup_common's.
 install(
   DIRECTORY utils/
   DESTINATION lib/${PROJECT_NAME}/utils

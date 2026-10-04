@@ -219,12 +219,12 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
             ctrl_state_pub_);
     ee_state_rt_pub_ =
         std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(ee_state_pub_);
+    // The poses are oMf, in the model's root frame; set once, not per cycle.
+    const auto root_frames = cho_controller_base::root_frames(model_);
+    ee_state_rt_pub_->msg_.header.frame_id = root_frames.empty() ? std::string() : root_frames.front();
     // Preallocate the controller_state vectors (and fill joint_names once) so the
     // per-cycle fill is heap-free, matching the joint-log publisher above.
-    ctrl_state_rt_pub_->msg_.joint_names.clear();
-    for (int i = 1; i <= num_dof_; ++i) {
-        ctrl_state_rt_pub_->msg_.joint_names.push_back(robot_type_ + "_joint" + std::to_string(i));
-    }
+    ctrl_state_rt_pub_->msg_.joint_names = arm_joint_names();
     ctrl_state_rt_pub_->msg_.reference.positions.resize(num_dof_);
     ctrl_state_rt_pub_->msg_.reference.velocities.resize(num_dof_);
     ctrl_state_rt_pub_->msg_.feedback.positions.resize(num_dof_);
@@ -283,8 +283,8 @@ controller_interface::return_type FrankaBaseController::update(
 
     // logging (only the arm-tracking controller; see should_publish_arm_log())
     if (should_publish_arm_log()) {
-        log_ee_pose();
-        log_joint_pos();
+        publish_ee_state();
+        publish_controller_state();
     }
 
     return controller_interface::return_type::OK;
@@ -476,7 +476,7 @@ void FrankaBaseController::clip_torque(Vector7d & torque)
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
 }
 
-void FrankaBaseController::log_ee_pose()
+void FrankaBaseController::publish_ee_state()
 {
     auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
         msg.position.x = pose.translation()(0);
@@ -492,6 +492,7 @@ void FrankaBaseController::log_ee_pose()
     // Per-controller ~/ee_state carries the three poses (ref / desired / current).
     if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
         auto & e = ee_state_rt_pub_->msg_;
+        e.header.stamp = get_node()->now();
         fill_pose(e.pose_ref, state_.H_ee_ref);
         fill_pose(e.pose_des, state_.H_ee_des);
         fill_pose(e.pose_curr, state_.H_ee);
@@ -499,7 +500,7 @@ void FrankaBaseController::log_ee_pose()
     }
 }
 
-void FrankaBaseController::log_joint_pos()
+void FrankaBaseController::publish_controller_state()
 {
     // Per-controller ~/controller_state. Vectors and joint_names were preallocated
     // in on_configure (resize() here is a no-op, so no RT heap traffic).
@@ -518,13 +519,18 @@ void FrankaBaseController::log_joint_pos()
     }
 }
 
-cho_controller::common::trajectory::JointMotionLimits FrankaBaseController::joint_motion_limits()
+std::vector<std::string> FrankaBaseController::arm_joint_names() const
 {
     std::vector<std::string> joints;
     for (int i = 1; i <= num_dof_; ++i) {
         joints.push_back(robot_type_ + "_joint" + std::to_string(i));
     }
-    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), joints);
+    return joints;
+}
+
+cho_controller::common::trajectory::JointMotionLimits FrankaBaseController::joint_motion_limits()
+{
+    return cho_controller::common::trajectory::load_joint_motion_limits(get_node(), arm_joint_names());
 }
 
 cho_controller::common::trajectory::CartesianMotionLimits FrankaBaseController::cartesian_motion_limits()

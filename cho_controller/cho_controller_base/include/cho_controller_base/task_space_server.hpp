@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <Eigen/Geometry>
 #include <pinocchio/spatial/explog.hpp>
@@ -62,9 +63,27 @@ inline bool normalized_quaternion(
   return out.coeffs().allFinite();
 }
 
+// Whether a TaskSpace goal stamped in `frame` may be taken as it is
+// (cho_interfaces/CONTRACT.md): an empty frame always; otherwise one of the
+// model's root frames for an absolute goal, the EE frame for a relative one.
+inline bool task_goal_frame_allowed(
+  const std::string & frame, bool relative, const std::vector<std::string> & base_frames,
+  const std::string & ee_frame)
+{
+  if (frame.empty()) {
+    return true;
+  }
+  if (relative) {
+    return !ee_frame.empty() && frame == ee_frame;
+  }
+  return std::find(base_frames.begin(), base_frames.end(), frame) != base_frames.end();
+}
+
 // The TaskSpace action every arm controller serves: a point-to-point move of the
-// EE to target_pose (absolute, or relative to the pose when the goal starts)
-// over at least `duration`, played by TrajectoryT. StateT must carry the
+// EE to target_pose (absolute, in the base frame; or relative to the pose when
+// the goal starts, in the EE frame) over at least `duration_sec`, played by
+// TrajectoryT. The controller runs in the control loop and transforms nothing,
+// so a goal stamped in any other frame is rejected (set_frames()). StateT must carry the
 // measured EE pose H_ee and the H_ee_ref (goal) and H_ee_init (hold) fields the
 // controllers read, all pinocchio::SE3.
 //
@@ -107,6 +126,17 @@ public:
     RCLCPP_INFO(
       this->node_->get_logger(), "[%s] success thresholds (control_mode=%s): translation<%.4f, rotation<%.4f",
       this->action_name_.c_str(), this->control_mode_.c_str(), threshold_.translation, threshold_.rotation);
+  }
+
+  // The frames a goal may be stamped in: for an absolute goal, the frame H_ee is
+  // expressed in -- the robot model's root, under any of the names that
+  // coincide with it (root_frames() in kinematics.hpp) -- and for a relative
+  // one, the EE frame. An empty frame_id is accepted for either and means that
+  // frame.
+  void set_frames(std::vector<std::string> base_frames, std::string ee_frame)
+  {
+    base_frames_ = std::move(base_frames);
+    ee_frame_ = std::move(ee_frame);
   }
 
   bool compute(const rclcpp::Time & now, StateT & state) override
@@ -192,13 +222,25 @@ protected:
     const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal> goal) override
   {
     const char * name = this->action_name_.c_str();
-    const auto & p = goal->target_pose.position;
-    const auto & o = goal->target_pose.orientation;
+    const auto & p = goal->target_pose.pose.position;
+    const auto & o = goal->target_pose.pose.orientation;
+    const auto & frame = goal->target_pose.header.frame_id;
     RCLCPP_INFO(
-      this->node_->get_logger(), "[%s] Received goal: pos(%.3f, %.3f, %.3f) %s, duration %.2f",
-      name, p.x, p.y, p.z, goal->relative ? "relative" : "absolute", goal->duration);
-    if (!Base::valid_duration(goal->duration)) {
-      RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: duration must be finite and positive.", name);
+      this->node_->get_logger(), "[%s] Received goal: pos(%.3f, %.3f, %.3f) %s in '%s', duration %.2f",
+      name, p.x, p.y, p.z, goal->relative ? "relative" : "absolute", frame.c_str(), goal->duration_sec);
+    if (!Base::valid_duration(goal->duration_sec)) {
+      RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: duration_sec must be finite and positive.", name);
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (!task_goal_frame_allowed(frame, goal->relative, base_frames_, ee_frame_)) {
+      const std::string expected = goal->relative ? ee_frame_ :
+        (base_frames_.empty() ? std::string() : base_frames_.front());
+      RCLCPP_ERROR(
+        this->node_->get_logger(),
+        "[%s] Goal rejected: a %s goal is in '%s' (or an empty frame_id), not '%s'; this controller does not "
+        "transform frames.",
+        name, goal->relative ? "relative" : "absolute", expected.empty() ? "<unknown>" : expected.c_str(),
+        frame.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
     // No arm here reaches beyond a metre or two: a component past 10 m is a
@@ -228,13 +270,13 @@ protected:
   {
     // Stage the payload BEFORE activate_goal() (the GoalPhase ordering contract).
     const auto goal = goal_handle->get_goal();
-    const auto & p = goal->target_pose.position;
-    const auto & o = goal->target_pose.orientation;
+    const auto & p = goal->target_pose.pose.position;
+    const auto & o = goal->target_pose.pose.orientation;
     Eigen::Quaterniond quaternion = Eigen::Quaterniond::Identity();
     normalized_quaternion(o.x, o.y, o.z, o.w, quaternion);  // validated in handle_goal
     goal_ = pinocchio::SE3(quaternion.toRotationMatrix(), Eigen::Vector3d(p.x, p.y, p.z));
     relative_ = goal->relative;
-    this->duration_ = goal->duration;
+    this->duration_ = goal->duration_sec;
     this->trajectory_->setDuration(this->duration_);
     this->activate_goal(goal_handle);
   }
@@ -243,6 +285,8 @@ protected:
   TaskSuccessThreshold threshold_{2e-2, 1e-1};
   pinocchio::SE3 goal_{pinocchio::SE3::Identity()};
   bool relative_{false};
+  std::vector<std::string> base_frames_;
+  std::string ee_frame_;
 
 private:
   char reason_[256]{};  // a composed abort reason; read by the finisher before the next goal

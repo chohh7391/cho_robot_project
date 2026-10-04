@@ -23,8 +23,22 @@ has installed the floor. No startup motion is sent.
 
 OMPL only. Every robot registers `pipelines=['ompl']`, and
 `moveit_action_bridge.py` requests it by name through its `planning_pipeline`
-parameter (default `ompl`) for both `moveit_joint` and `moveit_task`. No GPU
-planner is part of this stack.
+parameter (default `ompl`) for both of its actions. No GPU planner is part of
+this stack.
+
+## Actions
+
+The bridge serves `JointSpace` and `TaskSpace` the way a controller does
+(`cho_interfaces/CONTRACT.md`): as `~/joint_space` and `~/task_space` under its
+own node, which every launch here names `<robot>[_<profile>]_moveit_action_bridge`
+(`cho_robot_config.moveit_bridge_node()`), e.g. `/fr5_moveit_action_bridge/joint_space`
+or `/openarm_left_moveit_action_bridge/task_space`. It refuses to start under any
+other name, since the registry's action preferences -- what every client binds to --
+name it that way. Goals follow the contract: `duration_sec` (used here as the
+planning-time budget; MoveIt's own time parameterization sets the motion's length),
+optionally named joints, and a `PoseStamped` whose `frame_id` must be empty or the
+planning frame (absolute) or the EE link (relative). Any other frame is rejected,
+not transformed.
 
 ## Bimanual OpenArm
 

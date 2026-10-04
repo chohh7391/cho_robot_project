@@ -17,9 +17,9 @@ packages.
 ## HIGH — blocks anything beyond a smoke check
 
 - **Gripper controller.** No `gripper_controller` exists, so nothing can pick
-  anything up. Note `behaviors/action/gripper.py` hardcodes
-  `ControllerNames.GRIPPER`, so the controller MUST be named `gripper_controller`
-  or `GripperActionBehavior` needs a `controller_name` kwarg. The hand is already
+  anything up. (`GripperActionBehavior` and `home_subtree()` now take the
+  controller from `robot_config['gripper']`, so a per-arm `left_`/`right_`
+  gripper controller is addressed correctly once it exists.) The hand is already
   position-driven in every control mode on both simulators, and
   `openarm_{left_,right_,}finger_joint1` with its mimic joint2 is already wired
   through the description, so this is a controller + action server, not asset work.

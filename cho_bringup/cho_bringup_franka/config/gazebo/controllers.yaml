@@ -74,8 +74,6 @@
       moveit_joint_trajectory_controller:
         type: joint_trajectory_controller/JointTrajectoryController
 
-
-/**:
   joint_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
@@ -89,50 +87,42 @@
         - fr3_joint7
         - fr3_finger_joint1
 
-/**:
   ee_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   simulation_gripper_controller:
     ros__parameters:
       joints:
         - fr3_finger_joint1
       interface_name: effort
 
-/**:
   gripper_controller:
     ros__parameters:
       robot_type: "fr3"
       # Sim has no /franka_gripper/homing action server; only home on real.
       auto_home: false
 
-/**:
   gravity_compensation_controller:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   joint_space_position_controller:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   task_space_ik_controller:
     ros__parameters:
       robot_type: "fr3"
       lambda: 0.01          # DLS damping factor
       max_delta_q: 0.0025   # per-step joint command limit [rad] (~2.5 rad/s @1kHz, under FR3 joint vel limits)
 
-/**:
   joint_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_joint: [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
       kd_joint: [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
 
-/**:
   task_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -144,7 +134,6 @@
       use_nullspace_posture: false
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
 
-/**:
   operational_space_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -156,14 +145,12 @@
       use_nullspace_posture: false
       default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
 
-/**:
   joint_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
       kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
 
-/**:
   task_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -175,7 +162,6 @@
       use_nullspace_posture: false
       nullspace_posture_weight: 1.0e-3
 
-/**:
   vla_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -198,7 +184,6 @@
       # vibration (0.25 -> 0.39). 0 is the old law.
       velocity_feedforward: 1.0
 
-/**:
   moveit_joint_trajectory_controller:
     ros__parameters:
       joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]

@@ -25,6 +25,8 @@
        what the pipeline thinks it found next to the robot model in rviz. -->
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- node.py imports the Python tf2_ros (Buffer, TransformListener). -->
+  <exec_depend>tf2_ros_py</exec_depend>
   <exec_depend>cho_robot_config</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

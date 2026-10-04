@@ -205,7 +205,7 @@ def test_the_latches_land_where_occlusion_recovery_puts_them(tmp_path):
 def test_the_moveit_variant_homes_through_the_bridge(tmp_path):
     leaves = _leaves(_tree(tmp_path, home_via='moveit'))
     start = leaves[_index(leaves, lambda leaf: leaf.name == 'Go_Home_MoveIt_Replay_Start')]
-    assert start.action_name == '/fr5/controller_action_server/moveit_joint'
+    assert start.action_name == '/fr5_moveit_action_bridge/joint_space'
 
 
 def test_both_halves_report_what_they_covered(tmp_path):

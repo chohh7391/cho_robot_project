@@ -1,7 +1,8 @@
-# cho_task_manager/behaviors/wait/vla_wait_behavior.py
+# cho_task_manager/behaviors/service/vla_completion_waiter.py
 from std_srvs.srv import Trigger
 from cho_task_manager.behaviors.service.base_service_server_behavior import BaseServiceServerBehavior
 from cho_task_manager.utils.controller_names import vla_completion_service_name
+
 
 class VLACompletionWaiterBehavior(BaseServiceServerBehavior):
     # timeout_sec defaults to None (wait indefinitely): a timeout here returns FAILURE,
@@ -9,16 +10,20 @@ class VLACompletionWaiterBehavior(BaseServiceServerBehavior):
     # no failure-handling branch that cancels the VLA goal or switches controllers, so a
     # bounded wait is only safe for trees that add one. Long VLA rollouts (several
     # minutes) are legitimate, so an arbitrary default deadline would also cut them off.
-    # `controller` selects which VLA controller's completion service to wait on.
-    # It must match the controller actually driving: the controller derives the
-    # service from its own action name, and those differ per robot
+    # `controller` selects which VLA controller's completion service to wait on, and
+    # it is required. It must match the controller actually driving: the controller
+    # derives the service from its own action name, and those differ per robot
     # (Franka `vla_controller`, OpenArm MIT `vla_mit_controller`). Pass
-    # load_robot_config(...)['vla']; None keeps the historical Franka name.
+    # load_robot_config(...)['vla'].
     #
     # `success_service` is the operator-facing "the task succeeded" trigger.
     # Franka's controller exposes it globally at /vla/trigger_success; the OpenArm
     # MIT controller exposes it controller-scoped, matching the rest of that
     # vertical's services, so its name has to be passed in.
+    #
+    # A completion that arrives while this leaf is not waiting is answered
+    # success=false and does NOT trigger the success service: see
+    # BaseServiceServerBehavior.
     def __init__(self, name="Wait_For_External_VLA_Script", timeout_sec: float = None,
                  controller=None, success_service: str = "/vla/trigger_success"):
         super().__init__(name, Trigger, vla_completion_service_name(controller),

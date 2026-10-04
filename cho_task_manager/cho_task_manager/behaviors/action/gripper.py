@@ -1,12 +1,17 @@
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from cho_interfaces.action import Gripper
-from cho_task_manager.utils.controller_names import (
-    ControllerNames,
-    controller_action_name,
-)
+from cho_task_manager.utils.controller_names import controller_action_name
 
 
 class GripperActionBehavior(BaseActionBehavior):
+    """Open or close the gripper served by *controller_name*.
+
+    ``controller_name`` is required and comes from the robot config of the tree
+    being built (``robot_config['gripper']``): which gripper controller there is
+    -- ``gripper_controller``, or an OpenArm arm's ``left_`` / ``right_``
+    instance -- is the robot's business, not this leaf's.
+    """
+
     def __init__(
         self,
         name: str,
@@ -16,8 +21,15 @@ class GripperActionBehavior(BaseActionBehavior):
         force: float = 0.0,
         epsilon_inner: float = 0.0,
         epsilon_outer: float = 0.0,
+        controller_name: str = None,
     ):
-        super().__init__(name, Gripper, controller_action_name(ControllerNames.GRIPPER))
+        if not controller_name:
+            raise ValueError(
+                f"[{name}] controller_name is required: pass robot_config['gripper'] "
+                'for the robot the tree is built for (a robot that declares no '
+                'gripper has nothing to open or close)')
+        super().__init__(
+            name, Gripper, controller_action_name(controller_name, 'gripper'))
         self.grasp = grasp
         # Any value left at 0 makes the controller fall back to its built-in default.
         self.width = width

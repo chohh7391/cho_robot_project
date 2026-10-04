@@ -38,7 +38,6 @@ from launch.actions import (
     IncludeLaunchDescription,
     OpaqueFunction,
     RegisterEventHandler,
-    SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
@@ -47,6 +46,22 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
+
+from cho_bringup_common import (
+    chain_spawners,
+    load_package_utils,
+    make_spawner_node,
+    prepend_to_search_paths,
+    runtime_param_cleanup,
+)
+
+launch_utils = load_package_utils('cho_bringup_fr5')
+
+# What config/gz/controllers.yaml sets as well; this bringup has no arguments
+# for them. The description's default gripper is none, so there is no tool
+# envelope either.
+BRINGUP_TYPE = 'gz'
+EE_NAME = 'wrist3_link'
 
 
 SWITCHABLE_CONTROLLERS = [
@@ -88,15 +103,15 @@ def launch_setup(context, *args, **kwargs):
     # model://cho_description_fr5/....  Gazebo therefore needs the parent of
     # the package share directory on its resource path in order to resolve
     # both visual and collision meshes.
-    resource_root = os.path.dirname(fr5_desc)
-    ignition_resource_path = os.pathsep.join(filter(None, [
-        resource_root,
-        os.environ.get('IGN_GAZEBO_RESOURCE_PATH', ''),
-    ]))
-    gz_resource_path = os.pathsep.join(filter(None, [
-        resource_root,
-        os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
-    ]))
+    resource_path_actions = prepend_to_search_paths(
+        ['IGN_GAZEBO_RESOURCE_PATH', 'GZ_SIM_RESOURCE_PATH'], os.path.dirname(fr5_desc))
+
+    # The controller_manager lives inside the Gazebo plugin and loads
+    # config/gz/controllers.yaml from the description, so the runtime
+    # parameters (the MoveIt motion limits, mainly) reach the controllers
+    # through the spawners' -p, as in cho_bringup_ur's Gazebo bringup.
+    runtime_param_file = launch_utils.create_runtime_param_file(
+        BRINGUP_TYPE, EE_NAME, prefix='cho_fr5_gz_runtime_params_')
 
     robot_description_content = xacro.process_file(
         urdf_path,
@@ -146,61 +161,37 @@ def launch_setup(context, *args, **kwargs):
         name='rviz2',
         output='log',
         arguments=['-d', os.path.join(fr5_desc, 'rviz', 'view_robot.rviz')],
+        # On the Gazebo clock like everything else here, or its TF lookups
+        # compare wall time against sim-time stamps and drop every transform.
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(launch_rviz),
     )
 
-    cm_timeout = LaunchConfiguration('controller_manager_timeout')
-
-    active_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            'joint_state_broadcaster',
-            active_controller,
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', cm_timeout,
-        ],
-        output='screen',
-    )
-
-    inactive_controllers = [
-        c for c in SWITCHABLE_CONTROLLERS if c != active_controller
-    ]
-    inactive_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            *inactive_controllers,
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', cm_timeout,
-            '--inactive',
-        ],
-        output='screen',
-    )
+    spawner_kwargs = {
+        'runtime_param_file': runtime_param_file,
+        'controller_manager': '/controller_manager',
+        'timeout': LaunchConfiguration('controller_manager_timeout').perform(context),
+    }
+    active_controller_spawner = make_spawner_node(
+        ['joint_state_broadcaster', active_controller], **spawner_kwargs)
+    inactive_controller_spawner = make_spawner_node(
+        [c for c in SWITCHABLE_CONTROLLERS if c != active_controller], active=False, **spawner_kwargs)
 
     delayed_spawners = RegisterEventHandler(
         event_handler=OnProcessExit(
             target_action=gz_spawn_entity,
-            on_exit=[active_controller_spawner, rviz],
-        )
-    )
-    delayed_inactive_spawner = RegisterEventHandler(
-        event_handler=OnProcessExit(
-            target_action=active_controller_spawner,
-            on_exit=[inactive_controller_spawner],
+            on_exit=chain_spawners(active_controller_spawner, [inactive_controller_spawner]) + [rviz],
         )
     )
 
-    actions = [
-        SetEnvironmentVariable('IGN_GAZEBO_RESOURCE_PATH', ignition_resource_path),
-        SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH', gz_resource_path),
+    actions = resource_path_actions + [
         robot_state_publisher,
         gz_spawn_entity,
         gz_launch_with_gui,
         gz_launch_without_gui,
         clock_bridge,
         delayed_spawners,
-        delayed_inactive_spawner,
+        runtime_param_cleanup(runtime_param_file),
     ]
     return actions
 

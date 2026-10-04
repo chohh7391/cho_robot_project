@@ -44,9 +44,9 @@ def run_gui(ros_node):
 
     # 크고 예쁜 버튼 생성
     btn = tk.Button(
-        root, 
-        text="🚀 Task Success (Trigger)", 
-        font=("Arial", 16, "bold"), 
+        root,
+        text="🚀 Task Success (Trigger)",
+        font=("Arial", 16, "bold"),
         bg="#4CAF50", # 초록색 계열
         fg="white",
         activebackground="#45a049",

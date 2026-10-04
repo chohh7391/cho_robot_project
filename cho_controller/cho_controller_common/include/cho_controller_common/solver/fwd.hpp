@@ -23,10 +23,7 @@ namespace solver {
 enum TSID_DLLAPI SolverHQP
 {
     SOLVER_HQP_EIQUADPROG = 0,
-    SOLVER_HQP_EIQUADPROG_FAST = 1,
-    SOLVER_HQP_EIQUADPROG_RT = 2,
-    SOLVER_HQP_WHCOD = 4
-    
+    SOLVER_HQP_EIQUADPROG_FAST = 1
 };
 enum TSID_DLLAPI HQPStatus
 {
@@ -41,9 +38,6 @@ enum TSID_DLLAPI HQPStatus
 class HQPOutput;
 
 class TSID_DLLAPI SolverHQPBase;
-
-template<int nVars, int nEqCon, int nIneqCon>
-class TSID_DLLAPI SolverHQuadProgRT;
 
 template<typename T1, typename T2>
 class aligned_pair

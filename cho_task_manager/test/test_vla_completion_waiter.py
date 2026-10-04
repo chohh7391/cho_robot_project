@@ -1,5 +1,6 @@
 """Unit tests for BaseServiceServerBehavior's timeout and VLACompletionWaiterBehavior."""
 import py_trees
+import pytest
 from unittest.mock import MagicMock
 
 from cho_task_manager.behaviors.service.base_service_server_behavior import (
@@ -41,6 +42,10 @@ def make_behavior(cls=BaseServiceServerBehavior, timeout_sec=None, **kwargs):
     return behavior
 
 
+def _call(behavior):
+    return behavior._service_callback(Trigger.Request(), Trigger.Response())
+
+
 def test_running_until_signal_received():
     behavior = make_behavior()
     behavior.initialise()
@@ -64,21 +69,78 @@ def test_timeout_returns_failure():
     assert behavior.update() == py_trees.common.Status.FAILURE
 
 
+def test_a_signal_while_waiting_is_accepted():
+    behavior = make_behavior()
+    behavior.initialise()
+
+    response = _call(behavior)
+
+    assert response.success is True
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+
+
+def test_a_signal_before_the_wait_starts_is_refused():
+    # The server exists from setup(), long before the tree reaches this leaf.
+    behavior = make_behavior()
+
+    response = _call(behavior)
+
+    assert response.success is False
+    assert 'not waiting' in response.message
+    # And it is not banked for a later wait to find.
+    behavior.initialise()
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+
+def test_a_signal_after_the_wait_ended_is_refused():
+    behavior = make_behavior()
+    behavior.initialise()
+    _call(behavior)
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    behavior.terminate(py_trees.common.Status.SUCCESS)
+
+    assert _call(behavior).success is False
+
+
+def _vla_waiter(**kwargs):
+    behavior = VLACompletionWaiterBehavior(controller='vla_controller', **kwargs)
+    behavior.node = MagicMock()
+    behavior.node.get_clock.return_value = FakeClock()
+    behavior.trigger_success_client = MagicMock()
+    behavior.trigger_success_client.service_is_ready.return_value = True
+    return behavior
+
+
 def test_vla_completion_waiter_defaults_to_unbounded_wait():
     # A default deadline would shut the tree down mid-manipulation (no failure branch
     # cancels the VLA goal), so the waiter must wait indefinitely unless opted in.
-    behavior = VLACompletionWaiterBehavior()
+    behavior = VLACompletionWaiterBehavior(controller='vla_controller')
     assert behavior.timeout_sec is None
 
 
-def test_vla_completion_waiter_triggers_success_reset_on_signal():
-    behavior = VLACompletionWaiterBehavior()
-    behavior.node = MagicMock()
-    behavior.trigger_success_client = MagicMock()
-    behavior.trigger_success_client.service_is_ready.return_value = True
+def test_vla_completion_waiter_needs_the_robots_vla_controller():
+    with pytest.raises(ValueError, match='VLA controller'):
+        VLACompletionWaiterBehavior()
+    assert VLACompletionWaiterBehavior(controller='left_vla_mit_controller').service_name == (
+        '/left_vla_mit_controller/vla/notify_completion')
 
-    response = Trigger.Response()
-    behavior.fill_response(Trigger.Request(), response)
+
+def test_vla_completion_waiter_triggers_success_reset_on_signal():
+    behavior = _vla_waiter()
+    behavior.initialise()
+
+    response = _call(behavior)
 
     behavior.trigger_success_client.call_async.assert_called_once()
     assert response.success is True
+
+
+def test_vla_completion_waiter_ignores_a_completion_nobody_waits_for():
+    # Answering success here used to also reset the VLA controller through
+    # the success service, for a goal no step of the tree was waiting on.
+    behavior = _vla_waiter()
+
+    response = _call(behavior)
+
+    assert response.success is False
+    behavior.trigger_success_client.call_async.assert_not_called()

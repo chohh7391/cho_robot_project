@@ -56,9 +56,10 @@ CallbackReturn OperationalSpaceController::on_configure(
     return CallbackReturn::FAILURE;
   }
 
-  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/operational_space_controller");
+  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "~/task_space");
   action_server_->init();
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
+  action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
   action_server_->attach_activity(&activity_);
 
   dq_filtered_.setZero();

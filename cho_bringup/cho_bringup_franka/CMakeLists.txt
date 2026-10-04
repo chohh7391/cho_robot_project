@@ -13,6 +13,8 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# The Franka-specific launch helpers, loaded by the launch files with
+# cho_bringup_common.load_package_utils('cho_bringup_franka').
 install(DIRECTORY utils/
   DESTINATION lib/${PROJECT_NAME}/utils
   FILES_MATCHING PATTERN "*.py"

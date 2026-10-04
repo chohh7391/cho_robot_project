@@ -21,13 +21,8 @@ import py_trees
 from cho_task_manager.behaviors.action import TaskSpaceActionBehavior
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.behaviors.topic import PoseTargetBehavior
-from cho_task_manager.subtrees import guarded_mission, home_subtree
+from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
 from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
-from cho_task_manager.utils.msg_utils import make_joint_state
-
-# Same home as the pick-and-place trees: TCP forward and down, gripper facing
-# straight down, which is also the approach top_down_yaw produces.
-FRANKA_HOME_POSITION = make_joint_state([0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785])
 
 # task_space_qp_controller is a torque controller, so this tree only runs on a
 # control_mode:=torque bringup.
@@ -60,12 +55,16 @@ def create_franka_tag_reach_tree(robot_config=None) -> py_trees.behaviour.Behavi
     # does it: which controller serves absolute task-space goals is the
     # robot's business, not this task's.
     task_controller = robot_config['task_space']
+    # Same home as the pick-and-place trees, the registry's poses.task_home:
+    # TCP forward and down, gripper facing straight down, which is also the
+    # approach top_down_yaw produces.
+    home = home_joint_state(robot_config)
 
     mission = py_trees.composites.Sequence(name='Franka_Tag_Reach_Sequence', memory=True)
 
     init_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_IMPEDANCE,
         duration=3.0,
     )
@@ -98,7 +97,7 @@ def create_franka_tag_reach_tree(robot_config=None) -> py_trees.behaviour.Behavi
 
     finish_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_IMPEDANCE,
         duration=5.0,
         name='3_Finish',

@@ -169,8 +169,8 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State &)
   const double publish_rate = node->get_parameter("state_publish_rate").as_double();
   state_publish_period_ = publish_rate > 0.0 ? 1.0 / publish_rate : 0.0;
 
-  const auto action_name = std::string("/controller_action_server/") + node->get_name();
-  action_server_ = rclcpp_action::create_server<Action>(node, action_name,
+  // /<controller>/gripper (cho_interfaces/CONTRACT.md).
+  action_server_ = rclcpp_action::create_server<Action>(node, "~/gripper",
     std::bind(&GripperController::goal_callback, this, std::placeholders::_1, std::placeholders::_2),
     std::bind(&GripperController::cancel_callback, this, std::placeholders::_1),
     std::bind(&GripperController::accepted_callback, this, std::placeholders::_1));
@@ -201,7 +201,7 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State &)
     mapping_.width_at_closed, mapping_.width_at_open, default_speed_, max_speed_,
     default_force_, max_force_,
     force_interface_.empty() ? " (no force command interface)" : "",
-    action_name.c_str());
+    (std::string(node->get_node_base_interface()->get_fully_qualified_name()) + "/gripper").c_str());
   return CallbackReturn::SUCCESS;
 }
 
@@ -274,7 +274,7 @@ CallbackReturn GripperController::on_deactivate(const rclcpp_lifecycle::State &)
   // Abandoning an in-flight goal without a terminal result would leave the
   // caller's action client waiting forever.
   if (goal_id_) {
-    finish(goal_id_, Terminal::ABORTED);
+    finish(goal_id_, Terminal::ABORTED, "the controller was deactivated during the goal");
     goal_id_ = 0;
     public_goal_id_.store(0);
   }
@@ -361,12 +361,12 @@ void GripperController::accepted_callback(const std::shared_ptr<GoalHandle> & ha
   goal_buffer_.writeFromNonRT(staged);
 }
 
-void GripperController::finish(const std::uint64_t id, const Terminal terminal)
+void GripperController::finish(const std::uint64_t id, const Terminal terminal, const char * reason)
 {
   if (!id) {
     return;
   }
-  if (!terminal_queue_.push(TerminalEvent{id, terminal})) {
+  if (!terminal_queue_.push(TerminalEvent{id, terminal, reason})) {
     // The queue holds eight results and the timer drains it at 200 Hz, so this
     // needs a stalled executor to happen at all. Dropping the event silently
     // would leave the caller's action client waiting for a result that can
@@ -385,7 +385,7 @@ controller_interface::return_type GripperController::update(
 
   const auto canceled = cancel_id_.exchange(0, std::memory_order_acq_rel);
   if (canceled && canceled == goal_id_) {
-    finish(goal_id_, Terminal::CANCELED);
+    finish(goal_id_, Terminal::CANCELED, "canceled on request");
     goal_id_ = 0;
     public_goal_id_.store(0);
     // Hold where the fingers are rather than snapping to the old target: a
@@ -403,7 +403,7 @@ controller_interface::return_type GripperController::update(
   if (width_sequence != consumed_width_sequence_) {
     consumed_width_sequence_ = width_sequence;
     if (goal_id_) {
-      finish(goal_id_, Terminal::ABORTED);
+      finish(goal_id_, Terminal::ABORTED, "preempted by a width command on ~/width_command");
       goal_id_ = 0;
       public_goal_id_.store(0);
     }
@@ -419,7 +419,7 @@ controller_interface::return_type GripperController::update(
   const Goal incoming = *goal_buffer_.readFromRT();
   if (incoming.id && incoming.id != last_started_goal_id_) {
     if (goal_id_) {
-      finish(goal_id_, Terminal::ABORTED);
+      finish(goal_id_, Terminal::ABORTED, "preempted by a newer goal");
     }
     goal_id_ = incoming.id;
     last_started_goal_id_ = incoming.id;
@@ -476,8 +476,11 @@ controller_interface::return_type GripperController::update(
       // width tolerance's job, not the stall detector's.
       grasped_ = grasp_succeeded(
         width, active_target_width_, active_epsilon_inner_, active_epsilon_outer_);
-      finish(goal_id_, (grasped_ || !report_grasp_failure_) ?
-        Terminal::SUCCEEDED : Terminal::ABORTED);
+      if (grasped_ || !report_grasp_failure_) {
+        finish(goal_id_, Terminal::SUCCEEDED);
+      } else {
+        finish(goal_id_, Terminal::ABORTED, "the fingers stopped outside the grasp tolerance (epsilon_inner/outer)");
+      }
       goal_id_ = 0;
       public_goal_id_.store(0);
       // Keep squeezing: the commanded width stays past the object so the grasp
@@ -487,11 +490,15 @@ controller_interface::return_type GripperController::update(
       // that is success; for a grasp it means the fingers closed on air.
       grasped_ = false;
       const bool empty_grasp = active_grasp_ && report_grasp_failure_;
-      finish(goal_id_, empty_grasp ? Terminal::ABORTED : Terminal::SUCCEEDED);
+      if (empty_grasp) {
+        finish(goal_id_, Terminal::ABORTED, "the fingers reached the target width without grasping anything");
+      } else {
+        finish(goal_id_, Terminal::SUCCEEDED);
+      }
       goal_id_ = 0;
       public_goal_id_.store(0);
     } else if (goal_elapsed_ > goal_timeout_) {
-      finish(goal_id_, Terminal::ABORTED);
+      finish(goal_id_, Terminal::ABORTED, "timed out before reaching the target width");
       goal_id_ = 0;
       public_goal_id_.store(0);
       active_target_width_ = command_is_setpoint_ ? width : commanded_width_;
@@ -541,6 +548,7 @@ void GripperController::non_rt_tick()
     for (auto & entry : stranded) {
       auto result = std::make_shared<Action::Result>();
       result->is_completed = false;
+      result->message = "the gripper result queue overflowed";
       entry.second->abort(result);
     }
     return;
@@ -557,6 +565,7 @@ void GripperController::non_rt_tick()
     }
     auto result = std::make_shared<Action::Result>();
     result->is_completed = event.terminal == Terminal::SUCCEEDED;
+    result->message = event.reason;
     if (event.terminal == Terminal::SUCCEEDED) {
       handle->succeed(result);
     } else if (event.terminal == Terminal::CANCELED) {

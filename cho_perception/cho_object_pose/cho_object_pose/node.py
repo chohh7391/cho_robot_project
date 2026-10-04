@@ -449,9 +449,11 @@ class ObjectPoseNode(Node):
         origin = transform.transform.translation
         return np.array([origin.x, origin.y, origin.z])
 
-    def _evaluate(self, spec, now_seconds, stamp_msg):
+    def _evaluate(self, spec, stamp_seconds, stamp_msg):
+        # stamp_seconds is the detection's image stamp, not the node clock: the
+        # window is measured in the cameras' time.
         samples = self._samples[spec.name]
-        while samples and now_seconds - samples[0][0] > self._window:
+        while samples and stamp_seconds - samples[0][0] > self._window:
             samples.popleft()
 
         # The priority contest, and it is decided by what is IN THE WINDOW, not
@@ -520,7 +522,7 @@ class ObjectPoseNode(Node):
             offset_frame=offset_frame)
         self._publish(spec, position, orientation, stamp_msg,
                       offset_frame if offset_frame is not None else orientation)
-        self._published_at[spec.name] = now_seconds
+        self._published_at[spec.name] = stamp_seconds
         self._status[spec.name] = (
             f'publishing, spread {estimate.position_spread_m * 1e3:.1f} mm '
             f'over {estimate.count} samples from {len(contributors)} camera(s)'

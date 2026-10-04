@@ -10,6 +10,7 @@
   <depend>ament_index_python</depend>
   <depend>action_msgs</depend>
   <depend>cho_interfaces</depend>
+  <depend>control_msgs</depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>rclpy</depend>
@@ -17,7 +18,14 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <!-- cho_robot_config is deliberately NOT declared. The generic debug client
+       (clients/action_client.py) imports it lazily when it is installed; the
+       robot-scoped operator clients never do and run from bundled metadata in
+       workspaces that leave the registry out, which a declared dependency would
+       make rosdep refuse. -->
   <exec_depend>python3-matplotlib</exec_depend>
+  <!-- vla/success_gui.py -->
+  <exec_depend>python3-tk</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>pinocchio</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

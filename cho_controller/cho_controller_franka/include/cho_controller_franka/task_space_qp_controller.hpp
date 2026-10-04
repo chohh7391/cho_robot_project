@@ -13,6 +13,8 @@
 #include "cho_controller_common/tasks/task_joint_posture.hpp"
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
 #include "cho_controller_common/formulation/inverse_dynamics_formulation_acc.hpp"
+#include <memory>
+
 #include "cho_controller_common/solver/solver_HQP_eiquadprog.hpp"
 #include "cho_controller_common/solver/solver_HQP_factory.hpp"
 
@@ -56,7 +58,7 @@ private:
   std::shared_ptr<TrajectoryEuclidianRuckig> traj_posture_;
 
   std::shared_ptr<InverseDynamicsFormulationAccForce> tsid_; 
-  SolverHQPBase * solver_;
+  std::unique_ptr<SolverHQPBase> solver_;  // owned; the factory returns a raw new
   
   enum class QPControlMode {
     UNINITIALIZED,

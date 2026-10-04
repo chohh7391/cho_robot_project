@@ -25,9 +25,13 @@ moveit:
     max_velocity_scaling_factor: 0.25
     max_acceleration_scaling_factor: 0.25
 actions:
+  # Action names follow cho_interfaces/CONTRACT.md: /<node>/<kind>, served by
+  # the controller (or the MoveIt bridge) under its own node. The first joint
+  # and task entries are this profile's MoveIt bridge, whose node name is
+  # registry.moveit_bridge_node(); validate_robot_config() checks both.
   preferences:
-    joint: [/ur5e/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller]
-    task: [/ur5e/controller_action_server/moveit_task, /controller_action_server/task_space_ik_controller]
+    joint: [/ur5e_moveit_action_bridge/joint_space, /joint_space_position_controller/joint_space]
+    task: [/ur5e_moveit_action_bridge/task_space, /task_space_ik_controller/task_space]
     gripper: []
   gripper_command:
     topic: /robotiq_controller/commands
@@ -39,6 +43,9 @@ poses:
     '1': [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
     '2': [0.2, -1.4, 1.4, -1.6, -1.5, 0.2]
     '3': [-0.2, -1.4, 1.4, -1.6, -1.5, -0.2]
+  # Where the behaviour-tree tasks start and finish a mission
+  # (cho_robot_config.task_home_pose): the ready pose, home 1.
+  task_home: '1'
 motions:
   reach:
     '0': {relative: false, position: [0.2, -0.2, 0.5], orientation: [1.0, 0.0, 0.0, 0.0]}

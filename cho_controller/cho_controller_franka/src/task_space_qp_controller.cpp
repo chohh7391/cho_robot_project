@@ -86,12 +86,13 @@ CallbackReturn TaskSpaceQPController::on_configure(
   data_ = tsid_->data();
 
   // solver
-  solver_ = SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog");
+  solver_.reset(SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog"));
   
   // action server
-  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_qp_controller");
+  action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "~/task_space");
   action_server_->init();
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
+  action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
   action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;

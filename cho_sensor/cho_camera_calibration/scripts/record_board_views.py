@@ -58,6 +58,9 @@ import yaml
 
 from cho_interfaces.action import JointSpace
 
+#: The controller that drives the poses. Its JointSpace action is its own
+#: ~/joint_space (cho_interfaces/CONTRACT.md).
+CONTROLLER = 'joint_space_position_controller'
 MOVE_SEC = 7.0
 SETTLE_SEC = 2.5
 SAMPLE_SEC = 2.0
@@ -70,9 +73,7 @@ class Recorder(Node):
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
         self.client = ActionClient(
-            self, JointSpace,
-            '/controller_action_server/joint_space_position_controller',
-            callback_group=group)
+            self, JointSpace, f'/{CONTROLLER}/joint_space', callback_group=group)
         self.topics = topics
         self.latest = {key: None for key in topics}
         for key, topic in topics.items():
@@ -83,7 +84,8 @@ class Recorder(Node):
 
     def move(self, joints, seconds):
         goal = JointSpace.Goal()
-        goal.duration = float(seconds)
+        # A minimum: the controller takes longer if its joint limits require.
+        goal.duration_sec = float(seconds)
         goal.target_joints = JointState(position=[float(v) for v in joints])
         future = self.client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, future, executor=EXEC)

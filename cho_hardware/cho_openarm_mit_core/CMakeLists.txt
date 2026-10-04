@@ -25,13 +25,21 @@ install(FILES DESIGN.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Build-file and manifest lint only: the C++ predates any formatter here.
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   find_package(cho_description_openarm REQUIRED)
+  # The description's installed share directory (symlinked to the source
+  # under --symlink-install), not a path back into the source tree.
+  set(OPENARM_DESCRIPTION_SHARE "${cho_description_openarm_DIR}/..")
   ament_add_gtest(test_safety_profile test/test_safety_profile.cpp)
   target_link_libraries(test_safety_profile ${PROJECT_NAME})
   ament_add_gtest(test_arm_consumer test/test_arm_consumer.cpp)
   target_link_libraries(test_arm_consumer ${PROJECT_NAME})
   target_compile_definitions(test_safety_profile PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 endif()
 
 ament_export_include_directories(include)

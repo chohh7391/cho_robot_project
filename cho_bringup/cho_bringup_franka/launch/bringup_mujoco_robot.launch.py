@@ -1,30 +1,21 @@
-import importlib.util
 import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, OpaqueFunction, Shutdown
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
-package_share = get_package_share_directory('cho_bringup_franka')
-utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_franka', 'utils')
+from cho_bringup_common import (
+    create_controller_spawners,
+    load_package_utils,
+    runtime_param_cleanup,
 )
-launch_utils_path = os.path.join(utils_path, 'launch_utils.py')
-spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
-launch_utils = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launch_utils)
 
-ALWAYS_ACTIVE_CONTROLLERS = launch_utils.ALWAYS_ACTIVE_CONTROLLERS
-create_controller_spawners = launch_utils.create_controller_spawners
-create_runtime_param_file = launch_utils.create_runtime_param_file
-create_runtime_param_cleanup = launch_utils.create_runtime_param_cleanup
-get_initial_active_controller = launch_utils.get_initial_active_controller
-get_switchable_controllers = launch_utils.get_switchable_controllers
+launch_utils = load_package_utils('cho_bringup_franka')
 
 
 def generate_launch_description():
@@ -122,17 +113,11 @@ def generate_launch_description():
         use_vla = LaunchConfiguration('vla').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
         ee_name = LaunchConfiguration('ee_name').perform(context)
-        load_gripper_bool = load_gripper.lower() == 'true'
-        always_active_controllers = [
-            controller for controller in ALWAYS_ACTIVE_CONTROLLERS
-            if load_gripper_bool or controller not in (
-                'simulation_gripper_controller',
-                'gripper_controller',
-            )
-        ]
+        launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
+        always_active_controllers = launch_utils.always_active_controllers(load_gripper)
 
-        initial_active_controller = get_initial_active_controller(ctrl_name, use_vla)
-        switchable_controllers = get_switchable_controllers(
+        initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_vla)
+        switchable_controllers = launch_utils.get_switchable_controllers(
             control_mode=mode,
             use_vla=use_vla,
             requested_controller=ctrl_name,
@@ -140,7 +125,7 @@ def generate_launch_description():
         all_runtime_param_controllers = (
             always_active_controllers + switchable_controllers
         )
-        runtime_param_file = create_runtime_param_file(
+        runtime_param_file = launch_utils.create_runtime_param_file(
             payload_config_path=payload_config_file,
             controller_names=all_runtime_param_controllers,
             bringup_type=b_type,
@@ -148,9 +133,9 @@ def generate_launch_description():
             ee_name=ee_name,
         )
         controller_spawners = create_controller_spawners(
-            always_active_controllers=always_active_controllers,
+            always_active=always_active_controllers,
             switchable_controllers=switchable_controllers,
-            initial_active_controller=initial_active_controller,
+            initial_active_controllers=initial_active_controller,
             # runtime params are loaded directly on node_mujoco_ros2_control
             # below, so no spawner -p file handoff is needed here.
             use_sim_time=use_sim_time,
@@ -178,11 +163,7 @@ def generate_launch_description():
                     on_start=controller_spawners,
                 )
             ),
-            RegisterEventHandler(
-                event_handler=OnShutdown(
-                    on_shutdown=[create_runtime_param_cleanup(runtime_param_file)],
-                )
-            )
+            runtime_param_cleanup(runtime_param_file),
         ]
 
         return [node_mujoco_ros2_control] + event_handlers

@@ -64,8 +64,6 @@
       vla_controller:
         type: cho_controller_franka/VLAController
 
-
-/**:
   franka_robot_state_broadcaster:
     ros__parameters:
       lock_try_count: 5 # Number of attempts to acquire the lock in a single on_update()
@@ -73,7 +71,6 @@
       lock_log_error: true #  Log error if lock acquisition fails - false == do not log  
       lock_update_success: false # return update OK, although lock fails (no update occurs)
 
-/**:
   joint_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
@@ -86,12 +83,10 @@
         - fr3_joint6
         - fr3_joint7
 
-/**:
   ee_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   gripper_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -101,24 +96,20 @@
       # Real robot can sense grasp success/failure, so surface failures to the BT.
       report_failure: true
 
-/**:
   gravity_compensation_controller:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   joint_space_position_controller:
     ros__parameters:
       robot_type: "fr3"
 
-/**:
   task_space_ik_controller:
     ros__parameters:
       robot_type: "fr3"
       lambda: 0.01          # DLS damping factor
       max_delta_q: 0.0025   # per-step joint command limit [rad] (~2.5 rad/s @1kHz, under FR3 joint vel limits)
 
-/**:
   task_space_velocity_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -131,7 +122,6 @@
       kp_joint: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]  # hold/track P gain [1/s]
       max_joint_vel: 0.5    # output velocity clamp [rad/s]
 
-/**:
   joint_space_velocity_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -139,14 +129,12 @@
       kp_joint: [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]  # hold/track P gain [1/s]
       max_joint_vel: 0.5    # output velocity clamp [rad/s]
 
-/**:
   joint_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_joint: [400.0, 500.0, 500.0, 400.0, 100.0, 100.0, 100.0]  # [400.0, 400.0, 400.0, 400.0, 100.0, 100.0, 100.0]
       kd_joint: [15.0, 15.0, 15.0, 15.0, 2.0, 2.0, 1.0]  # [10.0, 10.0, 10.0, 10.0, 2.0, 2.0, 2.0]
 
-/**:
   task_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -158,7 +146,6 @@
       use_nullspace_posture: false
       default_dof_pos: [-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754]
 
-/**:
   operational_space_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -170,14 +157,12 @@
       use_nullspace_posture: false
       default_dof_pos: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]
 
-/**:
   joint_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
       kd_joint: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
 
-/**:
   task_space_qp_controller:
     ros__parameters:
       robot_type: "fr3"
@@ -190,7 +175,6 @@
       use_nullspace_posture: false
       nullspace_posture_weight: 1.0e-3
 
-/**:
   vla_controller:
     ros__parameters:
       robot_type: "fr3"

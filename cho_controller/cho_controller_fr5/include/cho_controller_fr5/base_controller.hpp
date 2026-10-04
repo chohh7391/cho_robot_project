@@ -11,6 +11,7 @@
 
 #include "cho_controller_common/robot/robot_wrapper.hpp"
 #include "cho_controller_base/goal_phase_action_server.hpp"
+#include "cho_controller_base/kinematics.hpp"
 #include "cho_controller_common/math/fwd.hpp"
 #include "cho_controller_common/trajectory/motion_limits.hpp"
 
@@ -54,8 +55,8 @@ public:
     void update_joint_states();
     void compute_kinematics();
     void clip_position(Eigen::VectorXd & q_cmd, double eps = 0.01);
-    void log_ee_pose();
-    void log_joint_pos(const rclcpp::Time & stamp);
+    void publish_ee_state(const rclcpp::Time & stamp);
+    void publish_controller_state(const rclcpp::Time & stamp);
 
     // FK + local-frame arm Jacobian at an arbitrary config, on private scratch data
     // (leaves state_/data_ untouched). Used by the open-loop task-space IK, which

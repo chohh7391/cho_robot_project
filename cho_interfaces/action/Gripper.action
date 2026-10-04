@@ -8,5 +8,7 @@ float64 epsilon_inner  # inner width tolerance [m]
 float64 epsilon_outer  # outer width tolerance [m]
 ---
 bool is_completed
+# Empty on success; otherwise why the goal did not complete.
+string message
 ---
 float64 current_width

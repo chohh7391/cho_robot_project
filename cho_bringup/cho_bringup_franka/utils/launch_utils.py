@@ -12,15 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from copy import deepcopy
-import os
-import tempfile
-import yaml
+"""
+Franka-specific launch helpers: controller names and the payload-based params.
 
-from launch.actions import OpaqueFunction, RegisterEventHandler
-from launch.event_handlers import OnProcessExit
-from launch_ros.actions import Node
+Everything robot-independent (the runtime parameter file, spawners, the Isaac
+start-up order) is cho_bringup_common's.
+"""
 
+from cho_bringup_common import (
+    as_bool,
+    bringup_params,
+    load_yaml,
+    unique_names,
+    write_runtime_param_file,
+)
 from cho_robot_config import motion_limit_parameters
 
 
@@ -30,6 +35,11 @@ ALWAYS_ACTIVE_CONTROLLERS = [
     'simulation_gripper_controller',
     'gripper_controller',
 ]
+
+GRIPPER_CONTROLLERS = (
+    'simulation_gripper_controller',
+    'gripper_controller',
+)
 
 POSITION_CONTROLLERS = [
     'joint_space_position_controller',
@@ -50,34 +60,60 @@ TORQUE_CONTROLLERS = [
     'task_space_qp_controller',
 ]
 
+CONTROLLERS_BY_MODE = {
+    'position': POSITION_CONTROLLERS,
+    'velocity': VELOCITY_CONTROLLERS,
+    'torque': TORQUE_CONTROLLERS,
+}
+
 VLA_CONTROLLER = 'vla_controller'
 
 
-def load_yaml(file_path):
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-    with open(file_path, 'r') as file:
-        return yaml.safe_load(file)
-
-
-def as_bool(value):
-    if isinstance(value, bool):
-        return value
-    return str(value).lower() in ('true', '1', 'yes', 'on')
-
-
-def unique_names(names):
-    unique = []
-    for name in names:
-        if name not in unique:
-            unique.append(name)
-    return unique
+def always_active_controllers(load_gripper):
+    """Return ALWAYS_ACTIVE_CONTROLLERS, without the gripper ones unless load_gripper is 'true'."""
+    load_gripper_bool = str(load_gripper).lower() == 'true'
+    return [
+        controller for controller in ALWAYS_ACTIVE_CONTROLLERS
+        if load_gripper_bool or controller not in GRIPPER_CONTROLLERS
+    ]
 
 
 def get_initial_active_controller(controller_name, use_vla):
     if as_bool(use_vla):
         return VLA_CONTROLLER
     return controller_name
+
+
+def check_controller_matches_mode(controller_name, control_mode, use_vla):
+    """
+    Refuse a controller_name that cannot run in control_mode.
+
+    The description exports exactly one command interface per joint, chosen by
+    control_mode, while the runtime parameters tell every controller that same
+    mode. A controller from another mode's list would therefore be told a mode
+    it does not implement - control_mode:=position alone used to inject
+    position mode into the default torque controller - or claim an interface
+    the description does not export. vla_controller implements all three modes,
+    and vla:=true replaces controller_name altogether.
+    """
+    if as_bool(use_vla) or controller_name == VLA_CONTROLLER:
+        return
+    allowed = CONTROLLERS_BY_MODE.get(control_mode)
+    if allowed is None:
+        raise RuntimeError(
+            f"Unknown control_mode '{control_mode}'. Valid options: {sorted(CONTROLLERS_BY_MODE)}")
+    if controller_name in allowed:
+        return
+    owner = next(
+        (mode for mode, names in CONTROLLERS_BY_MODE.items() if controller_name in names), None)
+    if owner is not None:
+        raise RuntimeError(
+            f"controller_name:={controller_name} is a {owner} controller, but "
+            f"control_mode:={control_mode}. Pass control_mode:={owner}, or a {control_mode} "
+            f"controller: {allowed} (or vla:=true).")
+    raise RuntimeError(
+        f"Unknown controller_name '{controller_name}' for control_mode:={control_mode}. "
+        f"Valid options: {allowed + [VLA_CONTROLLER]} (or vla:=true).")
 
 
 def get_switchable_controllers(
@@ -113,167 +149,15 @@ def create_runtime_param_file(
     control_mode,
     ee_name,
 ):
-    dynamic_params = load_yaml(payload_config_path) or {}
-    wildcard_params = dynamic_params.setdefault('/**', {})
-    internal_control_mode = 'effort' if control_mode == 'torque' else control_mode
-    limits = motion_limit_parameters('franka')
+    """
+    Write the runtime parameter file, on top of payload.yaml's end-effector payload.
 
-    for controller_name in unique_names(controller_names):
-        controller_params = wildcard_params.setdefault(
-            controller_name,
-            {'ros__parameters': {}},
-        )
-        ros_params = controller_params.setdefault('ros__parameters', {})
-        ros_params['bringup_type'] = bringup_type
-        ros_params['control_mode'] = internal_control_mode
-        ros_params['ee_name'] = ee_name
-        # FR3's MoveIt joint/Cartesian limits bound the point-to-point goals. A copy
-        # each: rcl's params parser rejects the YAML alias a shared dict dumps as.
-        ros_params.update(deepcopy(limits))
-
-    # Write under ROS_HOME (defaults to ~/.ros) instead of the system /tmp.
-    # The file is read by the local controller_manager (ros2_control_node /
-    # gazebo / mujoco plugin) started by this same launch, so a per-user,
-    # non-/tmp location avoids the cross-process /tmp visibility problems
-    # (containers, PrivateTmp systemd units, multi-PC setups) that the old
-    # tempfile approach was vulnerable to.
-    runtime_dir = os.environ.get('ROS_HOME') or os.path.join(
-        os.path.expanduser('~'), '.ros'
-    )
-    os.makedirs(runtime_dir, exist_ok=True)
-    fd, runtime_path = tempfile.mkstemp(
-        suffix='.yaml',
+    FR3's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    """
+    params = bringup_params(bringup_type, control_mode, ee_name)
+    return write_runtime_param_file(
+        {name: params for name in unique_names(controller_names)},
+        shared_params=motion_limit_parameters('franka'),
+        base=load_yaml(payload_config_path) or {},
         prefix='cho_runtime_params_',
-        dir=runtime_dir,
     )
-    with os.fdopen(fd, 'w') as runtime_file:
-        yaml.dump(dynamic_params, runtime_file)
-    return runtime_path
-
-
-def create_runtime_param_cleanup(runtime_param_file):
-    def cleanup(context, *args, **kwargs):
-        if os.path.exists(runtime_param_file):
-            os.unlink(runtime_param_file)
-        return []
-
-    return OpaqueFunction(function=cleanup)
-
-
-def _make_spawner_node(
-    controller_names,
-    runtime_param_file=None,
-    active=True,
-    use_sim_time=None,
-    namespace=None,
-    timeout=None,
-    condition=None,
-):
-    # The ros2_control spawner accepts multiple controller names and loads /
-    # configures / activates them in a single, deterministic sequence inside one
-    # process. Grouping controllers this way (instead of one spawner per
-    # controller running in parallel) avoids the concurrent switch_controller
-    # races that intermittently leave a controller un-activated.
-    #
-    # runtime_param_file is only forwarded via '-p' when the controller_manager
-    # cannot receive the runtime parameters directly as node parameters (e.g.
-    # the Gazebo-embedded controller_manager). When None, the parameters are
-    # expected to already be loaded on the controller_manager node, which is the
-    # robust path that avoids the spawner -> controller_manager file handoff.
-    spawner_args = list(controller_names)
-    if runtime_param_file is not None:
-        spawner_args += ['-p', runtime_param_file]
-    if not active:
-        spawner_args.append('--inactive')
-    if timeout:
-        spawner_args.extend(['--controller-manager-timeout', str(timeout)])
-
-    parameters = []
-    if use_sim_time is not None:
-        parameters.append(use_sim_time)
-
-    node_kwargs = {
-        'package': 'controller_manager',
-        'executable': 'spawner',
-        'arguments': spawner_args,
-        'parameters': parameters,
-        'output': 'screen',
-    }
-    if namespace is not None:
-        node_kwargs['namespace'] = namespace
-    if condition is not None:
-        node_kwargs['condition'] = condition
-
-    return Node(**node_kwargs)
-
-
-def create_controller_spawner(
-    controller_name,
-    runtime_param_file=None,
-    active=True,
-    use_sim_time=None,
-    namespace=None,
-    timeout=None,
-    condition=None,
-):
-    return _make_spawner_node(
-        [controller_name],
-        runtime_param_file,
-        active=active,
-        use_sim_time=use_sim_time,
-        namespace=namespace,
-        timeout=timeout,
-        condition=condition,
-    )
-
-
-def create_controller_spawners(
-    always_active_controllers,
-    switchable_controllers,
-    initial_active_controller,
-    runtime_param_file=None,
-    use_sim_time=None,
-    namespace=None,
-    timeout=None,
-):
-    switchable = unique_names(switchable_controllers)
-
-    # Everything that must come up active: the always-active controllers plus the
-    # single requested/initial switchable controller (loaded last so the
-    # broadcasters are available before the main controller activates).
-    active_controllers = unique_names(
-        list(always_active_controllers)
-        + ([initial_active_controller] if initial_active_controller in switchable else [])
-    )
-    inactive_controllers = [c for c in switchable if c != initial_active_controller]
-
-    active_spawner = _make_spawner_node(
-        active_controllers,
-        runtime_param_file,
-        active=True,
-        use_sim_time=use_sim_time,
-        namespace=namespace,
-        timeout=timeout,
-    )
-
-    if not inactive_controllers:
-        return [active_spawner]
-
-    inactive_spawner = _make_spawner_node(
-        inactive_controllers,
-        runtime_param_file,
-        active=False,
-        use_sim_time=use_sim_time,
-        namespace=namespace,
-        timeout=timeout,
-    )
-
-    return [
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=active_spawner,
-                on_exit=[inactive_spawner],
-            )
-        ),
-        active_spawner,
-    ]

@@ -1,5 +1,6 @@
 import numpy as np
 import py_trees
+from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.behaviors.action import (
     TaskSpaceActionBehavior,
     GripperActionBehavior,
@@ -17,7 +18,12 @@ from cho_task_manager.utils.controller_names import ControllerNames, load_robot_
 # bringup. The safe-abort branch resolves its hold controller from this.
 CONTROL_MODE = 'torque'
 
-FRANKA_HOME_POSITION = make_joint_state(
+# Where the (unwired) 4_Finish block below would take the arm. NOT the robot's
+# task home (cho_robot_config poses.task_home, which the pick-and-place trees
+# use): this is the rounded ready pose the MuJoCo scene also starts in. Its old
+# name called it the Franka home position, which made it read as a copy of
+# that home.
+FORGE_FINISH_POSITION = make_joint_state(
     [0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785]
 )
 
@@ -65,7 +71,7 @@ def build_forge_tree(
     grasp_params,
     xy_range=(-0.01, 0.01),
     default_position=FORGE_DEFAULT_POSITION,
-    home_position=FRANKA_HOME_POSITION,
+    home_position=FORGE_FINISH_POSITION,
     approach_duration=3.0,
     tare_ft_sensor=True,
     robot_config=None,
@@ -80,6 +86,8 @@ def build_forge_tree(
     that never consume FT data can pass False to skip both steps.
     """
     robot_config = robot_config or load_robot_config('franka')
+    gripper = robot_config['gripper']
+    vla = robot_config['vla']
 
     x_offset, y_offset = random_xy_offset(xy_range)
     approach_orientation = random_yaw_orientation(base_orientation, yaw_range)
@@ -114,7 +122,8 @@ def build_forge_tree(
             controller_name=ControllerNames.TASK_QP,
             duration=approach_duration
         ),
-        GripperActionBehavior(name="Close_Gripper", grasp=True, **grasp_params),
+        GripperActionBehavior(
+            name="Close_Gripper", grasp=True, controller_name=gripper, **grasp_params),
     ])
 
     # 3. Start VLA Controller
@@ -122,12 +131,12 @@ def build_forge_tree(
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
-            activate=[ControllerNames.VLA],
+            activate=[vla],
             robot_config=robot_config,
         ),
-        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion"),
-        py_trees.timers.Timer(name="Wait_1_Seconds", duration=1.0),
-        GripperActionBehavior(name="Open_Gripper", grasp=False),
+        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion", controller=vla),
+        WaitBehavior(name="Wait_1_Seconds", duration_sec=1.0),
+        GripperActionBehavior(name="Open_Gripper", grasp=False, controller_name=gripper),
     ])
 
     # 4. finish — built but intentionally NOT wired into mission_sequence below.

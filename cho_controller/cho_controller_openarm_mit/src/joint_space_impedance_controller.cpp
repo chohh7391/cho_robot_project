@@ -124,10 +124,11 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     }
 
     action_server_ = std::make_shared<JointSpaceActionServer>(
-        get_node(), action_server_name(), num_dof_);
+        get_node(), "~/joint_space", num_dof_);
     action_server_->init();
     action_server_->trajectory_->setLimits(motion_limits);
     action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+    action_server_->set_joint_names(joint_names_);
     action_server_->attach_activity(&activity_);
 
     return CallbackReturn::SUCCESS;

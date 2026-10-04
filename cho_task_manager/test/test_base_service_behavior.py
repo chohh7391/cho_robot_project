@@ -1,5 +1,6 @@
 """Unit tests for BaseServiceBehavior (client-side) response timeout handling."""
 import py_trees
+import pytest
 from unittest.mock import MagicMock
 
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
@@ -84,3 +85,59 @@ def test_server_unavailable_at_request_time_returns_failure():
     behavior.send_service_request(object())
 
     assert behavior.update() == py_trees.common.Status.FAILURE
+
+
+def test_a_response_already_in_wins_over_a_passed_deadline():
+    """The tick that sees the response may land after the deadline.
+
+    Checking the deadline first turned a switch that had succeeded into a
+    FAILURE -- and the mission into a safe abort. BaseActionBehavior drains
+    its futures first; so does this.
+    """
+    behavior = make_behavior(response_timeout_sec=5.0)
+    future = MagicMock()
+    future.done.return_value = False
+    behavior.client.call_async.return_value = future
+
+    behavior.send_service_request(object())
+    behavior.clock.advance(6.0)
+    future.done.return_value = True
+    future.result.return_value = MagicMock()
+
+    assert behavior.update() == py_trees.common.Status.SUCCESS
+    behavior.client.remove_pending_request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# SwitchControllerServiceBehavior's own deadline
+# ---------------------------------------------------------------------------
+
+def _switch(**kwargs):
+    from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
+    return SwitchControllerServiceBehavior(
+        name='Switch', activate=['a'], exclusive_controllers=['a', 'b'], **kwargs)
+
+
+def test_a_fractional_switch_timeout_reaches_the_request():
+    # Duration(sec=2.5) raises: the seconds have to be split.
+    timeout = _switch(switch_timeout_sec=2.5).make_request().timeout
+    assert (timeout.sec, timeout.nanosec) == (2, 500_000_000)
+
+
+def test_the_default_switch_timeout_is_unchanged():
+    timeout = _switch().make_request().timeout
+    assert (timeout.sec, timeout.nanosec) == (2, 0)
+
+
+def test_the_switch_timeout_no_longer_shadows_the_service_wait():
+    # The base class's timeout_sec is how long setup() waits for the service.
+    # The switch used to overwrite it with its own 2 s request timeout.
+    behaviour = _switch(switch_timeout_sec=7.0)
+    assert behaviour.timeout_sec == 3.0
+    assert behaviour.switch_timeout_sec == 7.0
+
+
+@pytest.mark.parametrize('value', [-1.0, float('nan'), float('inf'), True, '2'])
+def test_a_meaningless_switch_timeout_is_refused(value):
+    with pytest.raises(ValueError, match='switch_timeout_sec'):
+        _switch(switch_timeout_sec=value)

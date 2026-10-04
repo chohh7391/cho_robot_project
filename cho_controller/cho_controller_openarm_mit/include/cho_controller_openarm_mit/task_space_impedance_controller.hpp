@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <cho_interfaces/action/task_space.hpp>
 #include <pinocchio/spatial/se3.hpp>
@@ -225,6 +227,7 @@ protected:
   double startup_elapsed_{0.0};
   bool startup_active_{false};
   std::string ee_frame_{"openarm_hand_tcp"};
+  std::vector<std::string> task_base_frames_;  // root_frames() of the task model
   pinocchio::FrameIndex ee_frame_id_{0};
   // Sized once at configure. The RT kinematics path must not allocate.
   Eigen::MatrixXd full_jacobian_;

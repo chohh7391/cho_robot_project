@@ -10,7 +10,6 @@ adapter still validates the selected CAN interface and the explicit
 commissioning safety profile before it constructs vendor transport.
 """
 
-import importlib.util
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -22,13 +21,9 @@ from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from cho_bringup_common import create_controller_spawners, load_package_utils, runtime_param_cleanup
 
-package_share = get_package_share_directory('cho_bringup_openarm')
-launch_utils_path = os.path.abspath(os.path.join(
-    package_share, '..', '..', 'lib', 'cho_bringup_openarm', 'utils', 'launch_utils.py'))
-spec = importlib.util.spec_from_file_location('launch_utils', launch_utils_path)
-launch_utils = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launch_utils)
+launch_utils = load_package_utils('cho_bringup_openarm')
 
 
 def generate_launch_description():
@@ -330,7 +325,7 @@ def generate_launch_description():
             parameters=[{'use_sim_time': False}, robot_description,
                         controllers_file, runtime_file],
             remappings=[('~/robot_description', '/robot_description')], on_exit=Shutdown())
-        spawners = launch_utils.create_controller_spawners(
+        spawners = create_controller_spawners(
             always_active=hardware_scope['always_active_controllers'],
             optional_controllers=hardware_scope['optional_controllers'],
             switchable_controllers=selection['controller_names'],
@@ -342,6 +337,7 @@ def generate_launch_description():
             RegisterEventHandler(event_handler=OnProcessStart(
                 target_action=control_node,
                 on_start=[TimerAction(period=2.0, actions=spawners)])),
+            runtime_param_cleanup(runtime_file),
         ]
         if launch_utils.as_bool(LaunchConfiguration('use_rviz').perform(context)):
             result.append(rviz)

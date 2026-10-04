@@ -18,11 +18,13 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <Eigen/Core>
 
 #include "cho_controller_base/goal_phase_action_server.hpp"
 #include "cho_interfaces/action/joint_space.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
 
 namespace cho_controller_base
 {
@@ -37,8 +39,56 @@ struct JointSuccessThresholds
   double effort{5e-2};
 };
 
+// A JointSpace goal's positions in the controller's joint order, or false and
+// why. With target_joints.name empty the positions are already in that order;
+// with names, each joint must be named exactly once (cho_interfaces/CONTRACT.md).
+// joint_names may be empty for a controller that does not know them, which then
+// accepts only unnamed goals. Not real-time: it allocates.
+inline bool ordered_joint_target(
+  const sensor_msgs::msg::JointState & target_joints, const std::vector<std::string> & joint_names,
+  std::size_t num_dof, std::vector<double> & out, std::string & why)
+{
+  const auto & names = target_joints.name;
+  const auto & positions = target_joints.position;
+  if (positions.size() != num_dof) {
+    why = "target_joints.position has " + std::to_string(positions.size()) + " elements, expected " +
+      std::to_string(num_dof) + ".";
+    return false;
+  }
+  if (names.empty()) {
+    out.assign(positions.begin(), positions.end());
+    return true;
+  }
+  if (names.size() != positions.size()) {
+    why = "target_joints.name and target_joints.position differ in length.";
+    return false;
+  }
+  if (joint_names.size() != num_dof) {
+    why = "this controller does not know its joint names; send target_joints.name empty.";
+    return false;
+  }
+  out.assign(num_dof, 0.0);
+  std::vector<bool> seen(num_dof, false);
+  for (std::size_t k = 0; k < names.size(); ++k) {
+    const auto it = std::find(joint_names.begin(), joint_names.end(), names[k]);
+    if (it == joint_names.end()) {
+      why = "unknown joint '" + names[k] + "'.";
+      return false;
+    }
+    const auto i = static_cast<std::size_t>(it - joint_names.begin());
+    if (seen[i]) {
+      why = "joint '" + names[k] + "' is named twice.";
+      return false;
+    }
+    seen[i] = true;
+    out[i] = positions[k];
+  }
+  // As many names as joints, none unknown and none twice: every joint is named.
+  return true;
+}
+
 // The JointSpace action every arm controller serves: a point-to-point move to
-// target_joints over at least `duration`, played by TrajectoryT (setInitSample,
+// target_joints over at least `duration_sec`, played by TrajectoryT (setInitSample,
 // setGoalSample, setDuration, setStartTime, setCurrentTime, getDuration,
 // planSucceeded). The controller samples trajectory_ itself.
 //
@@ -75,6 +125,10 @@ public:
       this->node_->get_logger(), "[%s] %d DOF, success threshold (control_mode=%s): joint_error<%.4f",
       this->action_name_.c_str(), this->num_dof_, this->control_mode_.c_str(), success_threshold_);
   }
+
+  // The joints this server drives, in its order. A goal that names its joints is
+  // matched against these; one that does not is taken in this order.
+  void set_joint_names(std::vector<std::string> names) {joint_names_ = std::move(names);}
 
   // Position limits for the joints this server drives: a goal outside them is
   // REJECTED. Otherwise it is accepted, the controller clamps its reference to
@@ -149,20 +203,19 @@ protected:
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal> goal) override
   {
-    const auto & target = goal->target_joints.position;
     const char * name = this->action_name_.c_str();
-    if (static_cast<int>(target.size()) != this->num_dof_) {
-      RCLCPP_ERROR(
-        this->node_->get_logger(), "[%s] Goal rejected: target_joints.position has %zu elements, expected %d.",
-        name, target.size(), this->num_dof_);
+    std::vector<double> target;
+    std::string why;
+    if (!ordered_target(*goal, target, why)) {
+      RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: %s", name, why.c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (!Base::all_finite(target)) {
       RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: non-finite joint target.", name);
       return rclcpp_action::GoalResponse::REJECT;
     }
-    if (!Base::valid_duration(goal->duration)) {
-      RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: duration must be finite and positive.", name);
+    if (!Base::valid_duration(goal->duration_sec)) {
+      RCLCPP_ERROR(this->node_->get_logger(), "[%s] Goal rejected: duration_sec must be finite and positive.", name);
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (q_lower_.size() == this->num_dof_ && q_upper_.size() == this->num_dof_) {
@@ -170,8 +223,8 @@ protected:
         if (target[i] < q_lower_(i) || target[i] > q_upper_(i)) {
           RCLCPP_ERROR(
             this->node_->get_logger(),
-            "[%s] Goal rejected: joint %d target %.4f is outside the limits [%.4f, %.4f].",
-            name, i + 1, target[i], q_lower_(i), q_upper_(i));
+            "[%s] Goal rejected: %s target %.4f is outside the limits [%.4f, %.4f].",
+            name, joint_label(i).c_str(), target[i], q_lower_(i), q_upper_(i));
           return rclcpp_action::GoalResponse::REJECT;
         }
       }
@@ -186,12 +239,26 @@ protected:
   {
     // Stage the payload BEFORE activate_goal() (the GoalPhase ordering contract).
     const auto goal = goal_handle->get_goal();
-    q_goal_ = Eigen::Map<const Eigen::VectorXd>(
-      goal->target_joints.position.data(), static_cast<Eigen::Index>(goal->target_joints.position.size()));
-    this->duration_ = goal->duration;
+    std::vector<double> target;
+    std::string why;
+    ordered_target(*goal, target, why);  // validated in handle_goal
+    q_goal_ = Eigen::Map<const Eigen::VectorXd>(target.data(), static_cast<Eigen::Index>(target.size()));
+    this->duration_ = goal->duration_sec;
     this->trajectory_->setDuration(this->duration_);
     this->trajectory_->setGoalSample(q_goal_);
     this->activate_goal(goal_handle);
+  }
+
+  bool ordered_target(const Action::Goal & goal, std::vector<double> & out, std::string & why) const
+  {
+    return ordered_joint_target(
+      goal.target_joints, joint_names_, static_cast<std::size_t>(this->num_dof_), out, why);
+  }
+
+  std::string joint_label(int i) const
+  {
+    return static_cast<int>(joint_names_.size()) == this->num_dof_ ?
+           joint_names_[static_cast<std::size_t>(i)] : "joint " + std::to_string(i + 1);
   }
 
   JointSuccessThresholds defaults_;
@@ -199,6 +266,7 @@ protected:
   Eigen::VectorXd q_goal_;
   Eigen::VectorXd q_lower_;
   Eigen::VectorXd q_upper_;
+  std::vector<std::string> joint_names_;
 
 private:
   char reason_[160]{};  // a composed abort reason; read by the finisher before the next goal

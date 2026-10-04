@@ -12,6 +12,8 @@ import argparse
 import sys
 import time
 
+from cho_control_tools.action_names import controller_action_name
+
 
 # Direct MIT task control begins from nominal zero by default.  Selectors 0--2
 # are bounded TCP-frame probes. Quaternion order is x, y, z, w.
@@ -92,9 +94,8 @@ class RobotActionShell:
         """Apply the direct-MIT zero-start contract and retry launch-time rejection."""
         shell = self._shell
         mit_task_endpoints = {
-            '/controller_action_server/task_space_impedance_mit_controller',
-            '/controller_action_server/left_task_space_impedance_mit_controller',
-            '/controller_action_server/right_task_space_impedance_mit_controller',
+            controller_action_name(f'{prefix}task_space_impedance_mit_controller', 'task')
+            for prefix in ('', 'left_', 'right_')
         }
         if (getattr(shell, 'robot_type', None) != 'openarm' or
                 getattr(shell, 'task_action_name', None) not in mit_task_endpoints):

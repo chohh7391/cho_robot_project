@@ -7,10 +7,18 @@
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>cho_openarm_mit_core</depend>
+  <!-- extern/openarm_can (package.xml, build_type cmake). Declared so colcon
+       builds it first: without the edge this package could be configured before
+       it, find OpenArmCAN missing, and silently skip the plugin. openarm_can
+       itself needs libcli11-dev, which its package.xml does not declare. -->
+  <depend>openarm_can</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_lint_cmake</test_depend>
+  <test_depend>ament_cmake_xmllint</test_depend>
+  <test_depend>cho_description_openarm</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

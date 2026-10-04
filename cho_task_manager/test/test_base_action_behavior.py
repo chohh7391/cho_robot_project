@@ -36,7 +36,7 @@ class FakeClock:
 
 
 def make_behavior(timeout_sec=30.0):
-    action_name = controller_action_name(ControllerNames.JOINT_QP)
+    action_name = controller_action_name(ControllerNames.JOINT_QP, 'joint_space')
     behavior = BaseActionBehavior("Test_Action", object, action_name, timeout_sec=timeout_sec)
     behavior.node = MagicMock()
     behavior.clock = FakeClock()
@@ -99,6 +99,28 @@ def test_failed_status_returns_failure():
     result_future.result.return_value = MagicMock(status=GoalStatus.STATUS_ABORTED)
 
     assert behavior.update() == py_trees.common.Status.FAILURE
+
+
+def test_a_failure_logs_the_reason_the_server_gave():
+    behavior = make_behavior()
+    send_future = MagicMock()
+    send_future.done.return_value = True
+    goal_handle = MagicMock(accepted=True)
+    send_future.result.return_value = goal_handle
+    behavior.client.send_goal_async.return_value = send_future
+    result_future = MagicMock()
+    goal_handle.get_result_async.return_value = result_future
+
+    behavior.send_action_goal(MagicMock())
+    behavior.update()
+    result_future.done.return_value = True
+    result_future.result.return_value = MagicMock(
+        status=GoalStatus.STATUS_ABORTED,
+        result=MagicMock(message='controller deactivated'))
+
+    assert behavior.update() == py_trees.common.Status.FAILURE
+    logged = behavior.node.get_logger().error.call_args[0][0]
+    assert logged.endswith(': controller deactivated')
 
 
 def test_timeout_before_goal_accepted_arms_late_cancel():

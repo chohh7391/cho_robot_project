@@ -148,16 +148,24 @@ void VLAActionServer::init()
     if (!node_->has_parameter("success_service")) {
         node_->declare_parameter<std::string>("success_service", "/vla/trigger_success");
     }
+    // The gripper controller's Gripper action (cho_interfaces/CONTRACT.md names it
+    // /<gripper controller>/gripper).
+    if (!node_->has_parameter("gripper_action")) {
+        node_->declare_parameter<std::string>("gripper_action", "/gripper_controller/gripper");
+    }
     const auto chunk_topic = node_->get_parameter("chunk_topic").as_string();
     const auto success_service = node_->get_parameter("success_service").as_string();
+    const auto gripper_action = node_->get_parameter("gripper_action").as_string();
 
     success_service_ = node_->create_service<std_srvs::srv::Trigger>(
         success_service,
         std::bind(&VLAActionServer::handle_success_trigger, this,
                   std::placeholders::_1, std::placeholders::_2));
 
+    // Served by the behaviour tree's completion waiter, next to the action:
+    // /<controller>/vla/notify_completion.
     notify_completion_client_ = node_->create_client<std_srvs::srv::Trigger>(
-        "/controller_action_server/vla_controller/notify_completion");
+        action_name_ + "/notify_completion");
 
     telemetry_pub_ = node_->create_publisher<cho_interfaces::msg::VlaTelemetry>(
         "~/vla_telemetry", rclcpp::SystemDefaultsQoS());
@@ -174,8 +182,7 @@ void VLAActionServer::init()
         rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
         std::bind(&VLAActionServer::process_vla_action, this, std::placeholders::_1));
 
-    gripper_client_ = rclcpp_action::create_client<GripperAction>(
-        node_, "/controller_action_server/gripper_controller");
+    gripper_client_ = rclcpp_action::create_client<GripperAction>(node_, gripper_action);
     gripper_goal_options_.goal_response_callback =
         [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<GripperAction>> & handle) {
             if (!handle) {
@@ -186,7 +193,7 @@ void VLAActionServer::init()
             }
         };
     if (!gripper_client_->wait_for_action_server(std::chrono::seconds(1))) {
-        RCLCPP_ERROR(node_->get_logger(), "Gripper action server not available at init!");
+        RCLCPP_ERROR(node_->get_logger(), "Gripper action server %s not available at init!", gripper_action.c_str());
     } else {
         RCLCPP_INFO(node_->get_logger(), "Gripper action server connected.");
     }

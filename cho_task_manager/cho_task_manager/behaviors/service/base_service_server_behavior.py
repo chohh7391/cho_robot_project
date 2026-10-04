@@ -1,10 +1,19 @@
-# cho_task_manager/behaviors/service/base_service_server_behavior.py
 import py_trees
 from rclpy.duration import Duration
 from rclpy.node import Node
 
+
 class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
-    """Base server behavior: RUNNING until an external service call (signal) arrives."""
+    """Base server behavior: RUNNING until an external service call (signal) arrives.
+
+    The server exists from setup() for the whole run, but a signal is only
+    ACCEPTED while this leaf is waiting for one -- between initialise() and
+    terminate(). A call at any other time is answered ``success=false`` with
+    the reason, and nothing else happens: telling the caller its signal was
+    acknowledged when no step of the tree was listening is how a completion
+    gets reported as handled and then silently lost.
+    """
+
     def __init__(self, name: str, service_type, service_name: str, timeout_sec: float = None):
         super().__init__(name)
         self.service_type = service_type
@@ -14,6 +23,7 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
         self.server = None
         self.node: Node = None
         self.signal_received = False
+        self.waiting = False
         self.response_message = "Signal received successfully."
         self._deadline = None
 
@@ -21,13 +31,18 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
         self.node = kwargs['node']
         self.server = self.node.create_service(
             self.service_type,
-            self.service_name, 
+            self.service_name,
             self._service_callback
         )
         self.node.get_logger().info(f"[{self.name}] Service Server Opened: {self.service_name}")
         return True
 
     def _service_callback(self, request, response):
+        if not self.waiting:
+            message = (f"{self.name} is not waiting for a signal on {self.service_name}; "
+                       "nothing was done with this one.")
+            self.node.get_logger().warn(f"[{self.name}] Signal refused: {message}")
+            return self.reject_response(request, response, message)
         self.signal_received = True
         self.node.get_logger().info(f"[{self.name}] Signal received.")
         return self.fill_response(request, response)
@@ -40,12 +55,21 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
             response.message = self.response_message
         return response
 
+    def reject_response(self, request, response, message):
+        """The answer to a signal that arrived while nothing was waiting for it."""
+        if hasattr(response, 'success'):
+            response.success = False
+        if hasattr(response, 'message'):
+            response.message = message
+        return response
+
     def initialise(self):
         self.signal_received = False
         if self.timeout_sec is not None:
             self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
         else:
             self._deadline = None
+        self.waiting = True
         self.node.get_logger().info(f"[{self.name}] Waiting for signal on {self.service_name}...")
 
     def update(self):
@@ -60,5 +84,6 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
     def terminate(self, new_status):
+        self.waiting = False
         self.signal_received = False
         self._deadline = None

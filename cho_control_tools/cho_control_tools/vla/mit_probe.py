@@ -27,7 +27,6 @@ Exit code is 0 only when every check passes.
 """
 import argparse
 import sys
-import threading
 import time
 
 import rclpy
@@ -36,6 +35,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from cho_interfaces.action import VisionLanguageAction
+from cho_control_tools.action_names import controller_action_name
 from cho_interfaces.msg import ActionChunk, VlaTelemetry
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import PoseStamped
@@ -52,8 +52,8 @@ class Probe(Node):
                  joint_index=0, joint_prefix='openarm_joint'):
         super().__init__('vla_mit_probe')
         # Both derived from the controller name, exactly as the controller itself
-        # derives its action name from get_node()->get_name().
-        action = f'/controller_action_server/{controller}'
+        # serves them: ~/vla and ~/vla_telemetry (cho_interfaces/CONTRACT.md).
+        action = controller_action_name(controller, 'vla')
         telemetry = f'/{controller}/vla_telemetry'
         self.joint_index = joint_index
         self.joint_prefix = joint_prefix

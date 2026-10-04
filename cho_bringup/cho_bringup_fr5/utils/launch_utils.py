@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared launch helpers for the FR5 bringups.
+"""FR5-specific launch helpers: grippers, their tool envelopes, the runtime params.
 
-Installed to lib/, not as an importable package, and loaded by path the way
-cho_bringup_franka and cho_bringup_openarm load theirs.
+Installed to lib/, not as an importable package, and loaded by path (with
+cho_bringup_common.load_package_utils) the way cho_bringup_franka and
+cho_bringup_openarm load theirs. Everything robot-independent is
+cho_bringup_common's.
 """
+
+from cho_bringup_common import bringup_params, write_runtime_param_file
+from cho_robot_config import motion_limit_parameters
 
 # The gripper names fr5.ros2_control.xacro switches on.
 GRIPPERS = ('none', 'ag95')
@@ -70,8 +75,13 @@ _FALSE = ('false', '0', 'no', 'off')
 _DEFER = ('', 'config')
 
 
-def as_bool(value):
-    """Parse a launch argument that means true or false, and nothing else."""
+def strict_bool(value):
+    """Parse a launch argument that means true or false, and nothing else.
+
+    Unlike cho_bringup_common.as_bool, which reads anything unrecognised as
+    false, this refuses it: `load_gripper:=ture` must not quietly mean "no
+    gripper".
+    """
     text = str(value).strip().lower()
     if text in _TRUE:
         return True
@@ -110,7 +120,7 @@ def resolve_gripper(gripper_arg, load_gripper_arg, config_value):
     if load_text in _DEFER:
         from_load = None
     else:
-        from_load = DEFAULT_GRIPPER if as_bool(load_text) else 'none'
+        from_load = DEFAULT_GRIPPER if strict_bool(load_text) else 'none'
 
     if named and from_load is not None and named != from_load:
         raise RuntimeError(
@@ -119,3 +129,24 @@ def resolve_gripper(gripper_arg, load_gripper_arg, config_value):
 
     # An explicit argument beats the config file; either spelling counts.
     return named or from_load or from_config
+
+
+def create_runtime_param_file(bringup_type, ee_name, gripper='none', prefix='cho_fr5_runtime_params_'):
+    """The runtime parameters of the two cho position controllers.
+
+    The FR5's MoveIt joint/Cartesian limits bound the point-to-point goals, and
+    task_space_ik_controller also gets the envelope of what is bolted to the
+    flange, so its workspace floor guard measures the thing that actually
+    reaches the bench rather than the flange above it (nothing for a bare one).
+    """
+    return write_runtime_param_file(
+        {
+            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
+            'task_space_ik_controller': {
+                **bringup_params(bringup_type, 'position', ee_name),
+                **tool_envelope_parameters(gripper),
+            },
+        },
+        shared_params=motion_limit_parameters('fr5'),
+        prefix=prefix,
+    )

@@ -4,7 +4,27 @@ The task manager builds a py_trees behavior tree and dispatches it by `robot_typ
 so Franka and UR implementations are fully separated under
 `cho_task_manager/tasks/franka/` and `cho_task_manager/tasks/ur/`.
 Controller roles per robot are read from `cho_robot_config/config/<robot>.yaml`
-(single source of truth).
+(single source of truth), and so is everything else a tree needs to know about
+the robot:
+
+- **Home pose** — `poses.task_home`, read with `subtrees.home_joint_state(robot_config)`.
+  Either a `poses.home` selector (FR5 and UR5e use `'1'`, OpenArm `'0'`) or a joint
+  vector of its own (Franka). No tree spells a home out.
+- **Controllers** — the action leaves (`JointSpace`, `TaskSpace`, `Gripper`, the
+  sweeps) and `VLACompletionWaiterBehavior` have no default controller; a tree
+  passes the robot config's role (`robot_config['joint_space']`, `['gripper']`,
+  `['vla']`, ...). `home_subtree()` opens `robot_config['gripper']`, so an OpenArm
+  arm profile opens its own `left_`/`right_` gripper.
+- **Exclusive switches** need `robot_config`: the controllers they take down are the
+  registry entry's roles, per-mode holds, `controllers.additional_arm` (the Franka
+  arm controllers that hold no role) and direct action endpoints.
+- **Joint position limits** for the FR5 replay come from the running
+  `/robot_description`, read by the same Pinocchio reader as the safety monitor; a
+  segment is refused until it has arrived.
+
+Waits in a tree use `behaviors/wait.WaitBehavior`, which runs on the node's clock
+(sim time under `use_sim_time`), not `py_trees.timers.Timer`, which counts wall time
+and so shortens every settle when a simulator runs slower than real time.
 
 ## Run
 
@@ -76,7 +96,7 @@ seq.add_children([
         topic='/detector/grasp', required_frame='fr3_link0'),
     TaskSpaceActionBehavior(
         name='Move_To_Object', target_pose_key='grasp_pose',
-        controller_name=ControllerNames.TASK_QP, duration=3.0),
+        controller_name=robot_config['task_space'], duration=3.0),
 ])
 ```
 
@@ -225,7 +245,7 @@ a rebuild or before real experiments.
 | task | what it does | required bringup |
 | --- | --- | --- |
 | `fjt_handover` | homes, hands the arm to the trajectory controller for an external executor, supervises, takes it back | `controller_name:=joint_trajectory_controller` |
-| `trajectory_replay` | replays a recorded waypoint CSV; refuses a cell that does not match the declared layout | same, plus `replay_trajectory:=` and `replay_layout:=` |
+| `trajectory_replay` | replays a recorded waypoint CSV; refuses a cell that does not match the declared layout | same, plus `replay_trajectory:=` and `replay_layout:=`; the home move plans through MoveIt by default, so a bringup without MoveIt needs `home_via:=direct` |
 | `perceived_replay` | the same replay, gated on what the cameras measure instead of a declared layout, optionally watched while it runs | same, plus `object_pose_config:=` and a running detector stack |
 | `vessel_detect` | latches the beaker's and the flask's detected poses. **Commands nothing** — no controller switch, no motion, no bringup needed | `object_pose_config:=` and a running detector stack |
 | `occlusion_recovery` | latches each vessel, sweeping the wrist camera over the bench for any the standing cameras cannot see -- one pass for all of them, or one sweep per vessel with `sweep_mode:=per_object` | the plain bringup, `object_pose_config:=`, `object_pose_cameras_config:=`, `sweep_config:=` and a running detector stack |

@@ -3,13 +3,8 @@ from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
     VLACompletionWaiterBehavior,
 )
-from cho_task_manager.subtrees import guarded_mission, home_subtree
-from cho_task_manager.utils.msg_utils import make_joint_state
+from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
 from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
-
-# Home pose: TCP shifted forward (+x ~0.12 m) and down (-z ~0.12 m).
-# Gripper stays pointing straight down (verified via FR3 FK: x=0.427, z=0.367, approach=[0,0,-1]).
-FRANKA_HOME_POSITION = make_joint_state([0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785])
 
 # joint_space_impedance_controller is a torque controller, so this tree only
 # runs on a control_mode:=torque bringup. The safe-abort branch needs to know
@@ -25,6 +20,10 @@ def create_franka_pick_place_tree(robot_config=None) -> py_trees.behaviour.Behav
     # both the exclusive-switch set and the abort's hold controller derive from
     # it, and the no-config fallback is the historical hard-coded Franka list.
     robot_config = robot_config or load_robot_config('franka')
+    # The registry's poses.task_home: TCP forward and down, gripper pointing
+    # straight down (cho_robot_config/config/franka.yaml).
+    home = home_joint_state(robot_config)
+    vla = robot_config['vla']
 
     mission_sequence = py_trees.composites.Sequence(name="Franka_Pick_And_Place_Sequence", memory=True)
 
@@ -33,7 +32,7 @@ def create_franka_pick_place_tree(robot_config=None) -> py_trees.behaviour.Behav
     # ----------------------------------------------------
     init_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_IMPEDANCE,
         duration=3.0,
     )
@@ -45,11 +44,11 @@ def create_franka_pick_place_tree(robot_config=None) -> py_trees.behaviour.Behav
     vla_seq.add_children([
         SwitchControllerServiceBehavior(
             name="Switch_To_VLA",
-            activate=[ControllerNames.VLA],
+            activate=[vla],
             robot_config=robot_config,
         ),
         VLACompletionWaiterBehavior(
-            name="Wait_For_VLA_Completion"
+            name="Wait_For_VLA_Completion", controller=vla,
         ),
     ])
 
@@ -58,7 +57,7 @@ def create_franka_pick_place_tree(robot_config=None) -> py_trees.behaviour.Behav
     # ----------------------------------------------------
     finish_seq = home_subtree(
         robot_config,
-        target_joints=FRANKA_HOME_POSITION,
+        target_joints=home,
         controller=ControllerNames.JOINT_IMPEDANCE,
         duration=5.0,
         name="3_Finish",

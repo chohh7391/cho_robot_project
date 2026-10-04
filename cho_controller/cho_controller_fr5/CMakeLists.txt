@@ -29,6 +29,10 @@ find_package(cho_controller_base REQUIRED)
 # cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
 find_package(joint_limits REQUIRED)
 find_package(cho_interfaces REQUIRED)
+find_package(generate_parameter_library REQUIRED)
+
+generate_parameter_library(fr5_task_space_ik_controller_parameters
+    src/task_space_ik_controller_parameters.yaml)
 
 add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
@@ -67,6 +71,8 @@ ament_target_dependencies(${PROJECT_NAME}
     cho_controller_common
     cho_interfaces
 )
+
+target_link_libraries(${PROJECT_NAME} fr5_task_space_ik_controller_parameters)
 
 pluginlib_export_plugin_description_file(
     controller_interface cho_controller_fr5.xml)

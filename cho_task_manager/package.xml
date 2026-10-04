@@ -23,15 +23,23 @@
        replay with no ceiling to check against has none at all. It is a
        config-only package, so this costs a share directory. -->
   <exec_depend>cho_moveit_fr5</exec_depend>
+  <depend>action_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>control_msgs</depend>
   <depend>controller_manager_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>trajectory_msgs</depend>
+  <!-- run_task_manager.launch.py -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pandas</exec_depend>
-  <!-- SafetyMonitorBehavior's Jacobian guards only. Imported lazily, so a tree
-       that enables no kinematic guard never loads it; the rosdep key is in
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- Reads /robot_description (utils/robot_description.py): SafetyMonitorBehavior's
+       kinematic guards and the FR5 replay's joint position limits. Imported
+       lazily, so a tree that uses neither never loads it; the rosdep key is in
        install_dependencies.bash SKIP_KEYS because libfranka and Pinocchio are
        pinned together as an ABI pair. -->
   <exec_depend>pinocchio</exec_depend>

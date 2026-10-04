@@ -36,84 +36,38 @@ Build the USD asset once before the first run:
     ~/isaacsim/python.sh <cho_simulation_isaac share>/isaac/convert_urdf_to_usd.py --help
 """
 
-from copy import deepcopy
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    ExecuteProcess,
     OpaqueFunction,
-    RegisterEventHandler,
     Shutdown,
 )
-from launch.event_handlers import OnProcessExit, OnProcessIO, OnShutdown
-from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 import xacro
+from cho_bringup_common import (
+    bringup_params,
+    chain_spawners,
+    check_isaac_install,
+    DEFAULT_ISAAC_SIM_PATH,
+    isaac_command_gate,
+    isaac_controller_startup,
+    isaac_sim_command,
+    isaac_sim_process,
+    make_spawner_node,
+    runtime_param_cleanup,
+    write_runtime_param_file,
+)
 from cho_robot_config import motion_limit_parameters
 
 SWITCHABLE_CONTROLLERS = [
     'joint_space_position_controller',
     'task_space_ik_controller',
 ]
-
-DEFAULT_ISAAC_SIM_PATH = os.path.join(os.path.expanduser('~'), 'isaacsim')
-
-# Printed by run_isaac_sim.py once physics is stepping and the ROS 2 bridge is
-# publishing. The spawners key off it.
-ISAAC_READY_MARKER = '[isaac_sim] running:'
-
-
-def create_runtime_controller_params(ee_name, bringup_type):
-    import tempfile
-
-    import yaml
-
-    runtime_dir = os.environ.get('ROS_HOME') or os.path.join(os.path.expanduser('~'), '.ros')
-    os.makedirs(runtime_dir, exist_ok=True)
-    fd, runtime_path = tempfile.mkstemp(
-        suffix='.yaml',
-        prefix='cho_ur_isaac_runtime_params_',
-        dir=runtime_dir,
-    )
-    params = {
-        '/**': {
-            'joint_space_position_controller': {
-                'ros__parameters': {
-                    'bringup_type': bringup_type,
-                    'control_mode': 'position',
-                },
-            },
-            'task_space_ik_controller': {
-                'ros__parameters': {
-                    'bringup_type': bringup_type,
-                    'control_mode': 'position',
-                    'ee_name': ee_name,
-                },
-            },
-        },
-    }
-    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    # A copy each: rcl's params parser rejects the YAML alias a shared dict dumps as.
-    limits = motion_limit_parameters('ur5e')
-    for controller in params['/**'].values():
-        controller['ros__parameters'].update(deepcopy(limits))
-    with os.fdopen(fd, 'w') as runtime_file:
-        yaml.safe_dump(params, runtime_file)
-    return runtime_path
-
-
-def cleanup_runtime_controller_params(runtime_path):
-    def cleanup(context, *args, **kwargs):
-        if os.path.exists(runtime_path):
-            os.unlink(runtime_path)
-        return []
-
-    return OpaqueFunction(function=cleanup)
 
 
 def setup_control_environment(context):
@@ -134,11 +88,18 @@ def setup_control_environment(context):
             f"Valid options: {SWITCHABLE_CONTROLLERS}"
         )
 
-    isaac_path = get_package_share_directory('cho_simulation_isaac')
     bringup_path = get_package_share_directory('cho_bringup_ur')
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
-    runtime_param_file = create_runtime_controller_params(ee_name, bringup_type)
+    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    runtime_param_file = write_runtime_param_file(
+        {
+            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
+            'task_space_ik_controller': bringup_params(bringup_type, 'position', ee_name),
+        },
+        shared_params=motion_limit_parameters('ur5e'),
+        prefix='cho_ur_isaac_runtime_params_',
+    )
 
     robot_description = {
         'robot_description': xacro.process_file(
@@ -146,35 +107,15 @@ def setup_control_environment(context):
         ).toxml()
     }
 
-    isaac_python = os.path.join(isaac_sim_path, 'python.sh')
-    if not os.path.exists(isaac_python):
-        raise RuntimeError(
-            f"Isaac Sim interpreter not found at '{isaac_python}'. "
-            'Pass isaac_sim_path:=<isaac sim install dir>.'
-        )
-    if not os.path.exists(robot_usd):
-        raise RuntimeError(
-            f"Isaac robot USD not found at '{robot_usd}'.\nBuild it once with:\n"
-            f"  {isaac_python} {os.path.join(isaac_path, 'isaac', 'convert_urdf_to_usd.py')} "
-            f'--urdf {urdf_path} --usd-path {os.path.dirname(robot_usd)} '
-            f'--ros-package cho_description_ur:'
-            f"{get_package_share_directory('cho_description_ur')}"
-        )
-
-    isaac_cmd = [
-        isaac_python,
-        os.path.join(isaac_path, 'isaac', 'run_isaac_sim.py'),
-        '--robot-usd', robot_usd,
-        '--robot-profile', os.path.join(
-            bringup_path, 'config', 'isaac', 'robot_profile.json'),
-        '--control-mode', 'position',
-        '--physics-rate', physics_rate,
-        '--device', device,
-    ]
-    if headless.lower() == 'true':
-        isaac_cmd.append('--headless')
-
-    isaac_sim = ExecuteProcess(cmd=isaac_cmd, output='screen', on_exit=Shutdown())
+    isaac_python = check_isaac_install(isaac_sim_path, robot_usd, [
+        '--urdf', urdf_path,
+        '--usd-path', os.path.dirname(robot_usd),
+        '--ros-package', f"cho_description_ur:{get_package_share_directory('cho_description_ur')}",
+    ])
+    isaac_sim = isaac_sim_process(isaac_sim_command(
+        isaac_python, robot_usd,
+        os.path.join(bringup_path, 'config', 'isaac', 'robot_profile.json'),
+        'position', physics_rate, device, headless=headless.lower() == 'true'))
 
     node_robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -198,84 +139,24 @@ def setup_control_environment(context):
         on_exit=Shutdown(),
     )
 
-    active_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            'joint_state_broadcaster', controller_name,
-            '-p', runtime_param_file,
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', cm_timeout,
-        ],
-        output='screen',
-    )
+    spawner_kwargs = {
+        'runtime_param_file': runtime_param_file,
+        'controller_manager': '/controller_manager',
+        'timeout': cm_timeout,
+    }
+    active_spawner = make_spawner_node(
+        ['joint_state_broadcaster', controller_name], **spawner_kwargs)
+    # Loaded whether or not the active spawner succeeded, as before.
+    inactive_spawner = make_spawner_node(
+        [c for c in SWITCHABLE_CONTROLLERS if c != controller_name],
+        active=False, **spawner_kwargs)
 
-    inactive = [c for c in SWITCHABLE_CONTROLLERS if c != controller_name]
-    inactive_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            *inactive,
-            '-p', runtime_param_file,
-            '--controller-manager', '/controller_manager',
-            '--controller-manager-timeout', cm_timeout,
-            '--inactive',
-        ],
-        output='screen',
-    )
-
-    isaac_command_gate = Node(
-        package='cho_simulation_isaac',
-        executable='isaac_command_gate.py',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
-    )
-
-    # Isaac needs tens of seconds to boot, and until it publishes /clock the
-    # controller_manager's realtime loop is parked in wait_until_started(). A
-    # spawner started before that dies on the controller switch's own 5 s timeout.
-    started = {'spawners': False}
-
-    def start_spawners_when_isaac_is_ready(event):
-        if started['spawners']:
-            return None
-        if ISAAC_READY_MARKER not in event.text.decode(errors='replace'):
-            return None
-        started['spawners'] = True
-        return [active_spawner]
-
-    # OnProcessExit fires however the spawner ended. One that failed leaves the
-    # requested controller inactive, and opening the gate then would hand Isaac
-    # exactly the zero commands the gate exists to keep from it.
-    def on_active_spawner_exit(event, _context):
-        # The inactive controllers are loaded either way, as before.
-        if event.returncode != 0:
-            get_logger('isaac_command_gate').error(
-                f'controller spawner exited with code {event.returncode}: the requested '
-                'controller is not active, so the Isaac command gate stays closed and '
-                'Isaac keeps holding the home pose. See the spawner output above.')
-            return [inactive_spawner]
-        return [inactive_spawner, isaac_command_gate]
-
-    event_handlers = [
-        RegisterEventHandler(
-            event_handler=OnProcessIO(
-                target_action=isaac_sim,
-                on_stdout=start_spawners_when_isaac_is_ready,
-            )
-        ),
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=active_spawner,
-                on_exit=on_active_spawner_exit,
-            )
-        ),
-        RegisterEventHandler(
-            event_handler=OnShutdown(
-                on_shutdown=[cleanup_runtime_controller_params(runtime_param_file)],
-            )
-        ),
-    ]
+    # Spawners once Isaac is stepping; the command gate once the requested
+    # controller is active (see isaac_controller_startup for both reasons).
+    event_handlers = isaac_controller_startup(
+        isaac_sim, chain_spawners(active_spawner, [inactive_spawner]), active_spawner,
+        isaac_command_gate({'use_sim_time': use_sim_time}))
+    event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
     return [isaac_sim, node_robot_state_publisher, node_ros2_control] + event_handlers
 

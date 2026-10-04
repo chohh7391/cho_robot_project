@@ -64,7 +64,8 @@ def generate_launch_description():
             'home_via', default_value='',
             description='How the arm reaches the start pose: direct (interpolate, '
                         'no collision checking) or moveit (planned; needs move_group '
-                        'and the MoveIt bridge). Empty keeps the task default, direct.'),
+                        'and the MoveIt bridge). Empty keeps the task default, moveit; '
+                        'a bringup without MoveIt needs home_via:=direct.'),
         DeclareLaunchArgument(
             'replay_speed_scale', default_value='0.0',
             description='Fraction of the recorded clock to replay at; 0 keeps the '
@@ -221,12 +222,17 @@ def generate_launch_description():
                 'print_tree': LaunchConfiguration('print_tree'),
                 'probe_translation': PythonExpression([
                     "[float(v) for v in ", LaunchConfiguration('probe_translation'), "]"]),
-                'probe_duration': LaunchConfiguration('probe_duration'),
+                # Typed, like the replay_pour_* doubles below: `probe_duration:=5`
+                # would otherwise arrive as an integer and be refused by the
+                # node's double parameter.
+                'probe_duration': ParameterValue(
+                    LaunchConfiguration('probe_duration'), value_type=float),
                 'probe_return': LaunchConfiguration('probe_return'),
                 'replay_trajectory': LaunchConfiguration('replay_trajectory'),
                 'replay_meta': LaunchConfiguration('replay_meta'),
                 'replay_layout': LaunchConfiguration('replay_layout'),
-                'replay_speed_scale': LaunchConfiguration('replay_speed_scale'),
+                'replay_speed_scale': ParameterValue(
+                    LaunchConfiguration('replay_speed_scale'), value_type=float),
                 'home_via': LaunchConfiguration('home_via'),
                 'replay_watch': LaunchConfiguration('replay_watch'),
                 # Typed: `replay_pour_grams:=20` would otherwise arrive as an integer
@@ -236,7 +242,8 @@ def generate_launch_description():
                 'replay_pour_container': ParameterValue(
                     LaunchConfiguration('replay_pour_container'), value_type=str),
                 'replay_pour_material': LaunchConfiguration('replay_pour_material'),
-                'replay_pour_flow_index': ParameterValue(LaunchConfiguration('replay_pour_flow_index'), value_type=float),
+                'replay_pour_flow_index': ParameterValue(
+                    LaunchConfiguration('replay_pour_flow_index'), value_type=float),
                 'replay_pour_timeout': ParameterValue(LaunchConfiguration('replay_pour_timeout'), value_type=float),
                 'replay_pour_marker_topic': LaunchConfiguration('replay_pour_marker_topic'),
                 'replay_pour_required': ParameterValue(

@@ -136,6 +136,11 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
         cs.feedback.positions.assign(num_dof_, 0.0);
         cs.feedback.velocities.assign(num_dof_, 0.0);
     }
+    {
+        // The poses are oMf, in the model's root frame; set once, not per cycle.
+        const auto root_frames = cho_controller_base::root_frames(model_);
+        ee_state_rt_pub_->msg_.header.frame_id = root_frames.empty() ? std::string() : root_frames.front();
+    }
 
     RCLCPP_INFO(get_node()->get_logger(),
         "FR5BaseController configured: %d DOF, ee=%s", num_dof_, ee_name_.c_str());
@@ -188,8 +193,8 @@ controller_interface::return_type FR5BaseController::update(
 {
     update_joint_states();
     compute_kinematics();
-    log_ee_pose();
-    log_joint_pos(time);
+    publish_ee_state(time);
+    publish_controller_state(time);
     return controller_interface::return_type::OK;
 }
 
@@ -223,7 +228,7 @@ void FR5BaseController::clip_position(Eigen::VectorXd & q_cmd, double eps)
     state_.q_ref = q_cmd;
 }
 
-void FR5BaseController::log_ee_pose()
+void FR5BaseController::publish_ee_state(const rclcpp::Time & stamp)
 {
     auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
         msg.position.x = pose.translation()(0);
@@ -238,6 +243,7 @@ void FR5BaseController::log_ee_pose()
     // Per-controller ~/ee_state carries the three poses (ref / desired / current).
     if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
         auto & msg = ee_state_rt_pub_->msg_;
+        msg.header.stamp = stamp;
         fill_pose(msg.pose_ref, state_.H_ee_ref);
         fill_pose(msg.pose_des, state_.H_ee_des);
         fill_pose(msg.pose_curr, state_.H_ee);
@@ -245,7 +251,7 @@ void FR5BaseController::log_ee_pose()
     }
 }
 
-void FR5BaseController::log_joint_pos(const rclcpp::Time & stamp)
+void FR5BaseController::publish_controller_state(const rclcpp::Time & stamp)
 {
     // Per-controller ~/controller_state; reference.velocities stays empty (no
     // desired velocity here). Sized in on_configure, so these are copies only.

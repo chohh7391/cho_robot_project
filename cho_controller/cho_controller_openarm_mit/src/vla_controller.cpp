@@ -205,8 +205,9 @@ controller_interface::CallbackReturn VlaController::on_configure(
     return CallbackReturn::ERROR;
   }
 
-  const auto action_name =
-    std::string("/controller_action_server/") + get_node()->get_name();
+  // /<controller>/vla, with the behaviour tree's completion service beside it
+  // (cho_interfaces/CONTRACT.md).
+  const std::string action_name = "~/vla";
   vla_server_ = rclcpp_action::create_server<VlaAction>(get_node(), action_name,
     std::bind(&VlaController::vla_goal_callback, this,
       std::placeholders::_1, std::placeholders::_2),

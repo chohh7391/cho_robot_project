@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+
 #include <hardware_interface/system_interface.hpp>
 #include <pluginlib/class_loader.hpp>
 TEST(MitMujocoSystem, PluginLoadsWithoutStartingSimulator)

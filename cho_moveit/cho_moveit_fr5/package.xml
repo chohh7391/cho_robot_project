@@ -4,7 +4,7 @@
   <name>cho_moveit_fr5</name>
   <version>0.1.0</version>
   <description>MoveIt 2 planning configuration for the FAIRINO FR5 robot.</description>
-  <maintainer email="maintainer@example.com">cho_robot_project maintainers</maintainer>
+  <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

@@ -18,6 +18,61 @@ _required_controller_roles = {
 # one that can hold the arm - depends on which mode it was started in.
 CONTROL_MODES = ('position', 'velocity', 'torque')
 
+# What a controller serves under its own node (cho_interfaces/CONTRACT.md):
+# `/<controller>/<kind>`. The MoveIt bridge, which is not a controller, follows
+# the same rule under its node, so a namespace or an arm prefix never needs a
+# code change.
+ACTION_KINDS = ('joint_space', 'task_space', 'gripper', 'vla', 'follow_joint_trajectory')
+
+# The FR5 pour action is application-specific and keeps the name it had before
+# the contract, `/controller_action_server/<controller>`. It is a kind here so
+# the exception lives in one place instead of at every call site.
+POUR_ACTION_KIND = 'pour'
+_POUR_ACTION_NAMESPACE = '/controller_action_server'
+
+# actions.preferences key -> the action kind every entry of that list must name.
+PREFERENCE_ACTION_KINDS = {
+    'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'vla': 'vla',
+}
+
+
+def controller_action_name(controller, kind):
+    """The absolute name of action *kind* served by node *controller*.
+
+    *controller* is a controller name (or the MoveIt bridge's node name, see
+    :func:`moveit_bridge_node`); *kind* is one of :data:`ACTION_KINDS` or
+    :data:`POUR_ACTION_KIND`. This is the one place the naming rule is written
+    down: every client builds its action names through it, never from a string
+    of its own.
+    """
+    node = str(controller).strip('/')
+    if not node:
+        raise ValueError('controller name must be non-empty')
+    if kind == POUR_ACTION_KIND:
+        return f'{_POUR_ACTION_NAMESPACE}/{node}'
+    if kind not in ACTION_KINDS:
+        raise ValueError(
+            f"unknown action kind '{kind}'; expected one of "
+            f'{list(ACTION_KINDS) + [POUR_ACTION_KIND]}')
+    return f'/{node}/{kind}'
+
+
+def moveit_bridge_node(robot_type, profile='single'):
+    """The node name the MoveIt action bridge runs under for one robot profile.
+
+    The bridge serves ``~/joint_space`` and ``~/task_space``, so its node name
+    is what scopes those actions to one robot: a client for one robot can never
+    bind to another robot's bridge. The launch files take the name from
+    :func:`load_moveit_metadata` and the bridge refuses to start under any
+    other, so the three cannot drift.
+    """
+    robot_type = str(robot_type).strip('/')
+    if not robot_type:
+        raise ValueError('robot_type must be non-empty')
+    if profile in (None, '', 'single'):
+        return f'{robot_type}_moveit_action_bridge'
+    return f'{robot_type}_{profile}_moveit_action_bridge'
+
 
 def _config_dir() -> Path:
     override = os.environ.get('CHO_ROBOT_CONFIG_DIR')
@@ -94,6 +149,52 @@ def _validate_hold_by_control_mode(mapping, robot_type):
                     f'{label}.{mode} must contain only non-empty controller names')
 
 
+def _validate_additional_arm(value, controllers, robot_type):
+    """Validate the optional list of arm controllers that hold no named role.
+
+    A bringup can load more arm controllers than the roles name - Franka's
+    torque bringup alone loads six. They claim the same arm command interfaces
+    as the role controllers, so an exclusive switch has to know them to take
+    them down; listing them here is what keeps that knowledge out of code.
+    """
+    if value is None:
+        return
+    label = f'{robot_type}: controllers.additional_arm'
+    if (not isinstance(value, list)
+            or not all(isinstance(name, str) and name for name in value)
+            or len(value) != len(set(value))):
+        raise ValueError(f'{label} must be a unique list of non-empty controller names')
+    # The gripper claims the finger interfaces, not the arm's: an exclusive arm
+    # switch that took it down would drop whatever the jaws were holding.
+    gripper = controllers.get('gripper')
+    if gripper is not None and gripper in value:
+        raise ValueError(f'{label} must not name the gripper controller ({gripper})')
+
+
+def _validate_task_home(value, home, joint_count, home_safety, robot_type):
+    """Validate the optional ``poses.task_home``.
+
+    Either a ``poses.home`` selector, so a pose the operator tools also use is
+    written once, or a joint vector of its own for a robot whose task trees
+    start somewhere none of the operator presets is.
+    """
+    if value is None:
+        return
+    label = f'{robot_type}: poses.task_home'
+    if isinstance(value, str):
+        if value not in home:
+            raise ValueError(
+                f"{label} names home selector '{value}', which poses.home does not "
+                f'declare; declared: {sorted(home)}')
+        policy = _mapping(home_safety.get(value, {}), f'{label} policy')
+        if policy.get('enabled', True) is False:
+            raise ValueError(
+                f"{label} names home selector '{value}', which poses.home_safety "
+                f"disables: {policy.get('reason', '')}")
+        return
+    _vector(value, joint_count, label)
+
+
 def validate_robot_config(config, expected_robot_type=None):
     """Validate a registry document and return it unchanged."""
     _mapping(config, 'config')
@@ -129,11 +230,12 @@ def validate_robot_config(config, expected_robot_type=None):
     if controllers['hold'] is None or controllers['moveit_trajectory'] is None:
         raise ValueError(f'{robot_type}: hold and moveit_trajectory controllers are required')
     for role, controller in controllers.items():
-        if role == 'hold_by_control_mode':
+        if role in ('hold_by_control_mode', 'additional_arm'):
             continue
         _optional_name(controller, f'{robot_type}: controllers.{role}')
     _validate_hold_by_control_mode(
         controllers.get('hold_by_control_mode'), robot_type)
+    _validate_additional_arm(controllers.get('additional_arm'), controllers, robot_type)
 
     moveit = _mapping(config.get('moveit'), f'{robot_type}: moveit')
     for field in ('config_package', 'planning_group'):
@@ -196,21 +298,33 @@ def validate_robot_config(config, expected_robot_type=None):
         if not math.isclose(norm, 1.0, rel_tol=1e-6, abs_tol=1e-6):
             raise ValueError(
                 f'{robot_type}: motions.reach.{selector}.orientation is not normalized')
+    _validate_task_home(poses.get('task_home'), home, len(joints), home_safety, robot_type)
 
     action_config = _mapping(config.get('actions'), f'{robot_type}: actions')
     actions = _mapping(
         action_config.get('preferences'), f'{robot_type}: actions.preferences')
-    for space in ('joint', 'task', 'gripper'):
+    unknown_spaces = sorted(set(actions) - set(PREFERENCE_ACTION_KINDS))
+    if unknown_spaces:
+        raise ValueError(
+            f'{robot_type}: actions.preferences declares unknown spaces: {unknown_spaces}')
+    for space, kind in PREFERENCE_ACTION_KINDS.items():
         names = actions.get(space)
+        if names is None and space == 'vla':
+            continue
+        # Every entry must follow the contract's /<node>/<kind> rule for its
+        # own space: a joint list naming a task_space server would bind a
+        # JointSpace client to the wrong action type.
         if (not isinstance(names, list)
-                or not all(isinstance(name, str) and name.startswith('/') for name in names)
+                or not all(isinstance(name, str) and name.startswith('/')
+                           and name.endswith(f'/{kind}')
+                           and name[1:-len(kind) - 1].strip('/') for name in names)
                 or len(names) != len(set(names))):
             raise ValueError(
                 f'{robot_type}: actions.preferences.{space} must be a unique list '
-                'of absolute action names')
-    action_root = f'/{robot_type}' if profile == 'single' else f'/{robot_type}/{profile}'
-    expected_joint = f'{action_root}/controller_action_server/moveit_joint'
-    expected_task = f'{action_root}/controller_action_server/moveit_task'
+                f'of absolute /<node>/{kind} action names')
+    bridge = moveit_bridge_node(robot_type, profile)
+    expected_joint = controller_action_name(bridge, 'joint_space')
+    expected_task = controller_action_name(bridge, 'task_space')
     if not actions['joint'] or actions['joint'][0] != expected_joint:
         raise ValueError(f'{robot_type}: first joint preference must be {expected_joint}')
     if supports_task and (not actions['task'] or actions['task'][0] != expected_task):
@@ -220,7 +334,7 @@ def validate_robot_config(config, expected_robot_type=None):
     for space, role in (('joint', 'direct_joint'), ('task', 'direct_task')):
         direct = controllers[role]
         if direct is not None and profile == 'single':
-            expected_direct = f'/controller_action_server/{direct}'
+            expected_direct = controller_action_name(direct, PREFERENCE_ACTION_KINDS[space])
             if expected_direct not in actions[space]:
                 raise ValueError(
                     f'{robot_type}: {space} preferences must contain {expected_direct}')
@@ -263,6 +377,29 @@ def home_pose_policy(config, selector):
     if policy is None:
         return {'enabled': True, 'reason': ''}
     return deepcopy(policy)
+
+
+def task_home_pose(config):
+    """The joint positions a behaviour-tree task starts and finishes a mission at.
+
+    ``poses.task_home`` is either a ``poses.home`` selector or a joint vector
+    (see :func:`validate_robot_config`); this resolves it to the vector, so a
+    task never has to know which. Raises ValueError when the robot/profile
+    declares none: a task that homes has to go somewhere this registry chose,
+    not somewhere it spelled out for itself.
+    """
+    config = _mapping(config, 'config')
+    robot_type = config.get('robot_type', '<unknown>')
+    profile = config.get('profile', 'single')
+    poses = config.get('poses') or {}
+    value = poses.get('task_home')
+    if value is None:
+        raise ValueError(
+            f"Robot '{robot_type}' (profile '{profile}') declares no poses.task_home, "
+            'so a task has no home pose to go to. Add one to its cho_robot_config entry.')
+    if isinstance(value, str):
+        value = poses['home'][value]
+    return [float(position) for position in value]
 
 
 def blocked_home_joint_goals(config):
@@ -413,6 +550,11 @@ def load_moveit_metadata(robot_type, expected_config_package=None, profile=None)
             'max_acceleration_scaling_factor'],
         'profile': config.get('profile', 'single'),
         'supports_task': config.get('supports_task', True),
+        # The bridge's node name scopes its ~/joint_space and ~/task_space to
+        # this robot profile, and the registry's first joint/task preferences
+        # are validated against it.
+        'action_bridge_node': moveit_bridge_node(
+            config['robot_type'], config.get('profile', 'single')),
         'ready_service': (
             f"/cho_moveit/{config['robot_type']}/static_scene_ready"
             if config.get('profile', 'single') == 'single'

@@ -10,6 +10,8 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
@@ -77,11 +79,12 @@ protected:
   {
     node_ = std::make_shared<rclcpp_lifecycle::LifecycleNode>("motion_server");
     client_node_ = std::make_shared<rclcpp::Node>("motion_client");
-    server_ = std::make_shared<ServerT>(node_, "/test_motion", 2);
+    // Relative, as every controller names its actions (cho_interfaces/CONTRACT.md).
+    server_ = std::make_shared<ServerT>(node_, "~/motion", 2);
     server_->init();
     server_->attach_activity(&activity_);
     activity_.activated();
-    client_ = rclcpp_action::create_client<ActionT>(client_node_, "/test_motion");
+    client_ = rclcpp_action::create_client<ActionT>(client_node_, "/motion_server/motion");
     executor_.add_node(node_->get_node_base_interface());
     executor_.add_node(client_node_);
     spinner_ = std::thread([this]() {executor_.spin();});
@@ -101,7 +104,13 @@ protected:
       ADD_FAILURE() << "goal response timed out";
       return nullptr;
     }
-    return future.get();
+    auto handle = future.get();
+    // The client hears ACCEPT before the server's handle_accepted() has run;
+    // the control loop only sees the goal after that.
+    for (int i = 0; handle && !server_->is_running() && i < 500; ++i) {
+      std::this_thread::sleep_for(1ms);
+    }
+    return handle;
   }
 
   typename GoalHandle::WrappedResult result_of(const typename GoalHandle::SharedPtr & handle)
@@ -135,11 +144,18 @@ protected:
 using JointServerTest = ServerFixture<JointSpace, JointServer>;
 using TaskServerTest = ServerFixture<TaskSpace, TaskServer>;
 
-JointSpace::Goal joint_goal(double a, double b, float duration = 1.0f)
+JointSpace::Goal joint_goal(double a, double b, double duration = 1.0)
 {
   JointSpace::Goal goal;
   goal.target_joints.position = {a, b};
-  goal.duration = duration;
+  goal.duration_sec = duration;
+  return goal;
+}
+
+JointSpace::Goal named_joint_goal(std::vector<std::string> names, double a, double b)
+{
+  JointSpace::Goal goal = joint_goal(a, b);
+  goal.target_joints.name = std::move(names);
   return goal;
 }
 
@@ -150,8 +166,34 @@ TEST_F(JointServerTest, RejectsWrongSizeNonFiniteAndOutOfLimitTargets) {
   EXPECT_EQ(send(three), nullptr);
   EXPECT_EQ(send(joint_goal(std::nan(""), 0.0)), nullptr);
   EXPECT_EQ(send(joint_goal(0.0, 1.5)), nullptr);
-  EXPECT_EQ(send(joint_goal(0.0, 0.5, std::nanf(""))), nullptr);
+  EXPECT_EQ(send(joint_goal(0.0, 0.5, std::nan(""))), nullptr);
+  EXPECT_EQ(send(joint_goal(0.0, 0.5, 0.0)), nullptr);
   EXPECT_NE(send(joint_goal(0.0, 0.5)), nullptr);
+}
+
+TEST_F(JointServerTest, NamedJointsAreMatchedByName) {
+  server_->set_joint_names({"shoulder", "elbow"});
+  server_->set_joint_limits(Eigen::Vector2d(-1.0, -0.5), Eigen::Vector2d(1.0, 0.5));
+  // In the other order: 0.8 is the shoulder's, inside its limit, not the elbow's.
+  auto handle = send(named_joint_goal({"elbow", "shoulder"}, 0.2, 0.8));
+  ASSERT_NE(handle, nullptr);
+  step(0.0);
+  state_.q = Eigen::Vector2d(0.8, 0.2);
+  step(1.1);
+  EXPECT_EQ(result_of(handle).code, rclcpp_action::ResultCode::SUCCEEDED);
+}
+
+TEST_F(JointServerTest, RejectsUnknownRepeatedAndMismatchedNames) {
+  server_->set_joint_names({"shoulder", "elbow"});
+  EXPECT_EQ(send(named_joint_goal({"shoulder", "wrist"}, 0.0, 0.0)), nullptr);
+  EXPECT_EQ(send(named_joint_goal({"elbow", "elbow"}, 0.0, 0.0)), nullptr);
+  EXPECT_EQ(send(named_joint_goal({"elbow"}, 0.0, 0.0)), nullptr);
+  EXPECT_NE(send(named_joint_goal({"shoulder", "elbow"}, 0.0, 0.0)), nullptr);
+}
+
+TEST_F(JointServerTest, NamesNeedAServerThatKnowsItsJoints) {
+  EXPECT_EQ(send(named_joint_goal({"shoulder", "elbow"}, 0.0, 0.0)), nullptr);
+  EXPECT_NE(send(joint_goal(0.0, 0.0)), nullptr);
 }
 
 TEST_F(JointServerTest, SucceedsAfterThePlannedDurationWithinTheThreshold) {
@@ -188,21 +230,42 @@ TEST_F(JointServerTest, APlannerRejectionAbortsAtOnce) {
   EXPECT_NE(result.result->message.find("planner"), std::string::npos);
 }
 
-TaskSpace::Goal task_goal(double x, bool relative, float duration = 1.0f)
+TaskSpace::Goal task_goal(double x, bool relative, double duration = 1.0, std::string frame = "")
 {
   TaskSpace::Goal goal;
-  goal.target_pose.position.x = x;
-  goal.target_pose.orientation.w = 1.0;
+  goal.target_pose.header.frame_id = std::move(frame);
+  goal.target_pose.pose.position.x = x;
+  goal.target_pose.pose.orientation.w = 1.0;
   goal.relative = relative;
-  goal.duration = duration;
+  goal.duration_sec = duration;
   return goal;
 }
 
 TEST_F(TaskServerTest, RejectsAZeroQuaternionAndAFarPosition) {
   TaskSpace::Goal zero = task_goal(0.1, false);
-  zero.target_pose.orientation.w = 0.0;
+  zero.target_pose.pose.orientation.w = 0.0;
   EXPECT_EQ(send(zero), nullptr);
   EXPECT_EQ(send(task_goal(11.0, false)), nullptr);
+  EXPECT_NE(send(task_goal(0.1, false)), nullptr);
+}
+
+TEST_F(TaskServerTest, AGoalMustBeInTheFrameItsModeIsDefinedIn) {
+  server_->set_frames({"base", "link0"}, "tcp");
+  EXPECT_EQ(send(task_goal(0.1, false, 1.0, "tcp")), nullptr);   // absolute: base only
+  EXPECT_EQ(send(task_goal(0.1, true, 1.0, "base")), nullptr);   // relative: EE only
+  EXPECT_EQ(send(task_goal(0.1, false, 1.0, "world")), nullptr);  // never transformed
+  for (const char * base : {"base", "link0"}) {
+    auto handle = send(task_goal(0.1, false, 1.0, base));
+    ASSERT_NE(handle, nullptr) << base;
+    step(0.0);
+    EXPECT_TRUE(server_->abort_active_goal("done"));
+    result_of(handle);
+  }
+  EXPECT_NE(send(task_goal(0.1, true, 1.0, "tcp")), nullptr);
+}
+
+TEST_F(TaskServerTest, AStampedFrameNeedsAServerThatKnowsItsFrames) {
+  EXPECT_EQ(send(task_goal(0.1, false, 1.0, "base")), nullptr);
   EXPECT_NE(send(task_goal(0.1, false)), nullptr);
 }
 

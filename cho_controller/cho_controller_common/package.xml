@@ -31,6 +31,8 @@
   <build_export_depend>joint_limits</build_export_depend>
   <build_export_depend>rclcpp_lifecycle</build_export_depend>
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_lint_cmake</test_depend>
+  <test_depend>ament_cmake_xmllint</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

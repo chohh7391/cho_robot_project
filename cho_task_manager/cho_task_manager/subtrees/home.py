@@ -18,7 +18,20 @@ from cho_task_manager.behaviors.action import (
     JointSpaceActionBehavior,
 )
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
-from cho_task_manager.utils.controller_names import controller_name_value
+from cho_task_manager.utils.controller_names import (
+    controller_name_value,
+    task_home_positions,
+)
+from cho_task_manager.utils.msg_utils import make_joint_state
+
+
+def home_joint_state(robot_config):
+    """The robot's task home (the registry's ``poses.task_home``) as a JointState.
+
+    Where a task starts and finishes a mission is a fact about the robot, so
+    it lives in its cho_robot_config entry and not in a tree.
+    """
+    return make_joint_state(task_home_positions(robot_config))
 
 
 def home_subtree(
@@ -36,7 +49,17 @@ def home_subtree(
     ``suffix`` distinguishes the closing copy of the block from the opening one
     in the tree display (``_Final``). ``lead_children`` are inserted ahead of
     the switch, for a task that must prepare hardware first (FT tare).
+
+    The gripper opened is ``robot_config['gripper']``, so an OpenArm arm
+    profile opens its own ``left_`` / ``right_`` instance. A robot that
+    declares none must pass ``open_gripper=False``.
     """
+    gripper = robot_config.get('gripper') if open_gripper else None
+    if open_gripper and not gripper:
+        raise ValueError(
+            f"robot_type '{robot_config.get('robot_type')}' (profile "
+            f"'{robot_config.get('profile', 'single')}') declares no gripper "
+            'controller; build the home block with open_gripper=False')
     seq = py_trees.composites.Sequence(name=name, memory=True)
     if lead_children:
         seq.add_children(list(lead_children))
@@ -57,6 +80,6 @@ def home_subtree(
         ),
     ])
     if open_gripper:
-        seq.add_child(
-            GripperActionBehavior(name=f'Open_Gripper{suffix}', grasp=False))
+        seq.add_child(GripperActionBehavior(
+            name=f'Open_Gripper{suffix}', grasp=False, controller_name=gripper))
     return seq

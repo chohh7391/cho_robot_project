@@ -22,6 +22,7 @@ Trees (match the switchable-controller sets in cho_bringup_franka launch_utils.p
 
 import py_trees
 
+from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.behaviors.action import (
     JointSpaceActionBehavior,
     TaskSpaceActionBehavior,
@@ -36,13 +37,14 @@ from cho_task_manager.utils.msg_utils import (
     make_down_pose,
     make_up_pose,
 )
-from cho_task_manager.subtrees import guarded_mission, home_subtree
+from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
 from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
 
-# Two known-safe joint poses (same values as the pick_place / forge trees).
-# Every joint-space check moves B -> A so the arm demonstrably tracks; B is
-# also the MuJoCo startup pose, so the very first move is a benign no-op.
-JOINT_POSE_A = make_joint_state([0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785])
+# Two known-safe joint poses. Every joint-space check moves B -> A so the arm
+# demonstrably tracks. A is the robot's task home, the registry's
+# poses.task_home (the pose the pick_place trees home to), read per tree; B is
+# the MuJoCo startup pose (the forge trees' FORGE_FINISH_POSITION), so the very
+# first move is a benign no-op.
 JOINT_POSE_B = make_joint_state([0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785])
 
 # EE-frame relative bump used for every task-space controller: 5 cm along the
@@ -52,10 +54,14 @@ TASK_BUMP_M = 0.05
 MOVE_DURATION_SEC = 3.0
 
 
-def _switch(controller, suffix=""):
+def _switch(robot_config, controller, suffix=""):
+    # robot_config makes the exclusive switch deactivate this robot's own
+    # controllers -- every one of the controllers swept here is in the Franka
+    # registry entry (a role, a per-mode hold or controllers.additional_arm).
     return SwitchControllerServiceBehavior(
         name=f"Switch_{controller}{suffix}",
         activate=[controller],
+        robot_config=robot_config,
     )
 
 
@@ -68,20 +74,20 @@ def _joint_move(controller, target, label):
     )
 
 
-def _joint_check(controller):
+def _joint_check(robot_config, controller):
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
     seq.add_children([
-        _switch(controller),
+        _switch(robot_config, controller),
         _joint_move(controller, JOINT_POSE_B, "Move"),
-        _joint_move(controller, JOINT_POSE_A, "Return"),
+        _joint_move(controller, home_joint_state(robot_config), "Return"),
     ])
     return seq
 
 
-def _task_check(controller):
+def _task_check(robot_config, controller):
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
     seq.add_children([
-        _switch(controller),
+        _switch(robot_config, controller),
         TaskSpaceActionBehavior(
             name=f"{controller}_Down",
             target_pose=make_down_pose(TASK_BUMP_M),
@@ -100,24 +106,25 @@ def _task_check(controller):
     return seq
 
 
-def _gripper_check():
-    seq = py_trees.composites.Sequence(name="Check_gripper_controller", memory=True)
+def _gripper_check(robot_config):
+    gripper = robot_config['gripper']
+    seq = py_trees.composites.Sequence(name=f"Check_{gripper}", memory=True)
     seq.add_children([
-        GripperActionBehavior(name="Gripper_Close", grasp=True),
-        GripperActionBehavior(name="Gripper_Open", grasp=False),
+        GripperActionBehavior(name="Gripper_Close", grasp=True, controller_name=gripper),
+        GripperActionBehavior(name="Gripper_Open", grasp=False, controller_name=gripper),
     ])
     return seq
 
 
-def _hold_check(controller, hold_sec=3.0):
+def _hold_check(robot_config, controller, hold_sec=3.0):
     """For controllers without an action server (gravity compensation, VLA
     without chunks): switch to it, hold, then verify it is still active --
     catches activation failures and mid-hold controller crashes.
     """
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
     seq.add_children([
-        _switch(controller),
-        py_trees.timers.Timer(name=f"{controller}_Hold", duration=hold_sec),
+        _switch(robot_config, controller),
+        WaitBehavior(name=f"{controller}_Hold", duration_sec=hold_sec),
         ListControllersServiceBehavior(
             name=f"{controller}_Still_Active",
             require_active=[controller],
@@ -130,7 +137,7 @@ def _finalize(robot_config, home_controller):
     """Leave the robot parked at pose A under a position-holding controller."""
     return home_subtree(
         robot_config,
-        target_joints=JOINT_POSE_A,
+        target_joints=home_joint_state(robot_config),
         controller=home_controller,
         duration=MOVE_DURATION_SEC,
         name="Finalize",
@@ -152,9 +159,9 @@ def _wrap(name, children, robot_config, control_mode):
 def create_franka_controller_check_position_tree(robot_config=None):
     robot_config = robot_config or load_robot_config('franka')
     return _wrap("Franka_Controller_Check_Position", [
-        _joint_check(ControllerNames.JOINT_POSITION),
-        _gripper_check(),
-        _task_check(ControllerNames.IK),
+        _joint_check(robot_config, ControllerNames.JOINT_POSITION),
+        _gripper_check(robot_config),
+        _task_check(robot_config, ControllerNames.IK),
         _finalize(robot_config, ControllerNames.JOINT_POSITION),
     ], robot_config, 'position')
 
@@ -162,13 +169,13 @@ def create_franka_controller_check_position_tree(robot_config=None):
 def create_franka_controller_check_torque_tree(robot_config=None):
     robot_config = robot_config or load_robot_config('franka')
     return _wrap("Franka_Controller_Check_Torque", [
-        _joint_check(ControllerNames.JOINT_IMPEDANCE),
-        _gripper_check(),
-        _joint_check(ControllerNames.JOINT_QP),
-        _task_check(ControllerNames.TASK_QP),
-        _task_check(ControllerNames.TASK_IMPEDANCE),
-        _task_check(ControllerNames.OPERATIONAL_SPACE),
-        _hold_check(ControllerNames.GRAVITY_COMPENSATION),
+        _joint_check(robot_config, ControllerNames.JOINT_IMPEDANCE),
+        _gripper_check(robot_config),
+        _joint_check(robot_config, ControllerNames.JOINT_QP),
+        _task_check(robot_config, ControllerNames.TASK_QP),
+        _task_check(robot_config, ControllerNames.TASK_IMPEDANCE),
+        _task_check(robot_config, ControllerNames.OPERATIONAL_SPACE),
+        _hold_check(robot_config, ControllerNames.GRAVITY_COMPENSATION),
         _finalize(robot_config, ControllerNames.JOINT_IMPEDANCE),
     ], robot_config, 'torque')
 
@@ -179,12 +186,12 @@ def create_franka_controller_check_velocity_tree(robot_config=None):
     # vla_controller loaded, and that must not fail the whole smoke check. When VLA
     # is present but broken, the inner failure is still visible in the tree/log.
     vla_optional = py_trees.decorators.FailureIsSuccess(
-        child=_hold_check(ControllerNames.VLA),
+        child=_hold_check(robot_config, robot_config['vla']),
         name="Optional_VLA_Hold",
     )
     return _wrap("Franka_Controller_Check_Velocity", [
-        _joint_check(ControllerNames.JOINT_VELOCITY),
-        _task_check(ControllerNames.TASK_VELOCITY),
+        _joint_check(robot_config, ControllerNames.JOINT_VELOCITY),
+        _task_check(robot_config, ControllerNames.TASK_VELOCITY),
         vla_optional,
         _finalize(robot_config, ControllerNames.JOINT_VELOCITY),
     ], robot_config, 'velocity')

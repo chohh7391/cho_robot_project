@@ -301,7 +301,7 @@ protected:
   auto send_goal(const std::shared_ptr<VlaAction::Goal> & goal)
   {
     auto client = rclcpp_action::create_client<VlaAction>(
-      client_node, std::string("/controller_action_server/") + kControllerName);
+      client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
     EXPECT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
     auto future = client->async_send_goal(*goal);
     for (int i = 0; i < 400 &&
@@ -385,20 +385,17 @@ TEST_F(Fixture, ExposesNoTaskSpaceActionServer)
   // Two servers on the same 39 interfaces could both drive; uses_task_space_action()
   // is false so only the VLA API exists.
   ASSERT_EQ(configured, controller_interface::return_type::OK);
-  auto names = client_node->get_service_names_and_types();
-  const std::string task_space_prefix =
-    std::string("/controller_action_server/") + kControllerName + "/_action/";
+  const std::string vla_prefix = std::string(kNamespace) + "/" + kControllerName + "/vla/_action/";
+  const std::string task_space_prefix = std::string(kNamespace) + "/" + kControllerName + "/task_space/_action/";
   bool have_vla_server = false;
-  for (const auto & entry : names) {
-    if (entry.first.rfind(task_space_prefix, 0) == 0) {have_vla_server = true;}
-  }
-  // The VLA action server itself must exist under that name.
+  bool have_task_space_server = false;
   cycle(20);
-  names = client_node->get_service_names_and_types();
-  for (const auto & entry : names) {
-    if (entry.first.rfind(task_space_prefix, 0) == 0) {have_vla_server = true;}
+  for (const auto & entry : client_node->get_service_names_and_types()) {
+    if (entry.first.rfind(vla_prefix, 0) == 0) {have_vla_server = true;}
+    if (entry.first.rfind(task_space_prefix, 0) == 0) {have_task_space_server = true;}
   }
   EXPECT_TRUE(have_vla_server);
+  EXPECT_FALSE(have_task_space_server);
 }
 
 TEST_F(Fixture, GoalIsRejectedBeforeTheStartupRampSettles)
@@ -494,7 +491,7 @@ TEST_F(Fixture, AQuietStreamHoldsAndThenAbortsWithoutRequestingSafe)
   ASSERT_TRUE(Access::ready(*controller));
 
   auto client = rclcpp_action::create_client<VlaAction>(
-    client_node, std::string("/controller_action_server/") + kControllerName);
+    client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
   auto goal_future = client->async_send_goal(*vla_goal());
   for (int i = 0; i < 400 &&
@@ -538,7 +535,7 @@ TEST_F(Fixture, CancelReleasesTheReferenceAndLeavesTheServerAvailable)
   ASSERT_TRUE(Access::ready(*controller));
 
   auto client = rclcpp_action::create_client<VlaAction>(
-    client_node, std::string("/controller_action_server/") + kControllerName);
+    client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
   auto goal_future = client->async_send_goal(*vla_goal());
   for (int i = 0; i < 400 &&

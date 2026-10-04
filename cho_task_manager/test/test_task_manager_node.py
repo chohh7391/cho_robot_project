@@ -28,7 +28,8 @@ class _GoalLeaf(BaseActionBehavior):
     """An action leaf on a fake client whose send_goal_async returns *send_future*."""
 
     def __init__(self, name, send_future):
-        super().__init__(name, object, controller_action_name(ControllerNames.JOINT_QP))
+        super().__init__(
+            name, object, controller_action_name(ControllerNames.JOINT_QP, 'joint_space'))
         self.node = MagicMock()
         self.node.get_clock.return_value = Clock()
         self.client = MagicMock()

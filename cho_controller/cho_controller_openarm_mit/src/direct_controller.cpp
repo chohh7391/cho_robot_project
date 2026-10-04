@@ -1,5 +1,6 @@
 #include "cho_controller_openarm_mit/direct_controller.hpp"
 #include "cho_controller_openarm_mit/safety_backend.hpp"
+#include "cho_controller_base/joint_space_server.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -192,10 +193,8 @@ controller_interface::CallbackReturn DirectControllerBase::on_configure(const rc
   }
   if (uses_joint_space_action()) {
     if (configure_action_mujoco_dynamics() != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
-    // Keep the public Cho action namespace independent of controller_manager's
-    // namespace, just like the existing OpenArm joint-space controllers.
-    const auto action_name = std::string("/controller_action_server/") + get_node()->get_name();
-    action_server_ = rclcpp_action::create_server<JointSpaceAction>(get_node(), action_name,
+    // /<controller>/joint_space (cho_interfaces/CONTRACT.md).
+    action_server_ = rclcpp_action::create_server<JointSpaceAction>(get_node(), "~/joint_space",
       std::bind(&DirectControllerBase::action_goal, this, std::placeholders::_1, std::placeholders::_2),
       std::bind(&DirectControllerBase::action_cancel, this, std::placeholders::_1),
       std::bind(&DirectControllerBase::action_accepted, this, std::placeholders::_1));
@@ -644,14 +643,19 @@ rclcpp_action::GoalResponse DirectControllerBase::action_goal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const JointSpaceAction::Goal> goal)
 {
   if (!uses_joint_space_action() || !action_ready_.load(std::memory_order_acquire) ||
-    !goal || goal->duration <= 0.0F || !std::isfinite(goal->duration) ||
-    goal->target_joints.position.size() != 7U) {
+    !goal || goal->duration_sec <= 0.0 || !std::isfinite(goal->duration_sec)) {
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  std::vector<double> target;
+  std::string why;
+  if (!cho_controller_base::ordered_joint_target(goal->target_joints, joint_names(side_), 7U, target, why)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "JointSpace goal rejected: %s", why.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
   for (std::size_t i = 0; i < 7; ++i) {
-    const auto q = goal->target_joints.position[i];
+    const auto q = target[i];
     const double q_start = action_reference_[i].load(std::memory_order_acquire);
-    const double cubic_peak_velocity = 1.5 * std::abs(q - q_start) / goal->duration;
+    const double cubic_peak_velocity = 1.5 * std::abs(q - q_start) / goal->duration_sec;
     if (!std::isfinite(q) || q < position_lower_[i] || q > position_upper_[i] ||
       !std::isfinite(cubic_peak_velocity) || cubic_peak_velocity > command_velocity_[i]) {
       return rclcpp_action::GoalResponse::REJECT;
@@ -685,8 +689,11 @@ void DirectControllerBase::action_accepted(const std::shared_ptr<JointSpaceGoalH
   const auto goal = handle->get_goal();
   ActionGoal action_goal;
   action_goal.id = next_action_id_.fetch_add(1, std::memory_order_relaxed);
-  action_goal.duration = goal->duration;
-  for (std::size_t i = 0; i < 7; ++i) action_goal.target[i] = goal->target_joints.position[i];
+  action_goal.duration = goal->duration_sec;
+  std::vector<double> target;
+  std::string why;
+  cho_controller_base::ordered_joint_target(goal->target_joints, joint_names(side_), 7U, target, why);  // validated
+  for (std::size_t i = 0; i < 7; ++i) action_goal.target[i] = target[i];
   {
     std::lock_guard<std::mutex> lock(action_handles_mutex_);
     action_handles_.emplace(action_goal.id, handle);

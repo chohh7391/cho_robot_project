@@ -1,5 +1,4 @@
 import py_trees
-import rclpy
 from action_msgs.msg import GoalStatus
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -12,9 +11,14 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
     def __init__(self, name: str, action_type, action_name: str, timeout_sec: float = 30.0):
         super().__init__(name)
 
+        # A raise, not an assert: `python -O` strips asserts, and this is the
+        # check that keeps a misspelt name from becoming a goal that waits out
+        # its timeout against a server nobody runs.
         valid_controllers = valid_controller_action_names()
-        assert str(action_name) in valid_controllers, \
-            f"Invalid controller name: '{action_name}'. Must be one of {valid_controllers}"
+        if str(action_name) not in valid_controllers:
+            raise ValueError(
+                f"[{name}] Invalid controller action name: '{action_name}'. "
+                f"Must be one of {valid_controllers}")
 
         self.action_type = action_type
         self.action_name = action_name
@@ -33,9 +37,9 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         self.node = kwargs['node']
         self.cb_group = ReentrantCallbackGroup()
         self.client = ActionClient(
-            self.node, 
-            self.action_type, 
-            self.action_name, 
+            self.node,
+            self.action_type,
+            self.action_name,
             callback_group=self.cb_group
         )
         self.node.get_logger().info(f"[{self.name}] Waiting for {self.action_name} Server...")
@@ -97,7 +101,13 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
             if result.status == GoalStatus.STATUS_SUCCEEDED:
                 self.node.get_logger().info(f"[{self.name}] Action Succeeded!")
                 return py_trees.common.Status.SUCCESS
-            self.node.get_logger().error(f"[{self.name}] Action Failed with status: {result.status}")
+            # Every cho result carries the server's reason (CONTRACT.md); a
+            # FollowJointTrajectory result has error_string instead.
+            reason = (getattr(result.result, 'message', '')
+                      or getattr(result.result, 'error_string', '') or '')
+            self.node.get_logger().error(
+                f"[{self.name}] Action Failed with status: {result.status}"
+                + (f": {reason}" if reason else ''))
             return py_trees.common.Status.FAILURE
 
         if self._timed_out():

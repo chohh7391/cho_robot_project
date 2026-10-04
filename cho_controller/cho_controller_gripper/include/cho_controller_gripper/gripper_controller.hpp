@@ -49,7 +49,7 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 // It deliberately offers TWO command paths rather than only the action:
 //
 //   ACTION  cho_interfaces/action/Gripper on
-//           /controller_action_server/<controller name>. Discrete grasp/release
+//           /<controller name>/gripper. Discrete grasp/release
 //           with the Franka width/speed/force/epsilon semantics and a terminal
 //           result, which is what a behaviour tree wants.
 //   TOPIC   ~/width_command (std_msgs/Float64, metres). A continuous stream,
@@ -98,14 +98,16 @@ private:
     double epsilon_inner{0.0};
     double epsilon_outer{0.0};
   };
-  struct TerminalEvent {std::uint64_t id{0}; Terminal terminal{Terminal::ABORTED};};
+  // reason is a string literal (the result's message): finish() runs on the
+  // control thread and must not allocate.
+  struct TerminalEvent {std::uint64_t id{0}; Terminal terminal{Terminal::ABORTED}; const char * reason{""};};
 
   rclcpp_action::GoalResponse goal_callback(
     const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal> goal);
   rclcpp_action::CancelResponse cancel_callback(const std::shared_ptr<GoalHandle> & handle);
   void accepted_callback(const std::shared_ptr<GoalHandle> & handle);
   void non_rt_tick();
-  void finish(std::uint64_t id, Terminal terminal);
+  void finish(std::uint64_t id, Terminal terminal, const char * reason = "");
   void publish_state(const rclcpp::Time & time);
 
   double measured_width() const;

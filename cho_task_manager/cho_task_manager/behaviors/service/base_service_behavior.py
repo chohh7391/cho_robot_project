@@ -30,8 +30,8 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
         self.node = kwargs['node']
         self.cb_group = ReentrantCallbackGroup()
         self.client = self.node.create_client(
-            self.service_type, 
-            self.service_name, 
+            self.service_type,
+            self.service_name,
             callback_group=self.cb_group
         )
         self.node.get_logger().info(f"[{self.name}] Waiting for {self.service_name} Server...")
@@ -72,19 +72,23 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
         if self.future is None:
             return py_trees.common.Status.FAILURE
 
-        if self._timed_out():
-            self.node.get_logger().error(
-                f"[{self.name}] Timed out after {self.response_timeout_sec}s waiting for "
-                f"{self.service_name} response"
-            )
-            # Untrack the abandoned request in the rclpy Client -- otherwise each
-            # timed-out attempt leaks an entry in its pending-request map forever.
-            self.client.remove_pending_request(self.future)
-            self.future = None
-            self._deadline = None
-            return py_trees.common.Status.FAILURE
-
+        # A response that is already in is judged as-is, BEFORE the deadline:
+        # a tick that lands past the deadline must not turn a switch that
+        # actually succeeded into a FAILURE (and a safe abort). Same order as
+        # BaseActionBehavior.update(); the deadline only fires while genuinely
+        # still waiting.
         if not self.future.done():
+            if self._timed_out():
+                self.node.get_logger().error(
+                    f"[{self.name}] Timed out after {self.response_timeout_sec}s waiting for "
+                    f"{self.service_name} response"
+                )
+                # Untrack the abandoned request in the rclpy Client -- otherwise each
+                # timed-out attempt leaks an entry in its pending-request map forever.
+                self.client.remove_pending_request(self.future)
+                self.future = None
+                self._deadline = None
+                return py_trees.common.Status.FAILURE
             return py_trees.common.Status.RUNNING
 
         try:

@@ -25,7 +25,8 @@ def get_joint_data(db_path, topic, start_t=None, end_t=None):
     msg_type = get_message(type_str)
     is_jtcs = type_str.endswith('JointTrajectoryControllerState')
 
-    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = ? ORDER BY timestamp ASC"
+    query = ("SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id "
+             "WHERE topics.name = ? ORDER BY timestamp ASC")
     cursor.execute(query, (topic,))
 
     timestamps = []
@@ -71,13 +72,14 @@ def get_joint_data(db_path, topic, start_t=None, end_t=None):
 
 def plot_results(bag_db_path, topic, start_t, end_t):
     import matplotlib.pyplot as plt
+    import numpy as np
 
     data = get_joint_data(bag_db_path, topic, start_t, end_t)
-    
+
     if data is None or len(data[0]) == 0:
         print("조건에 맞는 시간대의 데이터가 없습니다.")
         return
-    
+
     t, d_pos, c_pos, c_vel = data
     num_joints = d_pos.shape[1]
 
@@ -118,12 +120,12 @@ def plot_results(bag_db_path, topic, start_t, end_t):
         v_limit = VELOCITY_LIMITS[i] if i < len(VELOCITY_LIMITS) else None
 
         axes2[i].plot(t, c_vel[:, i], 'g-', label='Curr Vel', alpha=0.8)
-        
+
         # Velocity Limit 점선 표시 (상단/하단)
         if v_limit:
             axes2[i].axhline(v_limit, color='red', linestyle=':', alpha=0.7, label='Limit')
             axes2[i].axhline(-v_limit, color='red', linestyle=':', alpha=0.7)
-            
+
             # y축 범위를 limit보다 조금 더 여유있게 설정하여 점선이 잘 보이도록 함
             axes2[i].set_ylim(-v_limit * 1.2, v_limit * 1.2)
 

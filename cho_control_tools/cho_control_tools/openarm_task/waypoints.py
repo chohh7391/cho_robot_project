@@ -21,6 +21,8 @@ import os
 
 import yaml
 
+from cho_control_tools.action_names import controller_action_name
+
 # Fallback for a caller with no installed description (unit tests). These are
 # the SINGLE-arm mount's limits; the bimanual torso's two arms do not share
 # them, which is what profile_joint_limits() exists to resolve.
@@ -62,7 +64,7 @@ def arm_names(arm):
     controller = f'{prefix}task_space_impedance_mit_controller'
     return {
         'controller': controller,
-        'action': f'/controller_action_server/{controller}',
+        'action': controller_action_name(controller, 'task'),
         'diagnostics': f'/{controller}/task_diagnostics',
         'protocol_status': f'/{controller}/protocol_status',
         'pose_topic': '/ee_state/pose' if arm == 'single' else f'/ee_state/{arm}/pose',

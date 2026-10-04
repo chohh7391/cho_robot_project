@@ -240,6 +240,11 @@ def test_the_tree_puts_a_gripper_behaviour_at_the_event(tmp_path):
     # still while its reference walks away into a tolerance abort.
     assert 'Gripper_Settle' in kinds[2]
     assert 'Replay' in kinds[3]
+    # The registry's gripper, and a wait on the node's clock: the jaws move in
+    # sim time in a simulator.
+    from cho_task_manager.behaviors.wait import WaitBehavior
+    assert replay.children[1].action_name == '/%s/gripper' % config['gripper']
+    assert isinstance(replay.children[2], WaitBehavior)
 
 
 def test_the_gripper_settle_wait_outlasts_a_full_jaw_stroke():
@@ -419,6 +424,43 @@ def test_the_default_home_plans_rather_than_interpolates():
     assert trajectory_replay.DEFAULT_HOME_VIA == 'moveit'
 
 
+def test_a_replay_with_no_home_via_plans_its_home(tmp_path):
+    """The default in effect, not just the constant: nothing passed, MoveIt used.
+
+    The node, the launch file and a comment here all used to call 'direct' the
+    default; the code is what runs, so the docs now say 'moveit'.
+    """
+    config = _replay_config(tmp_path)
+    assert 'home_via' not in config
+    tree = build_task_tree('trajectory_replay', config)
+    names = {node.name for node in tree.iterate()}
+
+    assert tree.replay_summary['home_via'] == 'moveit'
+    assert 'Go_Home_MoveIt' in names and 'Go_Home' not in names
+
+
+def test_the_segments_are_bounded_by_the_running_description(tmp_path):
+    """No hand copy of the URDF limits.
+
+    Every segment checks against one reader of /robot_description, over this
+    robot's own joints.
+    """
+    from cho_task_manager.behaviors.action import FollowJointTrajectoryBehavior
+    from cho_task_manager.utils.robot_description import DescriptionPositionLimits
+
+    tree = build_task_tree('trajectory_replay', _replay_config(tmp_path, home_via='direct'))
+    segments = [node for node in tree.iterate()
+                if isinstance(node, FollowJointTrajectoryBehavior)]
+
+    assert segments
+    sources = {id(segment.position_limits) for segment in segments}
+    assert len(sources) == 1
+    source = segments[0].position_limits
+    assert isinstance(source, DescriptionPositionLimits)
+    assert source.joint_names == ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+    assert source.topic == '/robot_description'
+
+
 def test_a_direct_home_uses_the_hold_controllers_own_action(tmp_path):
     tree = build_task_tree(
         'trajectory_replay', _replay_config(tmp_path, home_via='direct'))
@@ -440,7 +482,7 @@ def test_a_moveit_home_plans_through_the_bridge(tmp_path):
     assert 'Go_Home' not in names
     # It goes to the bridge's endpoint, not to a controller's own action server.
     home = [n for n in tree.iterate() if n.name == 'Go_Home_MoveIt'][0]
-    assert home.action_name == '/fr5/controller_action_server/moveit_joint'
+    assert home.action_name == '/fr5_moveit_action_bridge/joint_space'
 
 
 def test_a_moveit_home_does_one_switch_fewer(tmp_path):
@@ -488,7 +530,7 @@ def test_the_moveit_action_name_comes_from_the_registry():
     # bridge's endpoint, so reading it there cannot drift from what is served.
     from cho_task_manager.utils.controller_names import moveit_joint_action_name
     assert moveit_joint_action_name(_config()) == \
-        '/fr5/controller_action_server/moveit_joint'
+        '/fr5_moveit_action_bridge/joint_space'
 
 
 # --- where the arm is left --------------------------------------------------

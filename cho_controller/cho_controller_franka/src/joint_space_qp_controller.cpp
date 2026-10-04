@@ -70,14 +70,15 @@ CallbackReturn JointSpaceQPController::on_configure(
   data_ = tsid_->data(); // overwrite
 
   // 3. QP solver setup
-  solver_ = SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog");
+  solver_.reset(SolverHQPFactory::createNewSolver(SOLVER_HQP_EIQUADPROG, "quadprog"));
 
   dq_filtered_.setZero();
 
-  action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "/controller_action_server/joint_space_qp_controller");
+  action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "~/joint_space");
   action_server_->init();
   action_server_->trajectory_->setLimits(joint_motion_limits());
   action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+  action_server_->set_joint_names(arm_joint_names());
   action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
@@ -146,11 +147,15 @@ controller_interface::return_type JointSpaceQPController::update(
     sample_posture.vel.tail(model_na - num_dof_).setZero();
     sample_posture.acc.tail(model_na - num_dof_).setZero();
 
-    state_.q_arm_des = trajectory_sample.pos; 
+    state_.q_arm_des = trajectory_sample.pos;
+    // Published as controller_state's reference velocity; the posture task
+    // above already tracks it.
+    state_.v_arm_des = trajectory_sample.vel;
   } else {
     // No active goal: hold the current posture
     sample_posture.pos.head(num_dof_) = state_.q_arm_des;
     sample_posture.vel.head(num_dof_).setZero(); // zero arm velocity
+    state_.v_arm_des.setZero();
     
     // zero the gripper entries
     sample_posture.pos.tail(model_na - num_dof_).setZero();

@@ -51,10 +51,7 @@ from cho_task_manager.behaviors.action.occlusion_sweep import (
 )
 from cho_task_manager.utils import occlusion
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, write_client
-from cho_task_manager.utils.controller_names import (
-    ControllerNames,
-    controller_action_name,
-)
+from cho_task_manager.utils.controller_names import controller_action_name
 from cho_task_manager.utils.msg_utils import make_joint_state
 
 #: How long a recovered object's pose may take to arrive after the snapshot that
@@ -102,16 +99,22 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         name: str,
         targets,
         required_frame: str,
-        controller_name: str = ControllerNames.JOINT_QP,
+        controller_name: str = None,
         visibility_topic: str = DEFAULT_VISIBILITY_TOPIC,
         action_name: str = None,
         goal_timeout_sec: float = 30.0,
         latch_timeout_sec: float = DEFAULT_LATCH_TIMEOUT_SEC,
         namespace: str = TASK_NAMESPACE,
     ):
+        if not action_name and not controller_name:
+            # No default: which controller drives the sweep is the robot's, and
+            # the old one was a Franka controller no FR5 bringup loads.
+            raise ValueError(
+                f'[{name}] controller_name is required (or action_name for the '
+                "MoveIt bridge's endpoint): pass the robot config's controller")
         super().__init__(
             name, JointSpace,
-            action_name or controller_action_name(controller_name),
+            action_name or controller_action_name(controller_name, 'joint_space'),
             timeout_sec=goal_timeout_sec)
         self.targets = list(targets)
         if not self.targets:
@@ -448,7 +451,7 @@ class SinglePassSweepBehavior(BaseActionBehavior):
             f'{waypoint.duration:.0f}s for '
             + ', '.join(f"'{target.name}'" for target in self._pending()))
         goal = JointSpace.Goal()
-        goal.duration = waypoint.duration
+        goal.duration_sec = float(waypoint.duration)
         goal.target_joints = make_joint_state(waypoint.joints)
         self.send_action_goal(goal)
         self._driven += 1

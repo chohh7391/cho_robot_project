@@ -305,6 +305,11 @@ CallbackReturn OpenArmBaseController::on_configure(const rclcpp_lifecycle::State
     // Preallocate the controller_state vectors (and fill joint_names once) so the
     // per-cycle fill is heap-free, matching the joint-log publisher above.
     ctrl_state_rt_pub_->msg_.joint_names = joint_names_;
+    // The poses are oMf, in the model's root frame; set once, not per cycle.
+    {
+        const auto root_frames = cho_controller_base::root_frames(model_);
+        ee_state_rt_pub_->msg_.header.frame_id = root_frames.empty() ? std::string() : root_frames.front();
+    }
     ctrl_state_rt_pub_->msg_.reference.positions.resize(num_dof_);
     ctrl_state_rt_pub_->msg_.reference.velocities.resize(num_dof_);
     ctrl_state_rt_pub_->msg_.feedback.positions.resize(num_dof_);
@@ -364,8 +369,8 @@ controller_interface::return_type OpenArmBaseController::update(
     update_joint_states();
     compute_all_terms();
     if (should_publish_arm_log()) {
-        log_ee_pose();
-        log_joint_pos();
+        publish_ee_state();
+        publish_controller_state();
     }
     return controller_interface::return_type::OK;
 }
@@ -407,7 +412,7 @@ void OpenArmBaseController::compute_all_terms()
     // all simulate gravity in full. cho_controller_franka branches on
     // bringup_type here precisely because libfranka pre-compensates arm and hand
     // gravity on real hardware - copying that branch would double-compensate.
-    const Eigen::VectorXd nle_full = robot_->nonLinearEffects(data_);
+    const Eigen::VectorXd & nle_full = robot_->nonLinearEffects(data_);
 
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
@@ -423,11 +428,6 @@ void OpenArmBaseController::compute_all_terms()
             state_.M_arm(i, j) = state_.M(arm_v_index_[i], arm_v_index_[j]);
         }
     }
-}
-
-std::string OpenArmBaseController::action_server_name() const
-{
-    return std::string("/controller_action_server/") + get_node()->get_name();
 }
 
 void OpenArmBaseController::write_arm_torque(const Eigen::VectorXd & torque)
@@ -560,7 +560,7 @@ void OpenArmBaseController::clamp_to_joint_limits(Eigen::VectorXd & q) const
     q = q.array().max(q_lower_limits_.array()).min(q_upper_limits_.array());
 }
 
-void OpenArmBaseController::log_ee_pose()
+void OpenArmBaseController::publish_ee_state()
 {
     auto fill_pose = [](geometry_msgs::msg::Pose & msg, const pinocchio::SE3 & pose) {
         msg.position.x = pose.translation()(0);
@@ -575,6 +575,7 @@ void OpenArmBaseController::log_ee_pose()
 
     // Per-controller ~/ee_state carries the three poses (ref / desired / current).
     if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
+        ee_state_rt_pub_->msg_.header.stamp = get_node()->now();
         fill_pose(ee_state_rt_pub_->msg_.pose_ref, state_.H_ee_ref);
         fill_pose(ee_state_rt_pub_->msg_.pose_des, state_.H_ee_des);
         fill_pose(ee_state_rt_pub_->msg_.pose_curr, state_.H_ee);
@@ -582,7 +583,7 @@ void OpenArmBaseController::log_ee_pose()
     }
 }
 
-void OpenArmBaseController::log_joint_pos()
+void OpenArmBaseController::publish_controller_state()
 {
     // Per-controller ~/controller_state. Vectors and joint_names were preallocated
     // in on_configure (resize() here is a no-op, so no RT heap traffic).

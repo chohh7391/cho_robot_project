@@ -35,8 +35,10 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
-# launch_utils is shared by every launch file. It goes to lib/ (not share/) and
-# is loaded by absolute path, matching cho_bringup_franka.
+# launch_utils holds the OpenArm-specific launch helpers. It goes to lib/ (not
+# share/) and the launch files load it with
+# cho_bringup_common.load_package_utils('cho_bringup_openarm'); the
+# robot-independent helpers are cho_bringup_common's.
 install(
   DIRECTORY utils/
   DESTINATION lib/${PROJECT_NAME}/utils

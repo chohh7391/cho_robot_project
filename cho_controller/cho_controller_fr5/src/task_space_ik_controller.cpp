@@ -27,22 +27,11 @@ CallbackReturn TaskSpaceIKController::on_init()
         return CallbackReturn::FAILURE;
     }
     try {
-        auto_declare<double>("lambda", 0.01);
-        auto_declare<double>("max_delta_q", 0.02);
-        auto_declare<bool>("enforce_workspace_floor", true);
-        auto_declare<double>("minimum_ee_height", 0.15);
-        // The volume bolted to the flange, as an axis-aligned box in the EE
-        // frame, and the height its lowest corner must clear. Empty means no
-        // tool, which is the old behaviour exactly -- so a bringup that says
-        // nothing is guarded exactly as it was before this existed.
-        auto_declare<std::vector<double>>("tool_envelope_min", {});
-        auto_declare<std::vector<double>>("tool_envelope_max", {});
-        auto_declare<double>("minimum_tool_height", 0.0);
-        auto_declare<double>("workspace_floor_tolerance", 1e-4);
-        auto_declare<double>("recovery_minimum_height_gain", 0.01);
-        auto_declare<double>("recovery_monotonic_tolerance", 1e-5);
-        auto_declare<double>("recovery_maximum_lateral_displacement", 0.002);
-        auto_declare<double>("recovery_maximum_orientation_error", 0.01);
+        // Declares and range-checks every parameter in
+        // task_space_ik_controller_parameters.yaml; a value outside its range
+        // throws here.
+        param_listener_ =
+            std::make_shared<fr5_task_space_ik_controller::ParamListener>(get_node());
     } catch (const std::exception & e) {
         RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
         return CallbackReturn::ERROR;
@@ -63,9 +52,10 @@ CallbackReturn TaskSpaceIKController::on_configure(
         return CallbackReturn::FAILURE;
     }
     action_server_ = std::make_shared<FR5TaskSpaceActionServer>(
-        get_node(), "/controller_action_server/task_space_ik_controller", num_dof_);
+        get_node(), "~/task_space", num_dof_);
     action_server_->init();
     action_server_->trajectory_->setLimits(cartesian_motion_limits());
+    action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
     action_server_->attach_activity(&activity_);
     return CallbackReturn::SUCCESS;
 }
@@ -119,7 +109,7 @@ controller_interface::return_type TaskSpaceIKController::update(
         q_full.head(num_dof_) = q_ref_;
         if (!q_ref_.allFinite()) {
             action_server_->abort_active_goal(
-                "workspace floor guard: non-finite open-loop reference; refusing to command it");
+                "non-finite open-loop reference; refusing to command it");
             prev_running_ = false;
             floor_recovery_active_ = false;
             return controller_interface::return_type::ERROR;
@@ -129,7 +119,7 @@ controller_interface::return_type TaskSpaceIKController::update(
         FR5BaseController::compute_arm_kinematics(q_full, H_ref, J);
         if (!H_ref.translation().allFinite() ||
             !H_ref.rotation().allFinite() || !J.allFinite()) {
-            abort_and_hold("workspace floor guard: non-finite reference FK/Jacobian; "
+            abort_and_hold("non-finite reference FK/Jacobian; "
                            "holding the last finite command");
             return controller_interface::return_type::OK;
         }
@@ -247,7 +237,7 @@ controller_interface::return_type TaskSpaceIKController::update(
 
         const auto sample = action_server_->trajectory_->computeNext();
         if (!sample.pos.allFinite()) {
-            abort_and_hold("workspace floor guard: non-finite task trajectory sample; "
+            abort_and_hold("non-finite task trajectory sample; "
                            "holding the last finite command");
             return controller_interface::return_type::OK;
         }
@@ -260,14 +250,14 @@ controller_interface::return_type TaskSpaceIKController::update(
         const Eigen::Matrix<double, 6, 1> error = cho_controller_base::local_pose_error(H_ref, H_des);
         if (!H_des.translation().allFinite() || !H_des.rotation().allFinite() ||
             !error.allFinite()) {
-            abort_and_hold("workspace floor guard: non-finite desired pose/task error; "
+            abort_and_hold("non-finite desired pose/task error; "
                            "holding the last finite command");
             return controller_interface::return_type::OK;
         }
 
         Eigen::VectorXd dq = cho_controller_base::dls_step(J, error, lambda_);
         if (!dq.allFinite()) {
-            abort_and_hold("workspace floor guard: non-finite IK solve; holding the last finite command");
+            abort_and_hold("non-finite IK solve; holding the last finite command");
             return controller_interface::return_type::OK;
         }
         cho_controller_base::limit_step(dq, max_delta_q_);
@@ -276,7 +266,7 @@ controller_interface::return_type TaskSpaceIKController::update(
         // through them.
         FR5BaseController::clamp_to_joint_limits(q_candidate);
         if (!q_candidate.allFinite()) {
-            abort_and_hold("workspace floor guard: non-finite IK candidate; "
+            abort_and_hold("non-finite IK candidate; "
                            "holding the last finite command");
             return controller_interface::return_type::OK;
         }
@@ -291,7 +281,7 @@ controller_interface::return_type TaskSpaceIKController::update(
             FR5BaseController::compute_arm_kinematics(q_candidate_full, H_candidate, J_unused);
             if (!H_candidate.translation().allFinite() ||
                 !H_candidate.rotation().allFinite() || !J_unused.allFinite()) {
-                abort_and_hold("workspace floor guard: non-finite candidate FK/Jacobian; "
+                abort_and_hold("non-finite candidate FK/Jacobian; "
                                "holding the last finite command");
                 return controller_interface::return_type::OK;
             }
@@ -481,63 +471,25 @@ double TaskSpaceIKController::floor_margin(const pinocchio::SE3 & pose) const
 
 bool TaskSpaceIKController::assign_parameters()
 {
-    lambda_ = get_node()->get_parameter("lambda").as_double();
-    max_delta_q_ = get_node()->get_parameter("max_delta_q").as_double();
-    enforce_workspace_floor_ =
-        get_node()->get_parameter("enforce_workspace_floor").as_bool();
-    minimum_ee_height_ = get_node()->get_parameter("minimum_ee_height").as_double();
-    minimum_tool_height_ = get_node()->get_parameter("minimum_tool_height").as_double();
-    tool_envelope_min_ = get_node()->get_parameter("tool_envelope_min").as_double_array();
-    tool_envelope_max_ = get_node()->get_parameter("tool_envelope_max").as_double_array();
-    workspace_floor_tolerance_ =
-        get_node()->get_parameter("workspace_floor_tolerance").as_double();
-    recovery_minimum_height_gain_ =
-        get_node()->get_parameter("recovery_minimum_height_gain").as_double();
-    recovery_monotonic_tolerance_ =
-        get_node()->get_parameter("recovery_monotonic_tolerance").as_double();
-    recovery_maximum_lateral_displacement_ =
-        get_node()->get_parameter("recovery_maximum_lateral_displacement").as_double();
-    recovery_maximum_orientation_error_ =
-        get_node()->get_parameter("recovery_maximum_orientation_error").as_double();
-    if (!std::isfinite(lambda_) || lambda_ <= 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(), "lambda must be finite and positive");
-        return false;
-    }
-    if (!std::isfinite(max_delta_q_) || max_delta_q_ <= 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(), "max_delta_q must be finite and positive");
-        return false;
-    }
-    if (!std::isfinite(minimum_ee_height_) || minimum_ee_height_ < 0.0) {
+    // Each value is range-checked by the generated listener (see the YAML);
+    // what is left here relates parameters to each other.
+    const auto params = param_listener_->get_params();
+    lambda_ = params.lambda;
+    max_delta_q_ = params.max_delta_q;
+    enforce_workspace_floor_ = params.enforce_workspace_floor;
+    minimum_ee_height_ = params.minimum_ee_height;
+    minimum_tool_height_ = params.minimum_tool_height;
+    tool_envelope_min_ = params.tool_envelope_min;
+    tool_envelope_max_ = params.tool_envelope_max;
+    workspace_floor_tolerance_ = params.workspace_floor_tolerance;
+    recovery_minimum_height_gain_ = params.recovery_minimum_height_gain;
+    recovery_monotonic_tolerance_ = params.recovery_monotonic_tolerance;
+    recovery_maximum_lateral_displacement_ = params.recovery_maximum_lateral_displacement;
+    recovery_maximum_orientation_error_ = params.recovery_maximum_orientation_error;
+    if (workspace_floor_tolerance_ >= minimum_ee_height_) {
         RCLCPP_ERROR(get_node()->get_logger(),
-            "minimum_ee_height must be finite and non-negative");
-        return false;
-    }
-    if (!std::isfinite(workspace_floor_tolerance_) || workspace_floor_tolerance_ < 0.0 ||
-        workspace_floor_tolerance_ >= minimum_ee_height_) {
-        RCLCPP_ERROR(get_node()->get_logger(),
-            "workspace_floor_tolerance must be finite, non-negative, and below minimum_ee_height");
-        return false;
-    }
-    if (!std::isfinite(recovery_minimum_height_gain_) || recovery_minimum_height_gain_ <= 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(),
-            "recovery_minimum_height_gain must be finite and positive");
-        return false;
-    }
-    if (!std::isfinite(recovery_monotonic_tolerance_) || recovery_monotonic_tolerance_ < 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(),
-            "recovery_monotonic_tolerance must be finite and non-negative");
-        return false;
-    }
-    if (!std::isfinite(recovery_maximum_lateral_displacement_) ||
-        recovery_maximum_lateral_displacement_ < 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(),
-            "recovery_maximum_lateral_displacement must be finite and non-negative");
-        return false;
-    }
-    if (!std::isfinite(recovery_maximum_orientation_error_) ||
-        recovery_maximum_orientation_error_ < 0.0) {
-        RCLCPP_ERROR(get_node()->get_logger(),
-            "recovery_maximum_orientation_error must be finite and non-negative");
+            "workspace_floor_tolerance (%f) must be below minimum_ee_height (%f)",
+            workspace_floor_tolerance_, minimum_ee_height_);
         return false;
     }
     return true;

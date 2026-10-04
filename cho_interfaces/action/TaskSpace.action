@@ -1,7 +1,14 @@
-# Define the goal
-geometry_msgs/Pose target_pose
-float32 duration
+# Point-to-point end-effector goal (see CONTRACT.md).
+#
+# Absolute (relative = false): the EE pose in the controller's base frame;
+# header.frame_id must be empty or that frame. Relative (relative = true): the
+# EE's displacement from its pose when the goal starts, expressed in the EE
+# frame; header.frame_id must be empty or the EE frame. Controllers do not
+# transform between frames, so any other frame is rejected.
+geometry_msgs/PoseStamped target_pose
 bool relative
+# The motion takes at least this long [s]; longer if the Cartesian limits require.
+float64 duration_sec
 ---
 # Define the result
 bool is_completed

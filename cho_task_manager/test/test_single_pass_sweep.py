@@ -392,7 +392,7 @@ def test_a_second_run_starts_from_the_first_waypoint_with_nothing_in_hand():
     _accept_goal(behaviour)
     assert behaviour.update() == RUNNING
     goal = behaviour.client.send_goal_async.call_args[0][0]
-    assert goal.duration == 3.0
+    assert goal.duration_sec == 3.0
     assert behaviour._index == 0
 
 
@@ -414,9 +414,17 @@ def test_an_object_listed_twice_is_refused():
 
 def test_a_frame_has_to_be_named():
     with pytest.raises(ValueError, match='required_frame'):
-        SinglePassSweepBehavior('Recover_Vessels', _targets(), required_frame='')
+        SinglePassSweepBehavior('Recover_Vessels', _targets(), required_frame='',
+                                controller_name='joint_space_position_controller')
 
 
 def test_a_pass_for_nothing_is_refused():
     with pytest.raises(ValueError, match='no targets'):
-        SinglePassSweepBehavior('Recover_Vessels', [], required_frame='base_link')
+        SinglePassSweepBehavior('Recover_Vessels', [], required_frame='base_link',
+                                controller_name='joint_space_position_controller')
+
+
+def test_a_sweep_has_no_default_controller():
+    # It used to default to a Franka controller no FR5 bringup loads.
+    with pytest.raises(ValueError, match='controller_name is required'):
+        SinglePassSweepBehavior('Recover_Vessels', _targets(), required_frame='base_link')

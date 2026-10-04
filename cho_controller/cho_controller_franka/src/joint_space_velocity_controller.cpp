@@ -54,11 +54,11 @@ CallbackReturn JointSpaceVelocityController::on_configure(
     return CallbackReturn::FAILURE;
   }
 
-  action_server_ = std::make_shared<JointSpaceActionServer>(
-      get_node(), "/controller_action_server/joint_space_velocity_controller");
+  action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "~/joint_space");
   action_server_->init();
   action_server_->trajectory_->setLimits(joint_motion_limits());
   action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+  action_server_->set_joint_names(arm_joint_names());
   action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;

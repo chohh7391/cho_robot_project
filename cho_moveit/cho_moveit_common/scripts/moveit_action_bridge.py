@@ -8,7 +8,8 @@ import time
 from action_msgs.msg import GoalStatus
 from action_msgs.srv import CancelGoal
 from cho_interfaces.action import JointSpace, TaskSpace
-from cho_robot_config import blocked_home_joint_goals, load_robot_config
+from cho_robot_config import (blocked_home_joint_goals, controller_action_name,
+                              load_robot_config, moveit_bridge_node)
 from controller_manager_msgs.srv import ListControllers
 from geometry_msgs.msg import Pose
 from moveit_msgs.action import MoveGroup
@@ -32,18 +33,20 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
-ACTION_NAMESPACE = 'controller_action_server'
+# The bridge serves the same actions a controller does, by the same rule
+# (cho_interfaces/CONTRACT.md): relative to its own node. Its node name is what
+# scopes them to one robot profile -- see cho_robot_config.moveit_bridge_node().
+JOINT_ACTION = '~/joint_space'
+TASK_ACTION = '~/task_space'
 
 
 class MoveItActionBridge(Node):
     @staticmethod
-    def _action_names(robot_type, profile='single'):
-        robot_type = robot_type.strip('/')
-        if not robot_type:
-            raise ValueError('robot_type must be non-empty')
-        prefix = f'/{robot_type}' if profile == 'single' else f'/{robot_type}/{profile}'
-        return (f'{prefix}/{ACTION_NAMESPACE}/moveit_joint',
-                f'{prefix}/{ACTION_NAMESPACE}/moveit_task')
+    def _expected_action_names(robot_type, profile='single'):
+        """The absolute (joint, task) names clients look this bridge up by."""
+        node = moveit_bridge_node(robot_type, profile)
+        return (controller_action_name(node, 'joint_space'),
+                controller_action_name(node, 'task_space'))
 
     def __init__(self):
         super().__init__('moveit_action_bridge')
@@ -103,6 +106,19 @@ class MoveItActionBridge(Node):
             raise ValueError('robot_type must be non-empty')
         self._blocked_joint_goals = blocked_home_joint_goals(
             load_robot_config(self._robot_type, self._profile))
+        self._joint_action = self.resolve_topic_name(JOINT_ACTION)
+        self._task_action = self.resolve_topic_name(TASK_ACTION)
+        expected = self._expected_action_names(self._robot_type, self._profile)
+        if (self._joint_action, self._task_action) != expected:
+            # The registry's action preferences -- what every client binds to --
+            # name the bridge by robot and profile. Served under any other node
+            # name, its actions would be found by nobody, or by a client of a
+            # different robot.
+            raise ValueError(
+                f'MoveIt bridge for {self._robot_type}/{self._profile} must run as node '
+                f'/{moveit_bridge_node(self._robot_type, self._profile)} so it serves '
+                f'{expected[0]}; it is {self.get_fully_qualified_name()} and would serve '
+                f'{self._joint_action}')
         if not self._group or not self._ee_link or not self._world_frame:
             raise ValueError('planning_group, ee_link, and world_frame must be non-empty')
         if not self._joint_names or len(set(self._joint_names)) != len(self._joint_names):
@@ -117,8 +133,6 @@ class MoveItActionBridge(Node):
         self._fault_reason = ''
         self._joint_server = None
         self._task_server = None
-        self._joint_action, self._task_action = self._action_names(
-            self._robot_type, self._profile)
         self._move_client = ActionClient(
             self, MoveGroup, self._move_group_action, callback_group=self._callbacks)
         self._ready_client = self.create_client(
@@ -142,14 +156,14 @@ class MoveItActionBridge(Node):
         if self._joint_server is not None:
             return
         self._joint_server = ActionServer(
-            self, JointSpace, self._joint_action, self._execute_joint,
-            goal_callback=self._goal_callback,
+            self, JointSpace, JOINT_ACTION, self._execute_joint,
+            goal_callback=self._joint_goal_callback,
             cancel_callback=self._cancel_callback,
             callback_group=self._callbacks)
         if self._supports_task:
             self._task_server = ActionServer(
-                self, TaskSpace, self._task_action, self._execute_task,
-                goal_callback=self._goal_callback,
+                self, TaskSpace, TASK_ACTION, self._execute_task,
+                goal_callback=self._task_goal_callback,
                 cancel_callback=self._cancel_callback,
                 callback_group=self._callbacks)
         self.get_logger().info(
@@ -218,8 +232,69 @@ class MoveItActionBridge(Node):
             self.get_logger().info(
                 f'READY: floor exists and {self._trajectory_controllers} are active')
 
+    def _joint_goal_callback(self, request):
+        try:
+            self._ordered_joint_positions(request.target_joints)
+        except ValueError as error:
+            self.get_logger().error(f'Goal rejected: {error}')
+            return GoalResponse.REJECT
+        return self._goal_callback(request)
+
+    def _task_goal_callback(self, request):
+        reason = self._unhonoured_frame(request)
+        if reason:
+            self.get_logger().error(f'Goal rejected: {reason}')
+            return GoalResponse.REJECT
+        return self._goal_callback(request)
+
+    def _ordered_joint_positions(self, target_joints):
+        """The goal's positions in this bridge's joint order.
+
+        With ``name`` empty they are already in that order; with names they are
+        matched by name, and a goal naming an unknown joint, a joint twice, or
+        not every joint is refused (cho_interfaces/CONTRACT.md).
+        """
+        positions = list(target_joints.position)
+        names = list(target_joints.name)
+        if not names:
+            return positions
+        if len(names) != len(positions):
+            raise ValueError(
+                f'target_joints names {len(names)} joints but gives {len(positions)} positions')
+        unknown = sorted(set(names) - set(self._joint_names))
+        if unknown:
+            raise ValueError(f'target_joints names unknown joints {unknown}')
+        if len(set(names)) != len(names):
+            raise ValueError('target_joints names a joint more than once')
+        missing = [name for name in self._joint_names if name not in names]
+        if missing:
+            raise ValueError(f'target_joints does not name {missing}')
+        by_name = dict(zip(names, positions))
+        return [by_name[name] for name in self._joint_names]
+
+    def _unhonoured_frame(self, request):
+        """Why the goal's frame cannot be honoured, or '' when it can.
+
+        Absolute goals are planned in ``world_frame`` and relative ones are
+        composed in the EE frame, so those -- or an empty frame_id, meaning the
+        same -- are all this accepts. Like the controllers, it does not
+        transform: any other frame is refused rather than silently read as one
+        of these.
+        """
+        frame = request.target_pose.header.frame_id
+        if request.relative:
+            allowed = self._ee_link
+            meaning = 'a relative goal is a displacement in the EE frame'
+        else:
+            allowed = self._world_frame
+            meaning = 'an absolute goal is a pose in the planning frame'
+        if frame in ('', allowed):
+            return ''
+        return (f"target_pose frame '{frame}' is not supported: {meaning}, so "
+                f"frame_id must be '' or '{allowed}'")
+
     def _goal_callback(self, request):
-        duration = float(request.duration)
+        duration = float(request.duration_sec)
         if not math.isfinite(duration) or duration <= 0.0:
             self.get_logger().error('Goal rejected: duration must be finite and positive')
             return GoalResponse.REJECT
@@ -326,7 +401,9 @@ class MoveItActionBridge(Node):
         return tuple(value / norm for value in values)
 
     def _task_constraints(self, request):
-        target = request.target_pose
+        # The frame was checked when the goal was accepted: '' or world_frame
+        # for an absolute goal, '' or the EE frame for a relative one.
+        target = request.target_pose.pose
         if request.relative:
             transform = self._tf_buffer.lookup_transform(
                 self._world_frame, self._ee_link, rclpy.time.Time(),
@@ -380,8 +457,9 @@ class MoveItActionBridge(Node):
         goal.request.pipeline_id = pipeline
         goal.request.num_planning_attempts = 5
         goal.request.allowed_planning_time = max(1.0, min(float(duration), 10.0))
-        # Cho duration is used as the planning-time budget. MoveIt trajectory
-        # timing remains governed by limits and the conservative speed scaling.
+        # The goal's duration_sec is used as the planning-time budget. MoveIt
+        # trajectory timing remains governed by limits and the conservative
+        # speed scaling, so it is not stretched to duration_sec.
         goal.request.max_velocity_scaling_factor = self._velocity_scaling
         goal.request.max_acceleration_scaling_factor = self._acceleration_scaling
         goal.request.goal_constraints = [constraints]
@@ -549,7 +627,14 @@ class MoveItActionBridge(Node):
     def _execute_joint(self, goal_handle):
         result = JointSpace.Result()
         try:
-            positions = list(goal_handle.request.target_joints.position)
+            try:
+                # Names were already validated when the goal was accepted.
+                positions = self._ordered_joint_positions(goal_handle.request.target_joints)
+            except ValueError as error:
+                result.message = f'Joint goal rejected: {error}'
+                self.get_logger().error(result.message)
+                goal_handle.abort()
+                return result
             if len(positions) != len(self._joint_names) or not all(
                     math.isfinite(value) for value in positions):
                 result.message = (
@@ -567,7 +652,7 @@ class MoveItActionBridge(Node):
                 return result
             result.is_completed, result.message = self._run_move_group(
                 goal_handle, self._joint_constraints(positions),
-                goal_handle.request.duration, JointSpace.Feedback,
+                goal_handle.request.duration_sec, JointSpace.Feedback,
                 self._pipeline)
             return result
         finally:
@@ -584,7 +669,7 @@ class MoveItActionBridge(Node):
                 goal_handle.abort()
                 return result
             result.is_completed, result.message = self._run_move_group(
-                goal_handle, constraints, goal_handle.request.duration, TaskSpace.Feedback,
+                goal_handle, constraints, goal_handle.request.duration_sec, TaskSpace.Feedback,
                 self._pipeline)
             if not result.is_completed:
                 result.message = f'{result.message}; {self._target_summary(constraints)}'

@@ -196,7 +196,7 @@ def create_fr5_occlusion_replay_tree(robot_config=None) -> py_trees.behaviour.Be
     replay_seq = py_trees.composites.Sequence(name='%d_Replay' % (step + 2), memory=True)
     replay_seq.add_children(_replay_children(
         segments, controller, joint_names, time_scale, limits,
-        velocity_scaling(robot_config)))
+        velocity_scaling(robot_config), gripper=robot_config.get('gripper')))
     mission.add_child(replay_seq)
 
     mission.add_child(_home_block(

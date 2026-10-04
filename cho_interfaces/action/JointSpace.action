@@ -1,6 +1,12 @@
-# Define the goal
+# Point-to-point joint goal (see CONTRACT.md).
+#
+# target_joints.position: one per joint the controller drives. With
+# target_joints.name empty they are read in the controller's joint order; with
+# names they are matched by name, and a goal naming an unknown joint, a joint
+# twice, or not every joint is rejected.
 sensor_msgs/JointState target_joints
-float32 duration
+# The motion takes at least this long [s]; longer if the joint limits require.
+float64 duration_sec
 ---
 # Define the result
 bool is_completed

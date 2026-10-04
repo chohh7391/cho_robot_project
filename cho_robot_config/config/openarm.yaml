@@ -40,17 +40,29 @@ moveit:
     max_velocity_scaling_factor: 0.15
     max_acceleration_scaling_factor: 0.05
 actions:
+  # Action names follow cho_interfaces/CONTRACT.md: /<node>/<kind>, served by
+  # the controller (or the MoveIt bridge) under its own node. The first joint
+  # and task entries are this profile's MoveIt bridge, whose node name is
+  # registry.moveit_bridge_node(); validate_robot_config() checks both.
   preferences:
-    joint: [/openarm/controller_action_server/moveit_joint, /controller_action_server/joint_space_position_controller, /controller_action_server/joint_impedance_mit_controller]
-    task: [/openarm/controller_action_server/moveit_task, /controller_action_server/task_space_impedance_mit_controller]
-    gripper: [/controller_action_server/gripper_controller]
-    vla: [/controller_action_server/vla_mit_controller]
+    joint: [/openarm_moveit_action_bridge/joint_space, /joint_space_position_controller/joint_space, /joint_impedance_mit_controller/joint_space]
+    task: [/openarm_moveit_action_bridge/task_space, /task_space_impedance_mit_controller/task_space]
+    gripper: [/gripper_controller/gripper]
+    vla: [/vla_mit_controller/vla]
 poses:
   home:
     '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
     '1': [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
     '2': [0.3, -0.4, 0.2, 1.0, 0.2, 0.2, 0.0]
     '3': [-0.3, -0.4, -0.2, 1.0, -0.2, 0.2, 0.0]
+  # Where the behaviour-tree tasks start and finish a mission
+  # (cho_robot_config.task_home_pose). Home 0, which is also the
+  # home_position the joint-space controllers go to on activation
+  # (cho_bringup_openarm config/*/controllers.yaml): joint4 sits 0.3 off its
+  # 0.0 lower stop, so a small undershoot reads as a tracking error rather
+  # than a limit violation. A selector, so the bimanual 'both' profile, which
+  # replaces poses.home with 14-axis vectors, resolves it to its own.
+  task_home: '0'
   # Joint-space fallback for MIT impedance bringup.  The normal action-client
   # `reach` command keeps its Cartesian TaskSpace route whenever that action
   # server exists; when only the MIT JointSpace server is selected it uses these
@@ -119,10 +131,10 @@ profiles:
       hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
     actions:
       preferences:
-        joint: [/openarm/left/controller_action_server/moveit_joint, /controller_action_server/left_joint_impedance_mit_controller]
-        task: [/openarm/left/controller_action_server/moveit_task, /controller_action_server/left_task_space_impedance_mit_controller]
-        gripper: [/controller_action_server/left_gripper_controller]
-        vla: [/controller_action_server/left_vla_mit_controller]
+        joint: [/openarm_left_moveit_action_bridge/joint_space, /left_joint_impedance_mit_controller/joint_space]
+        task: [/openarm_left_moveit_action_bridge/task_space, /left_task_space_impedance_mit_controller/task_space]
+        gripper: [/left_gripper_controller/gripper]
+        vla: [/left_vla_mit_controller/vla]
     # World-frame, idempotent task targets resolved from this arm's MIT
     # startup posture. They deliberately differ from the single-arm targets:
     # both arms hang from the bimanual torso at different world transforms.
@@ -163,10 +175,10 @@ profiles:
       hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
     actions:
       preferences:
-        joint: [/openarm/right/controller_action_server/moveit_joint, /controller_action_server/right_joint_impedance_mit_controller]
-        task: [/openarm/right/controller_action_server/moveit_task, /controller_action_server/right_task_space_impedance_mit_controller]
-        gripper: [/controller_action_server/right_gripper_controller]
-        vla: [/controller_action_server/right_vla_mit_controller]
+        joint: [/openarm_right_moveit_action_bridge/joint_space, /right_joint_impedance_mit_controller/joint_space]
+        task: [/openarm_right_moveit_action_bridge/task_space, /right_task_space_impedance_mit_controller/task_space]
+        gripper: [/right_gripper_controller/gripper]
+        vla: [/right_vla_mit_controller/vla]
     motions:
       reach:
         '0': {relative: false, position: [0.353214573, -0.028147131, 0.380270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
@@ -195,7 +207,7 @@ profiles:
       hold_controllers: [left_joint_space_position_controller, right_joint_space_position_controller]
     actions:
       preferences:
-        joint: [/openarm/both/controller_action_server/moveit_joint]
+        joint: [/openarm_both_moveit_action_bridge/joint_space]
         task: []
         gripper: []
     poses:

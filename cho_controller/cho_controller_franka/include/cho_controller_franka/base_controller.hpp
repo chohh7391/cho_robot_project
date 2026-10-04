@@ -2,6 +2,7 @@
 
 //Pinocchio Header
 #include "cho_controller_base/goal_phase_action_server.hpp"
+#include "cho_controller_base/kinematics.hpp"
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp> 
 #include <pinocchio/algorithm/jacobian.hpp>
@@ -140,8 +141,8 @@ public:
     // controller has ever written to it yet (cold start). See base_controller.cpp for why.
     Vector7d held_command_position() const;
 
-    void log_ee_pose();
-    void log_joint_pos();
+    void publish_ee_state();
+    void publish_controller_state();
 
     // Whether this controller owns the arm tracking log (~/controller_state,
     // ~/ee_state). True for arm-motion controllers; overridden to false by
@@ -156,6 +157,8 @@ protected:
     // pilz_cartesian_limits.yaml); see motion_limits_params.hpp. Call after
     // on_configure() has resolved the joint names.
     cho_controller::common::trajectory::JointMotionLimits joint_motion_limits();
+    // The arm's joint names, in the order of its command interfaces.
+    std::vector<std::string> arm_joint_names() const;
     cho_controller::common::trajectory::CartesianMotionLimits cartesian_motion_limits();
 
     std::string robot_type_;

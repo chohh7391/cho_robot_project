@@ -8,11 +8,14 @@ from cho_robot_config import (
     available_profiles,
     available_robot_types,
     blocked_home_joint_goals,
+    controller_action_name,
     declared_hold_control_modes,
     hold_controllers_for_control_mode,
     home_pose_policy,
     load_moveit_metadata,
     load_robot_config,
+    moveit_bridge_node,
+    task_home_pose,
     validate_robot_config,
 )
 import pytest
@@ -113,6 +116,56 @@ def test_home_commands_preserve_action_client_values():
         assert load_robot_config(robot_type)['poses']['home'] == expected
 
 
+# The values the task trees hard-coded before the registry held them
+# (franka/{pick_place,pick_place_position,tag_reach}.py, ur/{pick_place,
+# multi_move}.py, fr5/common.py's home 1, openarm/controller_check.py). They
+# must not change by moving.
+EXPECTED_TASK_HOME = {
+    'franka': [0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785],
+    'ur5e': [0.0, -1.5708, 1.5708, -1.5708, -1.5708, 0.0],
+    'fr5': [-0.0836, -1.1209, -2.0723, -1.7125, 1.6049, 0.0798],
+    'openarm': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0],
+}
+
+
+@pytest.mark.parametrize('robot_type,expected', sorted(EXPECTED_TASK_HOME.items()))
+def test_task_home_keeps_the_values_the_trees_hard_coded(robot_type, expected):
+    assert task_home_pose(load_robot_config(robot_type)) == expected
+
+
+@pytest.mark.parametrize('robot_type,selector', [('fr5', '1'), ('ur5e', '1'), ('openarm', '0')])
+def test_a_selector_task_home_is_the_home_pose_it_names(robot_type, selector):
+    # Written once: the operator's `home N` and the task trees cannot drift.
+    config = load_robot_config(robot_type)
+    assert config['poses']['task_home'] == selector
+    assert task_home_pose(config) == config['poses']['home'][selector]
+
+
+def test_every_profile_resolves_a_task_home_of_its_own_width():
+    for robot_type in available_robot_types():
+        for profile in available_profiles(robot_type):
+            config = load_robot_config(robot_type, profile)
+            assert len(task_home_pose(config)) == len(config['model']['joints'])
+
+
+def test_a_missing_task_home_raises_rather_than_guessing():
+    config = deepcopy(load_robot_config('ur5e'))
+    del config['poses']['task_home']
+    validate_robot_config(config, 'ur5e')    # optional in the schema...
+    with pytest.raises(ValueError, match='declares no poses.task_home'):
+        task_home_pose(config)                # ...but required by a task that homes
+
+
+def test_additional_arm_controllers_are_franka_only_today():
+    franka = load_robot_config('franka')['controllers']['additional_arm']
+    assert franka == [
+        'task_space_impedance_controller', 'operational_space_controller',
+        'task_space_ik_controller', 'task_space_velocity_controller',
+        'gravity_compensation_controller']
+    for robot_type in ('fr5', 'openarm', 'ur5e'):
+        assert 'additional_arm' not in load_robot_config(robot_type)['controllers']
+
+
 def test_fr5_zero_home_is_retained_but_disabled_for_normal_execution():
     config = load_robot_config('fr5')
     assert config['poses']['home']['0'] == [0.0] * 6
@@ -187,8 +240,33 @@ def test_openarm_reach_targets_are_fixed_absolute_world_poses():
     (lambda c: c.__setitem__('schema_version', 2), 'schema_version'),
     (lambda c: c['model'].__setitem__('joints', ['j1', True]), 'unique list'),
     (lambda c: c['actions']['preferences'].__setitem__(
-        'joint', ['/controller_action_server/not_the_direct_controller']),
+        'joint', ['/not_the_direct_controller/joint_space']),
      'first joint preference'),
+    # The pre-contract scheme is no longer an action name anything serves.
+    (lambda c: c['actions']['preferences'].__setitem__(
+        'joint', ['/fr5/controller_action_server/moveit_joint']),
+     r'/<node>/joint_space'),
+    # A joint list naming a task_space server would bind the wrong action type.
+    (lambda c: c['actions']['preferences']['joint'].append(
+        '/task_space_ik_controller/task_space'), r'/<node>/joint_space'),
+    (lambda c: c['actions']['preferences'].__setitem__('gripper', ['/gripper']),
+     r'/<node>/gripper'),
+    (lambda c: c['actions']['preferences'].__setitem__(
+        'vla', ['/vla_controller/joint_space']), r'/<node>/vla'),
+    (lambda c: c['actions']['preferences'].__setitem__('pour', []), 'unknown spaces'),
+    (lambda c: c['actions']['preferences'].__setitem__(
+        'task', ['/fr5_moveit_action_bridge/task_space']),
+     'task preferences must contain /task_space_ik_controller/task_space'),
+    (lambda c: c['poses'].__setitem__('task_home', '7'), 'does not declare'),
+    # home 0 is disabled for the FR5: a task must never be sent there.
+    (lambda c: c['poses'].__setitem__('task_home', '0'), 'disables'),
+    (lambda c: c['poses'].__setitem__('task_home', [0.0] * 5), 'exactly 6'),
+    (lambda c: c['poses'].__setitem__('task_home', [0.0] * 5 + [float('nan')]), 'finite'),
+    (lambda c: c['controllers'].__setitem__('additional_arm', 'a_controller'), 'unique list'),
+    (lambda c: c['controllers'].__setitem__('additional_arm', ['a', 'a']), 'unique list'),
+    (lambda c: c['controllers'].__setitem__('additional_arm', ['']), 'unique list'),
+    (lambda c: c['controllers'].__setitem__(
+        'additional_arm', ['gripper_controller']), 'must not name the gripper'),
 ])
 def test_invalid_documents_are_rejected(mutation, message):
     config = deepcopy(load_robot_config('fr5'))
@@ -202,10 +280,50 @@ def test_moveit_action_namespace_and_backend_are_consistent():
         config = load_robot_config(robot_type)
         preferences = config['actions']['preferences']
         assert preferences['joint'][0] == (
-            f'/{robot_type}/controller_action_server/moveit_joint')
+            f'/{robot_type}_moveit_action_bridge/joint_space')
         assert preferences['task'][0] == (
-            f'/{robot_type}/controller_action_server/moveit_task')
+            f'/{robot_type}_moveit_action_bridge/task_space')
         assert config['controllers']['moveit_trajectory']
+
+
+def test_controller_action_names_follow_the_contract():
+    assert controller_action_name('joint_space_qp_controller', 'joint_space') == (
+        '/joint_space_qp_controller/joint_space')
+    assert controller_action_name('left_vla_mit_controller', 'vla') == (
+        '/left_vla_mit_controller/vla')
+    assert controller_action_name('/gripper_controller/', 'gripper') == (
+        '/gripper_controller/gripper')
+    assert controller_action_name('joint_trajectory_controller', 'follow_joint_trajectory') == (
+        '/joint_trajectory_controller/follow_joint_trajectory')
+    # The one exception the contract makes: the FR5 pour keeps its own name.
+    assert controller_action_name('pouring_controller', 'pour') == (
+        '/controller_action_server/pouring_controller')
+    with pytest.raises(ValueError, match='unknown action kind'):
+        controller_action_name('joint_space_qp_controller', 'moveit_joint')
+    with pytest.raises(ValueError, match='non-empty'):
+        controller_action_name('/', 'joint_space')
+
+
+@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
+def test_every_profile_preference_is_a_node_and_kind_pair(robot_type):
+    kinds = {'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'vla': 'vla'}
+    for profile in available_profiles(robot_type):
+        config = load_robot_config(robot_type, profile)
+        bridge = moveit_bridge_node(robot_type, profile)
+        for space, names in config['actions']['preferences'].items():
+            for name in names:
+                node = name[1:].rsplit('/', 1)[0]
+                assert name == controller_action_name(node, kinds[space])
+                assert 'controller_action_server' not in name
+        assert config['actions']['preferences']['joint'][0] == (
+            controller_action_name(bridge, 'joint_space'))
+
+
+def test_bridge_node_names_are_scoped_by_robot_and_profile():
+    assert moveit_bridge_node('ur5e') == 'ur5e_moveit_action_bridge'
+    assert moveit_bridge_node('openarm', 'single') == 'openarm_moveit_action_bridge'
+    assert moveit_bridge_node('openarm', 'left') == 'openarm_left_moveit_action_bridge'
+    assert moveit_bridge_node('fr5') != moveit_bridge_node('ur5e')
 
 
 def test_launch_metadata_is_derived_from_every_registry_document():
@@ -224,6 +342,9 @@ def test_launch_metadata_is_derived_from_every_registry_document():
         assert metadata['max_acceleration_scaling_factor'] == (
             config['moveit']['execution']['max_acceleration_scaling_factor'])
         assert metadata['ready_service'] == f'/cho_moveit/{robot_type}/static_scene_ready'
+        assert metadata['action_bridge_node'] == f'{robot_type}_moveit_action_bridge'
+        assert config['actions']['preferences']['joint'][0] == (
+            f"/{metadata['action_bridge_node']}/joint_space")
 
 
 def test_openarm_moveit_execution_scaling_does_not_drift():

@@ -74,12 +74,14 @@ class TaskGoalClient(Node):
 
     def send(self, position, orientation, duration, relative):
         goal = TaskSpace.Goal()
-        goal.duration = float(duration)
+        goal.duration_sec = float(duration)
         goal.relative = bool(relative)
-        (goal.target_pose.position.x, goal.target_pose.position.y,
-         goal.target_pose.position.z) = [float(v) for v in position]
-        (goal.target_pose.orientation.x, goal.target_pose.orientation.y,
-         goal.target_pose.orientation.z, goal.target_pose.orientation.w) = [float(v) for v in orientation]
+        # frame_id stays '': the controller's model root for an absolute goal,
+        # its EE frame for a relative one -- which is what these poses are in.
+        pose = goal.target_pose.pose
+        (pose.position.x, pose.position.y, pose.position.z) = [float(v) for v in position]
+        (pose.orientation.x, pose.orientation.y,
+         pose.orientation.z, pose.orientation.w) = [float(v) for v in orientation]
         if not self.action.wait_for_server(timeout_sec=5.0):
             return None, 'action server unavailable'
         future = self.action.send_goal_async(goal)
@@ -91,7 +93,8 @@ class TaskGoalClient(Node):
         started = time.time()
         while not result_future.done():
             rclpy.spin_once(self, timeout_sec=0.05)
-            # The controller aborts an unreached goal duration + 2 s after start.
+            # The controller aborts an unreached goal 2 s after its planned
+            # motion, which takes at least `duration`.
             if time.time() - started > duration + 6.0:
                 return None, 'result timeout'
         result = result_future.result()

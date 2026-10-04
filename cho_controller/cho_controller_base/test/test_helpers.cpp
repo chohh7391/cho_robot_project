@@ -1,9 +1,11 @@
 // Copyright 2026 Hyunho Cho
 // SPDX-License-Identifier: Apache-2.0
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <pinocchio/multibody/joint/joints.hpp>
 #include <pinocchio/spatial/explog.hpp>
 
 #include "cho_controller_base/held_command.hpp"
@@ -27,6 +29,20 @@ TEST(Kinematics, DlsStepIsTheDampedPseudoInverse) {
   const Eigen::MatrixXd J_dynamic = J.leftCols(6);
   const Eigen::VectorXd step = dls_step(J_dynamic, e, lambda);
   EXPECT_EQ(step.size(), 6);
+}
+
+TEST(Kinematics, RootFramesAreTheLinksAtTheModelRoot) {
+  // What a URDF parse of base -(fixed, identity)-> link0 -(fixed, offset)-> mount
+  // -(revolute)-> link1 builds: every fixed link becomes a BODY frame on joint 0.
+  pinocchio::Model model;
+  const auto body = pinocchio::FrameType::BODY;
+  model.addFrame(pinocchio::Frame("base", 0, 0, pinocchio::SE3::Identity(), body));
+  model.addFrame(pinocchio::Frame("link0", 0, 0, pinocchio::SE3::Identity(), body));
+  model.addFrame(pinocchio::Frame(
+    "mount", 0, 0, pinocchio::SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0, 0, 0.1)), body));
+  const auto joint = model.addJoint(0, pinocchio::JointModelRZ(), pinocchio::SE3::Identity(), "joint1");
+  model.addFrame(pinocchio::Frame("link1", joint, 0, pinocchio::SE3::Identity(), body));
+  EXPECT_EQ(root_frames(model), (std::vector<std::string>{"base", "link0"}));
 }
 
 TEST(Kinematics, LocalPoseErrorIsInTheReferenceFrame) {

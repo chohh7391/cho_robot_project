@@ -257,8 +257,8 @@ CHO_DECLARE_DIRECT_MIT_CONTROLLER(CompensatedTorqueController, DirectMitMode::CO
 #undef CHO_DECLARE_DIRECT_MIT_CONTROLLER
 
 // Canonical action-client controller.  Its controller-manager instance is
-// intentionally named joint_impedance_mit_controller, yielding the familiar
-// /controller_action_server/joint_impedance_mit_controller JointSpace API.
+// intentionally named joint_impedance_mit_controller, yielding the
+// /joint_impedance_mit_controller/joint_space JointSpace API.
 // The topic-oriented JointImpedanceController remains available only as a
 // low-level diagnostic producer and is not selected by the MuJoCo launch.
 class JointImpedanceActionController final : public DirectControllerBase

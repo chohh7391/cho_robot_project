@@ -1,15 +1,18 @@
 """Validated access to the Cho robot metadata registry."""
 
-from .registry import (CONTROL_MODES, available_profiles, available_robot_types,
-                       blocked_home_joint_goals, declared_hold_control_modes,
-                       hold_controllers_for_control_mode,
+from .registry import (ACTION_KINDS, CONTROL_MODES, POUR_ACTION_KIND,
+                       PREFERENCE_ACTION_KINDS, available_profiles, available_robot_types,
+                       blocked_home_joint_goals, controller_action_name,
+                       declared_hold_control_modes, hold_controllers_for_control_mode,
                        home_pose_policy, load_moveit_metadata,
-                       load_robot_config, validate_robot_config)
+                       load_robot_config, moveit_bridge_node, task_home_pose,
+                       validate_robot_config)
 from .motion_limits import motion_limit_parameters
 
 __all__ = [
-    'CONTROL_MODES',
+    'ACTION_KINDS', 'CONTROL_MODES', 'POUR_ACTION_KIND', 'PREFERENCE_ACTION_KINDS',
     'available_profiles', 'available_robot_types', 'blocked_home_joint_goals',
-    'declared_hold_control_modes', 'hold_controllers_for_control_mode', 'home_pose_policy',
-    'load_moveit_metadata', 'load_robot_config', 'motion_limit_parameters', 'validate_robot_config',
+    'controller_action_name', 'declared_hold_control_modes', 'hold_controllers_for_control_mode',
+    'home_pose_policy', 'load_moveit_metadata', 'load_robot_config', 'motion_limit_parameters',
+    'moveit_bridge_node', 'task_home_pose', 'validate_robot_config',
 ]

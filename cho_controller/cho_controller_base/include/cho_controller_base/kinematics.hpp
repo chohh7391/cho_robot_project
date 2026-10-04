@@ -13,12 +13,17 @@
 // limitations under the License.
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include <Eigen/Cholesky>
 #include <Eigen/Core>
+#include <pinocchio/multibody/model.hpp>
 #include <pinocchio/spatial/explog.hpp>
 #include <pinocchio/spatial/se3.hpp>
 
-// The differential-IK pieces every task-space controller here shares.
+// The differential-IK pieces every task-space controller here shares, and the
+// frame a fixed-base model's poses are expressed in.
 
 namespace cho_controller_base
 {
@@ -56,6 +61,21 @@ void limit_step(Eigen::MatrixBase<StepT> & step, double max_step)
   if (largest > max_step && largest > 0.0) {
     step *= max_step / largest;
   }
+}
+
+// The names of the frame a fixed-base model's poses (oMf) are expressed in: the
+// URDF's root link and every link fixed to it at the identity, root first. For
+// the FR3 that is "base" and "fr3_link0", which a client may use
+// interchangeably.
+inline std::vector<std::string> root_frames(const pinocchio::Model & model)
+{
+  std::vector<std::string> names;
+  for (const auto & frame : model.frames) {
+    if (frame.type == pinocchio::BODY && frame.parentJoint == 0 && frame.placement.isIdentity(1e-9)) {
+      names.push_back(frame.name);
+    }
+  }
+  return names;
 }
 
 }  // namespace cho_controller_base

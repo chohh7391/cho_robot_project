@@ -12,22 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from ament_flake8.main import main_with_errors
 import pytest
+
+# Paths are resolved from this file rather than from the working directory, as
+# cho_object_pose's test does: `colcon test` runs pytest with the build
+# directory as cwd, where a --symlink-install tree only partly mirrors the
+# sources. And the paths come BEFORE --exclude, which takes any number of
+# values: listed after it, they were all swallowed as excludes and only
+# scripts/ and meshes/ were ever checked.
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TARGETS = [os.path.join(PACKAGE_ROOT, name)
+           for name in ('cho_task_manager', 'launch', 'setup.py', 'test')]
 
 
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8():
     rc, errors = main_with_errors(argv=[
-        '--config=setup.cfg',
+        '--config=%s' % os.path.join(PACKAGE_ROOT, 'setup.cfg'),
         '--linelength=120',
+    ] + TARGETS + [
         '--exclude',
         'python',
-        'cho_task_manager',
-        'launch',
-        'setup.py',
-        'test',
     ])
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + \

@@ -44,10 +44,12 @@ independent -- one asset serves position, velocity and torque.
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+
 
 def movable_joints(urdf_path):
     """Every actuated joint in the URDF - these must all survive the import."""
@@ -144,8 +146,10 @@ def expand_xacro(path, xacro_args):
     ws_setup = os.environ.get("CHO_WS_SETUP")
     if ws_setup and os.path.exists(ws_setup):
         sources.append(ws_setup)
-    prefix = "".join("source %s >/dev/null 2>&1; " % s for s in sources)
-    cmd = "%sxacro %s %s" % (prefix, path, " ".join(xacro_args))
+    # Every path and argument is quoted: a space or a shell metacharacter in a
+    # workspace path or a xacro argument must not split or run anything.
+    prefix = "".join("source %s >/dev/null 2>&1; " % shlex.quote(s) for s in sources)
+    cmd = prefix + shlex.join(["xacro", path, *xacro_args])
 
     result = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
     if result.returncode != 0:
@@ -155,7 +159,7 @@ def expand_xacro(path, xacro_args):
             "    xacro %s %s > /tmp/robot.urdf\n"
             "    ... convert_urdf_to_usd.py --urdf /tmp/robot.urdf ...\n"
             "(set CHO_WS_SETUP=<ws>/install/setup.bash if the URDF uses $(find ...))"
-            % (path, result.stderr.strip(), path, " ".join(xacro_args))
+            % (path, result.stderr.strip(), shlex.quote(path), shlex.join(xacro_args))
         )
     # Keep the source stem so the importer produces a predictable asset name,
     # but always hand it a .urdf file. Isaac Sim 6's importer rejects expanded

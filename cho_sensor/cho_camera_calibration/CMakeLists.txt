@@ -6,8 +6,15 @@ find_package(ament_cmake REQUIRED)
 # config/ is where a finished calibration lands, so that it can be handed to a
 # driver as package://cho_camera_calibration/config/<file>.yaml rather than a path
 # under someone's home directory. It starts out holding nothing but .gitkeep.
-install(DIRECTORY targets config scripts
+install(DIRECTORY targets config
   DESTINATION share/${PROJECT_NAME}
+)
+# Under lib/, so the README's `ros2 run cho_camera_calibration <script>` finds them.
+install(PROGRAMS
+  scripts/make_checkerboard.py
+  scripts/record_board_views.py
+  scripts/solve_hand_eye.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

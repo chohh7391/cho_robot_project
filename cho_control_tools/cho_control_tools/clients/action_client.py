@@ -17,11 +17,21 @@ from cho_interfaces.action import (
 )
 # from perception.perception_interfaces.srv import GetObjectInfo
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float64MultiArray
 import time
 
-ACTION_SERVER_PREFIX = "/controller_action_server"
+from cho_control_tools.action_names import (
+    ACTION_KINDS,
+    MOVEIT_BRIDGE_SUFFIX,
+    action_kind,
+    controller_action_name,
+    serving_node,
+)
+
+# Every goal this shell sends asks for at least this long [s]; the controller
+# takes longer if its limits require (cho_interfaces/CONTRACT.md).
+GOAL_DURATION_SEC = 5.0
 ACTION_TYPE_NAMES = {
     "joint": "cho_interfaces/action/JointSpace",
     "task": "cho_interfaces/action/TaskSpace",
@@ -154,7 +164,8 @@ class ControlSuiteShell(cmd.Cmd):
         active_controllers = self._active_controllers(timeout_sec=3.0)
 
         if active_controllers is None:
-            self.node.get_logger().error("Failed to get active controllers! Action clients might be incorrectly assigned.")
+            self.node.get_logger().error(
+                "Failed to get active controllers! Action clients might be incorrectly assigned.")
         else:
             self.node.get_logger().info(f"Active controllers found: {active_controllers}")
 
@@ -222,11 +233,16 @@ class ControlSuiteShell(cmd.Cmd):
         preferences = self._action_preferences()
         return tuple(preferences['joint'][:1] + preferences['task'][:1])
 
-    def _is_cho_action(self, action_name):
-        scoped = (f'/{self.robot_type}{ACTION_SERVER_PREFIX}/' if
-                  getattr(self, 'arm', 'single') == 'single' else
-                  f'/{self.robot_type}/{self.arm}{ACTION_SERVER_PREFIX}/')
-        return action_name.startswith(f'{ACTION_SERVER_PREFIX}/') or action_name.startswith(scoped)
+    @staticmethod
+    def _is_cho_action(action_name):
+        # Controllers and the MoveIt bridge serve /<node>/<kind>
+        # (cho_interfaces/CONTRACT.md); the kinds this shell drives are these.
+        return action_kind(action_name) in (
+            ACTION_KINDS['joint'], ACTION_KINDS['task'], ACTION_KINDS['gripper'])
+
+    @staticmethod
+    def _is_moveit_bridge_action(action_name):
+        return serving_node(action_name).endswith(MOVEIT_BRIDGE_SUFFIX)
 
     def _active_controllers(self, timeout_sec: float) -> set[str] | None:
         client = self.node.create_client(ListControllers, "/controller_manager/list_controllers")
@@ -264,7 +280,7 @@ class ControlSuiteShell(cmd.Cmd):
         expected_type = ACTION_TYPE_NAMES[action_space]
         candidates = []
         if requested_controller:
-            candidates.append(self._normalize_action_name(requested_controller))
+            candidates.append(self._normalize_action_name(requested_controller, action_space))
         candidates.extend(self._action_preferences().get(action_space, []))
         candidates = self._unique(candidates)
         available_candidates = [
@@ -277,7 +293,7 @@ class ControlSuiteShell(cmd.Cmd):
         if requested_controller and not available_candidates:
             self.node.get_logger().warn(
                 f"Requested {action_space} action server is not available: "
-                f"{self._normalize_action_name(requested_controller)}"
+                f"{self._normalize_action_name(requested_controller, action_space)}"
             )
 
         if active_controllers is not None:
@@ -304,25 +320,23 @@ class ControlSuiteShell(cmd.Cmd):
         return None
 
     def _action_has_active_backend(self, action_name, active_controllers):
-        controller = self._controller_name(action_name)
-        if controller in ('moveit_joint', 'moveit_task'):
+        if self._is_moveit_bridge_action(action_name):
             backends = self._config()['moveit'].get(
                 'controllers', [self._config()['controllers']['moveit_trajectory']])
             return all(backend in active_controllers for backend in backends)
-        return controller in active_controllers
+        return self._controller_name(action_name) in active_controllers
 
     def _action_belongs_to_robot(self, action_name):
-        scoped_prefix = (f'/{self.robot_type}{ACTION_SERVER_PREFIX}/' if
-                         getattr(self, 'arm', 'single') == 'single' else
-                         f'/{self.robot_type}/{self.arm}{ACTION_SERVER_PREFIX}/')
-        if action_name.startswith(scoped_prefix):
-            return action_name in self._moveit_action_names()
-        direct_prefix = f'{ACTION_SERVER_PREFIX}/'
-        if not action_name.startswith(direct_prefix):
+        if not self._is_cho_action(action_name):
             return False
-        # Direct controllers retain their historical global namespace. A
-        # generic/global MoveIt action is deliberately never accepted.
-        return not action_name[len(direct_prefix):].startswith('moveit_')
+        if self._is_moveit_bridge_action(action_name):
+            # A bridge's node name carries its robot and profile, so only this
+            # profile's own bridge is accepted -- never another robot's, and
+            # never one started under the executable's generic default name.
+            return action_name in self._moveit_action_names()
+        # A controller serves under its own node name, which the registry
+        # already scopes per robot (and per arm on a bimanual build).
+        return True
 
     def _create_client(self, action_space: str, action_name: str | None):
         if action_name is None:
@@ -354,17 +368,19 @@ class ControlSuiteShell(cmd.Cmd):
             print(f"  gripper: {self.gripper_action_name or '-'}")
 
     @staticmethod
-    def _normalize_action_name(controller_or_action_name: str) -> str:
+    def _normalize_action_name(controller_or_action_name: str, action_space: str) -> str:
+        """A full action name, or a controller's own *action_space* action."""
         name = controller_or_action_name.strip()
         if not name:
             return name
         if name.startswith("/"):
             return name
-        return f"{ACTION_SERVER_PREFIX}/{name}"
+        return controller_action_name(name, action_space)
 
     @staticmethod
     def _controller_name(action_name: str) -> str:
-        return action_name.rstrip("/").split("/")[-1]
+        """The node serving *action_name*: the controller, for a direct action."""
+        return serving_node(action_name)
 
     @staticmethod
     def _unique(items):
@@ -382,7 +398,7 @@ class ControlSuiteShell(cmd.Cmd):
         available_actions = self._discover_action_servers(timeout_sec=0.5)
         active_controllers = self._active_controllers(timeout_sec=0.5)
         if not available_actions:
-            print("No /controller_action_server/* action servers found.")
+            print("No Cho joint_space/task_space/gripper action servers found.")
             return
         for action_name in sorted(available_actions):
             controller = self._controller_name(action_name)
@@ -399,7 +415,7 @@ class ControlSuiteShell(cmd.Cmd):
 
     def do_use_joint(self, arg):
         """Switch joint-space action server. Example: use_joint joint_space_qp_controller"""
-        action_name = self._normalize_action_name(arg)
+        action_name = self._normalize_action_name(arg, "joint")
         if not action_name:
             print("Usage: use_joint <controller_name|/action/server/name>")
             return
@@ -408,7 +424,7 @@ class ControlSuiteShell(cmd.Cmd):
 
     def do_use_task(self, arg):
         """Switch task-space action server. Example: use_task task_space_impedance_controller"""
-        action_name = self._normalize_action_name(arg)
+        action_name = self._normalize_action_name(arg, "task")
         if not action_name:
             print("Usage: use_task <controller_name|/action/server/name>")
             return
@@ -417,7 +433,7 @@ class ControlSuiteShell(cmd.Cmd):
 
     def do_use_gripper(self, arg):
         """Switch gripper action server"""
-        action_name = self._normalize_action_name(arg)
+        action_name = self._normalize_action_name(arg, "gripper")
         if not action_name:
             print("Usage: use_gripper <controller_name|/action/server/name>")
             return
@@ -462,7 +478,7 @@ class ControlSuiteShell(cmd.Cmd):
             return
 
         goal = JointSpace.Goal()
-        goal.duration = 5.0
+        goal.duration_sec = GOAL_DURATION_SEC
         goal.target_joints = JointState()
 
         selector = arg.strip()
@@ -502,7 +518,7 @@ class ControlSuiteShell(cmd.Cmd):
         if (getattr(self, 'task_space_action_client', None) is None and
                 self.joint_space_action_client is not None and selector in joint_reach):
             goal = JointSpace.Goal()
-            goal.duration = 5.0
+            goal.duration_sec = GOAL_DURATION_SEC
             goal.target_joints = JointState()
             goal.target_joints.position = joint_reach[selector]
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
@@ -520,7 +536,7 @@ class ControlSuiteShell(cmd.Cmd):
                       '`use_joint <controller>`.')
                 return
             goal = JointSpace.Goal()
-            goal.duration = 5.0
+            goal.duration_sec = GOAL_DURATION_SEC
             goal.target_joints = JointState()
             goal.target_joints.position = joint_reach[selector]
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
@@ -533,21 +549,20 @@ class ControlSuiteShell(cmd.Cmd):
             return
 
         goal = TaskSpace.Goal()
-        goal.target_pose = Pose()
+        # frame_id stays '': the server's base frame for an absolute preset,
+        # its EE frame for a relative one -- the frames these presets are in.
+        goal.target_pose = PoseStamped()
         reach = self.robot_config['motions']['reach']
         if selector not in reach:
             print("Usage: reach 0|1|2|3")
             return
         motion = reach[selector]
-        goal.duration = 5.0
+        goal.duration_sec = GOAL_DURATION_SEC
         goal.relative = motion['relative']
-        (goal.target_pose.position.x,
-         goal.target_pose.position.y,
-         goal.target_pose.position.z) = motion['position']
-        (goal.target_pose.orientation.x,
-         goal.target_pose.orientation.y,
-         goal.target_pose.orientation.z,
-         goal.target_pose.orientation.w) = motion['orientation']
+        pose = goal.target_pose.pose
+        (pose.position.x, pose.position.y, pose.position.z) = motion['position']
+        (pose.orientation.x, pose.orientation.y,
+         pose.orientation.z, pose.orientation.w) = motion['orientation']
 
         if self._send_goal_and_wait(self.task_space_action_client, goal):
             self._report_outcome(True)
@@ -637,8 +652,8 @@ class ControlSuiteShell(cmd.Cmd):
             time.sleep(0.1)
 
         wrapped = get_result_future.result()
-        # Gripper results carry no message field; absent or empty is fine and
-        # simply leaves the outcome line as it has always read.
+        # Every result carries a message now (empty on success); getattr keeps
+        # a stub result without one reading as the plain outcome line.
         self._last_result_message = getattr(wrapped.result, 'message', '') or ''
 
         return wrapped.status == GoalStatus.STATUS_SUCCEEDED

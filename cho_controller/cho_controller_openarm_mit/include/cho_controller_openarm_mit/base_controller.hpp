@@ -14,6 +14,7 @@
 #pragma once
 
 #include "cho_controller_base/goal_phase_action_server.hpp"
+#include "cho_controller_base/kinematics.hpp"
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
@@ -105,8 +106,8 @@ public:
     // trajectory clock themselves. See the definition for why this is not
     // simply 1 / get_update_rate().
     double nominal_period(const rclcpp::Duration & period);
-    void log_ee_pose();
-    void log_joint_pos();
+    void publish_ee_state();
+    void publish_controller_state();
     // Always-active controllers (ee_state_broadcaster) override this to false so
     // they do not publish un-updated desired values onto ~/controller_state / ~/ee_state.
     virtual bool should_publish_arm_log() const { return true; }
@@ -129,15 +130,6 @@ protected:
 
     // Send one cycle's command. On MIT hardware each of these also fills the
     // other two thirds of the packet; see the .cpp for why that is mandatory.
-    // "/controller_action_server/<this controller's node name>".
-    //
-    // Derived from the node name rather than written as a literal so a bimanual
-    // build can spawn the same controller class twice - one instance per arm -
-    // without the two action servers colliding on one name. For a single arm the
-    // instance is named after the class anyway, so the result is unchanged. This
-    // is also the contract cho_task_manager's controller_action_name() assumes.
-    std::string action_server_name() const;
-
     void write_arm_torque(const Eigen::VectorXd & torque);
     void write_arm_position(const Eigen::VectorXd & position);
     void write_arm_velocity(const Eigen::VectorXd & velocity);

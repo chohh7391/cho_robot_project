@@ -67,7 +67,7 @@ protected:
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID &, std::shared_ptr<const JointSpace::Goal> goal) override
   {
-    if (!admit_goal() || !valid_duration(goal->duration)) {
+    if (!admit_goal() || !valid_duration(goal->duration_sec)) {
       return rclcpp_action::GoalResponse::REJECT;
     }
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -107,7 +107,7 @@ protected:
   {
     JointSpace::Goal goal;
     goal.target_joints.position = {0.0, 0.0};
-    goal.duration = duration;
+    goal.duration_sec = duration;
     rclcpp_action::Client<JointSpace>::SendGoalOptions options;
     options.feedback_callback = [this](ClientGoalHandle::SharedPtr, const std::shared_ptr<const JointSpace::Feedback> f) {
         last_feedback_.store(f->percent_complete);
@@ -117,7 +117,13 @@ protected:
       ADD_FAILURE() << "goal response timed out";
       return nullptr;
     }
-    return future.get();
+    auto handle = future.get();
+    // The client hears ACCEPT before the server's handle_accepted() has run;
+    // the control loop only sees the goal after that.
+    for (int i = 0; handle && !server_->is_running() && i < 500; ++i) {
+      std::this_thread::sleep_for(1ms);
+    }
+    return handle;
   }
 
   // Plays control cycles until the server leaves kActive or `limit` runs out.

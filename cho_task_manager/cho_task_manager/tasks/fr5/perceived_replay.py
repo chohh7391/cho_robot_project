@@ -81,7 +81,7 @@ from cho_task_manager.tasks.fr5.common import CONTROL_MODE, VESSELS
 # The motion half, taken whole from the tree this one perceives for. The two
 # leading-underscore names are imported deliberately: they assemble the start
 # pose move and the recorded segments with numbers measured on this arm
-# (FR5_POSITION_LIMITS, GRIPPER_SETTLE_SEC, the velocity ceiling), and a second
+# (GRIPPER_SETTLE_SEC, the velocity ceiling, the description's position limits), and a second
 # copy here would be exactly the pair of things that drift apart silently.
 # trajectory_replay.py is not modified for this; test_fr5_perceived_replay.py
 # pins the names so a rename there fails a test rather than a replay.
@@ -273,7 +273,7 @@ def create_fr5_perceived_replay_tree(robot_config=None) -> py_trees.behaviour.Be
     replay_seq = py_trees.composites.Sequence(name='4_Replay', memory=True)
     replay_seq.add_children(_replay_children(
         segments, controller, joint_names, time_scale, limits,
-        velocity_scaling(robot_config)))
+        velocity_scaling(robot_config), gripper=robot_config.get('gripper')))
 
     finish_seq = _home_block(robot_config, home, home_via, hold, controller,
                              name='5_Finish', suffix='_Final', park=True)

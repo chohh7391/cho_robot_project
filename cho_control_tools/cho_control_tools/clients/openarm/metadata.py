@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+from cho_control_tools.action_names import controller_action_name, moveit_bridge_node
+
 
 _HOME = {
     '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0],
@@ -21,12 +23,13 @@ _CONFIG = {
     'controllers': {'moveit_trajectory': 'joint_trajectory_controller'},
     'moveit': {},
     'actions': {'preferences': {
-        'joint': ['/openarm/controller_action_server/moveit_joint',
-                  '/controller_action_server/joint_space_position_controller',
-                  '/controller_action_server/joint_impedance_mit_controller'],
-        'task': ['/openarm/controller_action_server/moveit_task',
-                 '/controller_action_server/task_space_impedance_mit_controller'],
-        'gripper': ['/controller_action_server/gripper_controller'],
+        'joint': [controller_action_name(node, 'joint') for node in (
+            moveit_bridge_node('openarm'), 'joint_space_position_controller',
+            'joint_impedance_mit_controller')],
+        'task': [controller_action_name(node, 'task') for node in (
+            moveit_bridge_node('openarm'), 'task_space_impedance_mit_controller')],
+        'gripper': [controller_action_name('gripper_controller', 'gripper')],
+        'vla': [controller_action_name('vla_mit_controller', 'vla')],
     }},
     'poses': {'home': _HOME, 'reach': _REACH},
     'motions': {'reach': {
@@ -79,12 +82,14 @@ def _side_config(profile):
     config['controllers'] = {'moveit_trajectory': f'{profile}_joint_trajectory_controller'}
     config['moveit'] = {'controllers': [
         'left_joint_trajectory_controller', 'right_joint_trajectory_controller']}
+    bridge = moveit_bridge_node('openarm', profile)
     config['actions']['preferences'] = {
-        'joint': [f'/openarm/{profile}/controller_action_server/moveit_joint',
-                  f'/controller_action_server/{profile}_joint_impedance_mit_controller'],
-        'task': [f'/openarm/{profile}/controller_action_server/moveit_task',
-                 f'/controller_action_server/{profile}_task_space_impedance_mit_controller'],
-        'gripper': [f'/controller_action_server/{profile}_gripper_controller'],
+        'joint': [controller_action_name(node, 'joint') for node in (
+            bridge, f'{profile}_joint_impedance_mit_controller')],
+        'task': [controller_action_name(node, 'task') for node in (
+            bridge, f'{profile}_task_space_impedance_mit_controller')],
+        'gripper': [controller_action_name(f'{profile}_gripper_controller', 'gripper')],
+        'vla': [controller_action_name(f'{profile}_vla_mit_controller', 'vla')],
     }
     config['motions']['reach'] = {
         selector: {'relative': False, 'position': position,
@@ -101,7 +106,7 @@ def _both_config():
     config['moveit'] = {'controllers': [
         'left_joint_trajectory_controller', 'right_joint_trajectory_controller']}
     config['actions']['preferences'] = {
-        'joint': ['/openarm/both/controller_action_server/moveit_joint'],
+        'joint': [controller_action_name(moveit_bridge_node('openarm', 'both'), 'joint')],
         'task': [], 'gripper': [],
     }
     config['poses'] = {'home': _BOTH_HOME, 'reach': _BOTH_REACH}

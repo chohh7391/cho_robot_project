@@ -240,8 +240,12 @@ def test_return_to_zero_defaults_off_and_is_limited_to_direct_action_producers()
     assert 'if return_to_zero and mit_prototype:' in source
     assert 'RETURN_TO_ZERO_MIT_CONTROLLERS' in source
     assert "'return_to_zero_duration': 5.0" in source
-    assert "'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]" in source
     assert "'return_to_zero_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]" in source
+    # The task-space controller is not in RETURN_TO_ZERO_MIT_CONTROLLERS, so it is
+    # refused before any overrides are built: a startup_kp branch for it here
+    # could never run.
+    assert 'task_space_impedance_mit_controller' not in launch_utils.RETURN_TO_ZERO_MIT_CONTROLLERS
+    assert "'startup_kp'" not in source
 
 
 def test_paired_yaml_contains_only_one_14_axis_producer():

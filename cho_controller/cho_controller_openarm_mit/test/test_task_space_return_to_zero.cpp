@@ -165,13 +165,29 @@ struct TaskSpaceImpedanceControllerTestAccess
     TaskSpaceImpedanceController & controller)
   {
     auto goal = std::make_shared<TaskSpaceImpedanceController::Action::Goal>();
-    goal->duration = 5.0F;
+    goal->duration_sec = 5.0;
     goal->relative = true;
     // 300 mm/2 rad deliberately exceeds the retired Cartesian goal guards.
-    goal->target_pose.position.x = 0.30;
-    goal->target_pose.orientation.y = std::sin(1.0);
-    goal->target_pose.orientation.w = std::cos(1.0);
+    goal->target_pose.pose.position.x = 0.30;
+    goal->target_pose.pose.orientation.y = std::sin(1.0);
+    goal->target_pose.pose.orientation.w = std::cos(1.0);
     return controller.goal_callback({}, goal);
+  }
+  static rclcpp_action::GoalResponse goal_in_frame(
+    TaskSpaceImpedanceController & controller, const std::string & frame, bool relative)
+  {
+    auto goal = std::make_shared<TaskSpaceImpedanceController::Action::Goal>();
+    goal->duration_sec = 5.0;
+    goal->relative = relative;
+    goal->target_pose.header.frame_id = frame;
+    goal->target_pose.pose.position.x = relative ? 0.0 : 0.3;
+    goal->target_pose.pose.orientation.w = 1.0;
+    return controller.goal_callback({}, goal);
+  }
+  static std::string ee_frame(const TaskSpaceImpedanceController & controller) {return controller.ee_frame_;}
+  static std::vector<std::string> base_frames(const TaskSpaceImpedanceController & controller)
+  {
+    return controller.task_base_frames_;
   }
   static void stage_absolute_goal_without_cartesian_caps(
     TaskSpaceImpedanceController & controller)
@@ -994,6 +1010,24 @@ TEST_F(Fixture, RelativeGoalBeyondFormerCartesianCapsIsAcceptedAndExecuted)
 
   EXPECT_FALSE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::capacity_rejected(*controller_));
   EXPECT_NE(cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess::active_task_id(*controller_), 0U);
+}
+
+TEST_F(Fixture, AGoalMustBeInTheFrameItsModeIsDefinedIn)
+{
+  using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
+  for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) {
+    cycle(1);
+  }
+  ASSERT_TRUE(Access::ready(*controller_));
+  const auto base_frames = Access::base_frames(*controller_);
+  ASSERT_FALSE(base_frames.empty());
+  const auto reject = rclcpp_action::GoalResponse::REJECT;
+  // The controller transforms nothing: the EE frame is not a base frame, a base
+  // frame is not the EE frame, and an unrelated frame is neither.
+  EXPECT_EQ(Access::goal_in_frame(*controller_, Access::ee_frame(*controller_), false), reject);
+  EXPECT_EQ(Access::goal_in_frame(*controller_, base_frames.front(), true), reject);
+  EXPECT_EQ(Access::goal_in_frame(*controller_, "camera_optical_frame", false), reject);
+  EXPECT_NE(Access::goal_in_frame(*controller_, base_frames.front(), false), reject);
 }
 
 TEST_F(Fixture, AbsoluteGoalWithoutCartesianCapsIsAcceptedAndExecuted)

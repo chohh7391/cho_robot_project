@@ -18,7 +18,7 @@ follows from that being POSITION CONTROL THAT SENSES NOTHING:
    the swing. ``home_via`` chooses how the move is made:
 
    * ``moveit`` (the default) plans the move through the MoveIt bridge's
-     ``moveit_joint`` action, so the path to the start pose is collision-checked
+     ``joint_space`` action, so the path to the start pose is collision-checked
      and the motion is executed by the trajectory controller, which decides it
      has arrived by its own goal tolerance. It needs ``move_group`` and the
      bridge running -- ``bringup_real_moveit.launch.py``, or the MuJoCo/Gazebo/
@@ -90,6 +90,7 @@ from cho_task_manager.behaviors.service import (
     ListControllersServiceBehavior,
     SwitchControllerServiceBehavior,
 )
+from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.subtrees import guarded_mission, home_subtree
 from cho_task_manager.subtrees.pour import (
     grasp_measure_children,
@@ -102,6 +103,7 @@ from cho_task_manager.utils.controller_names import (
 )
 from cho_task_manager.utils.msg_utils import make_joint_state
 from cho_task_manager.utils.pour_splice import splice_pour
+from cho_task_manager.utils.robot_description import DescriptionPositionLimits
 from cho_task_manager.utils.trajectory_recording import (
     DEFAULT_POSITION_TOLERANCE_M,
     DEFAULT_YAW_TOLERANCE_DEG,
@@ -124,9 +126,12 @@ HOME_DURATION_SEC = 12.0
 
 #: How the arm gets to the recording's start pose. 'direct' interpolates there
 #: through the hold controller and checks nothing; 'moveit' plans it, which
-#: needs move_group and the MoveIt bridge up. Direct is the default because
-#: MuJoCo has no collisions to check and starting move_group for it would be a
-#: dependency paid for nothing.
+#: needs move_group and the MoveIt bridge up. MoveIt is the default: the arm
+#: starts wherever the last run left it, so the default checks the path, and a
+#: direct home calls the move done at a 0.05 rad error norm that a long move
+#: reaches by running out of duration (see the module docstring). A bringup
+#: without MoveIt -- MuJoCo, where there is nothing to collide with -- passes
+#: home_via:=direct.
 HOME_VIA_DIRECT = 'direct'
 HOME_VIA_MOVEIT = 'moveit'
 HOME_VIA_CHOICES = (HOME_VIA_DIRECT, HOME_VIA_MOVEIT)
@@ -167,19 +172,14 @@ GRIPPER_SETTLE_SEC = 4.0
 #: is bounded the way a planned motion through the same controller is.
 DEFAULT_VELOCITY_SCALING = 0.25
 
-#: Position limits [rad], from cho_description_fr5/urdf/fr5_macro.xacro.
-#: Written down rather than parsed: the URDF reaches this package only as a
-#: xacro that needs expanding, and these are checked before anything is sent
-#: because neither joint_trajectory_controller nor the vendor write() clamps a
-#: commanded position. Keep in step with that file.
-FR5_POSITION_LIMITS = {
-    'j1': (-3.0543, 3.0543),
-    'j2': (-4.6251, 1.4835),
-    'j3': (-2.8274, 2.8274),
-    'j4': (-4.6251, 1.4835),
-    'j5': (-3.0543, 3.0543),
-    'j6': (-3.0543, 3.0543),
-}
+# Position limits are NOT written down here. They come from the running robot
+# description (/robot_description, which robot_state_publisher latches in every
+# bringup), read by the same Pinocchio parser the safety monitor uses
+# (utils/robot_description.py), and are checked before anything is sent because
+# neither joint_trajectory_controller nor the vendor write() clamps a commanded
+# position. A segment is refused while that description has not arrived.
+# cho_moveit_fr5/config/joint_limits.yaml carries velocity and acceleration only,
+# so it cannot be the source for positions.
 
 
 def replay_controller(robot_config) -> str:
@@ -323,7 +323,8 @@ def create_fr5_trajectory_replay_tree(robot_config=None) -> py_trees.behaviour.B
         segments, controller, joint_names, time_scale, limits,
         velocity_scaling(robot_config),
         pour_children=_pour_children_for(robot_config, pour_request, controller),
-        grasp_children=_grasp_children_for(robot_config, pour_request)))
+        grasp_children=_grasp_children_for(robot_config, pour_request),
+        gripper=robot_config.get('gripper')))
 
     # Finishing returns to the recording's OWN start pose, the same one
     # 1_Initialize goes to. That leaves the cell as the next run of this
@@ -429,18 +430,27 @@ def _home_block(robot_config, home, home_via, hold, controller, name, suffix, pa
 
 
 def _replay_children(segments, controller, joint_names, time_scale, limits, scaling,
-                     settle_sec=GRIPPER_SETTLE_SEC, pour_children=None, grasp_children=None):
+                     settle_sec=GRIPPER_SETTLE_SEC, pour_children=None, grasp_children=None,
+                     gripper=None):
     """One behaviour per segment, in recorded order.
 
     *pour_children* builds what replaces a pour segment (``splice_pour``), as
     ``pour_children(index, segment) -> [behaviour, ...]``. *grasp_children*
     builds what follows the settle of the LAST grasp before it -- the one that
     closed on the vessel being poured -- as ``grasp_children(index)``.
+    *gripper* is the robot's gripper controller (``robot_config['gripper']``),
+    required when the recording has gripper events.
     """
     pours = [i for i, segment in enumerate(segments) if segment.kind == 'pour']
     grasps = [i for i, segment in enumerate(segments)
               if segment.kind == 'gripper' and segment.grasp and pours and i < pours[0]]
     grasp_of_pour = grasps[-1] if grasps else None
+    # One source for every segment of this replay: one subscription, one parse.
+    position_limits = DescriptionPositionLimits(joint_names)
+    if gripper is None and any(segment.kind == 'gripper' for segment in segments):
+        raise ValueError(
+            'the recording drives the gripper, and no gripper controller was given '
+            "(robot_config['gripper'])")
     children = []
     for index, segment in enumerate(segments):
         if segment.kind == 'pour':
@@ -455,10 +465,12 @@ def _replay_children(segments, controller, joint_names, time_scale, limits, scal
                 name='%d_Gripper_%s_%s' % (
                     index, 'Close' if segment.grasp else 'Open', segment.operation or 'seg'),
                 grasp=segment.grasp,
+                controller_name=gripper,
             ))
             # Stand still until the jaws really have. See GRIPPER_SETTLE_SEC.
-            children.append(py_trees.timers.Timer(
-                name='%d_Gripper_Settle' % index, duration=settle_sec))
+            # On the node's clock: in simulation the jaws move in sim time.
+            children.append(WaitBehavior(
+                name='%d_Gripper_Settle' % index, duration_sec=settle_sec))
             if index == grasp_of_pour and grasp_children is not None:
                 # Settled jaws, an arm standing still, and the vessel still on
                 # the bench near a camera: the best moment the replay has to
@@ -472,7 +484,7 @@ def _replay_children(segments, controller, joint_names, time_scale, limits, scal
             times=segment.times,
             positions=segment.positions,
             time_scale=time_scale,
-            position_limits=FR5_POSITION_LIMITS,
+            position_limits=position_limits,
             # The same ceiling the stretch was computed against, so a segment
             # that slipped through it is refused rather than sent.
             velocity_limits={name: value * scaling for name, value in limits.items()},
@@ -493,5 +505,4 @@ __all__ = [
     'HOME_VIA_DIRECT',
     'HOME_VIA_MOVEIT',
     'HOME_DURATION_SEC',
-    'FR5_POSITION_LIMITS',
 ]

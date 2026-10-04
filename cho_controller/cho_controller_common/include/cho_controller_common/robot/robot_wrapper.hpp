@@ -55,17 +55,17 @@ public:
     
     const Eigen::Vector3d & com(const Data & data) const;
 
-    Eigen::VectorXd nonLinearEffects(const Data & data);
+    // References into `data`, valid until the next computeAllTerms(); no copy
+    // in the control loop.
+    const Eigen::VectorXd & nonLinearEffects(const Data & data) const;
 
-    Eigen::VectorXd GeneralizedGravity(const Data & data);
+    const Eigen::VectorXd & GeneralizedGravity(const Data & data) const;
 
     const SE3 & position(const Data & data, const Model::JointIndex index) const;
 
     const Eigen::MatrixXd & mass(const Data & data);
 
     const Eigen::MatrixXd & mass_inverse(const Data & data);
-
-    const Eigen::MatrixXd & coriolis(const Data & data);
 
     const Motion & velocity(const Data & data, const Model::JointIndex index) const;
 
@@ -99,12 +99,11 @@ protected:
     std::string m_model_filename;
     bool m_verbose;
     int m_na;
-    Eigen::MatrixXd m_M, m_Minv, m_C;
+    Eigen::MatrixXd m_M, m_Minv;
     Eigen::MatrixXd m_S, m_S_dot;
     Matrix6d m_Rot;
     double r_, b_, d_, c_;
     Eigen::VectorXd m_q;
-    Eigen::VectorXd m_a_zero;  // cached zero acceleration for centerOfMass (avoids per-cycle alloc)
 };
 
 } // namespace robot

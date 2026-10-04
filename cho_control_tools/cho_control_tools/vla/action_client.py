@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from cho_interfaces.action import VisionLanguageAction
+from cho_control_tools.action_names import controller_action_name
 from cho_interfaces.msg import ActionChunk
 from std_msgs.msg import Header
 import math
@@ -15,12 +16,13 @@ class VLAActionTester(Node):
         super().__init__('vla_action_tester')
 
         # "axis_angle", "euler", "quaternion", "rotation6d"
-        self.test_rotation_type = "quaternion" 
+        self.test_rotation_type = "quaternion"
         self.is_relative = True
 
-        self._action_client = ActionClient(self, VisionLanguageAction, '/controller_action_server/vla_controller')
+        self._action_client = ActionClient(
+            self, VisionLanguageAction, controller_action_name('vla_controller', 'vla'))
         self.publisher_ = self.create_publisher(ActionChunk, '/vla/action/ee_pose', 10)
-        
+
         self.count = 0
         self.chunk_size = 16
         self.inference_dt = 1/15
@@ -58,7 +60,7 @@ class VLAActionTester(Node):
         msg.relative = self.is_relative
         msg.chunk_size = self.chunk_size
         msg.control_dt = self.dt  # explicit waypoint spacing (0.0 would fall back to inference_dt/chunk_size)
-        
+
         arm_actions = []
         gripper_actions = []
 

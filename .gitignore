@@ -3,6 +3,8 @@ install/
 log/
 .vscode/
 *.pyc
+__pycache__/
+.pytest_cache/
 
 # workspace 공통 규약 (절대경로 심볼릭 링크 — 커밋하지 않는다)
 .conventions/

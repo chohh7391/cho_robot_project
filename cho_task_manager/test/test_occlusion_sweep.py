@@ -304,7 +304,7 @@ def test_each_waypoint_may_take_its_own_time():
     _accept_goal(behaviour)
     assert behaviour.update() == RUNNING
     goal = behaviour.client.send_goal_async.call_args[0][0]
-    assert goal.duration == 12.0
+    assert goal.duration_sec == 12.0
 
 
 def test_it_judges_only_after_the_dwell():
@@ -390,8 +390,15 @@ def test_a_second_run_starts_from_the_first_waypoint_again():
 
 
 def test_a_sweep_with_no_waypoints_is_refused_at_build_time():
-    with pytest.raises(ValueError):
-        OcclusionSweepBehavior('Nowhere', _sweep(waypoints=()))
+    with pytest.raises(ValueError, match='no waypoints'):
+        OcclusionSweepBehavior('Nowhere', _sweep(waypoints=()),
+                               controller_name='joint_space_position_controller')
+
+
+def test_a_sweep_has_no_default_controller():
+    # It used to default to a Franka controller no FR5 bringup loads.
+    with pytest.raises(ValueError, match='controller_name is required'):
+        OcclusionSweepBehavior('Unaddressed', _sweep())
 
 
 # --------------------------------------------------- occlusion is a duration

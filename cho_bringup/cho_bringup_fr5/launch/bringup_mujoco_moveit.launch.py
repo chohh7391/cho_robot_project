@@ -20,25 +20,15 @@ gripper joint rejects gripper_finger_joint out of /joint_states with
 "Joint 'gripper_finger_joint' not found in model 'fr5'".
 """
 
-import importlib.util
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from cho_bringup_common import load_package_utils
 from cho_robot_config import load_moveit_metadata
 
-package_share = get_package_share_directory('cho_bringup_fr5')
-# Same by-path load the other bringups use: launch_utils lives in lib/.
-_launch_utils_path = os.path.abspath(
-    os.path.join(package_share, '..', '..', 'lib', 'cho_bringup_fr5', 'utils', 'launch_utils.py')
-)
-_spec = importlib.util.spec_from_file_location('fr5_launch_utils', _launch_utils_path)
-launch_utils = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(launch_utils)
+launch_utils = load_package_utils('cho_bringup_fr5')
 
 
 def setup_includes(context):

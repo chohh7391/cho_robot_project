@@ -45,6 +45,7 @@ from cho_task_manager.behaviors.service import (
     MitTaskDiagnosticsServiceBehavior,
 )
 from cho_task_manager.behaviors.topic import EeStateSampleBehavior
+from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.subtrees import guarded_mission
 
 # A forward-and-slightly-down TCP-local probe. The negative Z keeps a forward
@@ -146,7 +147,7 @@ def create_openarm_mit_task_tuning_tree(robot_config):
         # would be taken while the arm is still settling. Measured on hardware
         # 2026-09-05: the return leg landed 17 mm off and left a permanent
         # 0.3 N*m pull on joint 1. Outwait the blend before measuring or moving.
-        py_trees.timers.Timer(name='Settle_After_Probe', duration=SETTLE_SEC),
+        WaitBehavior(name='Settle_After_Probe', duration_sec=SETTLE_SEC),
         EeStateSampleBehavior(
             name='TCP_After_Probe', record_as='tcp_after', compare_to='tcp_before',
             commanded=math.dist((0.0, 0.0, 0.0), translation), topic=ee_topic,
@@ -165,7 +166,7 @@ def create_openarm_mit_task_tuning_tree(robot_config):
                 duration=duration,
                 controller_name=controller,
             )),
-            py_trees.timers.Timer(name='Settle_After_Return', duration=SETTLE_SEC),
+            WaitBehavior(name='Settle_After_Return', duration_sec=SETTLE_SEC),
             EeStateSampleBehavior(
                 name='TCP_After_Return', compare_to='tcp_after',
                 commanded=math.dist((0.0, 0.0, 0.0), reverse), topic=ee_topic,

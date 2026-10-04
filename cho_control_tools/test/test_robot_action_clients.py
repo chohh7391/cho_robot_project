@@ -82,9 +82,9 @@ def test_operator_shell_reports_readiness_without_endpoint_names(monkeypatch, ca
 
 
 @pytest.mark.parametrize('endpoint', [
-    '/controller_action_server/task_space_impedance_mit_controller',
-    '/controller_action_server/left_task_space_impedance_mit_controller',
-    '/controller_action_server/right_task_space_impedance_mit_controller',
+    '/task_space_impedance_mit_controller/task_space',
+    '/left_task_space_impedance_mit_controller/task_space',
+    '/right_task_space_impedance_mit_controller/task_space',
 ])
 def test_openarm_mit_startup_retries_only_rejected_task_goal(monkeypatch, capsys, endpoint):
     class BaseShell:
@@ -120,7 +120,7 @@ def test_openarm_mit_does_not_retry_accepted_task_failure(monkeypatch):
         def __init__(self, **kwargs):
             del kwargs
             self.robot_type = 'openarm'
-            self.task_action_name = '/controller_action_server/task_space_impedance_mit_controller'
+            self.task_action_name = '/task_space_impedance_mit_controller/task_space'
             self.joint_space_action_client = object()
             self.task_space_action_client = object()
             self.gripper_action_client = None
@@ -143,14 +143,14 @@ def test_openarm_mit_does_not_retry_accepted_task_failure(monkeypatch):
 
 
 @pytest.mark.parametrize('endpoint,profile,forward_bend', [
-    ('/controller_action_server/task_space_impedance_mit_controller', 'single',
+    ('/task_space_impedance_mit_controller/task_space', 'single',
      ((0.402, 0.0, 0.3425),
       (0.0, 0.707106781187, 0.0, 0.707106781187))),
-    ('/controller_action_server/left_task_space_impedance_mit_controller', 'left',
+    ('/left_task_space_impedance_mit_controller/task_space', 'left',
      ((0.402, 0.153499191895, 0.477999550034),
       (0.707106781185, 0.000001298672,
        0.707106781185, 0.000001298672))),
-    ('/controller_action_server/right_task_space_impedance_mit_controller', 'right',
+    ('/right_task_space_impedance_mit_controller/task_space', 'right',
      ((0.402, -0.153499191895, 0.477999550034),
       (0.707106781185, -0.000001298672,
        0.707106781185, -0.000001298672))),
@@ -211,7 +211,7 @@ def test_openarm_non_mit_task_metadata_keeps_its_absolute_presets(monkeypatch, c
         def __init__(self, **kwargs):
             del kwargs
             self.robot_type = 'openarm'
-            self.task_action_name = '/openarm/controller_action_server/moveit_task'
+            self.task_action_name = '/openarm_moveit_action_bridge/task_space'
             self.robot_config = openarm_metadata.load('single')
             self.joint_space_action_client = object()
             self.task_space_action_client = object()
@@ -233,7 +233,7 @@ def test_openarm_mit_startup_rejection_is_not_retried_after_launch_window(monkey
         def __init__(self, **kwargs):
             del kwargs
             self.robot_type = 'openarm'
-            self.task_action_name = '/controller_action_server/task_space_impedance_mit_controller'
+            self.task_action_name = '/task_space_impedance_mit_controller/task_space'
             self.joint_space_action_client = object()
             self.task_space_action_client = object()
             self.gripper_action_client = None

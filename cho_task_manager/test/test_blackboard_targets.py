@@ -102,19 +102,32 @@ def test_literal_target_still_goes_out_unchanged():
     behaviour.initialise()
 
     goal = _sent_goal(behaviour)
-    assert goal.target_pose == pose
-    assert goal.duration == 2.0
+    assert goal.target_pose.pose == pose
+    # Unstamped by default: the controller reads '' as its own base frame.
+    assert goal.target_pose.header.frame_id == ''
+    assert goal.duration_sec == 2.0
     assert goal.relative is False
+
+
+def test_a_known_frame_goes_out_on_the_goal():
+    behaviour = _wire(TaskSpaceActionBehavior(
+        name='Stamped', target_pose=make_pose(position=[0.4, 0.0, 0.4]),
+        controller_name=ControllerNames.TASK_QP, frame_id='fr3_link0'))
+
+    behaviour.initialise()
+
+    assert _sent_goal(behaviour).target_pose.header.frame_id == 'fr3_link0'
 
 
 def test_blackboard_target_is_read_when_the_goal_is_sent():
     _write('grasp_pose', make_pose(position=[0.5, 0.1, 0.3]))
     behaviour = _wire(TaskSpaceActionBehavior(
-        name='FromBoard', target_pose_key='grasp_pose'))
+        name='FromBoard', target_pose_key='grasp_pose',
+        controller_name=ControllerNames.TASK_QP))
 
     behaviour.initialise()
 
-    assert _sent_goal(behaviour).target_pose.position.x == pytest.approx(0.5)
+    assert _sent_goal(behaviour).target_pose.pose.position.x == pytest.approx(0.5)
 
 
 def test_the_target_follows_the_blackboard_between_runs():
@@ -125,21 +138,23 @@ def test_the_target_follows_the_blackboard_between_runs():
     """
     _write('grasp_pose', make_pose(position=[0.5, 0.0, 0.3]))
     behaviour = _wire(TaskSpaceActionBehavior(
-        name='Rereads', target_pose_key='grasp_pose'))
+        name='Rereads', target_pose_key='grasp_pose',
+        controller_name=ControllerNames.TASK_QP))
 
     behaviour.initialise()
-    first = _sent_goal(behaviour).target_pose.position.x
+    first = _sent_goal(behaviour).target_pose.pose.position.x
 
     _write('grasp_pose', make_pose(position=[0.6, 0.0, 0.3]))
     behaviour.initialise()
-    second = _sent_goal(behaviour).target_pose.position.x
+    second = _sent_goal(behaviour).target_pose.pose.position.x
 
     assert (first, second) == (pytest.approx(0.5), pytest.approx(0.6))
 
 
 def test_unset_key_fails_the_behaviour_without_sending_a_goal():
     behaviour = _wire(TaskSpaceActionBehavior(
-        name='Unset', target_pose_key='never_written'))
+        name='Unset', target_pose_key='never_written',
+        controller_name=ControllerNames.TASK_QP))
 
     behaviour.initialise()
 
@@ -155,7 +170,8 @@ def test_wrong_typed_key_fails_instead_of_raising_on_assignment():
     """
     _write('grasp_pose', [0.5, 0.0, 0.3])
     behaviour = _wire(TaskSpaceActionBehavior(
-        name='WrongType', target_pose_key='grasp_pose'))
+        name='WrongType', target_pose_key='grasp_pose',
+        controller_name=ControllerNames.TASK_QP))
 
     behaviour.initialise()
 
@@ -178,11 +194,11 @@ def test_a_custom_namespace_is_honoured():
     _write('grasp_pose', make_pose(position=[0.7, 0.0, 0.2]), namespace='/detector')
     behaviour = _wire(TaskSpaceActionBehavior(
         name='Namespaced', target_pose_key='grasp_pose',
-        blackboard_namespace='/detector'))
+        blackboard_namespace='/detector', controller_name=ControllerNames.TASK_QP))
 
     behaviour.initialise()
 
-    assert _sent_goal(behaviour).target_pose.position.x == pytest.approx(0.7)
+    assert _sent_goal(behaviour).target_pose.pose.position.x == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +220,8 @@ def test_joint_space_reads_its_target_off_the_blackboard():
 def test_joint_space_rejects_a_pose_on_its_key():
     _write('plan_result', make_pose(position=[0.5, 0.0, 0.3]))
     behaviour = _wire(JointSpaceActionBehavior(
-        name='JointWrongType', target_joints_key='plan_result'))
+        name='JointWrongType', target_joints_key='plan_result',
+        controller_name=ControllerNames.JOINT_IMPEDANCE))
 
     behaviour.initialise()
 
@@ -219,6 +236,24 @@ def test_joint_space_rejects_a_pose_on_its_key():
 def test_joint_space_requires_exactly_one_target_source(kwargs):
     with pytest.raises(ValueError, match='exactly one'):
         JointSpaceActionBehavior(name='Ambiguous', **kwargs)
+
+
+@pytest.mark.parametrize('behaviour,target', [
+    (JointSpaceActionBehavior, {'target_joints': JointState()}),
+    (TaskSpaceActionBehavior, {'target_pose': Pose()}),
+])
+def test_a_motion_leaf_has_no_default_controller(behaviour, target):
+    # The default used to be a Franka controller, which no other robot loads:
+    # a tree that forgot to pass one sent its goal to a server nobody runs.
+    with pytest.raises(ValueError, match='controller_name is required'):
+        behaviour(name='Unaddressed', **target)
+
+
+def test_a_joint_goal_may_name_its_endpoint_instead_of_a_controller():
+    behaviour = JointSpaceActionBehavior(
+        name='ViaBridge', target_joints=JointState(),
+        action_name='/fr5_moveit_action_bridge/joint_space')
+    assert behaviour.action_name == '/fr5_moveit_action_bridge/joint_space'
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +354,7 @@ def test_detected_pose_reaches_the_action_goal():
     assert detect.update() == SUCCESS
 
     move.initialise()
-    position = _sent_goal(move).target_pose.position
+    position = _sent_goal(move).target_pose.pose.position
 
     assert (position.x, position.y, position.z) == pytest.approx((0.42, -0.05, 0.31))
 

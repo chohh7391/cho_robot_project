@@ -41,7 +41,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(${PROJECT_NAME}
-  cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
+  cho_controller_base cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
   std_srvs trajectory_msgs)
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
@@ -90,6 +90,9 @@ install(FILES DESIGN.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(cho_description_openarm REQUIRED)
+  # The description's installed share directory (symlinked to the source
+  # under --symlink-install), not a path back into the source tree.
+  set(OPENARM_DESCRIPTION_SHARE "${cho_description_openarm_DIR}/..")
   find_package(controller_manager REQUIRED)
   find_package(controller_manager_msgs REQUIRED)
   find_package(cho_hardware_openarm_mit_test REQUIRED)
@@ -102,7 +105,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_direct_controller ${PROJECT_NAME})
   ament_target_dependencies(test_direct_controller controller_interface hardware_interface rclcpp)
   target_compile_definitions(test_direct_controller PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_controller_manager_action test/test_controller_manager_action.cpp)
   target_link_libraries(test_controller_manager_action ${PROJECT_NAME})
@@ -110,7 +113,7 @@ if(BUILD_TESTING)
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs control_msgs
     hardware_interface rclcpp rclcpp_action)
   target_compile_definitions(test_controller_manager_action PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_direct_controller_manager test/test_direct_controller_manager.cpp)
   target_link_libraries(test_direct_controller_manager ${PROJECT_NAME})
@@ -118,7 +121,7 @@ if(BUILD_TESTING)
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
     rclcpp std_msgs std_srvs)
   target_compile_definitions(test_direct_controller_manager PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_impedance_action_controller test/test_impedance_action_controller.cpp)
   target_link_libraries(test_impedance_action_controller ${PROJECT_NAME})
@@ -126,7 +129,7 @@ if(BUILD_TESTING)
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
     rclcpp rclcpp_action cho_interfaces std_srvs)
   target_compile_definitions(test_impedance_action_controller PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_vla_controller test/test_vla_controller.cpp)
   target_link_libraries(test_vla_controller ${PROJECT_NAME})
@@ -134,14 +137,14 @@ if(BUILD_TESTING)
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
     rclcpp rclcpp_action cho_interfaces std_srvs)
   target_compile_definitions(test_vla_controller PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
   target_link_libraries(test_task_space_return_to_zero ${PROJECT_NAME})
   ament_target_dependencies(test_task_space_return_to_zero
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface rclcpp)
   target_compile_definitions(test_task_space_return_to_zero PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   foreach(arm_side left right)
     ament_add_gtest(test_single_${arm_side}_controller_manager_action
@@ -152,7 +155,7 @@ if(BUILD_TESTING)
       hardware_interface rclcpp rclcpp_action)
     target_compile_definitions(test_single_${arm_side}_controller_manager_action PRIVATE
       TEST_ARM_SIDE="${arm_side}"
-      OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
+      OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
   endforeach()
 
 endif()

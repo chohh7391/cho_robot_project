@@ -1,7 +1,37 @@
 import sqlite3
+import struct
+from types import SimpleNamespace
+
 from rosidl_runtime_py.utilities import get_message
 from rclpy.serialization import deserialize_message
 import argparse
+
+# PoseLog gained a std_msgs/Header when ~/ee_state became stamped. A bag recorded
+# before that holds three bare Poses, which the current type cannot deserialize.
+# Their CDR payload is exactly 21 float64s after the 4-byte encapsulation header,
+# a size the stamped layout (header first, string padded to 8) never has, so the
+# two are told apart by length alone.
+_LEGACY_POSE_LOG_BYTES = 4 + 21 * 8
+
+
+def _legacy_pose(values):
+    x, y, z, qx, qy, qz, qw = values
+    return SimpleNamespace(position=SimpleNamespace(x=x, y=y, z=z),
+                           orientation=SimpleNamespace(x=qx, y=qy, z=qz, w=qw))
+
+
+def decode_pose_log(data, msg_type):
+    """A PoseLog from a bag row, stamped or recorded before the header existed."""
+    if len(data) != _LEGACY_POSE_LOG_BYTES:
+        return deserialize_message(data, msg_type)
+    # Encapsulation byte 1: 0x01 is little-endian CDR, 0x00 big-endian.
+    endian = '<' if data[1] == 1 else '>'
+    values = struct.unpack(f'{endian}21d', data[4:])
+    return SimpleNamespace(
+        pose_ref=_legacy_pose(values[0:7]),
+        pose_des=_legacy_pose(values[7:14]),
+        pose_curr=_legacy_pose(values[14:21]))
+
 
 def get_pose_data(db_path, topic, start_t=None, end_t=None):
     import numpy as np
@@ -13,7 +43,8 @@ def get_pose_data(db_path, topic, start_t=None, end_t=None):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id WHERE topics.name = ? ORDER BY timestamp ASC"
+    query = ("SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id "
+             "WHERE topics.name = ? ORDER BY timestamp ASC")
     cursor.execute(query, (topic,))
 
     timestamps = []
@@ -32,20 +63,22 @@ def get_pose_data(db_path, topic, start_t=None, end_t=None):
 
     for ts, data in rows:
         current_sec = (ts / 1e9) - first_ts
-        
+
         # 시간 필터링
         if start_t is not None and current_sec < start_t:
             continue
         if end_t is not None and current_sec > end_t:
             continue
 
-        msg = deserialize_message(data, msg_type)
+        msg = decode_pose_log(data, msg_type)
         timestamps.append(current_sec)
-        
+
         des_pos.append([msg.pose_des.position.x, msg.pose_des.position.y, msg.pose_des.position.z])
         curr_pos.append([msg.pose_curr.position.x, msg.pose_curr.position.y, msg.pose_curr.position.z])
-        des_quat.append([msg.pose_des.orientation.x, msg.pose_des.orientation.y, msg.pose_des.orientation.z, msg.pose_des.orientation.w])
-        curr_quat.append([msg.pose_curr.orientation.x, msg.pose_curr.orientation.y, msg.pose_curr.orientation.z, msg.pose_curr.orientation.w])
+        des_quat.append([msg.pose_des.orientation.x, msg.pose_des.orientation.y,
+                         msg.pose_des.orientation.z, msg.pose_des.orientation.w])
+        curr_quat.append([msg.pose_curr.orientation.x, msg.pose_curr.orientation.y,
+                          msg.pose_curr.orientation.z, msg.pose_curr.orientation.w])
 
     conn.close()
     return np.array(timestamps), np.array(des_pos), np.array(curr_pos), np.array(des_quat), np.array(curr_quat)
@@ -60,7 +93,7 @@ def plot_results(bag_db_path, topic, start_t, end_t):
     if data is None or len(data[0]) == 0:
         print("조건에 맞는 시간대의 데이터가 없습니다.")
         return
-    
+
     t, d_pos, c_pos, d_q, c_q = data
 
     # ---------------------------------------------------------
@@ -96,7 +129,7 @@ def plot_results(bag_db_path, topic, start_t, end_t):
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
     coords = ['X', 'Y', 'Z']
-    
+
     for i in range(3):
         axes[i].plot(t, d_pos[:, i], 'r--', label='Desired', alpha=0.8)
         axes[i].plot(t, c_pos[:, i], 'b-', label='Current', alpha=0.6)
@@ -114,7 +147,8 @@ def plot_results(bag_db_path, topic, start_t, end_t):
     if len(t) > 0:
         plt.xlim(t[0], t[-1])
 
-    plt.suptitle(f'Tracking Performance: {bag_db_path}\nRange: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]:.2f}s', fontsize=15)
+    plt.suptitle(f'Tracking Performance: {bag_db_path}\n'
+                 f'Range: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]:.2f}s', fontsize=15)
     plt.tight_layout()
     plt.show()
 

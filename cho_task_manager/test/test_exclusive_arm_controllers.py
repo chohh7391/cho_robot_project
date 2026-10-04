@@ -10,13 +10,29 @@ import pytest
 
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.utils.controller_names import (
-    EXCLUSIVE_ARM_CONTROLLERS,
     exclusive_arm_controllers,
     load_robot_config,
 )
 
 
-HISTORICAL_FRANKA_SET = [str(controller) for controller in EXCLUSIVE_ARM_CONTROLLERS]
+# The Franka-only list controller_names.py used to carry, and add to the
+# registry-derived set with an `if robot_type == 'franka'` branch. It now comes
+# from franka.yaml (roles, per-mode holds, controllers.additional_arm); these
+# names must all still be in it, or an exclusive switch on a Franka would leave
+# one of them running.
+HISTORICAL_FRANKA_SET = [
+    'joint_space_impedance_controller',
+    'joint_space_qp_controller',
+    'joint_space_position_controller',
+    'joint_space_velocity_controller',
+    'task_space_ik_controller',
+    'task_space_velocity_controller',
+    'operational_space_controller',
+    'task_space_impedance_controller',
+    'task_space_qp_controller',
+    'vla_controller',
+    'gravity_compensation_controller',
+]
 
 
 def _config(robot_type, profile='single'):
@@ -26,9 +42,12 @@ def _config(robot_type, profile='single'):
         pytest.skip(f'robot registry unavailable for {robot_type}/{profile}: {exc}')
 
 
-def test_no_robot_config_keeps_the_historical_franka_set():
-    assert exclusive_arm_controllers() == HISTORICAL_FRANKA_SET
-    assert exclusive_arm_controllers(None) == HISTORICAL_FRANKA_SET
+@pytest.mark.parametrize('config', [None, {}])
+def test_no_robot_config_is_refused_rather_than_assumed_franka(config):
+    # The old no-config default was Franka's list: on any other arm it
+    # deactivated nothing that actually held it.
+    with pytest.raises(ValueError, match='robot config'):
+        exclusive_arm_controllers(config)
 
 
 def test_openarm_set_contains_its_mit_controllers():
@@ -60,13 +79,26 @@ def test_bimanual_profile_yields_its_own_prefixed_controllers(profile):
     assert f'{profile}_gripper_controller' not in names
 
 
-def test_franka_keeps_every_historical_name():
+def test_franka_set_is_exactly_its_registry_entry():
+    """Same set as before the Franka branch moved into franka.yaml.
+
+    The historical list plus the registry-only MoveIt trajectory controller,
+    and nothing else: the move must not change what a Franka switch takes down.
+    """
     names = exclusive_arm_controllers(_config('franka'))
 
-    assert set(HISTORICAL_FRANKA_SET) <= set(names)
-    # Registry-only names join it; the gripper still does not.
-    assert 'moveit_joint_trajectory_controller' in names
+    assert set(names) == set(HISTORICAL_FRANKA_SET) | {'moveit_joint_trajectory_controller'}
+    assert len(names) == len(set(names))
     assert 'gripper_controller' not in names
+
+
+def test_the_code_has_no_franka_special_case():
+    # The extra Franka controllers come from the registry, so a robot that
+    # declared the same controllers.additional_arm would get the same set.
+    config = _config('ur5e')
+    names = exclusive_arm_controllers(config)
+    assert 'gravity_compensation_controller' not in names
+    assert 'task_space_velocity_controller' not in names
 
 
 def test_ur_set_is_the_ur_controllers():
@@ -93,14 +125,22 @@ def test_switch_behaviour_deactivates_the_robots_own_controllers():
     assert 'joint_space_impedance_controller' not in request.deactivate_controllers
 
 
-def test_switch_behaviour_without_a_robot_config_is_unchanged():
+def test_exclusive_switch_without_a_robot_config_is_refused():
+    with pytest.raises(ValueError, match='robot_config'):
+        SwitchControllerServiceBehavior(
+            name='Switch', activate=['task_space_qp_controller'])
+
+
+def test_franka_switch_takes_down_every_other_franka_arm_controller():
     behaviour = SwitchControllerServiceBehavior(
-        name='Switch', activate=['task_space_qp_controller'])
+        name='Switch', activate=['task_space_qp_controller'],
+        robot_config=_config('franka'))
 
     deactivate = behaviour.make_request().deactivate_controllers
 
-    assert deactivate == [
-        name for name in HISTORICAL_FRANKA_SET if name != 'task_space_qp_controller']
+    assert set(deactivate) == (
+        set(HISTORICAL_FRANKA_SET) | {'moveit_joint_trajectory_controller'}) - {
+        'task_space_qp_controller'}
 
 
 def test_explicit_exclusive_controllers_win():

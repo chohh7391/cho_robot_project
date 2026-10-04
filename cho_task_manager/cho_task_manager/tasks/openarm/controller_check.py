@@ -17,7 +17,7 @@ from cho_task_manager.behaviors.service import (
     ListControllersServiceBehavior,
     SwitchControllerServiceBehavior,
 )
-from cho_task_manager.subtrees import guarded_mission
+from cho_task_manager.subtrees import guarded_mission, home_joint_state
 from cho_task_manager.utils.msg_utils import make_joint_state
 
 # The legacy effort controller this check drives only exists on a
@@ -25,12 +25,12 @@ from cho_task_manager.utils.msg_utils import make_joint_state
 # controller lives.
 CONTROL_MODE = 'torque'
 
-# POSE_HOME is the pose the controller homes to on activation (home_position in
-# the bringup controllers.yaml), so the return leg ends where the arm started.
+# The return leg goes to the registry's poses.task_home, which for OpenArm is
+# home 0 -- the pose the controller homes to on activation (home_position in the
+# bringup controllers.yaml), so the return leg ends where the arm started.
 # joint4's lower limit is 0.0, hence the 0.3 offset: at 0.0 it would sit on the
 # stop and a small undershoot would read as a limit violation rather than a
 # tracking error.
-POSE_HOME = make_joint_state([0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0])
 POSE_AWAY = make_joint_state([0.3, 0.2, 0.0, 0.8, 0.0, 0.2, 0.0])
 
 MOVE_DURATION_SEC = 3.0
@@ -66,7 +66,7 @@ def create_openarm_controller_check_torque_tree(robot_config):
         ),
         JointSpaceActionBehavior(
             name=f'{controller}_Return',
-            target_joints=POSE_HOME,
+            target_joints=home_joint_state(robot_config),
             controller_name=controller,
             duration=MOVE_DURATION_SEC,
         ),

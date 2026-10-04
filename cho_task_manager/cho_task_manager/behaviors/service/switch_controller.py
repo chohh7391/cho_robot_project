@@ -1,3 +1,5 @@
+import math
+
 import py_trees
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
 from controller_manager_msgs.srv import SwitchController
@@ -9,6 +11,20 @@ from cho_task_manager.utils.controller_names import (
 )
 
 
+def _duration(seconds):
+    """A builtin_interfaces Duration for a float number of seconds.
+
+    ``Duration(sec=...)`` takes an int and raises on a float, so the seconds
+    are split here rather than passed through.
+    """
+    whole = int(math.floor(seconds))
+    nanos = int(round((seconds - whole) * 1e9))
+    if nanos >= 1_000_000_000:          # rounding can carry
+        whole += 1
+        nanos -= 1_000_000_000
+    return Duration(sec=whole, nanosec=nanos)
+
+
 class SwitchControllerServiceBehavior(BaseServiceBehavior):
     def __init__(
         self,
@@ -18,20 +34,31 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         exclusive: bool = True,
         strict: bool = None,
         activate_asap: bool = True,
-        timeout_sec: int = 2,
+        switch_timeout_sec: float = 2.0,
         robot_config: dict = None,
         exclusive_controllers: list = None,
     ):
         """
         Switch controllers, by default exclusively.
 
-        ``robot_config`` (the dict a tree builder receives) makes the exclusive
-        set the one this robot actually has, taken from the canonical robot
-        registry. Without it the historical Franka-only set is used, which is
-        wrong for every other robot; pass it from any non-Franka tree.
-        ``exclusive_controllers`` overrides the set outright.
+        An exclusive switch needs ``robot_config`` (the dict a tree builder
+        receives): the set it deactivates is the one this robot actually has,
+        taken from the canonical robot registry. ``exclusive_controllers``
+        overrides the set outright. With neither it raises -- there is no
+        robot-independent set to fall back to.
+
+        ``switch_timeout_sec`` is the controller_manager's own deadline for the
+        switch (the request's ``timeout``). It is deliberately not called
+        ``timeout_sec``: that is the base class's service-discovery wait, and
+        the two used to share one attribute.
         """
         super().__init__(name, SwitchController, SWITCH_CONTROLLER_SERVICE)
+        if (isinstance(switch_timeout_sec, bool)
+                or not isinstance(switch_timeout_sec, (int, float))
+                or not math.isfinite(switch_timeout_sec) or switch_timeout_sec < 0.0):
+            raise ValueError(
+                f'[{name}] switch_timeout_sec must be a finite, non-negative number of '
+                f'seconds; got {switch_timeout_sec!r}')
         self.activate = activate
 
         if exclusive:
@@ -40,6 +67,12 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
             # matter which controller was active before (e.g. when the mission
             # sequence re-runs from the top after a mid-sequence failure), instead
             # of assuming a fixed predecessor via a hard-coded deactivate list.
+            if exclusive_controllers is None and robot_config is None:
+                raise ValueError(
+                    f'[{name}] an exclusive switch needs robot_config (or '
+                    'exclusive_controllers): which controllers hold the arm is '
+                    "the robot's, and deactivating some other robot's set would "
+                    'leave this one\'s running')
             candidates = (
                 exclusive_controllers if exclusive_controllers is not None
                 else exclusive_arm_controllers(robot_config)
@@ -57,7 +90,7 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
             self.strict = True if strict is None else strict
 
         self.activate_asap = activate_asap
-        self.timeout_sec = timeout_sec
+        self.switch_timeout_sec = float(switch_timeout_sec)
 
     def make_request(self):
         req = SwitchController.Request()
@@ -73,7 +106,7 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
             else SwitchController.Request.BEST_EFFORT
         )
         req.activate_asap = self.activate_asap
-        req.timeout = Duration(sec=self.timeout_sec, nanosec=0)
+        req.timeout = _duration(self.switch_timeout_sec)
         return req
 
     def handle_response(self, result):

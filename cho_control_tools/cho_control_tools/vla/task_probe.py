@@ -44,6 +44,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from cho_interfaces.action import VisionLanguageAction
+from cho_control_tools.action_names import controller_action_name
 from cho_interfaces.msg import ActionChunk, VlaTelemetry
 from geometry_msgs.msg import PoseStamped
 
@@ -55,7 +56,7 @@ class TaskProbe(Node):
     def __init__(self, controller, chunk_topic, pose_topic):
         super().__init__('vla_task_probe')
         self.client = ActionClient(
-            self, VisionLanguageAction, f'/controller_action_server/{controller}')
+            self, VisionLanguageAction, controller_action_name(controller, 'vla'))
         self.pub = self.create_publisher(ActionChunk, chunk_topic, BEST_EFFORT)
         self.create_subscription(
             VlaTelemetry, f'/{controller}/vla_telemetry', self._telem, 10)

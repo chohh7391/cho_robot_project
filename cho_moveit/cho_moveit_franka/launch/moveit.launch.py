@@ -57,7 +57,9 @@ def generate_launch_description():
             'timeout': ParameterValue(LaunchConfiguration('scene_ready_timeout'), value_type=float)}])
     bridge = Node(
         package='cho_moveit_common', executable='moveit_action_bridge.py',
-        name='franka_moveit_action_bridge', output='screen', parameters=[{
+        # The node name scopes ~/joint_space and ~/task_space to this robot;
+        # the bridge refuses to start under any other.
+        name=metadata['action_bridge_node'], output='screen', parameters=[{
             'use_sim_time': use_sim_time,
             'robot_type': metadata['robot_type'],
             'ready_service': metadata['ready_service'],
