@@ -28,6 +28,8 @@ if(BUILD_TESTING)
   find_package(cho_description_openarm REQUIRED)
   ament_add_gtest(test_safety_profile test/test_safety_profile.cpp)
   target_link_libraries(test_safety_profile ${PROJECT_NAME})
+  ament_add_gtest(test_arm_consumer test/test_arm_consumer.cpp)
+  target_link_libraries(test_arm_consumer ${PROJECT_NAME})
   target_compile_definitions(test_safety_profile PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml")
 endif()

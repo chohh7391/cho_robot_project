@@ -78,6 +78,13 @@ private:
   void write_pair(
     const std::array<double, 14> & position, const std::array<double, 14> & velocity,
     double stiffness, double damping);
+  void write_pair(
+    const std::array<double, 14> & position, const std::array<double, 14> & velocity,
+    const std::array<double, 14> & stiffness, const std::array<double, 14> & damping);
+  // The contract's seed and hold: q_des = q_measured, dq_des = 0, and each
+  // joint's safe-hold gains from the safety profile. It used kp = 0, which left
+  // only damping against gravity: the arm sagged while seeding and holding.
+  void write_safe_hold(const std::array<double, 14> & position);
   void request_stop(StopReason reason);
   void finish_stop();
   bool queue_terminal(TerminalKind kind, int32_t code, std::uint8_t message);

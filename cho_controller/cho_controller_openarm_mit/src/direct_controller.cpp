@@ -367,7 +367,7 @@ controller_interface::CallbackReturn DirectControllerBase::configure_action_mujo
   return CallbackReturn::SUCCESS;
 }
 
-bool DirectControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & target)
+bool DirectControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & target, const double dt)
 {
   if (!action_model_ || !action_model_data_ || state_interfaces_.size() != 19U) return false;
   for (std::size_t i = 0; i < 7; ++i) {
@@ -385,7 +385,15 @@ bool DirectControllerBase::action_apply_mujoco_feedforward(DirectMitTarget & tar
     for (std::size_t i = 0; i < 7; ++i) {
       const double tau = action_model_data_->nle[action_v_indices_[i]];
       if (!std::isfinite(tau)) return false;
-      target.feedforward[i] = std::clamp(tau, -feedforward_limit_[i], feedforward_limit_[i]);
+      double feedforward = std::clamp(tau, -feedforward_limit_[i], feedforward_limit_[i]);
+      // Activation starts the feed-forward at zero, so without a slew the
+      // whole gravity torque arrived in the first ACTIVE cycle as a step.
+      if (feedforward_slew_[i] > 0.0) {
+        const double last = action_last_feedforward_[i].load(std::memory_order_acquire);
+        const double step = (std::isfinite(dt) && dt > 0.0 && dt < 0.1) ? feedforward_slew_[i] * dt : 0.0;
+        feedforward = std::clamp(feedforward, last - step, last + step);
+      }
+      target.feedforward[i] = feedforward;
       action_last_feedforward_[i].store(target.feedforward[i], std::memory_order_release);
     }
   } catch (const std::exception & error) {
@@ -476,7 +484,7 @@ bool DirectControllerBase::protocol_ok() const
   if(state_==State::SEEDING) {
     // Before the seed is committed the consumer is SAFE; after commit it must be ACTIVE
     // while the controller waits for the seed generation ACK.
-    return generation_==0 ? status==double(MitStatus::SAFE) : status==double(MitStatus::ACTIVE);
+    return generation_==base_generation_ ? status==double(MitStatus::SAFE) : status==double(MitStatus::ACTIVE);
   }
   if(state_==State::ACTIVE)return status==double(MitStatus::ACTIVE);
   if(state_==State::STOPPING)return status==double(MitStatus::SAFE_TRANSITION)||status==double(MitStatus::SAFE);
@@ -487,7 +495,8 @@ controller_interface::CallbackReturn DirectControllerBase::on_activate(const rcl
 {
   if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
-  session_=static_cast<std::uint64_t>(s);generation_=0;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
+  const double ack=state_interfaces_[15].get_value();if(!is_exact_nonnegative_integer(ack)||ack>=kMaxExactInteger)return CallbackReturn::ERROR;
+  session_=static_cast<std::uint64_t>(s);base_generation_=static_cast<std::uint64_t>(ack);generation_=base_generation_;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
 }
 controller_interface::CallbackReturn DirectControllerBase::on_deactivate(const rclcpp_lifecycle::State &)
 {if(!safe_stopped_.load()){RCLCPP_ERROR(get_node()->get_logger(),"unsafe deactivate before SAFE ACK");return CallbackReturn::ERROR;}action_ready_.store(false);state_=State::INACTIVE;return CallbackReturn::SUCCESS;}
@@ -532,9 +541,9 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
       state_interfaces_[17].get_value(),state_interfaces_[18].get_value())){
       state_=State::SAFE_STOPPED;safe_stopped_.store(true,std::memory_order_release);
     }else if(++wait_cycles_>max_wait_cycles_){state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return controller_interface::return_type::ERROR;}return controller_interface::return_type::OK;}
-  if(generation_&&state_interfaces_[15].get_value()!=double(generation_)){if(++wait_cycles_>max_wait_cycles_&&!request_safe())return controller_interface::return_type::ERROR;return controller_interface::return_type::OK;}
+  if(generation_!=base_generation_&&state_interfaces_[15].get_value()!=double(generation_)){if(++wait_cycles_>max_wait_cycles_&&!request_safe())return controller_interface::return_type::ERROR;return controller_interface::return_type::OK;}
   wait_cycles_=0;
-  if(state_==State::SEEDING&&generation_){
+  if(state_==State::SEEDING&&generation_!=base_generation_){
     state_=State::ACTIVE; command_age_cycles_=0;
     if (return_to_zero_) {
       return_to_zero_start_ = measured();
@@ -613,7 +622,7 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
   auto target = state_==State::SEEDING ? seed_ :
     (uses_joint_space_action() ? action_hold_ : *target_buffer_.readFromRT());
   if (state_ != State::SEEDING && uses_joint_space_action() &&
-    !action_apply_mujoco_feedforward(target)) {
+    !action_apply_mujoco_feedforward(target, dt)) {
     state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);
     return controller_interface::return_type::ERROR;
   }

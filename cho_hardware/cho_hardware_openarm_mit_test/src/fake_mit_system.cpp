@@ -177,6 +177,20 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     c.generation = p[7];
     return c;
   };
+  // The fake tracks its commands perfectly, so its state IS the measured pose
+  // a SAFE transition must hold (ArmConsumer::observe).
+  {
+    std::array<double, 7> l{}, r{};
+    for (size_t i = 0; i < 7; ++i) {
+      l[i] = state_[i][0];
+      if (bimanual_) r[i] = state_[i + 7][0];
+    }
+    left_.observe(l);
+    if (bimanual_) {
+      right_.observe(r);
+      if (pair_) pair_->observe(l, r);
+    }
+  }
   bool ok = true;
   if (bimanual_) {
     if (!pair_)

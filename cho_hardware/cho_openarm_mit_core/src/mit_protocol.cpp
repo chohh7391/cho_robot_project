@@ -347,6 +347,13 @@ void ArmConsumer::cleanup()
   submitted_ = ArmCommand{}; measured_.fill(0.0); status_ = MitStatus::DISABLED;
 }
 
+void ArmConsumer::observe(const std::array<double, kJointsPerArm> & measured)
+{
+  if (std::all_of(measured.begin(), measured.end(), [](double x) {return std::isfinite(x);})) {
+    measured_ = measured;
+  }
+}
+
 bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_succeeded)
 {
   if (session_ == 0 || latched_ || permanent_latched_) {
@@ -434,6 +441,14 @@ bool PairedConsumer::configure(
   ArmConsumer l = left_; ArmConsumer r = right_;
   if (!l.configure(session, left_measured) || !r.configure(session, right_measured)) return false;
   left_ = l; right_ = r; return true;
+}
+
+void PairedConsumer::observe(
+  const std::array<double, kJointsPerArm> & left_measured,
+  const std::array<double, kJointsPerArm> & right_measured)
+{
+  left_.observe(left_measured);
+  right_.observe(right_measured);
 }
 
 bool PairedConsumer::write_pair(const ArmCommand & left, const ArmCommand & right, const bool transport_succeeded)

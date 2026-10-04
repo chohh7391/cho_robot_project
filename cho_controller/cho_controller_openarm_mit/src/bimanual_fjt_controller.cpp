@@ -232,13 +232,34 @@ bool BimanualFollowJointTrajectoryController::protocol_ok() const
 void BimanualFollowJointTrajectoryController::write_pair(
   const std::array<double, 14> & q, const std::array<double, 14> & dq, double kp, double kd)
 {
+  std::array<double, 14> kp_all{}, kd_all{};
+  kp_all.fill(kp);
+  kd_all.fill(kd);
+  write_pair(q, dq, kp_all, kd_all);
+}
+
+void BimanualFollowJointTrajectoryController::write_safe_hold(const std::array<double, 14> & q)
+{
+  std::array<double, 14> zero{}, kp{}, kd{};
+  for (std::size_t in = 0; in < 7 * arm_count(); ++in) {
+    const auto & profile = window_for(in);
+    kp[in] = profile.safe_stiffness[in % kJointsPerArm];
+    kd[in] = profile.safe_damping[in % kJointsPerArm];
+  }
+  write_pair(q, zero, kp, kd);
+}
+
+void BimanualFollowJointTrajectoryController::write_pair(
+  const std::array<double, 14> & q, const std::array<double, 14> & dq,
+  const std::array<double, 14> & kp, const std::array<double, 14> & kd)
+{
   ++generation_;
   for (std::size_t arm = 0; arm < arm_count(); ++arm) {
     const auto base = arm * kArmCommandWidth;
     for (std::size_t j = 0; j < 7; ++j) {
       const auto out = base + 5 * j, in = 7 * arm + j;
       command_interfaces_[out].set_value(q[in]); command_interfaces_[out + 1].set_value(dq[in]);
-      command_interfaces_[out + 2].set_value(kp); command_interfaces_[out + 3].set_value(kd);
+      command_interfaces_[out + 2].set_value(kp[in]); command_interfaces_[out + 3].set_value(kd[in]);
       command_interfaces_[out + 4].set_value(0.0);
     }
     command_interfaces_[base + 35].set_value(static_cast<double>(session_));
@@ -445,7 +466,7 @@ controller_interface::return_type BimanualFollowJointTrajectoryController::updat
     if (++handshake_cycles_ > static_cast<std::size_t>(max_handshake_cycles_)) {
       run_state_ = RunState::FAULTED; return controller_interface::return_type::ERROR;
     }
-    if (!seed_written_) {std::array<double, 14> zero{}; write_pair(measured_position(), zero, 0.0, damping_); seed_written_ = true;}
+    if (!seed_written_) {write_safe_hold(measured_position()); seed_written_ = true;}
     return controller_interface::return_type::OK;
   }
   if (run_state_ == RunState::STOPPING) {
@@ -490,7 +511,7 @@ controller_interface::return_type BimanualFollowJointTrajectoryController::updat
       request_stop(StopReason::FAULT); return controller_interface::return_type::OK;
     }
     if (ack_l == static_cast<double>(generation_) && ack_r == ack_l) {
-      std::array<double, 14> zero{}; write_pair(measured_position(), zero, 0.0, damping_);
+      write_safe_hold(measured_position());
     }
     return controller_interface::return_type::OK;
   }

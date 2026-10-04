@@ -64,6 +64,15 @@ public:
     std::array<double, kArmDof> & effort) = 0;
   virtual bool send(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & command) = 0;
 
+  // Which joints' motors answered during the last read(). A transport that
+  // cannot tell reports all of them, and staleness is then never detected.
+  virtual std::array<bool, kArmDof> replied() const
+  {
+    std::array<bool, kArmDof> all{};
+    all.fill(true);
+    return all;
+  }
+
   // Gripper, optional. A transport that answers false to supports_gripper()
   // makes a `hand:=true` configuration fail at configure time rather than at
   // the first write, which is the only point where refusing is still free.
@@ -98,6 +107,15 @@ public:
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
   hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
   hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
+  // Contract v1: an external switch cannot rely on the outgoing controller for
+  // safety. prepare rejects a partial claim of this arm and asks write() to put
+  // the arm in measured SAFE; until perform, no commit is accepted.
+  hardware_interface::return_type prepare_command_mode_switch(
+    const std::vector<std::string> & start_interfaces,
+    const std::vector<std::string> & stop_interfaces) override;
+  hardware_interface::return_type perform_command_mode_switch(
+    const std::vector<std::string> & start_interfaces,
+    const std::vector<std::string> & stop_interfaces) override;
 
   // Test-only observability.  A false result guarantees the factory has not
   // been invoked by on_configure.
@@ -118,7 +136,17 @@ private:
   // evidence about the bus, not just about the hand.
   bool read_gripper();
   bool write_gripper();
-  bool transition_to_safe(bool transport_disable) noexcept;
+  // Faults the consumer, publishes FAULT and (optionally) disables transport;
+  // `reason` is logged. Control thread or lifecycle only -- the watchdog thread
+  // uses trip_watchdog(), since the consumer is the control thread's.
+  bool transition_to_safe(bool transport_disable, const char * reason = "") noexcept;
+  // Watchdog thread: disable transport now, leave the consumer and protocol
+  // state to the next read()/write() on the control thread.
+  void trip_watchdog() noexcept;
+  // The command interface names this arm owns (all five fields of every joint
+  // plus the four protocol commands); a switch must claim all or none of them.
+  std::vector<std::string> arm_claims() const;
+  bool claims_whole_arm_or_none(const std::vector<std::string> & interfaces) const;
   bool dispatch_safe_hold(bool force_new_generation = false);
   bool dispatch(const cho_openarm_mit_core::ArmCommand & command);
   void watchdog_loop();
@@ -171,5 +199,17 @@ private:
   // delivered this component's first write cycle.
   std::atomic<bool> watchdog_armed_{false};
   std::thread watchdog_thread_;
+  // Set by the watchdog thread; the control thread turns it into a FAULT.
+  std::atomic<bool> watchdog_tripped_{false};
+  // Consecutive read() cycles each joint's motor did not answer; past the
+  // profile's stale_cycles the bus is treated as lost (FAULT, transport off).
+  std::array<std::size_t, kArmDof> missed_replies_{};
+  std::size_t stale_cycles_{0};
+  // prepare_command_mode_switch() -> write(): enter measured SAFE, and accept
+  // no commit until perform_command_mode_switch() (or the bound below, in case
+  // the controller_manager abandons the switch after a successful prepare).
+  std::atomic<bool> switch_safe_requested_{false};
+  std::atomic<bool> switch_gated_{false};
+  std::size_t switch_gate_cycles_{0};
 };
 }  // namespace cho_hardware_openarm_mit_real

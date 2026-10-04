@@ -277,3 +277,24 @@ TEST_F(DirectManagerTest, UnprefixedSingleArmClaimsAndExecutes)
   EXPECT_NEAR(h.state("", 1, "effort"), .2, 1e-12);
   h.deactivate("single_direct");
 }
+
+TEST_F(DirectManagerTest, ASecondProducerInTheSameSessionContinuesFromTheAck)
+{
+  // The consumer keeps its ack across controller switches within a hardware
+  // session. A producer that restarted its generations at 1 sent a seed the
+  // consumer saw as stale: rejected, latched INVALID, then SAFE and FAULT.
+  Harness h;
+  h.add("first", "cho_controller_openarm_mit/JointPositionController", "left");
+  h.activate({"first"});
+  for (int i = 0; i < 5; ++i) {
+    h.publish("first", .02 * i, 0, 0, 0);
+  }
+  EXPECT_NEAR(h.state("left", 1, "position"), .08, 1e-12);
+  h.deactivate("first");
+
+  h.add("second", "cho_controller_openarm_mit/JointPositionController", "left");
+  h.activate({"second"});
+  h.publish("second", .15, 0, 0, 0);
+  EXPECT_NEAR(h.state("left", 1, "position"), .15, 1e-12);
+  h.deactivate("second");
+}

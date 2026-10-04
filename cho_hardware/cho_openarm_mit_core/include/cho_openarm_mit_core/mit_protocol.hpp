@@ -148,6 +148,12 @@ public:
     const std::array<double, kJointsPerArm> & safe_hold_stiffness);
   bool configure(std::uint64_t session, const std::array<double, kJointsPerArm> & measured);
   void cleanup();
+  // The adapter's latest measured joint positions, every read(). A SAFE
+  // transition holds the pose measured when it happens, as the contract's
+  // `q_des = q_measured` requires; without this it held the pose measured at
+  // configure(), and a lease expiry or stop request pulled the arm back there.
+  // Non-finite readings are ignored (the adapter faults on those itself).
+  void observe(const std::array<double, kJointsPerArm> & measured);
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
   bool successful_write_cycle();
   void request_safe_transition(bool recoverable = false);
@@ -186,6 +192,10 @@ public:
     std::uint64_t session, const std::array<double, kJointsPerArm> & left_measured,
     const std::array<double, kJointsPerArm> & right_measured);
   bool write_pair(const ArmCommand & left, const ArmCommand & right, bool transport_succeeded = true);
+  // ArmConsumer::observe() for both arms.
+  void observe(
+    const std::array<double, kJointsPerArm> & left_measured,
+    const std::array<double, kJointsPerArm> & right_measured);
   bool successful_write_cycle();
   void request_safe_transition(bool left, bool right, bool recoverable = false);
   bool submit_safe_transition(bool left, bool right, bool transport_succeeded = true);

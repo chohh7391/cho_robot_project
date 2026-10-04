@@ -114,7 +114,9 @@ protected:
   // This is deliberately action-adapter-only.  Raw direct MIT topics preserve
   // their explicit caller-provided tau_ff contract, and the MIT hardware
   // wrapper never injects a model torque of its own.
-  bool action_apply_mujoco_feedforward(DirectMitTarget & target);
+  // Gravity/Coriolis feed-forward for the action path, slewed from the last value
+  // at the profile's tau_ff_slew per second; dt is this cycle's period.
+  bool action_apply_mujoco_feedforward(DirectMitTarget & target, double dt);
   CallbackReturn configure_action_mujoco_dynamics();
   void action_abort_current();
   std::string side_{"left"};
@@ -167,6 +169,12 @@ protected:
   std::atomic<std::uint64_t> command_sequence_{0};
   State state_{State::INACTIVE};
   std::uint64_t session_{0}, generation_{0}, requested_safe_generation_{0};
+  // The consumer's ack when this activation began. Generations continue from
+  // it: the consumer keeps its ack across controller switches within a session,
+  // so restarting at 1 made a second producer's seed look stale -- rejected,
+  // latched INVALID, then SAFE and FAULT. generation_ == base_generation_ means
+  // nothing has been committed yet in this activation.
+  std::uint64_t base_generation_{0};
   double lease_{0};
   std::size_t wait_cycles_{0}, max_wait_cycles_{0};
   std::size_t command_age_cycles_{0}, command_timeout_cycles_{0};
