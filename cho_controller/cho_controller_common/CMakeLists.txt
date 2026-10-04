@@ -1,7 +1,17 @@
 cmake_minimum_required(VERSION 3.5)
 project(cho_controller_common)
 
-add_compile_options(-Wall -Wextra -Wpedantic -std=c++17 -Ofast)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Release (-O3) unless told otherwise: the QP runs at 1 kHz, and an unset build
+# type compiles it at -O0. Not -Ofast: it implies -ffinite-math-only, which folds
+# isfinite()/isnan() to constants and lets the dense solver's `objective ==
+# infinity` infeasibility test compile away, so an infeasible QP can come back
+# OPTIMAL. In MuJoCo the task-space QP took the same ~10 us per cycle either way.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Dependencies
 find_package(ament_cmake REQUIRED)
@@ -17,13 +27,6 @@ find_package(rclcpp_lifecycle REQUIRED)
 
 file(GLOB_RECURSE PROJECT_HEADERS include/${PROJECT_NAME}/*.hpp include/${PROJECT_NAME}/*.hh)
 file(GLOB_RECURSE PROJECT_SOURCES src/*.cpp)
-
-# Ruckig's templates rely on isnan()/isinf(), which -Ofast folds away; the
-# one file that instantiates them opts out. -fno-finite-math-only beats -Ofast
-# whatever the order (measured for cho_vla_core), and test_point_to_point fails
-# if this line goes.
-set_source_files_properties(src/trajectory/point_to_point.cpp
-  PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
 
 # Build shared library
 add_library(${PROJECT_NAME} SHARED
@@ -96,7 +99,6 @@ ament_export_targets(export_${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_point_to_point test/test_point_to_point.cpp)
-  set_source_files_properties(test/test_point_to_point.cpp PROPERTIES COMPILE_OPTIONS -fno-finite-math-only)
   # The private planner header lives in src/.
   target_include_directories(test_point_to_point PRIVATE src)
   target_link_libraries(test_point_to_point ${PROJECT_NAME} pinocchio::pinocchio)

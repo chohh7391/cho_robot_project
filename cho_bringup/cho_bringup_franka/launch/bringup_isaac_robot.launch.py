@@ -50,6 +50,7 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnProcessIO, OnShutdown
+from launch.logging import get_logger
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -374,6 +375,18 @@ def generate_launch_description():
             started['spawners'] = True
             return controller_spawners
 
+        # OnProcessExit fires however the spawner ended. One that failed leaves the
+        # requested controller inactive, and opening the gate then would hand Isaac
+        # exactly the zero commands the gate exists to keep from it.
+        def on_active_spawner_exit(event, _context):
+            if event.returncode != 0:
+                get_logger('isaac_command_gate').error(
+                    f'controller spawner exited with code {event.returncode}: the requested '
+                    'controller is not active, so the Isaac command gate stays closed and '
+                    'Isaac keeps holding the home pose. See the spawner output above.')
+                return None
+            return [isaac_command_gate]
+
         event_handlers = [
             RegisterEventHandler(
                 event_handler=OnProcessIO(
@@ -384,7 +397,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=active_spawner,
-                    on_exit=[isaac_command_gate],
+                    on_exit=on_active_spawner_exit,
                 )
             ),
             RegisterEventHandler(

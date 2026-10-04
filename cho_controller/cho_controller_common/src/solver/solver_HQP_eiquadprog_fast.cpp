@@ -219,11 +219,13 @@ const HQPOutput & SolverHQuadProgFast::solve(const HQPData & problemData)
     }
     #endif
   }
-  else if(status==EIQUADPROG_FAST_UNBOUNDED)
+  else if(status==EIQUADPROG_FAST_INFEASIBLE || status==EIQUADPROG_FAST_UNBOUNDED)
     m_output.status = HQP_STATUS_INFEASIBLE;
   else if(status==EIQUADPROG_FAST_MAX_ITER_REACHED)
     m_output.status = HQP_STATUS_MAX_ITER_REACHED;
-  else if(status==EIQUADPROG_FAST_REDUNDANT_EQUALITIES)
+  else
+    // REDUNDANT_EQUALITIES and anything added later: never keep the previous
+    // solve's status, which may have been OPTIMAL.
     m_output.status = HQP_STATUS_ERROR;
   
   return m_output;

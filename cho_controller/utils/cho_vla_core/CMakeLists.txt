@@ -6,9 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # This library's whole purpose is to reject non-finite policy output, and
-# -ffinite-math-only (implied by -Ofast, which cho_controller_common does use)
-# folds std::isfinite() to true. Measured on g++ 11.4: an -Ofast build reports a
-# NaN-carrying vector as all-finite, with no warning.
+# -ffinite-math-only (implied by -Ofast) folds std::isfinite() to true.
+# Measured on g++ 11.4: an -Ofast build reports a NaN-carrying vector as
+# all-finite, with no warning.
 #
 # This explicit -fno- wins over -Ofast regardless of which comes later on the
 # command line (also measured), so it holds even if a parent scope or a toolchain

@@ -77,8 +77,9 @@ void InverseDynamicsFormulationAccForce::resizeHqpData()
 template<class TaskLevelPointer>
 void InverseDynamicsFormulationAccForce::addTask(TaskLevelPointer tl, double weight, unsigned int priorityLevel)
 {
-  if(priorityLevel > m_hqpData.size())
-    m_hqpData.resize(priorityLevel);
+  // m_hqpData[priorityLevel] must exist: level == size() needs one more entry.
+  if(priorityLevel >= m_hqpData.size())
+    m_hqpData.resize(priorityLevel + 1);
   const ConstraintBase & c = tl->task.getConstraint();
   if(c.isEquality())
   {

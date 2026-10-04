@@ -79,6 +79,7 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
     state.grasp_epsilon_outer = goal_epsilon_outer_;
     state.gripper_has_goal = true;    // tell the controller to start the command
     state.gripper_has_result = false; // clear the result flag
+    dispatch_time_ = current_time;
     initialized_ = true;
   }
 
@@ -97,6 +98,11 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
     saved_success_status_ = state.gripper_success;
     wait_start_time_ = current_time;
     is_waiting_ = true;
+  }
+
+  if (!is_waiting_ && (current_time - dispatch_time_).seconds() > result_timeout_) {
+    finish_from_rt(GoalPhase::kFinishAborted, "franka_gripper gave no result in time");
+    return false;
   }
 
   // Step 2: non-blocking 1 s settle wait, then report.

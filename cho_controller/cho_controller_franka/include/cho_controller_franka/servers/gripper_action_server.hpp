@@ -31,11 +31,18 @@ public:
     // sets this true so genuine failures surface to the behavior tree.
     void set_report_failure(bool v) { report_failure_ = v; }
 
+    // How long a dispatched command may go without a franka_gripper result
+    // before the goal is aborted. Without it a lost result held the goal (and
+    // every later gripper goal) active forever.
+    void set_result_timeout(double seconds) { result_timeout_ = seconds; }
+
 private:
     bool is_waiting_{false};
     bool saved_success_status_{false};
     bool report_failure_{false};
     rclcpp::Time wait_start_time_;
+    rclcpp::Time dispatch_time_;
+    double result_timeout_{10.0};
 
     // Goal payload, staged in handle_accepted() before activate_goal() and read by
     // the RT compute() (see the GoalPhase ordering contract in base_action_server.hpp).

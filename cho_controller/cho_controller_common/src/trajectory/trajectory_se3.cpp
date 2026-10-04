@@ -140,6 +140,14 @@ double TrajectorySE3Ruckig::getDuration()
   return m_motion->duration();
 }
 
+bool TrajectorySE3Ruckig::planSucceeded()
+{
+  if (m_dirty) {
+    plan();
+  }
+  return m_motion->planned();
+}
+
 void TrajectorySE3Ruckig::setReference(const SE3 & ref) {
   m_sample.resize(12, 6);
   write_pose(ref, m_sample.pos);

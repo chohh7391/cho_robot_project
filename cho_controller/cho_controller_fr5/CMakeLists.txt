@@ -25,6 +25,7 @@ find_package(control_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
+find_package(cho_controller_base REQUIRED)
 # cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
 find_package(joint_limits REQUIRED)
 find_package(cho_interfaces REQUIRED)
@@ -43,8 +44,6 @@ add_library(${PROJECT_NAME} SHARED
     src/pour/pour_types.cpp
     src/pour/scale_filter.cpp
     src/pour/shaping_law.cpp
-    src/servers/joint_space_action_server.cpp
-    src/servers/task_space_action_server.cpp
     src/servers/pour_action_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -52,6 +51,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     ${EIGEN3_INCLUDE_DIRS}
 )
 ament_target_dependencies(${PROJECT_NAME}
+    cho_controller_base
     controller_interface
     joint_limits
     hardware_interface

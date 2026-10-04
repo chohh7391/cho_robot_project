@@ -71,7 +71,7 @@ CallbackReturn VLAController::on_configure(
 
   action_server_ = std::make_shared<VLAActionServer>(get_node(), "/controller_action_server/vla_controller");
   action_server_->init();
-  action_server_->attach_activity_flag(&controller_active_);
+  action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
 }

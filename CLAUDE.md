@@ -63,6 +63,10 @@ export IGN_IP=127.0.0.1
 ```
 cho_controller/
   cho_controller_common/     # Shared C++ math: Pinocchio FK/IK/dynamics, Eigen utilities
+  cho_controller_base/       # Robot-independent, header-only: the RT-safe action
+                             # server (GoalPhase), the JointSpace/TaskSpace servers
+                             # every arm serves, DLS IK and held-command helpers.
+                             # Robots keep only thin adapters (state fields, defaults).
   cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
   utils/cho_vla_core/        # Robot-independent VLA action-chunk pipeline: chunk
                              # validation, observation-time splicing, reference
@@ -246,6 +250,17 @@ and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replac
 
 Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
 
+The JointSpace and TaskSpace servers themselves are shared: `cho_controller_base`'s
+`JointSpaceServer` / `TaskSpaceServer` over `GoalPhaseActionServer`, with each robot
+supplying only an adapter (which state field is the measured joints, where a goal
+starts, success-tolerance defaults). The control thread never touches `rclcpp_action`:
+`compute()` only stores atomics, and a 5 ms non-RT timer makes the terminal calls and
+publishes progress feedback. Every base controller owns a `ControllerActivity` that
+its `on_activate`/`on_deactivate` update and its servers are attached to
+(`attach_activity`): goals are REJECTED while the controller is inactive, and a goal
+is ABORTED, with the reason in the result's `message`, when its controller is
+deactivated -- it used to stay active with no result and block every later goal.
+
 Their point-to-point motion is `cho_controller_common`'s `TrajectoryEuclidianRuckig` /
 `TrajectorySE3Ruckig`: Ruckig's fastest motion within the robot's limits, slowed
 uniformly to the goal's `duration`. The duration is therefore a minimum, and a goal
@@ -346,22 +361,19 @@ launch overrides it, and an undeclared mode raises at tree-build time.
 
 ### The `-Ofast` / `isfinite()` trap
 
-`cho_controller_common` compiles with `-Ofast`, which implies `-ffinite-math-only`,
-which folds `std::isfinite()` to `true`. Measured on g++ 11.4: an `-Ofast` build
-reports a NaN-carrying vector as all-finite, with no warning. **Never put a
-finiteness check in that package**, and never add `-Ofast` to a package that has
-one. It is the only package in the repo using that flag; every package carrying
-an `allFinite()` / `isfinite()` guard (franka, openarm_mit, the MIT hardware
-adapters, cho_vla_core) builds at default optimisation and is safe.
+`-Ofast` implies `-ffinite-math-only`, which folds `std::isfinite()` / `isnan()`
+to constants. Measured on g++ 11.4: an `-Ofast` build reports a NaN-carrying
+vector as all-finite, with no warning. **No package here uses `-Ofast`, and none
+should**: `cho_controller_common` used it until 2026-10-04, where it also allowed
+the dense QP solver's `objective == infinity` infeasibility test to be compiled
+away. It is now Release (`-O3`), and the task-space QP measured the same in
+MuJoCo (about 10 us per solve either way).
 
-`cho_vla_core` pins `-fno-finite-math-only` explicitly, which beats `-Ofast`
+`cho_vla_core` still pins `-fno-finite-math-only` explicitly, which beats `-Ofast`
 regardless of flag order (also measured), and `test_finite_math_guard` fails the
-build if that flag is ever removed.
-
-One file inside `cho_controller_common` makes the same exception:
-`src/trajectory/point_to_point.cpp`, the only file there that instantiates Ruckig,
-whose templates rely on `isnan()`/`isinf()`. `test_point_to_point` fails if its
-`-fno-finite-math-only` goes (verified both ways).
+build if that flag is ever removed. `cho_controller_common`'s
+`test_point_to_point` fails if the library is built with finite-math (Ruckig's
+templates rely on `isnan()`/`isinf()`).
 
 ### Frame Conventions
 

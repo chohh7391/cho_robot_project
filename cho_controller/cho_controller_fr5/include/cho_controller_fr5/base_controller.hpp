@@ -10,10 +10,12 @@
 #include <controller_interface/controller_interface.hpp>
 
 #include "cho_controller_common/robot/robot_wrapper.hpp"
+#include "cho_controller_base/goal_phase_action_server.hpp"
 #include "cho_controller_common/math/fwd.hpp"
 #include "cho_controller_common/trajectory/motion_limits.hpp"
 
 #include <Eigen/Eigen>
+#include <realtime_tools/realtime_publisher.hpp>
 #include <cho_interfaces/msg/pose_log.hpp>
 #include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 
@@ -53,7 +55,7 @@ public:
     void compute_kinematics();
     void clip_position(Eigen::VectorXd & q_cmd, double eps = 0.01);
     void log_ee_pose();
-    void log_joint_pos();
+    void log_joint_pos(const rclcpp::Time & stamp);
 
     // FK + local-frame arm Jacobian at an arbitrary config, on private scratch data
     // (leaves state_/data_ untouched). Used by the open-loop task-space IK, which
@@ -99,6 +101,9 @@ protected:
     // Cached position limits (with margin) for clamp_to_joint_limits().
     Eigen::VectorXd q_lower_limits_;
     Eigen::VectorXd q_upper_limits_;
+    // Lifecycle as the action servers see it (attach_activity); see
+    // cho_controller_base::ControllerActivity.
+    cho_controller_base::ControllerActivity activity_;
     // Smoothed update-period estimate; see nominal_period().
     double nominal_dt_{0.0};
 
@@ -109,6 +114,12 @@ protected:
     //   ~/ee_state         : cho_interfaces/PoseLog
     rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
+    // update() publishes through these: trylock, fill the preallocated message,
+    // hand it to a non-RT thread. A plain publish() from the control loop locks
+    // and allocates every cycle.
+    std::unique_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>
+        ctrl_state_rt_pub_;
+    std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> ee_state_rt_pub_;
 };
 
 } // namespace fr5

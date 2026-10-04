@@ -120,10 +120,20 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
     def terminate(self, new_status):
-        if new_status == py_trees.common.Status.INVALID and self.goal_handle is not None:
-            if self.get_result_future is not None and not self.get_result_future.done():
-                self.node.get_logger().warn(f"[{self.name}] Preempted! Canceling Goal...")
-                self.goal_handle.cancel_goal_async()
+        if new_status == py_trees.common.Status.INVALID:
+            if self.goal_handle is not None:
+                if self.get_result_future is not None and not self.get_result_future.done():
+                    self.node.get_logger().warn(f"[{self.name}] Preempted! Canceling Goal...")
+                    self.goal_handle.cancel_goal_async()
+            elif self.send_goal_future is not None:
+                # Preempted with acceptance still pending: there is no handle to cancel
+                # yet, but the server may accept and execute the goal after the tree has
+                # moved on. Same remedy as the timeout path -- cancel it on acceptance.
+                self.node.get_logger().warn(
+                    f"[{self.name}] Preempted before the goal was accepted; "
+                    "it will be cancelled on acceptance"
+                )
+                self.send_goal_future.add_done_callback(self._cancel_late_accepted_goal)
 
         self.send_goal_future = None
         self.get_result_future = None

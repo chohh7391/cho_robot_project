@@ -1,4 +1,5 @@
 #include "cho_controller_fr5/base_controller.hpp"
+#include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <cassert>
@@ -123,6 +124,18 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
     ctrl_state_pub_ = get_node()->create_publisher<control_msgs::msg::JointTrajectoryControllerState>(
         "~/controller_state", 10);
     ee_state_pub_ = get_node()->create_publisher<cho_interfaces::msg::PoseLog>("~/ee_state", 10);
+    ctrl_state_rt_pub_ = std::make_unique<
+        realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>(ctrl_state_pub_);
+    ee_state_rt_pub_ = std::make_unique<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>>(
+        ee_state_pub_);
+    // Sized once here, so update() only copies into them.
+    {
+        auto & cs = ctrl_state_rt_pub_->msg_;
+        cs.joint_names = joint_names_;
+        cs.reference.positions.assign(num_dof_, 0.0);
+        cs.feedback.positions.assign(num_dof_, 0.0);
+        cs.feedback.velocities.assign(num_dof_, 0.0);
+    }
 
     RCLCPP_INFO(get_node()->get_logger(),
         "FR5BaseController configured: %d DOF, ee=%s", num_dof_, ee_name_.c_str());
@@ -131,6 +144,22 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
 
 CallbackReturn FR5BaseController::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
+    // update_joint_states() reads position/velocity pairs by index; check the
+    // claimed order once here. An assert in the loop vanished from release builds.
+    if (state_interfaces_.size() < static_cast<size_t>(2 * num_dof_)) {
+        RCLCPP_ERROR(get_node()->get_logger(), "expected %d state interfaces, got %zu",
+            2 * num_dof_, state_interfaces_.size());
+        return CallbackReturn::ERROR;
+    }
+    for (int i = 0; i < num_dof_; ++i) {
+        if (state_interfaces_[2 * i].get_interface_name() != "position" ||
+            state_interfaces_[2 * i + 1].get_interface_name() != "velocity")
+        {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                "state interfaces out of order at joint %d: expected position then velocity", i);
+            return CallbackReturn::ERROR;
+        }
+    }
     update_joint_states();
     compute_kinematics();
     state_.q_init = state_.q;
@@ -138,23 +167,29 @@ CallbackReturn FR5BaseController::on_activate(const rclcpp_lifecycle::State & /*
     state_.H_ee_init = state_.H_ee;
     state_.H_ee_ref = state_.H_ee;
     state_.H_ee_des = state_.H_ee;
-    state_.q_des = state_.q.head(num_dof_);
-    state_.q_ref = state_.q.head(num_dof_);
+    // Continue from what the previous controller left commanded, not the drooped
+    // measurement: seeding q_ref from the measurement stepped the position command by
+    // the droop on the first cycle of every switch (JointSpacePosition holds and
+    // clip_position()s against q_ref).
+    state_.q_ref = held_command_position();
+    state_.q_des = state_.q_ref;
+    activity_.activated();
     return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn FR5BaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
+    activity_.deactivated();
     return CallbackReturn::SUCCESS;
 }
 
 controller_interface::return_type FR5BaseController::update(
-    const rclcpp::Time &, const rclcpp::Duration &)
+    const rclcpp::Time & time, const rclcpp::Duration &)
 {
     update_joint_states();
     compute_kinematics();
     log_ee_pose();
-    log_joint_pos();
+    log_joint_pos(time);
     return controller_interface::return_type::OK;
 }
 
@@ -163,8 +198,6 @@ void FR5BaseController::update_joint_states()
     for (int i = 0; i < num_dof_; ++i) {
         const auto & pos_iface = state_interfaces_.at(2 * i);
         const auto & vel_iface = state_interfaces_.at(2 * i + 1);
-        assert(pos_iface.get_interface_name() == "position");
-        assert(vel_iface.get_interface_name() == "velocity");
         state_.q(i) = pos_iface.get_value();
         state_.v(i) = vel_iface.get_value();
     }
@@ -203,27 +236,29 @@ void FR5BaseController::log_ee_pose()
         msg.orientation.w = q.w();
     };
     // Per-controller ~/ee_state carries the three poses (ref / desired / current).
-    auto ee_msg = cho_interfaces::msg::PoseLog();
-    fill_pose(ee_msg.pose_ref, state_.H_ee_ref);
-    fill_pose(ee_msg.pose_des, state_.H_ee_des);
-    fill_pose(ee_msg.pose_curr, state_.H_ee);
-    ee_state_pub_->publish(ee_msg);
+    if (ee_state_rt_pub_ && ee_state_rt_pub_->trylock()) {
+        auto & msg = ee_state_rt_pub_->msg_;
+        fill_pose(msg.pose_ref, state_.H_ee_ref);
+        fill_pose(msg.pose_des, state_.H_ee_des);
+        fill_pose(msg.pose_curr, state_.H_ee);
+        ee_state_rt_pub_->unlockAndPublish();
+    }
 }
 
-void FR5BaseController::log_joint_pos()
+void FR5BaseController::log_joint_pos(const rclcpp::Time & stamp)
 {
-    // Per-controller ~/controller_state. FR5 carries no desired velocity, so
-    // reference.velocities is left empty.
-    auto cs = control_msgs::msg::JointTrajectoryControllerState();
-    cs.header.stamp = get_node()->now();
-    cs.joint_names = joint_names_;
-    cs.reference.positions.resize(state_.q_des.size());
-    Eigen::VectorXd::Map(cs.reference.positions.data(), state_.q_des.size()) = state_.q_des;
-    cs.feedback.positions.resize(num_dof_);
-    Eigen::VectorXd::Map(cs.feedback.positions.data(), num_dof_) = state_.q.head(num_dof_);
-    cs.feedback.velocities.resize(num_dof_);
-    Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v.head(num_dof_);
-    ctrl_state_pub_->publish(cs);
+    // Per-controller ~/controller_state; reference.velocities stays empty (no
+    // desired velocity here). Sized in on_configure, so these are copies only.
+    if (ctrl_state_rt_pub_ && ctrl_state_rt_pub_->trylock()) {
+        auto & cs = ctrl_state_rt_pub_->msg_;
+        cs.header.stamp = stamp;
+        if (state_.q_des.size() == num_dof_) {
+            Eigen::VectorXd::Map(cs.reference.positions.data(), num_dof_) = state_.q_des;
+        }
+        Eigen::VectorXd::Map(cs.feedback.positions.data(), num_dof_) = state_.q.head(num_dof_);
+        Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v.head(num_dof_);
+        ctrl_state_rt_pub_->unlockAndPublish();
+    }
 }
 
 void FR5BaseController::compute_arm_kinematics(
@@ -265,27 +300,7 @@ void FR5BaseController::clamp_to_joint_limits(Eigen::VectorXd & q) const
 
 Eigen::VectorXd FR5BaseController::held_command_position() const
 {
-    // The position command interface keeps whatever the PREVIOUS controller last
-    // wrote, even across a switch. Seeding the open-loop reference from that (rather
-    // than the measured position) avoids injecting the holding tracking error as a
-    // one-cycle command step. But a fresh session can leave it at zeros/stale, so it
-    // is only used when consistent with the measured position at activation.
-    constexpr double kHeldCmdConsistencyBand = 0.05;  // rad, per joint
-    Eigen::VectorXd measured = state_.q.head(num_dof_);
-    if (static_cast<int>(command_interfaces_.size()) >= num_dof_) {
-        Eigen::VectorXd q_cmd(num_dof_);
-        bool usable = true;
-        for (int i = 0; i < num_dof_; ++i) {
-            const double v = command_interfaces_[i].get_value();
-            if (!std::isfinite(v) || std::abs(v - measured(i)) > kHeldCmdConsistencyBand) {
-                usable = false;
-                break;
-            }
-            q_cmd(i) = v;
-        }
-        if (usable) return q_cmd;
-    }
-    return measured;
+    return cho_controller_base::held_command(command_interfaces_, state_.q.head(num_dof_));
 }
 
 cho_controller::common::trajectory::JointMotionLimits FR5BaseController::joint_motion_limits()

@@ -11,15 +11,16 @@ control clock; the pipeline never reads a clock of its own. That is what lets
 splicing, watchdog transitions, per-step integration and NaN rejection be tested
 with plain gtest instead of a `controller_manager` fixture.
 
-It is a separate package rather than a module inside `cho_controller_common` for
-two measured reasons. That package compiles with `-Ofast`, which implies
-`-ffinite-math-only`, which folds `std::isfinite()` to `true` — on g++ 11.4 an
-`-Ofast` build reports a NaN-carrying vector as all-finite, so a validator built
-there would silently pass exactly what it exists to reject. And
-`cho_controller_openarm_mit` does not depend on `cho_controller_common`; taking
-that dependency to reach the pipeline would pull eiquadprog and the TSID-derived
-solver stack into a package whose whole design is a minimal producer.
-This package therefore compiles with an explicit `-fno-finite-math-only`, which
+It is a separate package rather than a module inside `cho_controller_common`
+because `cho_controller_openarm_mit` does not depend on `cho_controller_common`;
+taking that dependency to reach the pipeline would pull eiquadprog and the
+TSID-derived solver stack into a package whose whole design is a minimal
+producer. (A second reason held until 2026-10-04: that package compiled with
+`-Ofast`, which implies `-ffinite-math-only` and folds `std::isfinite()` to
+`true`, so a validator built there would silently pass exactly what it exists
+to reject.)
+
+This package still compiles with an explicit `-fno-finite-math-only`, which
 beats `-Ofast` regardless of flag order (measured), so it survives a parent scope
 or toolchain file adding one. `test_finite_math_guard` guards that flag rather
 than the optimisation level: verified to fail with the line removed under
@@ -142,6 +143,11 @@ either boundary (the cubic smoothstep it replaced was flat in velocity only).
 Averaging alone still steps; a servo bus absorbs that, a torque-controlled arm
 does not. Blending two trajectories rather than a frozen value against a
 trajectory matters too: freezing would lag the motion for the whole window.
+The blend's velocities are its derivative: the weighted rates plus the weight's
+own rate times the gap between the two trajectories, the term the limiter needs
+as feed-forward through the window. Translation blends linearly and rotation
+along the geodesic from the outgoing pose, because that split has a closed-form
+angular rate; a screw interpolation (`SE3::Interpolate`) couples the two.
 
 Default is `latest_only` plus a blend, because flow-matching policies are
 multimodal and averaging two modes lands between them, where neither is valid.

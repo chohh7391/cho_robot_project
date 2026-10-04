@@ -19,9 +19,8 @@
 // Each bringup merges those files into its controllers' runtime parameters
 // (cho_robot_config.motion_limit_parameters).
 //
-// Header-only on purpose, so it compiles in the calling controller package and
-// not under cho_controller_common's -Ofast, which assumes no value is ever NaN:
-// joint_limits declares every unset limit as NaN.
+// Header-only: it needs rclcpp_lifecycle and joint_limits, which the library
+// itself does not link, so it compiles in the calling controller package.
 
 namespace cho_controller {
 namespace common {

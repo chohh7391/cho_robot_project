@@ -348,13 +348,13 @@ CallbackReturn OpenArmBaseController::on_activate(const rclcpp_lifecycle::State 
         RCLCPP_INFO(get_node()->get_logger(), "state interfaces:   %s", st.c_str());
     }
 
-    controller_active_.store(true, std::memory_order_release);
+    activity_.activated();
     return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn OpenArmBaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-    controller_active_.store(false, std::memory_order_release);
+    activity_.deactivated();
     return CallbackReturn::SUCCESS;
 }
 

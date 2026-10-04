@@ -10,6 +10,7 @@ find_package(cho_openarm_mit_core REQUIRED)
 # Pulled in with the merged cho_controller_openarm sources.
 find_package(ament_index_cpp REQUIRED)
 find_package(cho_controller_common REQUIRED)
+find_package(cho_controller_base REQUIRED)
 # cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
 find_package(joint_limits REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -57,7 +58,7 @@ target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 # undefined, a hole no executable linking it could fill. That unused solver has
 # since been removed.)
 #
-# Not compiled with -Ofast, deliberately: these carry isfinite() guards, which
+# Never compile with -Ofast: these carry isfinite() guards, which
 # -ffinite-math-only folds to true. See the CLAUDE.md note on that trap.
 set(OPENARM_SHARED_LIB cho_controller_openarm_shared)
 add_library(${OPENARM_SHARED_LIB} SHARED
@@ -65,14 +66,13 @@ add_library(${OPENARM_SHARED_LIB} SHARED
   src/ee_state_broadcaster.cpp
   src/joint_space_impedance_controller.cpp
   src/joint_space_position_controller.cpp
-  src/joint_space_velocity_controller.cpp
-  src/servers/joint_space_action_server.cpp)
+  src/joint_space_velocity_controller.cpp)
 target_include_directories(${OPENARM_SHARED_LIB} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${EIGEN3_INCLUDE_DIRS})
 ament_target_dependencies(${OPENARM_SHARED_LIB}
-  ament_index_cpp cho_controller_common cho_interfaces control_msgs controller_interface joint_limits
+  ament_index_cpp cho_controller_base cho_controller_common cho_interfaces control_msgs controller_interface joint_limits
   geometry_msgs hardware_interface pinocchio pluginlib rclcpp rclcpp_action
   rclcpp_lifecycle realtime_tools)
 target_link_libraries(${OPENARM_SHARED_LIB} pinocchio::pinocchio)

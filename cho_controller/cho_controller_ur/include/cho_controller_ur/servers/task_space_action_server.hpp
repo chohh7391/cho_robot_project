@@ -1,8 +1,11 @@
 #pragma once
 
-#include "cho_controller_ur/servers/base_action_server.hpp"
-#include "cho_interfaces/action/task_space.hpp"
+#include <string>
+#include <utility>
+
+#include "cho_controller_base/task_space_server.hpp"
 #include "cho_controller_common/trajectory/trajectory_se3.hpp"
+#include "cho_controller_ur/base_controller.hpp"
 
 namespace cho_controller {
 namespace ur {
@@ -11,26 +14,18 @@ using TaskSpaceAction = cho_interfaces::action::TaskSpace;
 using TaskSpaceGoalHandle = rclcpp_action::ServerGoalHandle<TaskSpaceAction>;
 using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 
-class URTaskSpaceActionServer : public URBaseActionServer<TaskSpaceAction, TaskTrajectory>
+// The shared TaskSpace server (cho_controller_base) on a UR arm, with the
+// 2 cm / 0.05 rad tolerance UR always used, for every interface.
+class URTaskSpaceActionServer : public cho_controller_base::TaskSpaceServer<URState, TaskTrajectory>
 {
 public:
-    using URBaseActionServer<TaskSpaceAction, TaskTrajectory>::URBaseActionServer;
-
-    rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
-        std::shared_ptr<const TaskSpaceAction::Goal> goal) override;
-
-    rclcpp_action::CancelResponse handle_cancel(
-        const std::shared_ptr<TaskSpaceGoalHandle> goal_handle) override;
-
-    void handle_accepted(
-        const std::shared_ptr<TaskSpaceGoalHandle> goal_handle) override;
-
-    bool compute(const rclcpp::Time & current_time, URState & state) override;
+    URTaskSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name, int num_dof)
+    : TaskSpaceServer(std::move(node), std::move(action_name), num_dof,
+          {{2e-2, 5e-2}, {2e-2, 5e-2}, {2e-2, 5e-2}}) {}
 
 protected:
-    bool is_relative_{false};
-    pinocchio::SE3 H_ee_ref_;
+    // The IK integrates from q_ref: start it at the measured position.
+    void on_goal_start(URState & state) override { state.q_ref = state.q.head(num_dof_); }
 };
 
 } // namespace ur

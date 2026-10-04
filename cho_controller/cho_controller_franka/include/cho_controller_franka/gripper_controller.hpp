@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <string>
 
 #include <controller_interface/controller_interface.hpp>
@@ -70,8 +72,17 @@ class GripperController : public FrankaBaseController {
   void toggleGripperState();
   // Issues the Move Goal to open the Gripper
   bool openGripper();
+  // What update() hands the dispatch timer when a gripper goal starts.
+  struct Command
+  {
+    bool grasp{false};
+    double width{0.0}, speed{0.0}, force{0.0}, epsilon_inner{0.0}, epsilon_outer{0.0};
+  };
   // Issues the Grasp Goal to close the Gripper around an object.
-  void graspGripper();
+  void graspGripper(const Command & command);
+  // Non-RT: sends what update() staged, and the initial home/open once the
+  // franka_gripper servers are up. Runs on the executor, never in update().
+  void dispatch();
   // Issues the Homing Goal to calibrate the gripper (recovers the width reference).
   void homeGripper();
   // Populates the callbacks for the Move Goal
@@ -101,6 +112,19 @@ class GripperController : public FrankaBaseController {
   rclcpp_action::Client<franka_msgs::action::Homing>::SendGoalOptions homing_goal_options_;
 
   std::shared_ptr<GripperActionServer> action_server_;
+
+  // Handoff between update() (control thread) and the executor (dispatch() and
+  // the franka_gripper client callbacks). Sending an action goal allocates and
+  // locks, so update() only stages it; the result comes back the same way.
+  // staged_ is written before dispatch_pending_'s release store and read after
+  // its acquire exchange.
+  Command staged_;
+  std::atomic<bool> dispatch_pending_{false};
+  std::atomic<bool> result_ready_{false};
+  std::atomic<bool> result_success_{false};
+  std::atomic<double> current_width_{0.0};
+  bool initial_command_sent_{false};  // executor-only
+  rclcpp::TimerBase::SharedPtr dispatch_timer_;
 };
 
 } // namespace franka

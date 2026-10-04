@@ -15,7 +15,7 @@ controller_manager:
       type: cho_controller_ur/TaskSpaceIKController
 
     gripper_controller:
-      type: cho_controller_ur/GripperController
+      type: cho_controller_gripper/GripperController
 
 joint_trajectory_controller:
   ros__parameters:
@@ -63,9 +63,17 @@ task_space_ik_controller:
 
 gripper_controller:
   ros__parameters:
+    # The shared cho_controller_gripper on the Robotiq 2F-85's knuckle joint.
     gripper_joint: robotiq_85_left_knuckle_joint
-    open_position: 0.0       # [rad] fully open
-    closed_position: 0.7929  # [rad] fully closed (Robotiq 2F-85)
-    position_tolerance: 0.01
-    timeout: 2.0
+    use_velocity_state: false   # differenced from position
+    use_effort_state: false
+    joint_at_closed: 0.7929     # [rad] fully closed
+    joint_at_open: 0.0          # [rad] fully open
+    width_at_closed: 0.0
+    width_at_open: 0.085        # [m] 2F-85 stroke
+    # The old UR controller's 0.01 rad on the knuckle, as fingertip width.
+    position_tolerance: 0.001
+    # Hand gz the target outright, as the UR controller did; a grasp that stalls
+    # on an object still ends in success (report_grasp_failure is off).
+    command_is_setpoint: true
 

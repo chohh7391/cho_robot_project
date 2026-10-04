@@ -25,12 +25,19 @@ env:
   BUILD_PACKAGES: >-
     cho_interfaces
     cho_controller_common
+    cho_controller_base
+    cho_vla_core
+    cho_controller_gripper
     cho_controller_ur
+    cho_openarm_mit_core
+    cho_hardware_openarm_mit_test
+    cho_controller_openarm_mit
     cho_description_franka
     cho_description_fr5
     cho_description_ur
     cho_description_openarm
     cho_robot_config
+    cho_moveit_common
     cho_control_tools
     cho_task_manager
     cho_object_pose
@@ -47,9 +54,16 @@ env:
   TEST_PACKAGES: >-
     cho_interfaces
     cho_controller_common
+    cho_controller_base
+    cho_vla_core
+    cho_controller_gripper
     cho_controller_ur
+    cho_openarm_mit_core
+    cho_hardware_openarm_mit_test
+    cho_controller_openarm_mit
     cho_description_openarm
     cho_robot_config
+    cho_moveit_common
     cho_control_tools
     cho_task_manager
     cho_object_pose
@@ -89,20 +103,11 @@ jobs:
           apt-get update
           rosdep update --rosdistro humble
           source /opt/ros/humble/setup.bash
+          # The paths come from BUILD_PACKAGES, so the two lists cannot drift: a
+          # hand-kept copy here still named cho_controller_openarm after that
+          # package was merged away, and rosdep failed every run on it.
           rosdep install -y --rosdistro humble --ignore-src --from-paths \
-            src/cho_robot_project/cho_interfaces \
-            src/cho_robot_project/cho_controller/cho_controller_common \
-            src/cho_robot_project/cho_controller/cho_controller_ur \
-            src/cho_robot_project/cho_controller/cho_controller_openarm \
-            src/cho_robot_project/cho_description/cho_description_franka \
-            src/cho_robot_project/cho_description/cho_description_fr5 \
-            src/cho_robot_project/cho_description/cho_description_ur \
-            src/cho_robot_project/cho_description/cho_description_openarm \
-            src/cho_robot_project/cho_robot_config \
-            src/cho_robot_project/cho_control_tools \
-            src/cho_robot_project/cho_task_manager \
-            src/cho_robot_project/cho_sensor/hansung_scale/hansung_scale_msgs \
-            src/cho_robot_project/cho_sensor/hansung_scale/hansung_scale_driver
+            $(colcon list --paths-only --packages-select ${{ env.BUILD_PACKAGES }})
 
       - name: Build
         shell: bash

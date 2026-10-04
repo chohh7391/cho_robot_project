@@ -1,13 +1,92 @@
+import signal
+import threading
+import time
+
 import py_trees_ros
 import py_trees
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.signals import SignalHandlerOptions
 from cho_task_manager.tasks import build_task_tree
 from cho_task_manager.utils.controller_names import load_robot_config
 
+# How long shutdown keeps spinning after preempting a running tree, so the
+# cancels its action leaves just issued -- and the ones armed to go out when a
+# pending goal is accepted -- actually leave the process before the node is
+# destroyed. Wall time: sim time may have stopped along with the simulator.
+CANCEL_FLUSH_SEC = 1.0
+
+
+class StoppableBehaviourTree(py_trees_ros.trees.BehaviourTree):
+    """A BehaviourTree that can be stopped from the main thread without racing a tick.
+
+    tick_tock() ticks from an rclpy timer, which the MultiThreadedExecutor runs
+    on a worker thread, while Ctrl-C lands on the main thread. Invalidating the
+    root mid-tick could let that tick go on to initialise() the next leaf and
+    send a goal nothing would ever cancel.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._tick_lock = threading.Lock()
+        self._stopped = False
+
+    def tick(self, *args, **kwargs):
+        with self._tick_lock:
+            # A tick the executor dispatched just before stop() must not undo it.
+            if not self._stopped:
+                super().tick(*args, **kwargs)
+
+    def stop(self):
+        """Stop ticking and invalidate a RUNNING root; True if anything was preempted.
+
+        tree.shutdown() does not do this -- it only calls each behaviour's
+        shutdown() -- so without it a RUNNING action leaf never reaches
+        terminate(INVALID) and its goal keeps driving the arm after the node
+        is gone.
+        """
+        if self.timer is not None:
+            self.timer.cancel()
+        with self._tick_lock:
+            self._stopped = True
+            if self.root.status != py_trees.common.Status.RUNNING:
+                return False
+            self.root.stop(py_trees.common.Status.INVALID)
+            return True
+
+
+def shutdown_task_manager(tree, executor, node, flush_sec=CANCEL_FLUSH_SEC):
+    """Preempt whatever is still running, let its cancels go out, then tear down once."""
+    try:
+        if tree.stop():
+            node.get_logger().warn(
+                f"Stopped mid-task: cancelling the running goals ({flush_sec:g}s to send them)"
+            )
+            deadline = time.monotonic() + flush_sec
+            while time.monotonic() < deadline:
+                executor.spin_once(timeout_sec=0.05)
+    except KeyboardInterrupt:
+        # A second Ctrl-C cuts the wait short; it must not skip the teardown.
+        pass
+    finally:
+        # The node is ours, not the tree's: keep shutdown() from destroying it
+        # too, so it is destroyed exactly once.
+        tree.shutdown(destroy_node=False)
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
 
 def main():
-    rclpy.init()
+    # rclpy's own SIGINT/SIGTERM handler shuts the context down before the
+    # KeyboardInterrupt reaches the loop below, and every cancel sent after that
+    # fails on a dead context. Leave SIGINT to Python, and route SIGTERM (what
+    # ros2 launch escalates to) through the same path.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGTERM, _interrupt)
 
     node = rclpy.create_node("task_manager_node")
 
@@ -148,7 +227,7 @@ def main():
         rclpy.try_shutdown()
         return
 
-    tree = py_trees_ros.trees.BehaviourTree(
+    tree = StoppableBehaviourTree(
         root=root,
         unicode_tree_debug=debug_tree
     )
@@ -166,9 +245,9 @@ def main():
         rclpy.try_shutdown()
         return
 
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        executor = MultiThreadedExecutor()
-        executor.add_node(node)
         terminal_status = {"status": None}
 
         def stop_on_terminal_status(behaviour_tree):
@@ -206,9 +285,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        tree.shutdown()
-        node.destroy_node()
-        rclpy.try_shutdown()
+        shutdown_task_manager(tree, executor, node)
 
 
 if __name__ == '__main__':

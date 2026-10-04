@@ -1,3 +1,4 @@
+#include "cho_controller_base/kinematics.hpp"
 #include "cho_controller_franka/task_space_ik_controller.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
 
@@ -56,7 +57,7 @@ CallbackReturn TaskSpaceIKController::on_configure(
   action_server_ = std::make_shared<TaskSpaceActionServer>(get_node(), "/controller_action_server/task_space_ik_controller");
   action_server_->init();
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
-  action_server_->attach_activity_flag(&controller_active_);
+  action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -140,17 +141,9 @@ controller_interface::return_type TaskSpaceIKController::update(
     state_.H_ee_des = H_des;  // for logging
 
     // Task-space error (local frame) against the REFERENCE pose, DLS Newton step.
-    Vector6d error;
-    error.head<3>() = H_ref.rotation().transpose() * (H_des.translation() - H_ref.translation());
-    const pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * H_des.rotation();
-    error.tail<3>() = pinocchio::log3(R_err);
-
-    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-    JJt.diagonal().array() += lambda_ * lambda_;
-    Vector7d dq = J.transpose() * JJt.inverse() * error;
-    for (int i = 0; i < num_dof_; ++i) {
-      dq(i) = std::clamp(dq(i), -max_delta_q_, max_delta_q_);
-    }
+    const Vector6d error = cho_controller_base::local_pose_error(H_ref, H_des);
+    Vector7d dq = cho_controller_base::dls_step(J, error, lambda_);
+    cho_controller_base::limit_step(dq, max_delta_q_);
     q_ref_ += dq;
     // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
     // stop at the model's position limits instead of integrating through them.
@@ -161,7 +154,7 @@ controller_interface::return_type TaskSpaceIKController::update(
 
   // Command the open-loop reference directly. q_ref_ is already smooth (a deadbeat
   // IK of a smooth, jitter-free trajectory, lagged one cycle), and its per-cycle
-  // change is bounded by the dq clamp above. No output vel/accel limiter is used: a
+  // change is bounded by the dq limit above. No output vel/accel limiter is used: a
   // limiter chasing a moving target rings (under-damped) and shows up as vibration.
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(q_ref_(i));

@@ -58,7 +58,8 @@ CallbackReturn JointSpaceVelocityController::on_configure(
       get_node(), "/controller_action_server/joint_space_velocity_controller");
   action_server_->init();
   action_server_->trajectory_->setLimits(joint_motion_limits());
-  action_server_->attach_activity_flag(&controller_active_);
+  action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+  action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -84,6 +85,16 @@ CallbackReturn JointSpaceVelocityController::on_activate(
   prev_cmd_speed_ = 0.0;
 
   return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn JointSpaceVelocityController::on_deactivate(const rclcpp_lifecycle::State & previous_state)
+{
+  // A velocity interface keeps its last value after the controller lets go, and a
+  // simulator integrates it: leave the arm commanded to rest, not to keep moving.
+  for (auto & command : command_interfaces_) {
+    command.set_value(0.0);
+  }
+  return FrankaBaseController::on_deactivate(previous_state);
 }
 
 controller_interface::return_type JointSpaceVelocityController::update(

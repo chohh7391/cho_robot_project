@@ -19,6 +19,7 @@ import py_trees
 from std_srvs.srv import Trigger
 
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
+from cho_task_manager.utils.blackboard import read_if_set
 
 
 BLACKBOARD_NAMESPACE = '/mit_tuning'
@@ -107,9 +108,11 @@ class MitTaskDiagnosticsServiceBehavior(BaseServiceBehavior):
         for key in sorted(reading):
             lines.append(f'    {key:16s} = {_fmt(reading[key])}')
 
-        baseline = None
-        if self.compare_to:
-            baseline = getattr(self.board, self.compare_to, None)
+        # read_if_set, not getattr(..., None): a baseline whose reading never got
+        # recorded is a registered-but-unwritten key, and the KeyError py_trees
+        # raises for it is not absorbed by getattr's default -- it would escape
+        # the tick and take the node down instead of just skipping the diff.
+        baseline = read_if_set(self.board, self.compare_to)
         if baseline:
             lines.append('    --- growth since baseline (this probe only) ---')
             for key in ('peak_wrench', 'peak_tau_ff'):

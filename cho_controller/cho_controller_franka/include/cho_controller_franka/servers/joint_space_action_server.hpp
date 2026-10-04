@@ -1,7 +1,7 @@
 #pragma once
 
+#include "cho_controller_base/joint_space_server.hpp"
 #include "cho_controller_franka/servers/base_action_server.hpp"
-#include "cho_interfaces/action/joint_space.hpp"
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
 
 namespace cho_controller {
@@ -11,32 +11,19 @@ using JointSpaceAction = cho_interfaces::action::JointSpace;
 using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
 using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianRuckig;
 
-class JointSpaceActionServer : public BaseActionServer<JointSpaceAction, JointTrajectory>
+// The shared JointSpace server (cho_controller_base) on FR3's 7 joints.
+class JointSpaceActionServer : public cho_controller_base::JointSpaceServer<State, JointTrajectory>
 {
 public:
-    using BaseActionServer<JointSpaceAction, JointTrajectory>::BaseActionServer;
-
-    void init() override;
-
-    rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
-        std::shared_ptr<const JointSpaceAction::Goal> goal) override;
-
-    rclcpp_action::CancelResponse handle_cancel(
-        const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
-
-    void handle_accepted(
-        const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
-
-    bool compute(const rclcpp::Time& current_time, State & state) override;
+    JointSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name)
+    : JointSpaceServer(std::move(node), std::move(action_name), 7) {}
 
 protected:
-    // Success threshold, selected by control_mode in init().
-    double success_threshold_;
+    Eigen::Ref<const Eigen::VectorXd> measured(const State & state) const override { return state.q_arm; }
 
-    // Goal joint configuration (kept separate from State::q_arm_ref, which is the
-    // rate-limit reference used by clip_position).
-    Eigen::VectorXd q_goal_;
+    // q_arm_ref is the rate-limit reference for clip_position: start it at the
+    // measured position so the command ramps from where the arm is.
+    void on_goal_start(State & state) override { state.q_arm_ref = state.q_arm; }
 };
 
 } // namespace franka

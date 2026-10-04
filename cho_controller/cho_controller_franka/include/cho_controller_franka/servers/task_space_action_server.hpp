@@ -1,7 +1,7 @@
 #pragma once
 
+#include "cho_controller_base/task_space_server.hpp"
 #include "cho_controller_franka/servers/base_action_server.hpp"
-#include "cho_interfaces/action/task_space.hpp"
 #include "cho_controller_common/trajectory/trajectory_se3.hpp"
 
 namespace cho_controller {
@@ -11,32 +11,12 @@ using TaskSpaceAction = cho_interfaces::action::TaskSpace;
 using TaskSpaceGoalHandle = rclcpp_action::ServerGoalHandle<TaskSpaceAction>;
 using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 
-class TaskSpaceActionServer : public BaseActionServer<TaskSpaceAction, TaskTrajectory>
+// The shared TaskSpace server (cho_controller_base) for FR3.
+class TaskSpaceActionServer : public cho_controller_base::TaskSpaceServer<State, TaskTrajectory>
 {
 public:
-    using BaseActionServer<TaskSpaceAction, TaskTrajectory>::BaseActionServer;
-
-    void init() override;
-
-    rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
-        std::shared_ptr<const TaskSpaceAction::Goal> goal) override;
-
-    rclcpp_action::CancelResponse handle_cancel(
-        const std::shared_ptr<TaskSpaceGoalHandle> goal_handle) override;
-
-    void handle_accepted(
-        const std::shared_ptr<TaskSpaceGoalHandle> goal_handle) override;
-
-    bool compute(const rclcpp::Time& current_time, State & state) override;
-
-protected:
-    bool is_relative_;
-    pinocchio::SE3 H_ee_ref_;
-
-    // Success thresholds, selected by control_mode in init().
-    double success_translation_threshold_;
-    double success_rotation_threshold_;
+    TaskSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name)
+    : TaskSpaceServer(std::move(node), std::move(action_name), 7) {}
 };
 
 } // namespace franka

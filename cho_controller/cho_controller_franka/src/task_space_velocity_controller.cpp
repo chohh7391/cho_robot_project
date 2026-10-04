@@ -64,7 +64,7 @@ CallbackReturn TaskSpaceVelocityController::on_configure(
       get_node(), "/controller_action_server/task_space_velocity_controller");
   action_server_->init();
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
-  action_server_->attach_activity_flag(&controller_active_);
+  action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -89,6 +89,16 @@ CallbackReturn TaskSpaceVelocityController::on_activate(
   prev_cmd_speed_ = 0.0;
 
   return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn TaskSpaceVelocityController::on_deactivate(const rclcpp_lifecycle::State & previous_state)
+{
+  // A velocity interface keeps its last value after the controller lets go, and a
+  // simulator integrates it: leave the arm commanded to rest, not to keep moving.
+  for (auto & command : command_interfaces_) {
+    command.set_value(0.0);
+  }
+  return FrankaBaseController::on_deactivate(previous_state);
 }
 
 controller_interface::return_type TaskSpaceVelocityController::update(

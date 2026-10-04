@@ -38,6 +38,16 @@ double min_jerk(const double ratio)
   return s * s * s * (10.0 + s * (-15.0 + 6.0 * s));
 }
 
+// d(min_jerk)/ds = 30 s^2 (1 - s)^2, zero outside the window.
+double min_jerk_rate(const double ratio)
+{
+  if (ratio <= 0.0 || ratio >= 1.0) {
+    return 0.0;
+  }
+  const double rest = 1.0 - ratio;
+  return 30.0 * ratio * ratio * rest * rest;
+}
+
 Waypoint blend_waypoints(const Waypoint & old_wp, const Waypoint & new_wp, const double weight)
 {
   Waypoint out = new_wp;
@@ -496,14 +506,42 @@ bool sample_series(
   return true;
 }
 
-Reference mix(const Reference & from, const Reference & to, const double ratio)
+// The blend of two trajectories, weighted `ratio` toward `to`, with the rate
+// that weight changes at. The reported velocities are the derivative of the
+// reported positions: the weighted rates plus ratio_rate * (to - from). Without
+// that term the feed-forward lagged the reference through every blend.
+// Translation blends linearly and rotation along the geodesic from `from`,
+// R = R_from exp(w phi), phi = log(R_from^T R_to), so the angular rate has a
+// closed form (the screw SE3::Interpolate couples the two and has none).
+Reference mix(const Reference & from, const Reference & to, const double ratio, const double ratio_rate)
 {
   Reference out = to;
   const double kept = 1.0 - ratio;
   out.joints = ratio * to.joints + kept * from.joints;
-  out.joint_velocity = ratio * to.joint_velocity + kept * from.joint_velocity;
-  out.pose = SE3::Interpolate(from.pose, to.pose, ratio);
-  out.twist = ratio * to.twist + kept * from.twist;
+  out.joint_velocity =
+    ratio * to.joint_velocity + kept * from.joint_velocity + ratio_rate * (to.joints - from.joints);
+
+  const Eigen::Vector3d translation =
+    ratio * to.pose.translation() + kept * from.pose.translation();
+  const Eigen::Matrix3d relative = from.pose.rotation().transpose() * to.pose.rotation();
+  const Eigen::Vector3d phi = pinocchio::log3(relative);
+  const Eigen::Vector3d u = ratio * phi;
+  const Eigen::Matrix3d rotation = from.pose.rotation() * pinocchio::exp3(u);
+  out.pose = SE3(rotation, translation);
+
+  out.twist.head<3>() = ratio * to.twist.head<3>() + kept * from.twist.head<3>() +
+    ratio_rate * (to.pose.translation() - from.pose.translation());
+  // d/dt R_from exp(u) = omega_from + R Jr(u) du/dt, with
+  // du/dt = ratio_rate phi + ratio Jlog(relative) R_to^T (omega_to - omega_from).
+  Eigen::Matrix3d log_jacobian;
+  pinocchio::Jlog3(relative, log_jacobian);
+  Eigen::Matrix3d exp_jacobian;
+  pinocchio::Jexp3(u, exp_jacobian);
+  const Eigen::Vector3d phi_rate = log_jacobian *
+    (to.pose.rotation().transpose() * (to.twist.tail<3>() - from.twist.tail<3>()));
+  out.twist.tail<3>() = from.twist.tail<3>() +
+    rotation * exp_jacobian * (ratio_rate * phi + ratio * phi_rate);
+
   if (from.has_gripper && to.has_gripper && from.gripper_mode == to.gripper_mode) {
     out.gripper = ratio * to.gripper + kept * from.gripper;
   }
@@ -526,10 +564,9 @@ bool sample_timeline(const Timeline & timeline, const double now, Reference & ou
         timeline.previous, timeline.space, timeline.interpolation, now, outgoing))
     {
       const double span = timeline.blend_end - timeline.blend_start;
-      const double ratio = (span > 0.0)
-        ? min_jerk((now - timeline.blend_start) / span)
-        : 1.0;
-      out = mix(outgoing, current, ratio);
+      const double progress = (span > 0.0) ? (now - timeline.blend_start) / span : 1.0;
+      const double rate = (span > 0.0) ? min_jerk_rate(progress) / span : 0.0;
+      out = mix(outgoing, current, min_jerk(progress), rate);
       return true;
     }
   }

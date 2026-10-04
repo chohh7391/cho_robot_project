@@ -3,7 +3,7 @@
 //
 // Tripwire for the build flags, not for the logic.
 //
-// -ffinite-math-only (implied by -Ofast, which cho_controller_common does use)
+// -ffinite-math-only (implied by -Ofast)
 // folds std::isfinite() to true. Measured on g++ 11.4: an -Ofast build reports a
 // NaN-carrying vector as all-finite. Every rejection this library exists to make
 // would silently stop happening, with no compile error and no behavioural clue

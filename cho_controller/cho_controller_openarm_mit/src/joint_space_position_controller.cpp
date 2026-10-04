@@ -39,7 +39,7 @@ CallbackReturn JointSpacePositionController::on_configure(
     action_server_->init();
     action_server_->trajectory_->setLimits(joint_motion_limits());
     action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
-    action_server_->attach_activity_flag(&controller_active_);
+    action_server_->attach_activity(&activity_);
     return CallbackReturn::SUCCESS;
 }
 

@@ -57,6 +57,9 @@ public:
 	void setLimits(const CartesianMotionLimits & limits);
 	// The duration the motion will take; plans first if anything changed.
 	double getDuration();
+	// False when the planner rejected the inputs (a NaN, a size mismatch): the
+	// motion then stays at its start. Plans first if anything changed.
+	bool planSucceeded();
 	const std::vector<Eigen::VectorXd> & getWholeTrajectory();
 
 protected:

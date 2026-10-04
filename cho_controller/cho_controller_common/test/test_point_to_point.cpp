@@ -48,7 +48,7 @@ JointMotionLimits limits(double v, double a, double j, Eigen::Index n)
 }
 
 TEST(FiniteMathGuard, PlannerIsBuiltWithNanChecks) {
-  // cho_controller_common compiles with -Ofast; the planner must not.
+  // -Ofast would fold Ruckig's isnan()/isinf() and the solvers' infinity tests.
   EXPECT_TRUE(cho_controller::common::trajectory::point_to_point_checks_nan());
 }
 
@@ -149,6 +149,10 @@ TEST(JointTrajectory, RejectedInputStaysAtTheStart) {
   TrajectoryEuclidianRuckig traj("t", Eigen::Vector2d(0.2, 0.3), goal, 1.0, 0.0);
   traj.setCurrentTime(0.5);
   EXPECT_TRUE(traj.computeNext().pos.isApprox(Eigen::Vector2d(0.2, 0.3)));
+  EXPECT_FALSE(traj.planSucceeded());
+
+  traj.setGoalSample(Eigen::Vector2d(1.0, 0.5));
+  EXPECT_TRUE(traj.planSucceeded());
 }
 
 TEST(JointTrajectory, NanDurationWithLimitsTakesTheFastestMotion) {

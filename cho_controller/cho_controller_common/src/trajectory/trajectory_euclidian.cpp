@@ -124,6 +124,17 @@ double TrajectoryEuclidianRuckig::getDuration()
   return m_motion->duration();
 }
 
+bool TrajectoryEuclidianRuckig::planSucceeded()
+{
+  if (m_goal.size() == 0) {
+    return false;
+  }
+  if (m_dirty) {
+    plan();
+  }
+  return m_motion->planned();
+}
+
 void TrajectoryEuclidianRuckig::setReference(ConstRefVector ref) {
   m_sample.pos = ref;
   m_sample.vel.setZero(ref.size());

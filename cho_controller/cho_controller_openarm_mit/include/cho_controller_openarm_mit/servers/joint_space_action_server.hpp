@@ -14,10 +14,12 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <utility>
 
-#include "cho_controller_openarm_mit/servers/base_action_server.hpp"
-#include "cho_interfaces/action/joint_space.hpp"
+#include "cho_controller_base/joint_space_server.hpp"
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
+#include "cho_controller_openarm_mit/servers/base_action_server.hpp"
 
 namespace cho_controller {
 namespace openarm {
@@ -26,41 +28,22 @@ using JointSpaceAction = cho_interfaces::action::JointSpace;
 using JointSpaceGoalHandle = rclcpp_action::ServerGoalHandle<JointSpaceAction>;
 using JointTrajectory = cho_controller::common::trajectory::TrajectoryEuclidianRuckig;
 
-class JointSpaceActionServer : public BaseActionServer<JointSpaceAction, JointTrajectory>
+// The shared JointSpace server (cho_controller_base) on one OpenArm arm. The
+// controller gives it the model's position limits (set_joint_limits): the two
+// arms are mirrored, so a target meant for the other arm is easy to send by
+// accident -- the left joint2 spans [-3.316, 0.175], the right [-0.175, 3.316].
+class JointSpaceActionServer : public cho_controller_base::JointSpaceServer<OpenArmState, JointTrajectory>
 {
 public:
-    using BaseActionServer<JointSpaceAction, JointTrajectory>::BaseActionServer;
-
-    void init() override;
-
-    rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
-        std::shared_ptr<const JointSpaceAction::Goal> goal) override;
-
-    rclcpp_action::CancelResponse handle_cancel(
-        const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
-
-    void handle_accepted(const std::shared_ptr<JointSpaceGoalHandle> goal_handle) override;
-
-    bool compute(const rclcpp::Time & current_time, OpenArmState & state) override;
-
-    // Model position limits for the joints this server drives, so a goal outside
-    // them is REJECTED up front. Without this the goal is accepted, the arm
-    // tracks toward a target it can never reach, and the only signal is an abort
-    // two seconds after the requested duration. Set from the controller, which
-    // is what owns the Pinocchio model.
-    void set_joint_limits(const Eigen::VectorXd & lower, const Eigen::VectorXd & upper);
+    JointSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name, int num_dof)
+    : JointSpaceServer(std::move(node), std::move(action_name), num_dof) {}
 
 protected:
-    // Success threshold, selected by control_mode in init().
-    double success_threshold_{5e-2};
+    Eigen::Ref<const Eigen::VectorXd> measured(const OpenArmState & state) const override { return state.q_arm; }
 
-    // Goal joint configuration, kept separate from OpenArmState::q_arm_ref
-    // (which is the rate-limit reference used by the position-mode controllers).
-    Eigen::VectorXd q_goal_;
-
-    Eigen::VectorXd q_lower_;
-    Eigen::VectorXd q_upper_;
+    // q_arm_ref is the position-mode controllers' rate-limit reference: start it
+    // where the arm is, so a goal issued mid-motion does not step the command.
+    void on_goal_start(OpenArmState & state) override { state.q_arm_ref = state.q_arm; }
 };
 
 }  // namespace openarm

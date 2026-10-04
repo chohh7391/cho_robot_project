@@ -1,6 +1,7 @@
 #pragma once
 
 //Pinocchio Header
+#include "cho_controller_base/goal_phase_action_server.hpp"
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp> 
 #include <pinocchio/algorithm/jacobian.hpp>
@@ -207,7 +208,9 @@ protected:
     // on_activate/on_deactivate). Action servers read it via an attached pointer
     // to REJECT goals while the controller is inactive (compute() would never
     // run, so the goal would hang forever).
-    std::atomic<bool> controller_active_{false};
+    // Lifecycle as the action servers see it (attach_activity); see
+    // cho_controller_base::ControllerActivity.
+    cho_controller_base::ControllerActivity activity_;
 
     // Per-controller namespaced logs. Relative names ("~/...") resolve to this
     // controller's own node, e.g. /joint_space_qp_controller/controller_state.

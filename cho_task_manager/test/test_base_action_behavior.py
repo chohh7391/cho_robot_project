@@ -6,6 +6,7 @@ and the clock is faked so timeout tests don't actually sleep.
 """
 import py_trees
 from action_msgs.msg import GoalStatus
+from rclpy.task import Future
 from unittest.mock import MagicMock
 
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
@@ -183,3 +184,68 @@ def test_terminate_invalid_cancels_running_goal():
     assert behavior.send_goal_future is None
     assert behavior.get_result_future is None
     assert behavior.goal_handle is None
+
+
+def test_terminate_invalid_before_goal_accepted_cancels_on_acceptance():
+    # A real rclpy Future, so the done-callback is armed and fired the way the
+    # executor would do it rather than asserted on a mock.
+    behavior = make_behavior()
+    send_future = Future()  # acceptance still in flight
+    behavior.client.send_goal_async.return_value = send_future
+
+    behavior.send_action_goal(MagicMock())
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+    behavior.terminate(py_trees.common.Status.INVALID)
+    assert behavior.send_goal_future is None
+    assert behavior.goal_handle is None
+
+    # The server accepts after the preemption: the goal must be cancelled then,
+    # or a motion the tree has abandoned would run while it does something else.
+    late_handle = MagicMock(accepted=True)
+    send_future.set_result(late_handle)
+    late_handle.cancel_goal_async.assert_called_once()
+
+
+def test_terminate_invalid_before_goal_rejected_cancels_nothing():
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+
+    behavior.send_action_goal(MagicMock())
+    behavior.terminate(py_trees.common.Status.INVALID)
+
+    rejected = MagicMock(accepted=False)
+    send_future.set_result(rejected)
+    rejected.cancel_goal_async.assert_not_called()
+
+
+def test_terminate_invalid_with_acceptance_not_yet_consumed_cancels_at_once():
+    # The response arrived but no tick has run update() on it: the handle is
+    # still only inside the future, and the cancel must not wait for anything.
+    behavior = make_behavior()
+    send_future = Future()
+    handle = MagicMock(accepted=True)
+    send_future.set_result(handle)
+    behavior.client.send_goal_async.return_value = send_future
+
+    behavior.send_action_goal(MagicMock())
+    behavior.terminate(py_trees.common.Status.INVALID)
+
+    handle.cancel_goal_async.assert_called_once()
+
+
+def test_terminate_invalid_after_completion_does_nothing():
+    # A finished leaf is invalidated again whenever its parent is stopped; with
+    # its state already cleared that must not reach for a goal.
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    behavior.terminate(py_trees.common.Status.SUCCESS)
+
+    behavior.terminate(py_trees.common.Status.INVALID)
+
+    handle = MagicMock(accepted=True)
+    send_future.set_result(handle)
+    handle.cancel_goal_async.assert_not_called()

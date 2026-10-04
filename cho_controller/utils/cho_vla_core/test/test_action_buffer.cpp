@@ -557,6 +557,48 @@ TEST(ActionBuffer, BothCubicsHitEveryPoseAndTheirTwistIsItsDerivative) {
   }
 }
 
+TEST(ActionBuffer, BlendVelocityIsTheDerivativeOfTheBlend) {
+  // Through a blend window too, joint_velocity and twist are the derivative of
+  // joints and pose: the weighted rates alone miss the weight's own rate times
+  // the gap between the two trajectories, and the limiter feeds them forward.
+  constexpr double kDelta = 1e-6;
+  ActionBuffer::Params params;
+  params.blend_duration = 0.2;
+
+  ActionBuffer joints(params);
+  joints.splice(joint_ramp(1.0, 0.1, 10, 0.0, 0.3), ActionSpace::kJoint, 0.9, 0.1);
+  joints.splice(joint_ramp(1.5, 0.1, 10, 4.0, -0.2), ActionSpace::kJoint, 1.5, 0.1);
+
+  // A second chunk that disagrees with the first in position and orientation.
+  const SE3 offset(pinocchio::exp3(Eigen::Vector3d(0.3, -0.2, 0.1)), Eigen::Vector3d(0.05, -0.02, 0.03));
+  auto incoming = curving_task_path(1.5, 0.1, 8);
+  for (Waypoint & waypoint : incoming) {
+    waypoint.pose = offset * waypoint.pose;
+  }
+  ActionBuffer task(params);
+  task.splice(curving_task_path(1.0, 0.1, 10), ActionSpace::kTask, 0.9, 0.1);
+  task.splice(incoming, ActionSpace::kTask, 1.5, 0.1);
+
+  for (double t = 1.507; t < 1.7; t += 0.019) {
+    Reference here, ahead, behind;
+    ASSERT_TRUE(joints.sample(t, here));
+    ASSERT_TRUE(joints.sample(t + kDelta, ahead));
+    ASSERT_TRUE(joints.sample(t - kDelta, behind));
+    EXPECT_NEAR(here.joint_velocity(0), (ahead.joints(0) - behind.joints(0)) / (2.0 * kDelta), 1e-5)
+      << "t=" << t;
+
+    ASSERT_TRUE(task.sample(t, here));
+    ASSERT_TRUE(task.sample(t + kDelta, ahead));
+    ASSERT_TRUE(task.sample(t - kDelta, behind));
+    const Eigen::Vector3d linear =
+      (ahead.pose.translation() - behind.pose.translation()) / (2.0 * kDelta);
+    const Eigen::Vector3d angular = pinocchio::log3(Eigen::Matrix3d(
+      ahead.pose.rotation() * behind.pose.rotation().transpose())) / (2.0 * kDelta);
+    EXPECT_NEAR((here.twist.head<3>() - linear).norm(), 0.0, 1e-5) << "t=" << t;
+    EXPECT_NEAR((here.twist.tail<3>() - angular).norm(), 0.0, 1e-5) << "t=" << t;
+  }
+}
+
 TEST(ActionBuffer, BothCubicsKeepTheTwistContinuousAcrossWaypoints) {
   for (const Interpolation mode : {Interpolation::kPchip, Interpolation::kSpline}) {
     SCOPED_TRACE(mode == Interpolation::kPchip ? "pchip" : "spline");

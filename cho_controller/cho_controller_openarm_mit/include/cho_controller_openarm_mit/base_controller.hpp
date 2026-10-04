@@ -13,6 +13,7 @@
 // limitations under the License.
 #pragma once
 
+#include "cho_controller_base/goal_phase_action_server.hpp"
 #include <pinocchio/fwd.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
@@ -193,7 +194,9 @@ protected:
     // True exactly while this controller is ACTIVE. Action servers read it
     // through attach_activity_flag() to REJECT goals that would otherwise hang,
     // because compute() only runs while we are active.
-    std::atomic<bool> controller_active_{false};
+    // Lifecycle as the action servers see it (attach_activity); see
+    // cho_controller_base::ControllerActivity.
+    cho_controller_base::ControllerActivity activity_;
 
     // Per-controller namespaced logs. Relative names ("~/...") resolve to this
     // controller's own node, so a bimanual build gets one pair per arm.

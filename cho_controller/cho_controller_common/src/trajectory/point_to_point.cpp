@@ -122,6 +122,11 @@ double PointToPoint::duration() const
     return duration_;
 }
 
+bool PointToPoint::planned() const
+{
+    return planned_;
+}
+
 void PointToPoint::sample(double t, Eigen::Ref<Eigen::VectorXd> pos, Eigen::Ref<Eigen::VectorXd> vel,
                           Eigen::Ref<Eigen::VectorXd> acc) const
 {

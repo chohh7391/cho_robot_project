@@ -30,8 +30,8 @@ namespace trajectory {
 // Phase-synchronised, so every coordinate moves in proportion: a straight line
 // from start to goal, the path the cubic took.
 //
-// Compiled with -fno-finite-math-only, unlike the rest of cho_controller_common:
-// Ruckig's templates rely on isnan()/isinf(), which -Ofast folds away.
+// Never build this with -ffinite-math-only (-Ofast): Ruckig's templates rely on
+// isnan()/isinf(), which it folds away. test_point_to_point checks.
 class PointToPoint
 {
 public:
@@ -52,6 +52,9 @@ public:
 
     double duration() const;
 
+    // False when Ruckig rejected the last plan's input.
+    bool planned() const;
+
     // t is time since the start: start before 0, goal from duration() on.
     void sample(double t, Eigen::Ref<Eigen::VectorXd> pos, Eigen::Ref<Eigen::VectorXd> vel,
                 Eigen::Ref<Eigen::VectorXd> acc) const;
@@ -66,8 +69,8 @@ private:
     bool planned_ {false};
 };
 
-// True when this library's Ruckig code was built with finite-math checks;
-// test_point_to_point guards the build flag with it.
+// True when this library was built with finite-math checks;
+// test_point_to_point guards the build flags with it.
 bool point_to_point_checks_nan();
 
 } // namespace trajectory

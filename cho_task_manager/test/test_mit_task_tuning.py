@@ -1,9 +1,15 @@
 """Unit tests for the OpenArm MIT task-space tuning probe."""
 
+from unittest.mock import MagicMock
+
 import py_trees
 import pytest
+from std_srvs.srv import Trigger
 
-from cho_task_manager.behaviors.service.mit_task_diagnostics import parse_diagnostics
+from cho_task_manager.behaviors.service.mit_task_diagnostics import (
+    MitTaskDiagnosticsServiceBehavior,
+    parse_diagnostics,
+)
 from cho_task_manager.tasks import available_tasks, build_task_tree
 from cho_task_manager.tasks.openarm.mit_task_tuning import (
     DEFAULT_PROBE_DURATION_SEC,
@@ -137,3 +143,36 @@ def test_rejects_a_probe_the_action_server_would_refuse():
         build_task_tree('mit_task_tuning', _config(probe_duration=0.1))
     with pytest.raises(ValueError, match='exactly 3'):
         build_task_tree('mit_task_tuning', _config(probe_translation=[0.03, 0.0]))
+
+
+def _diagnostics_leaf(**kwargs):
+    leaf = MitTaskDiagnosticsServiceBehavior(
+        name='Diagnostics_After_Probe', controller_name='task_space_impedance_mit_controller', **kwargs)
+    leaf.node = MagicMock()
+    return leaf
+
+
+def test_a_baseline_that_was_never_recorded_skips_the_diff_instead_of_raising():
+    # The baseline read records nothing when its service reports failure, which
+    # leaves the key registered but unwritten -- the case getattr(..., None)
+    # turned into a KeyError out of the tick.
+    py_trees.blackboard.Blackboard.clear()
+    leaf = _diagnostics_leaf(compare_to='baseline')
+    response = Trigger.Response(success=True, message=TASK_DIAGNOSTICS_MESSAGE)
+
+    assert leaf.handle_response(response) == py_trees.common.Status.SUCCESS
+    logged = leaf.node.get_logger().info.call_args[0][0]
+    assert 'growth since baseline' not in logged
+
+
+def test_a_recorded_baseline_is_diffed_against():
+    py_trees.blackboard.Blackboard.clear()
+    _diagnostics_leaf(record_as='baseline').handle_response(
+        Trigger.Response(success=True, message=TASK_DIAGNOSTICS_MESSAGE))
+    leaf = _diagnostics_leaf(compare_to='baseline')
+
+    assert leaf.handle_response(
+        Trigger.Response(success=True, message=TASK_DIAGNOSTICS_MESSAGE)
+    ) == py_trees.common.Status.SUCCESS
+    logged = leaf.node.get_logger().info.call_args[0][0]
+    assert 'growth since baseline' in logged

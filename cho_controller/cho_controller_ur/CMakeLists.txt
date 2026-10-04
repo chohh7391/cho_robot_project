@@ -23,6 +23,7 @@ find_package(Eigen3 REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_controller_common REQUIRED)
+find_package(cho_controller_base REQUIRED)
 # cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
 find_package(joint_limits REQUIRED)
 find_package(cho_interfaces REQUIRED)
@@ -31,10 +32,6 @@ add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
     src/joint_space_position_controller.cpp
     src/task_space_ik_controller.cpp
-    src/gripper_controller.cpp
-    src/servers/joint_space_action_server.cpp
-    src/servers/task_space_action_server.cpp
-    src/servers/gripper_action_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include
@@ -52,6 +49,7 @@ ament_target_dependencies(${PROJECT_NAME}
     realtime_tools
     control_msgs
     cho_controller_common
+    cho_controller_base
     cho_interfaces
 )
 

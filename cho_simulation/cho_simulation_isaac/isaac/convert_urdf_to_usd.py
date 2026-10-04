@@ -93,7 +93,12 @@ def parse_args():
 
 
 def strip_links(urdf_path, pattern):
-    """Remove matching links and the joints that attach them; return a new path."""
+    """Remove matching links and the joints that attach them.
+
+    Returns (path, dropped_links, dropped_joints), where path is a new file in a
+    fresh temp directory, or None when nothing matched -- never the input path,
+    which the caller would otherwise clean up as if it were its own temp file.
+    """
     import xml.etree.ElementTree as ET
 
     regex = re.compile(pattern)
@@ -103,7 +108,7 @@ def strip_links(urdf_path, pattern):
     dropped_links = {link.get("name") for link in root.findall("link")
                      if regex.match(link.get("name") or "")}
     if not dropped_links:
-        return urdf_path, set(), set()
+        return None, set(), set()
 
     dropped_joints = set()
     for joint in list(root.findall("joint")):
@@ -174,16 +179,19 @@ urdf_path = os.path.abspath(args.urdf)
 if not os.path.exists(urdf_path):
     raise SystemExit("URDF not found: %s" % urdf_path)
 
-temp_urdf = None
+# Only directories this script created itself. The cleanup below removes these
+# and nothing else: deriving them from whatever urdf_path ended up as once
+# deleted the directory holding the caller's own URDF.
+temp_dirs = []
 if "xacro" in open(urdf_path, encoding="utf-8").read(4096):
     print("[convert] expanding xacro: %s" % urdf_path)
-    temp_urdf = expand_xacro(urdf_path, args.xacro_arg)
-    urdf_path = temp_urdf
+    urdf_path = expand_xacro(urdf_path, args.xacro_arg)
+    temp_dirs.append(os.path.dirname(urdf_path))
 
-stripped_urdf = None
 if args.strip_links:
     stripped_urdf, dropped_links, dropped_joints = strip_links(urdf_path, args.strip_links)
-    if stripped_urdf != urdf_path:
+    if stripped_urdf is not None:
+        temp_dirs.append(os.path.dirname(stripped_urdf))
         print("[convert] stripped %d links matching %r (and %d joints): %s"
               % (len(dropped_links), args.strip_links, len(dropped_joints),
                  ", ".join(sorted(dropped_links))))
@@ -262,10 +270,8 @@ except Exception as exc:  # noqa: BLE001 - report and exit non-zero
     print("[convert] ERROR: %r" % (exc,))
     exit_code = 1
 finally:
-    if temp_urdf:
-        shutil.rmtree(os.path.dirname(temp_urdf), ignore_errors=True)
-    if stripped_urdf:
-        shutil.rmtree(os.path.dirname(stripped_urdf), ignore_errors=True)
+    for temp_dir in temp_dirs:
+        shutil.rmtree(temp_dir, ignore_errors=True)
     simulation_app.close()
 
 sys.exit(exit_code)
