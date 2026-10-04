@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bring up the Franka FR3 in Isaac Sim, same interface as the other environments.
+"""
+Bring up the Franka FR3 in Isaac Sim, same interface as the other environments.
 
     ros2 launch cho_bringup_franka bringup_isaac_robot.launch.py \
          control_mode:=torque controller_name:=task_space_qp_controller
@@ -54,12 +55,14 @@ from cho_bringup_common import (
     check_isaac_install,
     create_controller_spawners,
     DEFAULT_ISAAC_SIM_PATH,
+    gate_failure_argument,
     isaac_command_gate,
     isaac_controller_startup,
     isaac_sim_command,
     isaac_sim_process,
     load_package_utils,
     runtime_param_cleanup,
+    shutdown_on_gate_failure,
     top_level_spawner,
 )
 
@@ -168,6 +171,7 @@ def generate_launch_description():
             default_value='false',
             description='Publish an emulated Bota FT wrench and serve /bota_ft_sensor/tare'
         ),
+        gate_failure_argument(),
     ]
 
     robot_description = {
@@ -294,7 +298,8 @@ def generate_launch_description():
         # Spawners once Isaac is stepping; the command gate once the requested
         # controller is active (see isaac_controller_startup for both reasons).
         event_handlers = isaac_controller_startup(
-            isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time))
+            isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time),
+            shutdown_on_failure=shutdown_on_gate_failure(context))
         event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
         return [isaac_sim, node_ros2_control, isaac_ft_sensor] + event_handlers

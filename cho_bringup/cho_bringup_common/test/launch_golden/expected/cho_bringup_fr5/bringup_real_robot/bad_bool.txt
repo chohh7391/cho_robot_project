@@ -1,0 +1,11 @@
+LAUNCH cho_bringup_fr5/bringup_real_robot.launch.py ['load_gripper:=maybe']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG robot_ip default='' choices=None
+  ARG ee_name default='' choices=None
+  ARG gripper default='' choices=None
+  ARG load_gripper default='config' choices=None
+  ARG bringup_type default='real' choices=None
+  ARG config_file default='<share:cho_bringup_fr5>/config/real/fr5.config.yaml' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE setup_control_environment
+    ERROR RuntimeError: Expected a boolean launch argument, got 'maybe'. Valid: true, 1, yes, on, false, 0, no, off

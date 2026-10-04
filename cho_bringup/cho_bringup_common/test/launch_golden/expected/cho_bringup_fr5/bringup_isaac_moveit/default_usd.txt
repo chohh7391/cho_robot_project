@@ -1,0 +1,63 @@
+LAUNCH cho_bringup_fr5/bringup_isaac_moveit.launch.py []
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG launch_rviz default='true' choices=None
+  ARG floor_frame default='world' choices=None
+  ARG floor_size default='4.0,4.0,0.10' choices=None
+  ARG floor_position default='0.0,0.0,-0.05' choices=None
+  ARG scene_ready_timeout default='300.0' choices=None
+  ARG controller_ready_timeout default='180.0' choices=None
+  ARG shutdown_on_gate_failure default='false' choices=None
+  INCLUDE <share:cho_bringup_fr5>/launch/bringup_isaac_robot.launch.py
+    arg controller_name='joint_space_position_controller'
+    arg use_sim_time='true'
+    arg headless='false'
+    arg device='cpu'
+    arg shutdown_on_gate_failure='false'
+      ARG controller_name default='joint_space_position_controller' choices=None
+      ARG ee_name default='wrist3_link' choices=None
+      ARG bringup_type default='isaac' choices=None
+      ARG use_sim_time default='true' choices=None
+      ARG urdf_file default='<share:cho_description_fr5>/urdf/fr5.urdf.xacro' choices=None
+      ARG controllers_file default='<share:cho_bringup_fr5>/config/isaac/controllers.yaml' choices=None
+      ARG controller_manager_timeout default='60' choices=None
+      ARG robot_usd default='<share:cho_description_fr5>/usd/fr5/fr5.usda' choices=None
+      ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+      ARG physics_rate default='250' choices=None
+      ARG headless default='false' choices=None
+      ARG device default='cpu' choices=['cpu', 'cuda']
+      ARG shutdown_on_gate_failure default='false' choices=None
+      OPAQUE setup_control_environment
+        ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<share:cho_description_fr5>/usd/fr5/fr5.usda'
+          convert_args=['--urdf', '<share:cho_description_fr5>/urdf/fr5.urdf.xacro', '--usd-path', '<share:cho_description_fr5>/usd', '--ros-package', 'cho_description_fr5:<share:cho_description_fr5>', '--require-link', 'wrist3_link']
+        ERROR RuntimeError: Isaac robot USD not found at '<share:cho_description_fr5>/usd/fr5/fr5.usda'.
+        | Build it once with:
+        |   <FAKE>/isaacsim/python.sh <share:cho_simulation_isaac>/isaac/convert_urdf_to_usd.py --urdf <share:cho_description_fr5>/urdf/fr5.urdf.xacro --usd-path <share:cho_description_fr5>/usd --ros-package cho_description_fr5:<share:cho_description_fr5> --require-link wrist3_link
+  INCLUDE <share:cho_moveit_fr5>/launch/moveit.launch.py
+    arg use_sim_time='true'
+    arg launch_rviz='true'
+    arg publish_static_scene='true'
+    arg floor_frame='world'
+    arg floor_size='4.0,4.0,0.10'
+    arg floor_position='0.0,0.0,-0.05'
+    arg scene_ready_timeout='300.0'
+    arg controller_ready_timeout='180.0'
+    arg activate_controller_after_scene='joint_trajectory_controller'
+    arg deactivate_controller_after_scene='joint_space_position_controller'
+RUNTIME_FILE <RT:cho_fr5_isaac_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: wrist3_link}
+  /** (every controller):
+    bringup_type: isaac
+    cartesian_limits: {max_rot_vel: 0.5, max_trans_acc: 0.5, max_trans_dec: -0.5, max_trans_vel: 0.25}
+    control_mode: position
+    joint_limits:
+      j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}

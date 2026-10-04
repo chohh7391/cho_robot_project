@@ -1,0 +1,180 @@
+# The launch argument variants test_launch_golden.py evaluates, and the reason
+# printed when a whole bringup package is skipped.
+#
+#   cases:
+#     <bringup package>:
+#       <file under share/<package>/launch/>:
+#         <case name>: [name:=value, ...]
+#
+# Each case's expected output is expected/<package>/<launch stem>/<case>.txt.
+# Every launch file a bringup package installs must have at least one case.
+#
+# $FAKE is a scratch directory holding a stub isaacsim/python.sh (never run;
+# check_isaac_install only looks for it) and an empty usd/robot/robot.usda (two
+# levels deep: the FR5 bringup passes the USD's grandparent to the converter),
+# so the Isaac bringups evaluate without Isaac. `defaults` are set before every
+# case's own arguments and are not printed: no case depends on whether Isaac is
+# installed here. A case that leaves robot_usd at its default expects that USD not to
+# exist; on a machine where it has been built that case reports as skipped.
+#
+# Regenerating after an intended launch change: see test_launch_golden.py.
+
+defaults:
+  - isaac_sim_path:=$FAKE/isaacsim
+
+# Why a bringup package may be absent. CI builds only what installs from
+# binary dependencies; see .github/workflows/ci.yml.
+not_installed:
+  cho_bringup_franka: >-
+    not built in CI - its exec_depends franka_gripper, franka_hardware,
+    franka_ign_ros2_control and franka_robot_state_broadcaster come from the
+    extern/franka_ros2 source build, which has no Humble debs
+  cho_bringup_openarm: >-
+    not built in CI - its exec_depends cho_hardware_openarm_mit_mujoco and
+    cho_hardware_openarm_mit_real need extern/mujoco_ros2_control and
+    extern/openarm_can built from source
+
+cases:
+  cho_bringup_franka:
+    bringup_gz_robot.launch.py:
+      default: []
+      position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
+      vla: [vla:=true]
+      vla_velocity: [vla:=true, control_mode:=velocity]
+      bare_no_rviz: [load_gripper:=false, load_ft_sensor:=false, launch_rviz:=false]
+      moveit_controller: [load_moveit_controller:=true, control_mode:=position,
+                          controller_name:=joint_space_position_controller]
+      mode_mismatch: [control_mode:=position]
+      namespace_refused: [namespace:=ns1]
+      moveit_refused: [controller_name:=moveit]
+    bringup_gz_moveit.launch.py:
+      default: []
+    bringup_mujoco_robot.launch.py:
+      default: []
+      position: [control_mode:=position, controller_name:=joint_space_position_controller]
+      velocity: [control_mode:=velocity, controller_name:=joint_space_velocity_controller]
+      vla: [vla:=true]
+      vla_position: [vla:=true, control_mode:=position]
+      no_gripper: [load_gripper:=false]
+      vla_controller_position: [controller_name:=vla_controller, control_mode:=position]
+      mode_mismatch: [control_mode:=position]
+      controller_mismatch: [controller_name:=joint_space_position_controller]
+    bringup_real_robot.launch.py:
+      default: []
+      position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
+      no_gripper: [load_gripper:=false]
+      vla: [vla:=true]
+      mode_mismatch: [control_mode:=position]
+    bringup_isaac_robot.launch.py:
+      default_usd: []
+      default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+      position: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=position,
+                 controller_name:=joint_space_position_controller]
+      ft_headless_cuda: [robot_usd:=$FAKE/usd/robot/robot.usda, publish_ft:=true, headless:=true, device:=cuda]
+      no_gripper: [robot_usd:=$FAKE/usd/robot/robot.usda, load_gripper:=false]
+      mode_mismatch: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity]
+      velocity: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity,
+                 controller_name:=joint_space_velocity_controller]
+      vla: [robot_usd:=$FAKE/usd/robot/robot.usda, vla:=true]
+      gate_failure_shutdown: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=true]
+
+  cho_bringup_ur:
+    bringup_gz_robot.launch.py:
+      default: []
+      ik_headless: [controller_name:=task_space_ik_controller, load_gripper:=false, gazebo_gui:=false,
+                    launch_rviz:=false, use_sim_time:=false]
+      joint_trajectory: [controller_name:=joint_trajectory_controller]
+      moveit_refused: [controller_name:=moveit]
+      unknown_controller: [controller_name:=bogus]
+    bringup_gz_moveit.launch.py:
+      default: []
+    bringup_mujoco_robot.launch.py:
+      default: []
+      ik_wrist: [controller_name:=task_space_ik_controller, ee_name:=wrist_3_link]
+      unknown_controller: [controller_name:=bogus]
+    bringup_real_robot.launch.py:
+      default: [robot_ip:=192.168.1.10]
+      ik: [robot_ip:=192.168.1.10, controller_name:=task_space_ik_controller]
+    bringup_isaac_robot.launch.py:
+      default_usd: []
+      default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+      ik_headless: [robot_usd:=$FAKE/usd/robot/robot.usda, controller_name:=task_space_ik_controller, headless:=true]
+      unknown_controller: [robot_usd:=$FAKE/usd/robot/robot.usda, controller_name:=bogus]
+      no_isaac: [robot_usd:=$FAKE/usd/robot/robot.usda, isaac_sim_path:=$FAKE/no_isaacsim]
+      gate_failure_shutdown: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=true]
+
+  cho_bringup_fr5:
+    bringup_gz_robot.launch.py:
+      default: []
+      ik_headless: [controller_name:=task_space_ik_controller, gazebo_gui:=false, launch_rviz:=false,
+                    use_sim_time:=false]
+      moveit_refused: [controller_name:=moveit]
+    bringup_gz_moveit.launch.py:
+      default: []
+    bringup_isaac_robot.launch.py:
+      default_usd: []
+      default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+      ik_headless: [robot_usd:=$FAKE/usd/robot/robot.usda, controller_name:=task_space_ik_controller, headless:=true]
+      unknown_controller: [robot_usd:=$FAKE/usd/robot/robot.usda, controller_name:=bogus]
+      gate_failure_shutdown: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=true]
+    bringup_isaac_moveit.launch.py:
+      default_usd: []
+      default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+    bringup_mujoco_robot.launch.py:
+      default: []
+      ik_ag95: [controller_name:=task_space_ik_controller, gripper:=ag95]
+      load_gripper: [load_gripper:=true]
+      pouring: [controller_name:=pouring_controller]
+      gripper_contradiction: [gripper:=ag95, load_gripper:=false]
+    bringup_mujoco_moveit.launch.py:
+      default: []
+      ag95: [gripper:=ag95]
+    bringup_real_robot.launch.py:
+      default: []
+      bare_ik: [gripper:=none, controller_name:=task_space_ik_controller]
+      gripper_ip: [load_gripper:=true, robot_ip:=10.0.0.5]
+      bad_bool: [load_gripper:=maybe]
+    bringup_real_moveit.launch.py:
+      default: []
+      bare: [gripper:=none]
+    camera_extrinsics.launch.py:
+      default: []
+
+  cho_bringup_openarm:
+    bringup_mujoco_robot.launch.py:
+      default: []
+      bimanual: [bimanual:=true]
+      position: [control_mode:=position, controller_name:=joint_space_position_controller]
+      velocity_bimanual: [control_mode:=velocity, controller_name:=joint_space_velocity_controller,
+                          bimanual:=true]
+      no_hand: [hand:=false, ee_name:=openarm_hand]
+      mit_headless: [mujoco_mit_prototype:=true, mujoco_mit_headless:=true]
+      mit_joint_return_to_zero: [mujoco_mit_prototype:=true, mit_controller_name:=joint_impedance_mit_controller,
+                                 return_to_zero:=true]
+      mit_task_return_to_zero: [mujoco_mit_prototype:=true,
+                                mit_controller_name:=task_space_impedance_mit_controller, return_to_zero:=true]
+      mit_vla_bimanual: [mujoco_mit_prototype:=true, mit_controller_name:=vla_mit_controller, bimanual:=true]
+      mit_fjt_both: [mujoco_mit_prototype:=true, bimanual:=true,
+                     mit_controller_name:=bimanual_follow_joint_trajectory_mit_controller, mit_arm:=both]
+      mit_fjt_left: [mujoco_mit_prototype:=true, bimanual:=true,
+                     mit_controller_name:=single_arm_follow_joint_trajectory_mit_controller, mit_arm:=left]
+      moveit_refused: [controller_name:=moveit]
+    bringup_mujoco_moveit.launch.py:
+      default: []
+      bimanual_mit: [bimanual:=true, arm:=both, mujoco_mit_prototype:=true]
+    bringup_real_robot.launch.py:
+      default: []
+      bimanual_hand: [bimanual:=true, hand:=true]
+      task_return_to_zero: [controller_name:=task_space_impedance_mit_controller, return_to_zero:=true,
+                            gravity_compensation:=true, gravity_scale:=1.2]
+      vla_right: [bimanual:=true, mit_arm:=right, controller_name:=vla_mit_controller, return_to_zero:=true]
+      rviz: [use_rviz:=true]
+    bringup_isaac_robot.launch.py:
+      default_usd: []
+      bimanual_default_usd: [bimanual:=true]
+      default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+      newton_bimanual_position: [robot_usd:=$FAKE/usd/robot/robot.usda, bimanual:=true, physics_engine:=newton,
+                                 control_mode:=position, controller_name:=joint_space_position_controller]
+      velocity_headless: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity,
+                          controller_name:=joint_space_velocity_controller, headless:=true, ee_name:=openarm_hand]
+      gate_failure_shutdown: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=true]

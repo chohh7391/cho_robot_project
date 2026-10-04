@@ -75,15 +75,16 @@ def generate_robot_nodes(context):
     nodes = []
 
     for _, config in configs.items():
-        namespace             = str(config['namespace'])
-        robot_type_str        = str(config['robot_type'])
-        arm_prefix_str        = str(config.get('arm_prefix', ''))
-        robot_ip_str          = str(config['robot_ip'])
-        load_gripper_str      = str(config['load_gripper']) if load_gripper_arg == 'config' else load_gripper_arg
-        use_fake_hw_str       = str(config['use_fake_hardware'])
-        fake_sensor_cmds_str  = str(config['fake_sensor_commands'])
-        joint_state_rate_int  = int(config.get('joint_state_rate', 30))
-        load_gripper_bool     = load_gripper_str.lower() == 'true'
+        namespace = str(config['namespace'])
+        robot_type_str = str(config['robot_type'])
+        arm_prefix_str = str(config.get('arm_prefix', ''))
+        robot_ip_str = str(config['robot_ip'])
+        load_gripper_str = (
+            str(config['load_gripper']) if load_gripper_arg == 'config' else load_gripper_arg)
+        use_fake_hw_str = str(config['use_fake_hardware'])
+        fake_sensor_cmds_str = str(config['fake_sensor_commands'])
+        joint_state_rate_int = int(config.get('joint_state_rate', 30))
+        load_gripper_bool = load_gripper_str.lower() == 'true'
 
         # ---- (A) Build URDF (xacro) ----
         urdf_path = PathJoinSubstitution([
@@ -235,7 +236,8 @@ def generate_launch_description():
             # (auto gravity compensation), so vla_controller's velocity control_mode should work
             # here in principle -- verified in MuJoCo, but NOT yet exercised on real hardware.
             # Start slow/low-gain and be ready on the e-stop the first time.
-            description='Choose control mode: position, velocity, torque (velocity untested on real hardware)',
+            description=('Choose control mode: position, velocity, torque '
+                         '(velocity untested on real hardware)'),
             choices=['position', 'velocity', 'torque'],
         ),
         DeclareLaunchArgument(

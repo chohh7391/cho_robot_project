@@ -1,0 +1,139 @@
+LAUNCH cho_bringup_franka/bringup_mujoco_robot.launch.py ['load_gripper:=false']
+  ARG control_mode default='torque' choices=None
+  ARG controller_name default='task_space_impedance_controller' choices=None
+  ARG vla default='false' choices=None
+  ARG load_gripper default='true' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG bringup_type default='mujoco' choices=None
+  ARG xacro_file default='<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf' choices=None
+  ARG controllers_file default='<share:cho_bringup_franka>/config/mujoco/controllers.yaml' choices=None
+  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+  NODE cho_bringup_franka/mock_franka_gripper.py [cond=False]
+    name=None namespace=None
+    args=[]
+    param {use_sim_time: True}
+    param {command_mode: 'position'}
+    output='log' on_exit=NoneType
+  NODE robot_state_publisher/robot_state_publisher
+    name=None namespace=None
+    args=[]
+    param {use_sim_time: True}
+    param {robot_description: <description #1 fr3>}
+    output='screen' on_exit=NoneType
+  OPAQUE setup_control_environment
+    COMMAND ['xacro', '<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf', 'control_mode:=torque']
+    NODE mujoco_ros2_control/ros2_control_node
+      name=None namespace=None
+      args=[]
+      remap=[('~/robot_description', '/robot_description')]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 fr3>}
+      param FILE <share:cho_bringup_franka>/config/mujoco/controllers.yaml
+      param FILE <RT:cho_runtime_params_#0>
+      output='screen' on_exit=Shutdown
+    ON OnProcessStart target=<mujoco_ros2_control/ros2_control_node args=[]>
+      ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'ee_state_broadcaster', 'task_space_impedance_controller', '|', '--controller-manager-timeout 60']>
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['gravity_compensation_controller', 'joint_space_impedance_controller', 'operational_space_controller', 'joint_space_qp_controller', 'task_space_qp_controller', '|', '--controller-manager-timeout 60', '--inactive']
+          param {use_sim_time: True}
+          output='screen' on_exit=NoneType
+      NODE controller_manager/spawner
+        name=None namespace=None
+        args=['joint_state_broadcaster', 'ee_state_broadcaster', 'task_space_impedance_controller', '|', '--controller-manager-timeout 60']
+        param {use_sim_time: True}
+        output='screen' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='fr3'
+  joint fr3_base_joint fixed base -> fr3_link0
+  joint fr3_link0_sc_joint fixed fr3_link0 -> fr3_link0_sc
+  joint fr3_link0_accelerometer_top_joint fixed fr3_link0 -> fr3_link0_accelerometer_top
+  joint fr3_link0_accelerometer_bottom_joint fixed fr3_link0 -> fr3_link0_accelerometer_bottom
+  joint fr3_link1_sc_joint fixed fr3_link1 -> fr3_link1_sc
+  joint fr3_link1_accelerometer_top_joint fixed fr3_link1 -> fr3_link1_accelerometer_top
+  joint fr3_link1_accelerometer_bottom_joint fixed fr3_link1 -> fr3_link1_accelerometer_bottom
+  joint fr3_joint1 revolute fr3_link0 -> fr3_link1
+  joint fr3_link2_sc_joint fixed fr3_link2 -> fr3_link2_sc
+  joint fr3_link2_accelerometer_top_joint fixed fr3_link2 -> fr3_link2_accelerometer_top
+  joint fr3_link2_accelerometer_bottom_joint fixed fr3_link2 -> fr3_link2_accelerometer_bottom
+  joint fr3_joint2 revolute fr3_link1 -> fr3_link2
+  joint fr3_link3_sc_joint fixed fr3_link3 -> fr3_link3_sc
+  joint fr3_link3_accelerometer_top_joint fixed fr3_link3 -> fr3_link3_accelerometer_top
+  joint fr3_link3_accelerometer_bottom_joint fixed fr3_link3 -> fr3_link3_accelerometer_bottom
+  joint fr3_joint3 revolute fr3_link2 -> fr3_link3
+  joint fr3_link4_sc_joint fixed fr3_link4 -> fr3_link4_sc
+  joint fr3_link4_accelerometer_top_joint fixed fr3_link4 -> fr3_link4_accelerometer_top
+  joint fr3_link4_accelerometer_bottom_joint fixed fr3_link4 -> fr3_link4_accelerometer_bottom
+  joint fr3_joint4 revolute fr3_link3 -> fr3_link4
+  joint fr3_link5_sc_joint fixed fr3_link5 -> fr3_link5_sc
+  joint fr3_link5_accelerometer_top_joint fixed fr3_link5 -> fr3_link5_accelerometer_top
+  joint fr3_link5_accelerometer_bottom_joint fixed fr3_link5 -> fr3_link5_accelerometer_bottom
+  joint fr3_joint5 revolute fr3_link4 -> fr3_link5
+  joint fr3_link6_sc_joint fixed fr3_link6 -> fr3_link6_sc
+  joint fr3_joint6 revolute fr3_link5 -> fr3_link6
+  joint fr3_link7_sc_joint fixed fr3_link7 -> fr3_link7_sc
+  joint fr3_joint7 revolute fr3_link6 -> fr3_link7
+  joint fr3_joint8 fixed fr3_link7 -> fr3_link8
+  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting
+  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench
+  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1
+  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2
+  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3
+  joint fr3_hand_joint fixed bota_ft_sensor_wrench -> fr3_hand
+  joint fr3_hand_sc_joint fixed fr3_hand -> fr3_hand_sc
+  joint fr3_hand_tcp_joint fixed fr3_hand -> fr3_hand_tcp
+  joint fr3_finger_joint1 prismatic fr3_hand -> fr3_leftfinger
+  joint fr3_finger_joint2 prismatic fr3_hand -> fr3_rightfinger
+  ros2_control name='MujocoSystem' type='system'
+    hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_franka>/xml/fr3_with_ft_sensor/scene_torque.xml]
+    joint name='fr3_joint1' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint2' [command_interface name='effort', state_interface name='position' [param name='initial_value': -0.785], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint3' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint4' [command_interface name='effort', state_interface name='position' [param name='initial_value': -2.356], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint5' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint6' [command_interface name='effort', state_interface name='position' [param name='initial_value': 1.57], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_joint7' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.7853], state_interface name='velocity', state_interface name='effort']
+    joint name='fr3_finger_joint1'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.04]
+      state_interface name='velocity'
+      state_interface name='effort'
+RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
+  /**:
+    ee_state_broadcaster:
+      ros__parameters: {}
+    gravity_compensation_controller:
+      ros__parameters: {}
+    joint_space_impedance_controller:
+      ros__parameters: {}
+    joint_space_qp_controller:
+      ros__parameters: {}
+    joint_state_broadcaster:
+      ros__parameters: {}
+    operational_space_controller:
+      ros__parameters: {}
+    ros__parameters:
+      center_of_mass: [-0.00753, 0.0, 0.05325]
+      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
+      mass: 0.97
+    task_space_impedance_controller:
+      ros__parameters: {}
+    task_space_qp_controller:
+      ros__parameters: {}
+  /** (every controller):
+    bringup_type: mujoco
+    cartesian_limits: {max_rot_acc: 17.0, max_rot_vel: 2.5, max_trans_acc: 9.0, max_trans_dec: -9.0, max_trans_vel: 3.0}
+    control_mode: effort
+    ee_name: fr3_hand_tcp
+    joint_limits:
+      fr3_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 2.62}
+      fr3_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.0, max_velocity: 2.62}
+      fr3_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}
+      fr3_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 4.18}
+      fr3_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}

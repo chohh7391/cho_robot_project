@@ -9,11 +9,10 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 from cho_bringup_common import (
-    bringup_params,
     chain_spawners,
     make_spawner_node,
     runtime_param_cleanup,
-    write_runtime_param_file,
+    write_position_arm_param_file,
 )
 from cho_robot_config import motion_limit_parameters
 
@@ -40,14 +39,9 @@ def setup_control_environment(context):
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
     # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    runtime_param_file = write_runtime_param_file(
-        {
-            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
-            'task_space_ik_controller': bringup_params(bringup_type, 'position', ee_name),
-        },
-        shared_params=motion_limit_parameters('ur5e'),
-        prefix='cho_ur_mujoco_runtime_params_',
-    )
+    runtime_param_file = write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('ur5e'),
+        prefix='cho_ur_mujoco_runtime_params_')
 
     # ur5e.urdf carries a `hardware` xacro arg so the same file can emit either the
     # MuJoCo or the Isaac ros2_control block, so it has to be expanded rather than
@@ -111,7 +105,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name',
             default_value='joint_space_position_controller',
-            description='Cho controller to activate: joint_space_position_controller or task_space_ik_controller',
+            description=('Cho controller to activate: joint_space_position_controller or '
+                         'task_space_ik_controller'),
         ),
         DeclareLaunchArgument(
             'ee_name',

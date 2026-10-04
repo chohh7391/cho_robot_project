@@ -24,11 +24,13 @@ from .events import start_on_output
 from .isaac import (
     check_isaac_install,
     DEFAULT_ISAAC_SIM_PATH,
+    gate_failure_argument,
     ISAAC_READY_MARKER,
     isaac_command_gate,
     isaac_controller_startup,
     isaac_sim_command,
     isaac_sim_process,
+    shutdown_on_gate_failure,
 )
 from .runtime_params import (
     bringup_params,
@@ -36,6 +38,7 @@ from .runtime_params import (
     runtime_control_mode,
     runtime_param_cleanup,
     runtime_param_dir,
+    write_position_arm_param_file,
     write_runtime_param_file,
 )
 from .spawners import (
@@ -44,7 +47,7 @@ from .spawners import (
     make_spawner_node,
     top_level_spawner,
 )
-from .utils import as_bool, load_package_utils, load_yaml, unique_names
+from .utils import as_bool, load_package_utils, load_yaml, strict_bool, unique_names
 
 __all__ = [
     'as_bool',
@@ -54,6 +57,7 @@ __all__ = [
     'create_controller_spawners',
     'create_runtime_param_cleanup',
     'DEFAULT_ISAAC_SIM_PATH',
+    'gate_failure_argument',
     'ISAAC_READY_MARKER',
     'isaac_command_gate',
     'isaac_controller_startup',
@@ -66,8 +70,10 @@ __all__ = [
     'runtime_control_mode',
     'runtime_param_cleanup',
     'runtime_param_dir',
+    'shutdown_on_gate_failure',
     'start_on_output',
     'top_level_spawner',
     'unique_names',
+    'write_position_arm_param_file',
     'write_runtime_param_file',
 ]

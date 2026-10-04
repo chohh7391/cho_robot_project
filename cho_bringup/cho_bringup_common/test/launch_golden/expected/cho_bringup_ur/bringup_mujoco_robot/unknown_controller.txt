@@ -1,0 +1,10 @@
+LAUNCH cho_bringup_ur/bringup_mujoco_robot.launch.py ['controller_name:=bogus']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG bringup_type default='mujoco' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_ur>/urdf/ur5e.urdf' choices=None
+  ARG controllers_file default='<share:cho_bringup_ur>/config/mujoco/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE setup_control_environment
+    ERROR RuntimeError: Unknown controller_name 'bogus'. Valid options: ['joint_space_position_controller', 'task_space_ik_controller']

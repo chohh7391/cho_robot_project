@@ -64,6 +64,7 @@ from cho_bringup_common import (
     chain_spawners,
     check_isaac_install,
     DEFAULT_ISAAC_SIM_PATH,
+    gate_failure_argument,
     isaac_command_gate,
     isaac_controller_startup,
     isaac_sim_command,
@@ -71,6 +72,7 @@ from cho_bringup_common import (
     load_package_utils,
     make_spawner_node,
     runtime_param_cleanup,
+    shutdown_on_gate_failure,
 )
 
 launch_utils = load_package_utils('cho_bringup_fr5')
@@ -164,7 +166,8 @@ def setup_control_environment(context):
     # controller is active (see isaac_controller_startup for both reasons).
     event_handlers = isaac_controller_startup(
         isaac_sim, chain_spawners(active_spawner, [inactive_spawner]), active_spawner,
-        isaac_command_gate({'use_sim_time': use_sim_time}))
+        isaac_command_gate({'use_sim_time': use_sim_time}),
+        shutdown_on_failure=shutdown_on_gate_failure(context))
     event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
     return [isaac_sim, node_robot_state_publisher, node_ros2_control] + event_handlers
@@ -208,5 +211,6 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('headless', default_value='false'),
         DeclareLaunchArgument('device', default_value='cpu', choices=['cpu', 'cuda']),
+        gate_failure_argument(),
         OpaqueFunction(function=setup_control_environment),
     ])

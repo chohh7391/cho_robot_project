@@ -1,0 +1,16 @@
+LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robot/robot.usda', 'controller_name:=bogus']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='wrist3_link' choices=None
+  ARG bringup_type default='isaac' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_fr5>/urdf/fr5.urdf.xacro' choices=None
+  ARG controllers_file default='<share:cho_bringup_fr5>/config/isaac/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='60' choices=None
+  ARG robot_usd default='<share:cho_description_fr5>/usd/fr5/fr5.usda' choices=None
+  ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+  ARG physics_rate default='250' choices=None
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG shutdown_on_gate_failure default='false' choices=None
+  OPAQUE setup_control_environment
+    ERROR RuntimeError: Unknown controller_name 'bogus'. Valid options: ['joint_trajectory_controller', 'joint_space_position_controller', 'task_space_ik_controller']

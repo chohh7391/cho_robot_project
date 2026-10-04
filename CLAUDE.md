@@ -20,6 +20,33 @@ colcon test-result --verbose
 
 Python linting enforces max line length 120 (flake8), relaxed pep257. Test files must be named `test_*.py`.
 
+Every bringup launch file is covered by a golden test: cho_bringup_common's
+`test/test_launch_golden.py` evaluates each one for the argument sets in
+`test/launch_golden/cases.yaml` (walking OpaqueFunctions and event handlers with
+a real LaunchContext, starting nothing, Isaac and hardware stubbed) and compares
+against `test/launch_golden/expected/`. A launch change that is meant to change
+behaviour fails it until the expected files are regenerated and the diff reviewed:
+
+```bash
+colcon build --symlink-install --packages-select <changed bringup packages>
+source install/setup.bash
+cd src/cho_robot_project/cho_bringup/cho_bringup_common
+CHO_LAUNCH_GOLDEN_UPDATE=1 python3 -m pytest test/test_launch_golden.py
+git diff test/launch_golden/
+# One case by hand: python3 -m cho_bringup_common.launch_golden <pkg> <file> [name:=value ...]
+```
+
+A new launch file or bringup package needs cases there, or the test fails. CI
+evaluates the UR and FR5 bringups; Franka and OpenArm are skipped there (their
+source-only dependencies are not built) and run locally.
+
+CI (`.github/workflows/ci.yml`) derives its rosdep paths from BUILD_PACKAGES, so
+every workspace package a listed package depends on, of any dependency type, must
+be listed too - `rosdep --ignore-src` reports any other workspace name as an
+unknown key. Check with `rosdep install --simulate --rosdistro humble --ignore-src
+--from-paths $(colcon list --paths-only --packages-select <BUILD_PACKAGES>)` in a
+shell that has sourced only /opt/ros/humble.
+
 ## Launch
 
 ```bash
@@ -38,6 +65,9 @@ ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py control_mode:=tor
 ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller physics_engine:=newton bimanual:=true
 # Isaac: give it its own ROS_DOMAIN_ID if anything else on the machine simulates -
 # two /clock publishers make sim time jump backwards and every controller misbehaves.
+# If the requested controller fails to activate, the command gate stays closed and
+# Isaac holds the home pose with one ERROR line to show for it; for headless or
+# unattended runs pass shutdown_on_gate_failure:=true to end the launch instead.
 
 # VLA mode (requires control_mode set in controller config)
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
@@ -67,6 +97,9 @@ cho_controller/
                              # server (GoalPhase), the JointSpace/TaskSpace servers
                              # every arm serves, DLS IK and held-command helpers.
                              # Robots keep only thin adapters (state fields, defaults).
+                             # testing/controller_manager_harness.hpp is test support:
+                             # a controller_manager on mock hardware that a test steps
+                             # one period at a time (each arm's test_reactivation).
   cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
   utils/cho_vla_core/        # Robot-independent VLA action-chunk pipeline: chunk
                              # validation, observation-time splicing, reference
@@ -101,6 +134,9 @@ cho_bringup/cho_bringup_common/  # ament_python; what every bringup shares, impo
                                  # load_package_utils() for a robot's own
                                  # lib/<pkg>/utils/launch_utils.py. Robot-specific
                                  # names and rules stay in those robot utils.
+                                 # Those utils/ dirs are installed with PATTERN
+                                 # EXCLUDEs, never FILES_MATCHING, which makes
+                                 # --symlink-install copy them (and go stale).
 
 cho_description/cho_description_openarm/   # enactic OpenArm v1.0, vendored fork
   robots/openarm_v10/        # ONE xacro entry point for real/gazebo/mujoco/isaac/mock
@@ -284,7 +320,20 @@ lives in `cho_robot_config` (which validates `actions.preferences` against it),
 `cho_control_tools/action_names.py` is the operator clients' registry-free copy. The
 MoveIt bridge serves `~/joint_space` / `~/task_space` too, under the node name
 `cho_robot_config.moveit_bridge_node()` gives (`<robot>[_<profile>]_moveit_action_bridge`),
-and refuses to start under any other.
+and refuses to start under any other. Those names are absolute, so a ROS namespace is
+NOT transparent (CONTRACT.md, Names).
+
+Clients name and stamp their goals from the registry: JointSpace targets carry the
+profile's `model.joints` (`arm_joint_names()`; per-arm prefixed on a bimanual build),
+and TaskSpace goals `cho_robot_config.task_goal_frame(config, relative)` --
+`model.absolute_goal_frame` / `model.relative_goal_frame`, `''` where undeclared.
+`model.arm_base_link` is NOT the absolute goal frame everywhere (OpenArm bimanual arms'
+`link0` is off the torso root; the trees there say `world`).
+`cho_task_manager/test/test_goal_frames.py` expands every bringup's description with
+its xacro mappings and proves each absolute goal frame is a `root_frames()` member. The
+MoveIt bridge keeps `duration_sec` a minimum: plan-only, then the plan is slowed
+uniformly to `duration_sec` (never sped up) and executed via `ExecuteTrajectory`; its
+planning budget is its own `planning_time_sec`.
 
 The JointSpace and TaskSpace servers themselves are shared: `cho_controller_base`'s
 `JointSpaceServer` / `TaskSpaceServer` over `GoalPhaseActionServer`, with each robot
@@ -381,6 +430,19 @@ Note for any blackboard read: py_trees raises `KeyError` for a registered but
 unwritten key, and `getattr(board, key, None)` does **not** absorb it — that
 KeyError escapes `update()` and takes the node down. Use
 `utils/blackboard.read_if_set()`.
+
+`BaseActionBehavior.terminate()` cancels a goal that may still be running for EVERY
+status, not only INVALID: one already accepted at once, one still awaiting acceptance
+when it is accepted (a sweep can fail on the tick after it sent a waypoint). The leaf
+records the cancels it still owes (`cancels_outstanding()`), and
+`task_manager_node.shutdown_task_manager()` spins, at most 1 s, until none is left --
+also when the tree ended SUCCESS/FAILURE -- with Ctrl-C/SIGTERM held from before
+`tree.stop()` to the end of that flush (an interrupt that lands before the handlers
+are in place restarts the stop-and-flush).
+Every deadline a behaviour takes on the node clock -- goal timeouts, waits, sweep
+ceilings, dwells, latch windows, outage clocks -- goes through `utils/clock.py`: none
+is set while the clock reads 0 (sim time before the first /clock), so it starts from
+the first real reading instead of being missed the moment /clock arrives.
 
 `guarded_mission(..., monitor=...)` adds a watchdog branch beside the mission via
 `subtrees/watched_mission()`: `Parallel(SuccessOnSelected([mission]))` with

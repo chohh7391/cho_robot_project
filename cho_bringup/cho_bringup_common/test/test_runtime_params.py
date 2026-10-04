@@ -22,6 +22,7 @@ from cho_bringup_common import (
     runtime_control_mode,
     runtime_param_cleanup,
     runtime_param_dir,
+    write_position_arm_param_file,
     write_runtime_param_file,
 )
 from launch import LaunchContext
@@ -89,6 +90,19 @@ def test_every_controller_gets_its_own_params_and_the_shared_ones():
     task = wildcard['task_space_ik_controller']['ros__parameters']
     assert joint == {'bringup_type': 'mujoco', 'control_mode': 'position', **LIMITS}
     assert task == {'bringup_type': 'mujoco', 'control_mode': 'position', 'ee_name': 'tool0', **LIMITS}
+
+
+def test_position_arm_file_puts_ee_name_and_extras_on_the_task_space_controller_only():
+    path = write_position_arm_param_file(
+        'gz', 'tool0', LIMITS, prefix='cho_ur_gz_runtime_params_',
+        task_space_params={'minimum_tool_height': 0.02})
+    assert os.path.basename(path).startswith('cho_ur_gz_runtime_params_')
+    wildcard = load(path)['/**']
+    assert wildcard['joint_space_position_controller']['ros__parameters'] == {
+        'bringup_type': 'gz', 'control_mode': 'position', **LIMITS}
+    assert wildcard['task_space_ik_controller']['ros__parameters'] == {
+        'bringup_type': 'gz', 'control_mode': 'position', 'ee_name': 'tool0',
+        'minimum_tool_height': 0.02, **LIMITS}
 
 
 def test_shared_params_are_copied_so_the_file_has_no_yaml_aliases():

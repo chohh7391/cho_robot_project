@@ -1,0 +1,195 @@
+LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['load_gripper:=false']
+  ARG robot_config_file default='<share:cho_bringup_franka>/config/real/franka.config.yaml' choices=None
+  ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
+  ARG controller_name default='operational_space_controller' choices=None
+  ARG load_gripper default='config' choices=['true', 'false', 'config']
+  ARG vla default='false' choices=None
+  ARG bringup_type default='real' choices=None
+  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+  OPAQUE generate_robot_nodes
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=''
+      args=[]
+      param {robot_description: <description #1 fr3>}
+      output='screen' on_exit=NoneType
+    NODE controller_manager/ros2_control_node
+      name=None namespace=''
+      args=[]
+      remap=[('joint_states', 'franka/joint_states')]
+      param FILE <share:cho_bringup_franka>/config/real/controllers.yaml
+      param FILE <RT:cho_runtime_params_#0>
+      param {robot_description: <description #1 fr3>}
+      param {load_gripper: False}
+      output='screen' on_exit=Shutdown
+    NODE joint_state_publisher/joint_state_publisher
+      name='joint_state_publisher' namespace=''
+      args=[]
+      param {rate: 100, source_list: ['franka/joint_states'], use_robot_description: False}
+      output='screen' on_exit=NoneType
+    INCLUDE [cond=False] <share:franka_gripper>/launch/gripper.launch.py
+      arg namespace=''
+      arg robot_ip='172.16.0.2'
+      arg use_fake_hardware='false'
+    ON OnProcessStart target=<controller_manager/ros2_control_node args=[]>
+      ON OnProcessExit target=<controller_manager/spawner args=['franka_robot_state_broadcaster', 'joint_state_broadcaster', 'ee_state_broadcaster', 'operational_space_controller', '|', '--controller-manager-timeout 60']>
+        NODE controller_manager/spawner
+          name=None namespace=''
+          args=['gravity_compensation_controller', 'joint_space_impedance_controller', 'task_space_impedance_controller', 'joint_space_qp_controller', 'task_space_qp_controller', '|', '--controller-manager-timeout 60', '--inactive']
+          output='screen' on_exit=NoneType
+      NODE controller_manager/spawner
+        name=None namespace=''
+        args=['franka_robot_state_broadcaster', 'joint_state_broadcaster', 'ee_state_broadcaster', 'operational_space_controller', '|', '--controller-manager-timeout 60']
+        output='screen' on_exit=NoneType
+    NODE rviz2/rviz2
+      name='rviz2' namespace=None
+      args=['--display-config', '<share:cho_description_franka>/rviz/visualize_franka.rviz', '-f', 'base']
+      output='screen' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='fr3'
+  joint fr3_base_joint fixed base -> fr3_link0
+  joint fr3_link0_accelerometer_top_joint fixed fr3_link0 -> fr3_link0_accelerometer_top
+  joint fr3_link0_accelerometer_bottom_joint fixed fr3_link0 -> fr3_link0_accelerometer_bottom
+  joint fr3_link1_accelerometer_top_joint fixed fr3_link1 -> fr3_link1_accelerometer_top
+  joint fr3_link1_accelerometer_bottom_joint fixed fr3_link1 -> fr3_link1_accelerometer_bottom
+  joint fr3_joint1 revolute fr3_link0 -> fr3_link1
+  joint fr3_link2_accelerometer_top_joint fixed fr3_link2 -> fr3_link2_accelerometer_top
+  joint fr3_link2_accelerometer_bottom_joint fixed fr3_link2 -> fr3_link2_accelerometer_bottom
+  joint fr3_joint2 revolute fr3_link1 -> fr3_link2
+  joint fr3_link3_accelerometer_top_joint fixed fr3_link3 -> fr3_link3_accelerometer_top
+  joint fr3_link3_accelerometer_bottom_joint fixed fr3_link3 -> fr3_link3_accelerometer_bottom
+  joint fr3_joint3 revolute fr3_link2 -> fr3_link3
+  joint fr3_link4_accelerometer_top_joint fixed fr3_link4 -> fr3_link4_accelerometer_top
+  joint fr3_link4_accelerometer_bottom_joint fixed fr3_link4 -> fr3_link4_accelerometer_bottom
+  joint fr3_joint4 revolute fr3_link3 -> fr3_link4
+  joint fr3_link5_accelerometer_top_joint fixed fr3_link5 -> fr3_link5_accelerometer_top
+  joint fr3_link5_accelerometer_bottom_joint fixed fr3_link5 -> fr3_link5_accelerometer_bottom
+  joint fr3_joint5 revolute fr3_link4 -> fr3_link5
+  joint fr3_joint6 revolute fr3_link5 -> fr3_link6
+  joint fr3_joint7 revolute fr3_link6 -> fr3_link7
+  joint fr3_joint8 fixed fr3_link7 -> fr3_link8
+  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting
+  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench
+  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1
+  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2
+  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3
+  ros2_control name='FrankaHardwareInterface' type='system'
+    hardware [param name='version': 0.1.0, param name='robot_type': fr3, param name='prefix', plugin: franka_hardware/FrankaHardwareInterface, param name='robot_ip': 172.16.0.2, param name='arm_prefix']
+    joint name='fr3_joint1'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint2'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -0.7853981633974483]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint3'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint4'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -2.356194490192345]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint5'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint6'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 1.5707963267948966]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint7'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.7853981633974483]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    gpio name='vx' [command_interface name='cartesian_velocity', param name='index': 0]
+    gpio name='vy' [command_interface name='cartesian_velocity', param name='index': 1]
+    gpio name='vz' [command_interface name='cartesian_velocity', param name='index': 2]
+    gpio name='wx' [command_interface name='cartesian_velocity', param name='index': 3]
+    gpio name='wy' [command_interface name='cartesian_velocity', param name='index': 4]
+    gpio name='wz' [command_interface name='cartesian_velocity', param name='index': 5]
+    gpio name='0' [command_interface name='cartesian_pose_command', param name='index': 0]
+    gpio name='1' [command_interface name='cartesian_pose_command', param name='index': 1]
+    gpio name='2' [command_interface name='cartesian_pose_command', param name='index': 2]
+    gpio name='3' [command_interface name='cartesian_pose_command', param name='index': 3]
+    gpio name='4' [command_interface name='cartesian_pose_command', param name='index': 4]
+    gpio name='5' [command_interface name='cartesian_pose_command', param name='index': 5]
+    gpio name='6' [command_interface name='cartesian_pose_command', param name='index': 6]
+    gpio name='7' [command_interface name='cartesian_pose_command', param name='index': 7]
+    gpio name='8' [command_interface name='cartesian_pose_command', param name='index': 8]
+    gpio name='9' [command_interface name='cartesian_pose_command', param name='index': 9]
+    gpio name='10' [command_interface name='cartesian_pose_command', param name='index': 10]
+    gpio name='11' [command_interface name='cartesian_pose_command', param name='index': 11]
+    gpio name='12' [command_interface name='cartesian_pose_command', param name='index': 12]
+    gpio name='13' [command_interface name='cartesian_pose_command', param name='index': 13]
+    gpio name='14' [command_interface name='cartesian_pose_command', param name='index': 14]
+    gpio name='15' [command_interface name='cartesian_pose_command', param name='index': 15]
+    gpio name='joint_3_position' [command_interface name='elbow_command', param name='index': 0]
+    gpio name='joint_4_sign' [command_interface name='elbow_command', param name='index': 1]
+RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
+  /**:
+    ee_state_broadcaster:
+      ros__parameters: {}
+    gravity_compensation_controller:
+      ros__parameters: {}
+    gripper_controller:
+      ros__parameters: {}
+    joint_space_impedance_controller:
+      ros__parameters: {}
+    joint_space_qp_controller:
+      ros__parameters: {}
+    joint_state_broadcaster:
+      ros__parameters: {}
+    operational_space_controller:
+      ros__parameters: {}
+    ros__parameters:
+      center_of_mass: [-0.00753, 0.0, 0.05325]
+      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
+      mass: 0.97
+    task_space_impedance_controller:
+      ros__parameters: {}
+    task_space_qp_controller:
+      ros__parameters: {}
+  /** (every controller):
+    bringup_type: real
+    cartesian_limits: {max_rot_acc: 17.0, max_rot_vel: 2.5, max_trans_acc: 9.0, max_trans_dec: -9.0, max_trans_vel: 3.0}
+    control_mode: effort
+    ee_name: fr3_hand_tcp
+    joint_limits:
+      fr3_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 2.62}
+      fr3_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.0, max_velocity: 2.62}
+      fr3_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}
+      fr3_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 4.18}
+      fr3_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}

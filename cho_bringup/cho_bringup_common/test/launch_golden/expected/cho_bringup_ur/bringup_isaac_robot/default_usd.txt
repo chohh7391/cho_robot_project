@@ -1,0 +1,36 @@
+LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py []
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG bringup_type default='isaac' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_ur>/urdf/ur5e.urdf' choices=None
+  ARG controllers_file default='<share:cho_bringup_ur>/config/isaac/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='60' choices=None
+  ARG robot_usd default='<share:cho_description_ur>/usd/ur5e/ur5e.usda' choices=None
+  ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+  ARG physics_rate default='250' choices=None
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG shutdown_on_gate_failure default='false' choices=None
+  OPAQUE setup_control_environment
+    ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<share:cho_description_ur>/usd/ur5e/ur5e.usda'
+      convert_args=['--urdf', '<share:cho_description_ur>/urdf/ur5e.urdf', '--usd-path', '<share:cho_description_ur>/usd/ur5e', '--ros-package', 'cho_description_ur:<share:cho_description_ur>']
+    ERROR RuntimeError: Isaac robot USD not found at '<share:cho_description_ur>/usd/ur5e/ur5e.usda'.
+    | Build it once with:
+    |   <FAKE>/isaacsim/python.sh <share:cho_simulation_isaac>/isaac/convert_urdf_to_usd.py --urdf <share:cho_description_ur>/urdf/ur5e.urdf --usd-path <share:cho_description_ur>/usd/ur5e --ros-package cho_description_ur:<share:cho_description_ur>
+RUNTIME_FILE <RT:cho_ur_isaac_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: tool0}
+  /** (every controller):
+    bringup_type: isaac
+    control_mode: position
+    joint_limits:
+      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

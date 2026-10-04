@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bring up the UR5e in Isaac Sim.
+"""
+Bring up the UR5e in Isaac Sim.
 
     ros2 launch cho_bringup_ur bringup_isaac_robot.launch.py \
          controller_name:=task_space_ik_controller
@@ -50,17 +51,18 @@ from launch_ros.actions import Node
 
 import xacro
 from cho_bringup_common import (
-    bringup_params,
     chain_spawners,
     check_isaac_install,
     DEFAULT_ISAAC_SIM_PATH,
+    gate_failure_argument,
     isaac_command_gate,
     isaac_controller_startup,
     isaac_sim_command,
     isaac_sim_process,
     make_spawner_node,
     runtime_param_cleanup,
-    write_runtime_param_file,
+    shutdown_on_gate_failure,
+    write_position_arm_param_file,
 )
 from cho_robot_config import motion_limit_parameters
 
@@ -92,14 +94,9 @@ def setup_control_environment(context):
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
     # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    runtime_param_file = write_runtime_param_file(
-        {
-            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
-            'task_space_ik_controller': bringup_params(bringup_type, 'position', ee_name),
-        },
-        shared_params=motion_limit_parameters('ur5e'),
-        prefix='cho_ur_isaac_runtime_params_',
-    )
+    runtime_param_file = write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('ur5e'),
+        prefix='cho_ur_isaac_runtime_params_')
 
     robot_description = {
         'robot_description': xacro.process_file(
@@ -155,7 +152,8 @@ def setup_control_environment(context):
     # controller is active (see isaac_controller_startup for both reasons).
     event_handlers = isaac_controller_startup(
         isaac_sim, chain_spawners(active_spawner, [inactive_spawner]), active_spawner,
-        isaac_command_gate({'use_sim_time': use_sim_time}))
+        isaac_command_gate({'use_sim_time': use_sim_time}),
+        shutdown_on_failure=shutdown_on_gate_failure(context))
     event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
     return [isaac_sim, node_robot_state_publisher, node_ros2_control] + event_handlers
@@ -196,5 +194,6 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('headless', default_value='false'),
         DeclareLaunchArgument('device', default_value='cpu', choices=['cpu', 'cuda']),
+        gate_failure_argument(),
         OpaqueFunction(function=setup_control_environment),
     ])

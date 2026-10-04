@@ -32,9 +32,8 @@
 #
 # --------------------------------------------------------------- how to redo
 #
-# `python3 $(ros2 pkg prefix --share cho_camera_calibration)/scripts/solve_hand_eye.py`
-# -- see that package's README (its `ros2 run` form finds nothing: the scripts
-# install to share/, not lib/). All three entries below come from one run.
+# `ros2 run cho_camera_calibration solve_hand_eye.py ...` -- see that package's
+# README for the arguments. All three entries below come from one run.
 #
 # THE BOARD'S OWN POSE IS AN OUTPUT, NOT AN INPUT. The earlier procedure put
 # one tag at a surveyed point and solved the camera against it, which made

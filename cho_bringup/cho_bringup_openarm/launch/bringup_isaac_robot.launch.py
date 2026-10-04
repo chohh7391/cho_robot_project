@@ -52,12 +52,14 @@ from cho_bringup_common import (
     check_isaac_install,
     create_controller_spawners,
     DEFAULT_ISAAC_SIM_PATH,
+    gate_failure_argument,
     isaac_command_gate,
     isaac_controller_startup,
     isaac_sim_command,
     isaac_sim_process,
     load_package_utils,
     runtime_param_cleanup,
+    shutdown_on_gate_failure,
     top_level_spawner,
 )
 
@@ -118,6 +120,7 @@ def generate_launch_description():
                         'in the controllers file: the manager is paced by /clock.'),
         DeclareLaunchArgument(
             'headless', default_value='false', description='Run Isaac without a viewport'),
+        gate_failure_argument(),
         DeclareLaunchArgument(
             'device', default_value='cpu', choices=['cpu', 'cuda'],
             description='Isaac physics device'),
@@ -244,7 +247,8 @@ def generate_launch_description():
         # Spawners once Isaac is stepping; the command gate once the requested
         # controller is active (see isaac_controller_startup for both reasons).
         return [isaac_sim, node_ros2_control] + isaac_controller_startup(
-            isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time)
+            isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time),
+            shutdown_on_failure=shutdown_on_gate_failure(context),
         ) + [runtime_param_cleanup(runtime_param_file)]
 
     return LaunchDescription(

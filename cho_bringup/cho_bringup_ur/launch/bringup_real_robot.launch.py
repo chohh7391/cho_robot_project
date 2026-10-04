@@ -4,10 +4,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from cho_bringup_common import (
-    bringup_params,
     make_spawner_node,
     runtime_param_cleanup,
-    write_runtime_param_file,
+    write_position_arm_param_file,
 )
 from cho_robot_config import motion_limit_parameters
 
@@ -30,14 +29,9 @@ def launch_setup(context, *args, **kwargs):
     bringup_type = LaunchConfiguration('bringup_type').perform(context)
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
     # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    runtime_param_file = write_runtime_param_file(
-        {
-            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
-            'task_space_ik_controller': bringup_params(bringup_type, 'position', ee_name),
-        },
-        shared_params=motion_limit_parameters('ur5e'),
-        prefix='cho_ur_runtime_params_',
-    )
+    runtime_param_file = write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('ur5e'),
+        prefix='cho_ur_runtime_params_')
 
     return [
         IncludeLaunchDescription(
@@ -91,7 +85,8 @@ def generate_launch_description():
                 LaunchConfiguration('ur_type'),
                 'default_kinematics.yaml',
             ]),
-            description='Calibration YAML extracted from the physical robot, or nominal default kinematics.',
+            description=('Calibration YAML extracted from the physical robot, or nominal '
+                         'default kinematics.'),
         ),
         DeclareLaunchArgument(
             'controllers_file',

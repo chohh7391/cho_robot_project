@@ -1,0 +1,368 @@
+LAUNCH cho_bringup_franka/bringup_gz_robot.launch.py ['vla:=true']
+  ARG load_gripper default='true' choices=None
+  ARG franka_hand default='franka_hand' choices=None
+  ARG robot_type default='fr3' choices=None
+  ARG namespace default='' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG vla default='false' choices=None
+  ARG robot_name default='franka_robot' choices=None
+  ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
+  ARG controller_name default='task_space_impedance_controller' choices=None
+  ARG bringup_type default='gazebo' choices=None
+  ARG world default='empty.sdf' choices=None
+  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+  ARG launch_rviz default='true' choices=None
+  ARG load_moveit_controller default='false' choices=None
+  ARG load_ft_sensor default='true' choices=None
+  ENV-APPEND IGN_GAZEBO_SYSTEM_PLUGIN_PATH value='<prefix:franka_ign_ros2_control>/lib' prepend=True sep=':'
+  ENV-APPEND GZ_SIM_SYSTEM_PLUGIN_PATH value='<prefix:franka_ign_ros2_control>/lib' prepend=True sep=':'
+  ENV-APPEND GZ_SIM_RESOURCE_PATH value='<prefix:cho_description_franka>/share' prepend=True sep=':'
+  INCLUDE <share:ros_gz_sim>/launch/gz_sim.launch.py
+    arg gz_args='-r empty.sdf'
+  NODE ros_gz_bridge/parameter_bridge
+    name=None namespace=None
+    args=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock']
+    param {use_sim_time: True}
+    output='screen' on_exit=NoneType
+  OPAQUE launch_setup
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {robot_description: <description #1 fr3>}
+      param {use_sim_time: True}
+      output='log' on_exit=NoneType
+    NODE ros_gz_sim/create
+      name=None namespace=None
+      args=['-string', <description #1 fr3>, '-name', 'franka_robot']
+      output='screen' on_exit=NoneType
+    ON OnProcessExit target=<ros_gz_sim/create args=['-string', <description #1 fr3>, '-name', 'franka_robot']>
+      ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'ee_state_broadcaster', 'simulation_gripper_controller', 'gripper_controller', 'vla_controller', '|']>
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['gravity_compensation_controller', 'joint_space_impedance_controller', 'task_space_impedance_controller', 'operational_space_controller', 'joint_space_qp_controller', 'task_space_qp_controller', '|', '--controller-manager-timeout 60', '--inactive']
+          param {use_sim_time: True}
+          output='screen' on_exit=NoneType
+      NODE controller_manager/spawner
+        name=None namespace=None
+        args=['joint_state_broadcaster', 'ee_state_broadcaster', 'simulation_gripper_controller', 'gripper_controller', 'vla_controller', '|', '--controller-manager-timeout 60']
+        param {use_sim_time: True}
+        output='screen' on_exit=NoneType
+      NODE cho_bringup_franka/mock_franka_gripper.py [cond=True]
+        name=None namespace=None
+        args=[]
+        param {use_sim_time: True}
+        param {command_mode: 'effort', effort_kd: 3.0, effort_kp: 10.0, max_effort: 12.0, position_deadband: 0.001, velocity_deadband: 0.002}
+        output='screen' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_runtime_params_#0>']
+    NODE rviz2/rviz2 [cond=True]
+      name=None namespace=None
+      args=['-d', '<share:cho_description_franka>/rviz/visualize_franka.rviz']
+      param {use_sim_time: True}
+      output='log' on_exit=NoneType
+DESCRIPTION #1
+  robot name='fr3'
+  joint fr3_link0_accelerometer_top_joint fixed fr3_link0 -> fr3_link0_accelerometer_top
+  joint fr3_link0_accelerometer_bottom_joint fixed fr3_link0 -> fr3_link0_accelerometer_bottom
+  joint fr3_link1_accelerometer_top_joint fixed fr3_link1 -> fr3_link1_accelerometer_top
+  joint fr3_link1_accelerometer_bottom_joint fixed fr3_link1 -> fr3_link1_accelerometer_bottom
+  joint fr3_joint1 revolute fr3_link0 -> fr3_link1
+  joint fr3_link2_accelerometer_top_joint fixed fr3_link2 -> fr3_link2_accelerometer_top
+  joint fr3_link2_accelerometer_bottom_joint fixed fr3_link2 -> fr3_link2_accelerometer_bottom
+  joint fr3_joint2 revolute fr3_link1 -> fr3_link2
+  joint fr3_link3_accelerometer_top_joint fixed fr3_link3 -> fr3_link3_accelerometer_top
+  joint fr3_link3_accelerometer_bottom_joint fixed fr3_link3 -> fr3_link3_accelerometer_bottom
+  joint fr3_joint3 revolute fr3_link2 -> fr3_link3
+  joint fr3_link4_accelerometer_top_joint fixed fr3_link4 -> fr3_link4_accelerometer_top
+  joint fr3_link4_accelerometer_bottom_joint fixed fr3_link4 -> fr3_link4_accelerometer_bottom
+  joint fr3_joint4 revolute fr3_link3 -> fr3_link4
+  joint fr3_link5_accelerometer_top_joint fixed fr3_link5 -> fr3_link5_accelerometer_top
+  joint fr3_link5_accelerometer_bottom_joint fixed fr3_link5 -> fr3_link5_accelerometer_bottom
+  joint fr3_joint5 revolute fr3_link4 -> fr3_link5
+  joint fr3_joint6 revolute fr3_link5 -> fr3_link6
+  joint fr3_joint7 revolute fr3_link6 -> fr3_link7
+  joint fr3_joint8 fixed fr3_link7 -> fr3_link8
+  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting
+  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench
+  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1
+  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2
+  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3
+  joint fr3_hand_joint fixed bota_ft_sensor_wrench -> fr3_hand
+  joint fr3_hand_tcp_joint fixed fr3_hand -> fr3_hand_tcp
+  joint fr3_finger_joint1 prismatic fr3_hand -> fr3_leftfinger
+  joint fr3_finger_joint2 prismatic fr3_hand -> fr3_rightfinger
+  joint world_joint fixed world -> fr3_link0
+  gazebo reference='fr3_joint1' [provideFeedback: true]
+  transmission name='fr3_joint1_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint1' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint1_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint2' [provideFeedback: true]
+  transmission name='fr3_joint2_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint2' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint2_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint3' [provideFeedback: true]
+  transmission name='fr3_joint3_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint3' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint3_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint4' [provideFeedback: true]
+  transmission name='fr3_joint4_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint4' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint4_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint5' [provideFeedback: true]
+  transmission name='fr3_joint5_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint5' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint5_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint6' [provideFeedback: true]
+  transmission name='fr3_joint6_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint6' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint6_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint7' [provideFeedback: true]
+  transmission name='fr3_joint7_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint7' [hardwareInterface: hardware_interface/PositionJointInterface]
+    actuator name='fr3_joint7_motor' [hardwareInterface: hardware_interface/PositionJointInterface]
+  gazebo reference='fr3_joint1' [provideFeedback: true]
+  transmission name='fr3_joint1_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint1' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint1_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint2' [provideFeedback: true]
+  transmission name='fr3_joint2_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint2' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint2_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint3' [provideFeedback: true]
+  transmission name='fr3_joint3_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint3' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint3_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint4' [provideFeedback: true]
+  transmission name='fr3_joint4_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint4' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint4_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint5' [provideFeedback: true]
+  transmission name='fr3_joint5_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint5' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint5_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint6' [provideFeedback: true]
+  transmission name='fr3_joint6_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint6' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint6_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint7' [provideFeedback: true]
+  transmission name='fr3_joint7_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint7' [hardwareInterface: hardware_interface/VelocityJointInterface]
+    actuator name='fr3_joint7_motor' [hardwareInterface: hardware_interface/VelocityJointInterface]
+  gazebo reference='fr3_joint1' [provideFeedback: true]
+  transmission name='fr3_joint1_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint1' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint1_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint2' [provideFeedback: true]
+  transmission name='fr3_joint2_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint2' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint2_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint3' [provideFeedback: true]
+  transmission name='fr3_joint3_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint3' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint3_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint4' [provideFeedback: true]
+  transmission name='fr3_joint4_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint4' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint4_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint5' [provideFeedback: true]
+  transmission name='fr3_joint5_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint5' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint5_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint6' [provideFeedback: true]
+  transmission name='fr3_joint6_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint6' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint6_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_joint7' [provideFeedback: true]
+  transmission name='fr3_joint7_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_joint7' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_joint7_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  transmission name='fr3_franka_state'
+    type: franka_hw/FrankaStateInterface
+    joint name='fr3_joint1' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint2' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint3' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint4' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint5' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint6' [hardwareInterface: franka_hw/FrankaStateInterface]
+    joint name='fr3_joint7' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor1' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor2' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor3' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor4' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor5' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor6' [hardwareInterface: franka_hw/FrankaStateInterface]
+    actuator name='fr3_motor7' [hardwareInterface: franka_hw/FrankaStateInterface]
+  transmission name='fr3_franka_model'
+    type: franka_hw/FrankaModelInterface
+    joint name='fr3_joint1' [role: root, hardwareInterface: franka_hw/FrankaModelInterface]
+    joint name='fr3_joint8' [role: tip, hardwareInterface: franka_hw/FrankaModelInterface]
+    actuator name='fr3_joint1_motor_root' [hardwareInterface: franka_hw/FrankaModelInterface]
+    actuator name='fr3_joint8_motor_tip' [hardwareInterface: franka_hw/FrankaModelInterface]
+  gazebo reference='fr3_finger_joint1' [provideFeedback: true]
+  transmission name='fr3_finger_joint1_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_finger_joint1' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_finger_joint1_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_finger_joint2' [provideFeedback: true]
+  transmission name='fr3_finger_joint2_transmission'
+    type: transmission_interface/SimpleTransmission
+    joint name='fr3_finger_joint2' [hardwareInterface: hardware_interface/EffortJointInterface]
+    actuator name='fr3_finger_joint2_motor' [hardwareInterface: hardware_interface/EffortJointInterface]
+  gazebo reference='fr3_leftfinger' [collision [max_contacts: 10, surface [contact [ode [max_vel: 0, min_depth: 0.001]], friction [ode [mu: 1.13, mu2: 1.13]], bounce]]]
+  gazebo reference='fr3_rightfinger' [collision [max_contacts: 10, surface [contact [ode [max_vel: 0, min_depth: 0.001]], friction [ode [mu: 1.13, mu2: 1.13]], bounce]]]
+  ros2_control name='FrankaHardwareInterface' type='system'
+    hardware [param name='version': 0.1.0, param name='robot_type': fr3, param name='prefix', plugin: franka_ign_ros2_control/IgnitionSystem]
+    joint name='fr3_joint1'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint2'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -0.7853981633974483]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint3'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint4'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -2.356194490192345]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint5'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint6'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 1.5707963267948966]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_joint7'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.7853981633974483]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    joint name='fr3_finger_joint1'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      param name='initial_value': 0.0
+      state_interface name='effort'
+    gpio name='vx' [command_interface name='cartesian_velocity', param name='index': 0]
+    gpio name='vy' [command_interface name='cartesian_velocity', param name='index': 1]
+    gpio name='vz' [command_interface name='cartesian_velocity', param name='index': 2]
+    gpio name='wx' [command_interface name='cartesian_velocity', param name='index': 3]
+    gpio name='wy' [command_interface name='cartesian_velocity', param name='index': 4]
+    gpio name='wz' [command_interface name='cartesian_velocity', param name='index': 5]
+    gpio name='0' [command_interface name='cartesian_pose_command', param name='index': 0]
+    gpio name='1' [command_interface name='cartesian_pose_command', param name='index': 1]
+    gpio name='2' [command_interface name='cartesian_pose_command', param name='index': 2]
+    gpio name='3' [command_interface name='cartesian_pose_command', param name='index': 3]
+    gpio name='4' [command_interface name='cartesian_pose_command', param name='index': 4]
+    gpio name='5' [command_interface name='cartesian_pose_command', param name='index': 5]
+    gpio name='6' [command_interface name='cartesian_pose_command', param name='index': 6]
+    gpio name='7' [command_interface name='cartesian_pose_command', param name='index': 7]
+    gpio name='8' [command_interface name='cartesian_pose_command', param name='index': 8]
+    gpio name='9' [command_interface name='cartesian_pose_command', param name='index': 9]
+    gpio name='10' [command_interface name='cartesian_pose_command', param name='index': 10]
+    gpio name='11' [command_interface name='cartesian_pose_command', param name='index': 11]
+    gpio name='12' [command_interface name='cartesian_pose_command', param name='index': 12]
+    gpio name='13' [command_interface name='cartesian_pose_command', param name='index': 13]
+    gpio name='14' [command_interface name='cartesian_pose_command', param name='index': 14]
+    gpio name='15' [command_interface name='cartesian_pose_command', param name='index': 15]
+    gpio name='joint_3_position' [command_interface name='elbow_command', param name='index': 0]
+    gpio name='joint_4_sign' [command_interface name='elbow_command', param name='index': 1]
+  gazebo
+    plugin filename='franka_ign_ros2_control-system' name='ign_ros2_control::IgnitionROS2ControlPlugin'
+      parameters: <share:cho_bringup_franka>/config/gazebo/controllers.yaml
+      parameters: <RT:cho_runtime_params_#0>
+RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
+  /**:
+    ee_state_broadcaster:
+      ros__parameters: {}
+    gravity_compensation_controller:
+      ros__parameters: {}
+    gripper_controller:
+      ros__parameters: {}
+    joint_space_impedance_controller:
+      ros__parameters: {}
+    joint_space_qp_controller:
+      ros__parameters: {}
+    joint_state_broadcaster:
+      ros__parameters: {}
+    operational_space_controller:
+      ros__parameters: {}
+    ros__parameters:
+      center_of_mass: [-0.00753, 0.0, 0.05325]
+      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
+      mass: 0.97
+    simulation_gripper_controller:
+      ros__parameters: {}
+    task_space_impedance_controller:
+      ros__parameters: {}
+    task_space_qp_controller:
+      ros__parameters: {}
+    vla_controller:
+      ros__parameters: {}
+  /** (every controller):
+    bringup_type: gazebo
+    cartesian_limits: {max_rot_acc: 17.0, max_rot_vel: 2.5, max_trans_acc: 9.0, max_trans_dec: -9.0, max_trans_vel: 3.0}
+    control_mode: effort
+    ee_name: fr3_hand_tcp
+    joint_limits:
+      fr3_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 2.62}
+      fr3_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.0, max_velocity: 2.62}
+      fr3_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 2.5, max_velocity: 2.62}
+      fr3_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}
+      fr3_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 3.0, max_velocity: 4.18}
+      fr3_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 4.0, max_velocity: 5.26}

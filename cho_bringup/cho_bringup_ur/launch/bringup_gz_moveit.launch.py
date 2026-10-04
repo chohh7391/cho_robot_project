@@ -15,7 +15,7 @@
 """Official arm-only UR5e Gazebo + MoveIt composition entry point."""
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
@@ -34,6 +34,11 @@ def generate_launch_description():
             'gazebo_gui': LaunchConfiguration('gazebo_gui'),
             'world_file': LaunchConfiguration('world_file'),
         }.items())
+    # Scoped, because Humble's includes are not: the robot launch's
+    # launch_rviz:='false' (it must not open an RViz of its own) would
+    # otherwise stay set and reach the MoveIt include below, whose RViz then
+    # never started either.
+    robot = GroupAction([robot])
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             FindPackageShare('cho_moveit_ur'), '/launch/moveit.launch.py']),

@@ -1,0 +1,108 @@
+LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robot/robot.usda', 'shutdown_on_gate_failure:=true']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG bringup_type default='isaac' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_ur>/urdf/ur5e.urdf' choices=None
+  ARG controllers_file default='<share:cho_bringup_ur>/config/isaac/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='60' choices=None
+  ARG robot_usd default='<share:cho_description_ur>/usd/ur5e/ur5e.usda' choices=None
+  ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+  ARG physics_rate default='250' choices=None
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG shutdown_on_gate_failure default='false' choices=None
+  OPAQUE setup_control_environment
+    ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
+      convert_args=['--urdf', '<share:cho_description_ur>/urdf/ur5e.urdf', '--usd-path', '<FAKE>/usd/robot', '--ros-package', 'cho_description_ur:<share:cho_description_ur>']
+    PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_ur>/config/isaac/robot_profile.json', '--control-mode', 'position', '--physics-rate', '250', '--device', 'cpu']
+      additional_env=None output='screen' on_exit=Shutdown
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 ur>}
+      output='screen' on_exit=NoneType
+    NODE mujoco_ros2_control/ros2_control_node
+      name=None namespace=None
+      args=[]
+      remap=[('~/robot_description', '/robot_description')]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 ur>}
+      param FILE <share:cho_bringup_ur>/config/isaac/controllers.yaml
+      param FILE <RT:cho_ur_isaac_runtime_params_#0>
+      param {bringup_type: 'isaac', ee_name: 'tool0'}
+      output='screen' on_exit=Shutdown
+    ON OnProcessIO target=<process python.sh run_isaac_sim.py>
+      [stdout-noise] -> None
+      [stderr-marker] -> None
+      [stdout-marker] ->
+        ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_ur_isaac_runtime_params_#0>']>
+          NODE controller_manager/spawner
+            name=None namespace=None
+            args=['task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '--inactive', '-p <RT:cho_ur_isaac_runtime_params_#0>']
+            output='screen' on_exit=NoneType
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_ur_isaac_runtime_params_#0>']
+          output='screen' on_exit=NoneType
+      [stdout-marker-again] -> None
+    ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_ur_isaac_runtime_params_#0>']>
+      [rc=0] ->
+        NODE cho_simulation_isaac/isaac_command_gate.py
+          name=None namespace=None
+          args=[]
+          param {use_sim_time: True}
+          output='screen' on_exit=NoneType
+      [rc=1] ->
+        LOG ERROR [isaac_command_gate] controller spawner exited with code 1: the requested controller is not active, so the Isaac command gate stays CLOSED and Isaac holds the home pose and ignores every command. See the spawner output above. Shutting down (shutdown_on_gate_failure).
+        OPAQUE _fail_launch
+          ERROR RuntimeError: Isaac command gate: controller spawner exited with code 1: the requested controller is not active, so the Isaac command gate stays CLOSED and Isaac holds the home pose and ignores every command. See the spawner output above.
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_ur_isaac_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='ur'
+  joint base_joint fixed world -> base_link
+  joint base_link-base_link_inertia fixed base_link -> base_link_inertia
+  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link
+  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link
+  joint elbow_joint revolute upper_arm_link -> forearm_link
+  joint wrist_1_joint revolute forearm_link -> wrist_1_link
+  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link
+  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link
+  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame
+  joint base_link-base_fixed_joint fixed base_link -> base
+  joint wrist_3-flange fixed wrist_3_link -> flange
+  joint flange-tool0 fixed flange -> tool0
+  ros2_control name='IsaacArmSystem' type='system'
+    hardware
+      plugin: topic_based_ros2_control/TopicBasedSystem
+      param name='joint_commands_topic': /isaac_joint_commands
+      param name='joint_states_topic': /isaac_joint_states
+      param name='trigger_joint_command_threshold': -1.0
+    joint name='shoulder_pan_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='shoulder_lift_joint'
+      command_interface name='position'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='elbow_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': 1.57], state_interface name='velocity', state_interface name='effort']
+    joint name='wrist_1_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.57], state_interface name='velocity', state_interface name='effort']
+    joint name='wrist_2_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.57], state_interface name='velocity', state_interface name='effort']
+    joint name='wrist_3_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+RUNTIME_FILE <RT:cho_ur_isaac_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: tool0}
+  /** (every controller):
+    bringup_type: isaac
+    control_mode: position
+    joint_limits:
+      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

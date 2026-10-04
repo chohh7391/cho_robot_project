@@ -28,16 +28,38 @@ def load_yaml(file_path):
         return yaml.safe_load(file)
 
 
+_TRUE = ('true', '1', 'yes', 'on')
+_FALSE = ('false', '0', 'no', 'off')
+
+
 def as_bool(value):
     """Read a launch argument as a boolean, leniently.
 
     true / 1 / yes / on (any case) are True and everything else is False, so a
     typo reads as false rather than failing. Where a typo must fail instead,
-    use a strict parser (cho_bringup_fr5's launch_utils.strict_bool).
+    use strict_bool().
     """
     if isinstance(value, bool):
         return value
-    return str(value).lower() in ('true', '1', 'yes', 'on')
+    return str(value).lower() in _TRUE
+
+
+def strict_bool(value):
+    """Parse a launch argument that means true or false, and nothing else.
+
+    Unlike as_bool, which reads anything unrecognised as false, this refuses
+    it: `load_gripper:=ture` must not quietly mean "no gripper".
+    """
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise RuntimeError(
+        f"Expected a boolean launch argument, got '{value}'. "
+        f"Valid: {', '.join(_TRUE + _FALSE)}")
 
 
 def unique_names(names):

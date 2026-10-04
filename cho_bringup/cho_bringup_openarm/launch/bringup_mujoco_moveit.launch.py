@@ -24,6 +24,7 @@ from cho_robot_config import load_moveit_metadata
 
 def generate_launch_description():
     metadata = load_moveit_metadata('openarm', 'cho_moveit_openarm')
+
     def setup(context):
         enabled = LaunchConfiguration('mujoco_mit_prototype').perform(context).lower() == 'true'
         bimanual = LaunchConfiguration('bimanual').perform(context).lower() == 'true'

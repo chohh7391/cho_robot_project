@@ -1,0 +1,195 @@
+LAUNCH cho_bringup_openarm/bringup_real_robot.launch.py ['controller_name:=task_space_impedance_mit_controller', 'return_to_zero:=true', 'gravity_compensation:=true', 'gravity_scale:=1.2']
+  ARG bimanual default='false' choices=['true', 'false']
+  ARG controller_name default='joint_impedance_mit_controller' choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'vla_mit_controller']
+  ARG mit_arm default='both_independent' choices=['left', 'right', 'both_independent']
+  ARG can_interface default='can0' choices=None
+  ARG left_can_interface default='can1' choices=None
+  ARG right_can_interface default='can0' choices=None
+  ARG can_fd default='true' choices=['true', 'false']
+  ARG mit_expected_update_rate_hz default='750' choices=None
+  ARG mit_state_from_command_reply default='true' choices=['true', 'false']
+  ARG hand default='false' choices=['true', 'false']
+  ARG return_to_zero default='false' choices=['true', 'false']
+  ARG gravity_compensation default='false' choices=['true', 'false']
+  ARG base_rpy default='0 0 0' choices=None
+  ARG gravity_scale default='1.0' choices=None
+  ARG controllers_file default='' choices=None
+  ARG xacro_file default='<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro' choices=None
+  ARG use_rviz default='false' choices=['true', 'false']
+  OPAQUE setup
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: False}
+      param {robot_description: <description #1 openarm>}
+      output='screen' on_exit=NoneType
+    NODE controller_manager/ros2_control_node
+      name=None namespace=None
+      args=[]
+      remap=[('~/robot_description', '/robot_description')]
+      param {use_sim_time: False}
+      param {robot_description: <description #1 openarm>}
+      param FILE <share:cho_bringup_openarm>/config/real/controllers_mit.yaml
+      param FILE <RT:cho_openarm_runtime_params_#0>
+      output='screen' on_exit=Shutdown
+    ON OnProcessStart target=<controller_manager/ros2_control_node args=[]>
+      TIMER period=2.0
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_state_broadcaster', 'ee_state_broadcaster', 'task_space_impedance_mit_controller', '|', '--controller-manager-timeout 60']
+          param {use_sim_time: False}
+          output='screen' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_openarm_runtime_params_#0>']
+  COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=real', 'real_mit_hardware:=true', 'real_mit_arm:=both_independent', 'real_mit_safety_profile:=real_conservative_commissioning', 'mit_expected_update_rate_hz:=750', 'bimanual:=false', 'can_interface:=can0', 'left_can_interface:=can1', 'right_can_interface:=can0', 'can_fd:=true', 'mit_state_from_command_reply:=true', 'hand:=false', 'rpy:=0 0 0']
+DESCRIPTION #1
+  robot name='openarm'
+  joint openarm_joint1 revolute openarm_link0 -> openarm_link1
+  joint openarm_joint2 revolute openarm_link1 -> openarm_link2
+  joint openarm_joint3 revolute openarm_link2 -> openarm_link3
+  joint openarm_joint4 revolute openarm_link3 -> openarm_link4
+  joint openarm_joint5 revolute openarm_link4 -> openarm_link5
+  joint openarm_joint6 revolute openarm_link5 -> openarm_link6
+  joint openarm_joint7 revolute openarm_link6 -> openarm_link7
+  joint openarm_hand_joint fixed openarm_link7 -> openarm_hand
+  joint openarm_hand_tcp_joint fixed openarm_hand -> openarm_hand_tcp
+  joint openarm_finger_joint1 prismatic openarm_link7 -> openarm_right_finger
+  joint openarm_finger_joint2 prismatic openarm_link7 -> openarm_left_finger
+  joint openarm_base_joint fixed world -> openarm_link0
+  ros2_control name='OpenArmHardwareInterface' type='system'
+    hardware
+      plugin: cho_hardware_openarm_mit_real/OpenArmMitRealSystem
+      param name='mit_safety_profile_file': <share:cho_description_openarm>/config/mit_safety_profiles_v1.yaml
+      param name='mit_safety_profile': real_conservative_commissioning
+      param name='mit_expected_update_rate_hz': 750
+      param name='can_interface': can0
+      param name='can_fd': True
+      param name='mit_state_from_command_reply': True
+      param name='arm_side': single
+      param name='hand': False
+    joint name='openarm_joint1'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint2'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint3'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint4'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.3]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint5'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint6'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='openarm_joint7'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='stiffness'
+      command_interface name='damping'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    gpio name='openarm_arm'
+      command_interface name='mit_session_echo'
+      command_interface name='mit_lease_cycles'
+      command_interface name='mit_commit_generation'
+      command_interface name='mit_safe_request_generation'
+      state_interface name='mit_session_id'
+      state_interface name='mit_ack_generation'
+      state_interface name='mit_safe_generation'
+      state_interface name='mit_safe_ack_generation'
+      state_interface name='mit_status'
+RUNTIME_FILE <RT:cho_openarm_runtime_params_#0> aliases=False
+  /**:
+    ee_state_broadcaster:
+      ros__parameters: {}
+    joint_state_broadcaster:
+      ros__parameters: {}
+    task_space_impedance_mit_controller:
+      ros__parameters:
+        drive_side_impedance: false
+        friction_scale: 0.0
+        friction_velocity_epsilon: 0.1
+        friction_velocity_source: measured
+        gravity_scale: 1.2
+        joint_limit_stiffness: [5.0, 5.0, 5.0, 0.0, 2.0, 2.0, 2.0]
+        kd: [1.0, 1.0, 0.8, 0.8, 0.3, 0.25, 0.2]
+        kd_null: 0.0
+        kd_task: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        kp_null: 0.0
+        kp_task: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return_to_zero: true
+        return_to_zero_duration: 2.0
+        return_to_zero_tolerance: 0.05
+        safety_profile_file: <share:cho_description_openarm>/config/mit_safety_profiles_v1.yaml
+        safety_profile_name: real_conservative_commissioning
+        startup_kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+        startup_kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+        use_nullspace_posture: false
+  /** (every controller):
+    bringup_type: real
+    control_mode: effort
+    joint_limits:
+      openarm_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}

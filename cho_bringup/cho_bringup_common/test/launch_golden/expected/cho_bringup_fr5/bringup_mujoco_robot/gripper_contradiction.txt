@@ -1,0 +1,14 @@
+LAUNCH cho_bringup_fr5/bringup_mujoco_robot.launch.py ['gripper:=ag95', 'load_gripper:=false']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='wrist3_link' choices=None
+  ARG bringup_type default='mujoco' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG mujoco_initial_keyframe default='home1' choices=None
+  ARG mujoco_scene default='' choices=None
+  ARG urdf_file default='<share:cho_description_fr5>/urdf/fr5.urdf.xacro' choices=None
+  ARG controllers_file default='<share:cho_bringup_fr5>/config/mujoco/controllers.yaml' choices=None
+  ARG gripper default='' choices=None
+  ARG load_gripper default='config' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE setup_control_environment
+    ERROR RuntimeError: gripper:=ag95 contradicts load_gripper:=false. Pass one of them, or make them agree (load_gripper true means gripper:=ag95).

@@ -1,0 +1,99 @@
+LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robot/robot.usda', 'controller_name:=task_space_ik_controller', 'headless:=true']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='wrist3_link' choices=None
+  ARG bringup_type default='isaac' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_fr5>/urdf/fr5.urdf.xacro' choices=None
+  ARG controllers_file default='<share:cho_bringup_fr5>/config/isaac/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='60' choices=None
+  ARG robot_usd default='<share:cho_description_fr5>/usd/fr5/fr5.usda' choices=None
+  ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+  ARG physics_rate default='250' choices=None
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG shutdown_on_gate_failure default='false' choices=None
+  OPAQUE setup_control_environment
+    ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
+      convert_args=['--urdf', '<share:cho_description_fr5>/urdf/fr5.urdf.xacro', '--usd-path', '<FAKE>/usd', '--ros-package', 'cho_description_fr5:<share:cho_description_fr5>', '--require-link', 'wrist3_link']
+    PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_fr5>/config/isaac/robot_profile.json', '--control-mode', 'position', '--physics-rate', '250', '--device', 'cpu', '--headless']
+      additional_env=None output='screen' on_exit=Shutdown
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 fr5>}
+      output='screen' on_exit=NoneType
+    NODE mujoco_ros2_control/ros2_control_node
+      name=None namespace=None
+      args=[]
+      remap=[('~/robot_description', '/robot_description')]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 fr5>}
+      param FILE <share:cho_bringup_fr5>/config/isaac/controllers.yaml
+      param FILE <RT:cho_fr5_isaac_runtime_params_#0>
+      param {bringup_type: 'isaac', ee_name: 'wrist3_link'}
+      output='screen' on_exit=Shutdown
+    ON OnProcessIO target=<process python.sh run_isaac_sim.py>
+      [stdout-noise] -> None
+      [stderr-marker] -> None
+      [stdout-marker] ->
+        ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_fr5_isaac_runtime_params_#0>']>
+          NODE controller_manager/spawner
+            name=None namespace=None
+            args=['joint_trajectory_controller', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '--inactive', '-p <RT:cho_fr5_isaac_runtime_params_#0>']
+            output='screen' on_exit=NoneType
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_state_broadcaster', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_fr5_isaac_runtime_params_#0>']
+          output='screen' on_exit=NoneType
+      [stdout-marker-again] -> None
+    ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 60', '-p <RT:cho_fr5_isaac_runtime_params_#0>']>
+      [rc=0] ->
+        NODE cho_simulation_isaac/isaac_command_gate.py
+          name=None namespace=None
+          args=[]
+          param {use_sim_time: True}
+          output='screen' on_exit=NoneType
+      [rc=1] -> None
+        LOG ERROR [isaac_command_gate] controller spawner exited with code 1: the requested controller is not active, so the Isaac command gate stays CLOSED and Isaac holds the home pose and ignores every command. See the spawner output above. The launch keeps running; pass shutdown_on_gate_failure:=true to stop it instead.
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_fr5_isaac_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='fr5'
+  joint base_joint fixed world -> base_link
+  joint j1 revolute base_link -> shoulder_link
+  joint j2 revolute shoulder_link -> upperarm_link
+  joint j3 revolute upperarm_link -> forearm_link
+  joint j4 revolute forearm_link -> wrist1_link
+  joint j5 revolute wrist1_link -> wrist2_link
+  joint j6 revolute wrist2_link -> wrist3_link
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp
+  ros2_control name='fr5_system' type='system'
+    hardware
+      plugin: topic_based_ros2_control/TopicBasedSystem
+      param name='joint_commands_topic': /isaac_joint_commands
+      param name='joint_states_topic': /isaac_joint_states
+      param name='trigger_joint_command_threshold': -1.0
+    joint name='j1' [command_interface name='position', state_interface name='position' [param name='initial_value': -0.0836], state_interface name='velocity', state_interface name='effort']
+    joint name='j2' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.1209], state_interface name='velocity', state_interface name='effort']
+    joint name='j3' [command_interface name='position', state_interface name='position' [param name='initial_value': -2.0723], state_interface name='velocity', state_interface name='effort']
+    joint name='j4' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.7125], state_interface name='velocity', state_interface name='effort']
+    joint name='j5' [command_interface name='position', state_interface name='position' [param name='initial_value': 1.6049], state_interface name='velocity', state_interface name='effort']
+    joint name='j6' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.0798], state_interface name='velocity', state_interface name='effort']
+RUNTIME_FILE <RT:cho_fr5_isaac_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: wrist3_link}
+  /** (every controller):
+    bringup_type: isaac
+    cartesian_limits: {max_rot_vel: 0.5, max_trans_acc: 0.5, max_trans_dec: -0.5, max_trans_vel: 0.25}
+    control_mode: position
+    joint_limits:
+      j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}

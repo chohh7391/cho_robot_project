@@ -95,6 +95,27 @@ def write_runtime_param_file(controller_params, shared_params=None, base=None,
     return path
 
 
+def write_position_arm_param_file(bringup_type, ee_name, motion_limits, prefix, task_space_params=None):
+    """Write the runtime parameter file of a position-only arm's two cho controllers.
+
+    joint_space_position_controller and task_space_ik_controller are what the
+    UR and the FR5 run, both in position mode; only the task-space one takes
+    ee_name, and `task_space_params` on top (the FR5's tool envelope).
+    `motion_limits` is the robot's cho_robot_config.motion_limit_parameters().
+    """
+    return write_runtime_param_file(
+        {
+            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
+            'task_space_ik_controller': {
+                **bringup_params(bringup_type, 'position', ee_name),
+                **(task_space_params or {}),
+            },
+        },
+        shared_params=motion_limits,
+        prefix=prefix,
+    )
+
+
 def create_runtime_param_cleanup(runtime_param_file):
     """An OpaqueFunction that deletes `runtime_param_file` if it still exists."""
     def cleanup(context, *args, **kwargs):

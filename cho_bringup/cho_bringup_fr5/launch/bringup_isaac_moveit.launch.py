@@ -19,6 +19,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from cho_bringup_common import gate_failure_argument
 from cho_robot_config import load_moveit_metadata
 
 
@@ -33,6 +34,7 @@ def generate_launch_description():
             'use_sim_time': 'true',
             'headless': LaunchConfiguration('headless'),
             'device': LaunchConfiguration('device'),
+            'shutdown_on_gate_failure': LaunchConfiguration('shutdown_on_gate_failure'),
         }.items(),
     )
     moveit = IncludeLaunchDescription(
@@ -61,6 +63,7 @@ def generate_launch_description():
         DeclareLaunchArgument('floor_position', default_value='0.0,0.0,-0.05'),
         DeclareLaunchArgument('scene_ready_timeout', default_value='300.0'),
         DeclareLaunchArgument('controller_ready_timeout', default_value='180.0'),
+        gate_failure_argument(),
         robot,
         moveit,
     ])

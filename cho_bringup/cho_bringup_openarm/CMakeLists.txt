@@ -39,10 +39,14 @@ install(
 # share/) and the launch files load it with
 # cho_bringup_common.load_package_utils('cho_bringup_openarm'); the
 # robot-independent helpers are cho_bringup_common's.
+# Excludes rather than FILES_MATCHING: ament's --symlink-install does not
+# support FILES_MATCHING and silently falls back to copying, and a copy goes
+# stale the moment the source changes.
 install(
   DIRECTORY utils/
   DESTINATION lib/${PROJECT_NAME}/utils
-  FILES_MATCHING PATTERN "*.py"
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
 )
 
 ament_package()

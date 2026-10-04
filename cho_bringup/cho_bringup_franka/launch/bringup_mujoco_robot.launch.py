@@ -56,7 +56,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'xacro_file',
-            default_value=os.path.join(description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf'),
+            default_value=os.path.join(
+                description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf'),
             description='Xacro/URDF file used to build the MuJoCo robot_description'
         ),
         DeclareLaunchArgument(

@@ -1,0 +1,155 @@
+LAUNCH cho_bringup_ur/bringup_gz_robot.launch.py []
+  ARG ur_type default='ur5e' choices=None
+  ARG description_file default='ur.urdf.xacro' choices=None
+  ARG controllers_file default='gz/controllers.yaml' choices=None
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG load_gripper default='true' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG launch_rviz default='true' choices=None
+  ARG gazebo_gui default='true' choices=None
+  ARG world_file default='empty.sdf' choices=None
+  ARG robot_name default='ur' choices=None
+  ARG allow_renaming default='true' choices=None
+  ARG safety_pos_margin default='0.15' choices=None
+  ARG safety_k_position default='20' choices=None
+  ARG bringup_type default='gz' choices=None
+  ARG tf_prefix default='' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE launch_setup
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 ur>}
+      output='both' on_exit=NoneType
+    NODE ros_gz_sim/create
+      name=None namespace=None
+      args=['-string', <description #1 ur>, '-name', 'ur', '-allow_renaming', 'true']
+      output='screen' on_exit=NoneType
+    INCLUDE [cond=True] <share:ros_gz_sim>/launch/gz_sim.launch.py
+      arg gz_args=' -r -v 4 empty.sdf'
+    INCLUDE [cond=False] <share:ros_gz_sim>/launch/gz_sim.launch.py
+      arg gz_args=' -s -r -v 4 empty.sdf'
+    NODE ros_gz_bridge/parameter_bridge
+      name=None namespace=None
+      args=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock']
+      output='screen' on_exit=NoneType
+    ON OnProcessExit target=<ros_gz_sim/create args=['-string', <description #1 ur>, '-name', 'ur', '-allow_renaming', 'true']>
+      ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_ur_gz_runtime_params_#0>']>
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_trajectory_controller', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '--inactive', '-p <RT:cho_ur_gz_runtime_params_#0>']
+          output='screen' on_exit=NoneType
+      NODE controller_manager/spawner
+        name=None namespace=None
+        args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_ur_gz_runtime_params_#0>']
+        output='screen' on_exit=NoneType
+      NODE controller_manager/spawner [cond=True]
+        name=None namespace=None
+        args=['gripper_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30']
+        output='screen' on_exit=NoneType
+      NODE rviz2/rviz2 [cond=True]
+        name='rviz2' namespace=None
+        args=['-d', '<share:cho_description_ur>/rviz/view_robot.rviz']
+        param {use_sim_time: True}
+        output='log' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_ur_gz_runtime_params_#0>']
+  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=true']
+  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=true']
+  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=true']
+  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=true']
+DESCRIPTION #1
+  robot name='ur'
+  joint ground_plane_joint fixed world -> ground_plane
+  joint base_joint fixed world -> base_link
+  joint base_link-base_link_inertia fixed base_link -> base_link_inertia
+  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link
+  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link
+  joint elbow_joint revolute upper_arm_link -> forearm_link
+  joint wrist_1_joint revolute forearm_link -> wrist_1_link
+  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link
+  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link
+  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame
+  joint base_link-base_fixed_joint fixed base_link -> base
+  joint wrist_3-flange fixed wrist_3_link -> flange
+  joint flange-tool0 fixed flange -> tool0
+  joint ur_to_robotiq_joint fixed tool0 -> ur_to_robotiq_link
+  joint gripper_side_joint fixed ur_to_robotiq_link -> gripper_mount_link
+  joint robotiq_85_base_joint fixed gripper_mount_link -> robotiq_85_base_link
+  joint robotiq_85_left_knuckle_joint revolute robotiq_85_base_link -> robotiq_85_left_knuckle_link
+  joint robotiq_85_right_knuckle_joint revolute robotiq_85_base_link -> robotiq_85_right_knuckle_link
+  joint robotiq_85_left_finger_joint fixed robotiq_85_left_knuckle_link -> robotiq_85_left_finger_link
+  joint robotiq_85_right_finger_joint fixed robotiq_85_right_knuckle_link -> robotiq_85_right_finger_link
+  joint robotiq_85_left_inner_knuckle_joint continuous robotiq_85_base_link -> robotiq_85_left_inner_knuckle_link
+  joint robotiq_85_right_inner_knuckle_joint continuous robotiq_85_base_link -> robotiq_85_right_inner_knuckle_link
+  joint robotiq_85_left_finger_tip_joint continuous robotiq_85_left_finger_link -> robotiq_85_left_finger_tip_link
+  joint robotiq_85_right_finger_tip_joint continuous robotiq_85_right_finger_link -> robotiq_85_right_finger_tip_link
+  ros2_control name='ur' type='system'
+    hardware [plugin: ign_ros2_control/IgnitionSystem]
+    joint name='shoulder_pan_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='shoulder_lift_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='elbow_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': 1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_1_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_2_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_3_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+  ros2_control name='robotiq_gripper' type='system'
+    hardware [plugin: ign_ros2_control/IgnitionSystem]
+    joint name='robotiq_85_left_knuckle_joint' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.7929], state_interface name='velocity']
+    joint name='robotiq_85_right_knuckle_joint' [param name='mimic': robotiq_85_left_knuckle_joint, param name='multiplier': -1]
+    joint name='robotiq_85_left_inner_knuckle_joint' [param name='mimic': robotiq_85_left_knuckle_joint, param name='multiplier': 1]
+    joint name='robotiq_85_right_inner_knuckle_joint' [param name='mimic': robotiq_85_left_knuckle_joint, param name='multiplier': -1]
+    joint name='robotiq_85_left_finger_tip_joint' [param name='mimic': robotiq_85_left_knuckle_joint, param name='multiplier': -1]
+    joint name='robotiq_85_right_finger_tip_joint' [param name='mimic': robotiq_85_left_knuckle_joint, param name='multiplier': 1]
+  gazebo reference='world'
+  gazebo
+    plugin filename='libign_ros2_control-system.so' name='ign_ros2_control::IgnitionROS2ControlPlugin'
+      parameters: <share:cho_bringup_ur>/config/gz/controllers.yaml
+      controller_manager_node_name: controller_manager
+RUNTIME_FILE <RT:cho_ur_gz_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: tool0}
+  /** (every controller):
+    bringup_type: gz
+    control_mode: position
+    joint_limits:
+      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

@@ -1,0 +1,15 @@
+LAUNCH cho_bringup_fr5/camera_extrinsics.launch.py []
+  ARG extrinsics_config default='<share:cho_bringup_fr5>/config/real/camera_extrinsics.yaml' choices=None
+  OPAQUE _publishers
+    NODE tf2_ros/static_transform_publisher
+      name='camera_extrinsic_wrist' namespace=None
+      args=['--x', '0.00025', '--y', '0.0485', '--z', '0.23261', '--qx', '0.536962', '--qy', '-0.530907', '--qz', '0.459547', '--qw', '0.467576', '--frame-id', 'wrist3_link', '--child-frame-id', 'wrist_link']
+      output='log' on_exit=NoneType
+    NODE tf2_ros/static_transform_publisher
+      name='camera_extrinsic_side_1' namespace=None
+      args=['--x', '0.70842', '--y', '0.32134', '--z', '0.47292', '--qx', '0.336035', '--qy', '0.077731', '--qz', '-0.919145', '--qw', '0.190295', '--frame-id', 'base_link', '--child-frame-id', 'side_1_mount']
+      output='log' on_exit=NoneType
+    NODE tf2_ros/static_transform_publisher
+      name='camera_extrinsic_side_2' namespace=None
+      args=['--x', '0.71539', '--y', '-0.34709', '--z', '0.48364', '--qx', '-0.394449', '--qy', '0.185682', '--qz', '0.836787', '--qw', '0.331238', '--frame-id', 'base_link', '--child-frame-id', 'side_2_link']
+      output='log' on_exit=NoneType

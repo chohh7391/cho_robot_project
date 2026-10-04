@@ -66,7 +66,8 @@ def generate_launch_description():
             # (vendored, not to be edited here) rather than to this project's own code.
             # Do not use control_mode:=velocity with Gazebo until that plugin is fixed/
             # replaced; use MuJoCo or real hardware instead.
-            description='Choose control mode: position, torque (velocity is NOT functional in Gazebo -- see NOTE above)',
+            description=('Choose control mode: position, torque '
+                         '(velocity is NOT functional in Gazebo -- see NOTE above)'),
             choices=['position', 'velocity', 'torque']
         ),
         DeclareLaunchArgument(

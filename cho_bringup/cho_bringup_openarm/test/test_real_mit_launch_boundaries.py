@@ -424,6 +424,7 @@ def test_a_gripper_that_cannot_load_never_blocks_the_arm_controller():
         switchable_controllers=['right_task_space_impedance_mit_controller'],
         initial_active_controllers=['right_task_space_impedance_mit_controller'],
         optional_controllers=['right_gripper_controller'])
+
     # launch.Node keeps its arguments as substitutions; render them to text.
     def controller_arguments(node):
         rendered = []

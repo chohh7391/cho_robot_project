@@ -1,0 +1,86 @@
+LAUNCH cho_bringup_fr5/bringup_gz_robot.launch.py ['controller_name:=task_space_ik_controller', 'gazebo_gui:=false', 'launch_rviz:=false', 'use_sim_time:=false']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG launch_rviz default='true' choices=None
+  ARG gazebo_gui default='true' choices=None
+  ARG world_file default='empty.sdf' choices=None
+  ARG robot_name default='fr5' choices=None
+  ARG allow_renaming default='true' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE launch_setup
+    ENV-APPEND IGN_GAZEBO_RESOURCE_PATH value='<prefix:cho_description_fr5>/share' prepend=True sep=':'
+    ENV-APPEND GZ_SIM_RESOURCE_PATH value='<prefix:cho_description_fr5>/share' prepend=True sep=':'
+    NODE robot_state_publisher/robot_state_publisher
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: False}
+      param {robot_description: <description #1 fr5>}
+      output='both' on_exit=NoneType
+    NODE ros_gz_sim/create
+      name=None namespace=None
+      args=['-string', <description #1 fr5>, '-name', 'fr5', '-allow_renaming', 'true']
+      output='screen' on_exit=NoneType
+    INCLUDE [cond=False] <share:ros_gz_sim>/launch/gz_sim.launch.py
+      arg gz_args=' -r -v 4 empty.sdf'
+    INCLUDE [cond=True] <share:ros_gz_sim>/launch/gz_sim.launch.py
+      arg gz_args=' -s -r -v 4 empty.sdf'
+    NODE ros_gz_bridge/parameter_bridge
+      name=None namespace=None
+      args=['/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock']
+      output='screen' on_exit=NoneType
+    ON OnProcessExit target=<ros_gz_sim/create args=['-string', <description #1 fr5>, '-name', 'fr5', '-allow_renaming', 'true']>
+      ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_fr5_gz_runtime_params_#0>']>
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_trajectory_controller', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '--inactive', '-p <RT:cho_fr5_gz_runtime_params_#0>']
+          output='screen' on_exit=NoneType
+      NODE controller_manager/spawner
+        name=None namespace=None
+        args=['joint_state_broadcaster', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_fr5_gz_runtime_params_#0>']
+        output='screen' on_exit=NoneType
+      NODE rviz2/rviz2 [cond=False]
+        name='rviz2' namespace=None
+        args=['-d', '<share:cho_description_fr5>/rviz/view_robot.rviz']
+        param {use_sim_time: False}
+        output='log' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_fr5_gz_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='fr5'
+  joint base_joint fixed world -> base_link
+  joint j1 revolute base_link -> shoulder_link
+  joint j2 revolute shoulder_link -> upperarm_link
+  joint j3 revolute upperarm_link -> forearm_link
+  joint j4 revolute forearm_link -> wrist1_link
+  joint j5 revolute wrist1_link -> wrist2_link
+  joint j6 revolute wrist2_link -> wrist3_link
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp
+  ros2_control name='fr5_system' type='system'
+    hardware [plugin: gz_ros2_control/GazeboSimSystem]
+    joint name='j1' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -0.0836], state_interface name='velocity']
+    joint name='j2' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -1.1209], state_interface name='velocity']
+    joint name='j3' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -2.0723], state_interface name='velocity']
+    joint name='j4' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -1.7125], state_interface name='velocity']
+    joint name='j5' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': 1.6049], state_interface name='velocity']
+    joint name='j6' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': 0.0798], state_interface name='velocity']
+  gazebo
+    plugin filename='libgz_ros2_control-system.so' name='gz_ros2_control::GazeboSimROS2ControlPlugin'
+      parameters: <share:cho_bringup_fr5>/config/gz/controllers.yaml
+      controller_manager_node_name: controller_manager
+RUNTIME_FILE <RT:cho_fr5_gz_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: wrist3_link}
+  /** (every controller):
+    bringup_type: gz
+    cartesian_limits: {max_rot_vel: 0.5, max_trans_acc: 0.5, max_trans_dec: -0.5, max_trans_vel: 0.25}
+    control_mode: position
+    joint_limits:
+      j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}

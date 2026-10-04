@@ -27,7 +27,7 @@ from cho_bringup_common import (
     start_on_output,
 )
 import cho_bringup_common.isaac as isaac_module
-from launch import LaunchContext
+from launch import LaunchContext, LaunchDescription, LaunchService
 from launch.actions import ExecuteProcess
 from launch.events.process import ProcessExited, ProcessStderr, ProcessStdout
 import pytest
@@ -120,6 +120,21 @@ def test_spawners_wait_for_isaac_and_the_gate_for_a_successful_spawner():
     # A failed spawner leaves the controller inactive; opening the gate then
     # would hand Isaac the zero commands the gate exists to keep from it.
     assert on_exit.handle(event(ProcessExited, active, returncode=1), context) is None
+
+
+def test_a_failed_spawner_can_shut_the_launch_down_instead():
+    isaac = process()
+    active = make_spawner_node(['jsb', 'arm'])
+    gate = isaac_command_gate({'use_sim_time': True})
+    on_exit = isaac_controller_startup(isaac, [active], active, gate, shutdown_on_failure=True)[1].event_handler
+    context = LaunchContext()
+    assert on_exit.handle(event(ProcessExited, active, returncode=0), context) == [gate]
+    actions = on_exit.handle(event(ProcessExited, active, returncode=2), context)
+    # It fails the launch rather than shutting it down cleanly: a Shutdown
+    # action exits 0, and an unattended wrapper would take that as success.
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription(actions))
+    assert service.run() == 1
 
 
 def test_gate_node():

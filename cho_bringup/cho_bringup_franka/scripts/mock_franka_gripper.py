@@ -8,6 +8,7 @@ from sensor_msgs.msg import JointState
 from franka_msgs.action import Grasp, Move
 from std_srvs.srv import Trigger
 
+
 class MockFrankaGripper(Node):
     def __init__(self):
         super().__init__('mock_franka_gripper_node')
@@ -43,7 +44,7 @@ class MockFrankaGripper(Node):
         self.effort_limit = self.max_effort
 
         self.cmd_pub = self.create_publisher(
-            Float64MultiArray, 
+            Float64MultiArray,
             self.command_topic,
             10
         )
@@ -57,14 +58,14 @@ class MockFrankaGripper(Node):
             self.control_period,
             self.control_callback,
         )
-        
+
         self._grasp_server = ActionServer(
             self, Grasp, '/franka_gripper/grasp', self.grasp_callback)
         self._move_server = ActionServer(
             self, Move, '/franka_gripper/move', self.move_callback)
         self._stop_srv = self.create_service(
             Trigger, '/franka_gripper/stop', self.stop_callback)
-            
+
         self.get_logger().info("Mock Franka Gripper Server is Ready for Simulation!")
 
     def joint_state_callback(self, msg):
@@ -148,7 +149,7 @@ class MockFrankaGripper(Node):
         )
 
         self.command_finger_position(target_position, goal_handle.request.force)
-        
+
         goal_handle.succeed()
         result = Grasp.Result()
         result.success = True
@@ -162,7 +163,7 @@ class MockFrankaGripper(Node):
         )
 
         self.command_finger_position(target_position)
-        
+
         goal_handle.succeed()
         result = Move.Result()
         result.success = True
@@ -198,6 +199,7 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

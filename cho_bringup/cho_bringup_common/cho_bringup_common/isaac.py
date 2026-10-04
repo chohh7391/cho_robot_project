@@ -30,12 +30,14 @@ isaac_controller_startup() is the ordering of step 3.
 import os
 import shlex
 
-from launch.actions import ExecuteProcess, RegisterEventHandler, Shutdown
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, RegisterEventHandler, Shutdown
 from launch.event_handlers import OnProcessExit
 from launch.logging import get_logger
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from .events import start_on_output
+from .utils import strict_bool
 
 DEFAULT_ISAAC_SIM_PATH = os.path.join(os.path.expanduser('~'), 'isaacsim')
 
@@ -112,8 +114,27 @@ def isaac_command_gate(use_sim_time):
     )
 
 
+def gate_failure_argument():
+    """Declare shutdown_on_gate_failure, which every Isaac bringup passes to isaac_controller_startup()."""
+    return DeclareLaunchArgument(
+        'shutdown_on_gate_failure',
+        default_value='false',
+        description='Shut the launch down when the requested controller fails to activate, instead of '
+                    'leaving Isaac holding the home pose behind a closed command gate. For headless runs.',
+    )
+
+
+def shutdown_on_gate_failure(context):
+    """Read the shutdown_on_gate_failure launch argument; a typo is refused, not read as false."""
+    return strict_bool(LaunchConfiguration('shutdown_on_gate_failure').perform(context))
+
+
+def _fail_launch(_context, reason):
+    raise RuntimeError(reason)
+
+
 def isaac_controller_startup(isaac_sim, spawners, active_spawner, command_gate,
-                             marker=ISAAC_READY_MARKER):
+                             marker=ISAAC_READY_MARKER, shutdown_on_failure=False):
     """Order the spawners after Isaac, and the command gate after the controller.
 
     The spawners must not run until Isaac is actually stepping. The
@@ -132,15 +153,27 @@ def isaac_controller_startup(isaac_sim, spawners, active_spawner, command_gate,
     OnProcessExit fires however the spawner ended, and one that failed leaves
     the requested controller inactive: opening the gate then would hand Isaac
     exactly the zero commands the gate exists to keep from it.
+
+    A failure is logged as an ERROR and the launch keeps running, with Isaac
+    holding the home pose kinematically - easy to miss in a headless run, where
+    Isaac's own output buries one line. `shutdown_on_failure` (the bringups'
+    shutdown_on_gate_failure:=true, for unattended runs) fails the launch
+    instead: it raises, so launch shuts down AND exits with code 1. A Shutdown
+    action would exit 0, and a wrapper script would take the run as a success.
     """
     def on_active_spawner_exit(event, _context):
-        if event.returncode != 0:
-            get_logger('isaac_command_gate').error(
-                f'controller spawner exited with code {event.returncode}: the requested '
-                'controller is not active, so the Isaac command gate stays closed and '
-                'Isaac keeps holding the home pose. See the spawner output above.')
-            return None
-        return [command_gate]
+        if event.returncode == 0:
+            return [command_gate]
+        reason = (f'controller spawner exited with code {event.returncode}: the requested '
+                  'controller is not active, so the Isaac command gate stays CLOSED and '
+                  'Isaac holds the home pose and ignores every command. See the spawner '
+                  'output above.')
+        if shutdown_on_failure:
+            get_logger('isaac_command_gate').error(f'{reason} Shutting down (shutdown_on_gate_failure).')
+            return [OpaqueFunction(function=_fail_launch, args=[f'Isaac command gate: {reason}'])]
+        get_logger('isaac_command_gate').error(
+            f'{reason} The launch keeps running; pass shutdown_on_gate_failure:=true to stop it instead.')
+        return None
 
     return [
         start_on_output(isaac_sim, marker, spawners),

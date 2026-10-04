@@ -1,0 +1,49 @@
+LAUNCH cho_bringup_ur/bringup_real_robot.launch.py ['robot_ip:=192.168.1.10', 'controller_name:=task_space_ik_controller']
+  ARG ur_type default='ur5e' choices=None
+  ARG robot_ip default=None choices=None
+  ARG kinematics_params_file default='<share:cho_description_ur>/config/ur5e/default_kinematics.yaml' choices=None
+  ARG controllers_file default='real/controllers.yaml' choices=None
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG description_file default='ur.urdf.xacro' choices=None
+  ARG initial_joint_controller default='joint_trajectory_controller' choices=None
+  ARG activate_joint_controller default='false' choices=None
+  ARG launch_rviz default='false' choices=None
+  ARG use_tool_communication default='false' choices=None
+  ARG bringup_type default='real' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE launch_setup
+    INCLUDE <share:ur_robot_driver>/launch/ur_control.launch.py
+      arg ur_type='ur5e'
+      arg robot_ip='192.168.1.10'
+      arg runtime_config_package='cho_bringup_ur'
+      arg description_package='cho_description_ur'
+      arg description_file='ur.urdf.xacro'
+      arg controllers_file='real/controllers.yaml'
+      arg initial_joint_controller='joint_trajectory_controller'
+      arg activate_joint_controller='false'
+      arg kinematics_params_file='<share:cho_description_ur>/config/ur5e/default_kinematics.yaml'
+      arg launch_rviz='false'
+      arg use_tool_communication='false'
+    NODE controller_manager/spawner
+      name=None namespace=None
+      args=['task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_ur_runtime_params_#0>']
+      output='screen' on_exit=NoneType
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_ur_runtime_params_#0>']
+RUNTIME_FILE <RT:cho_ur_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: tool0}
+  /** (every controller):
+    bringup_type: real
+    control_mode: position
+    joint_limits:
+      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

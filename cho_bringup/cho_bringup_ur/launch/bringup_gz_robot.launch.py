@@ -1,5 +1,6 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -7,11 +8,10 @@ from launch.substitutions import Command, FindExecutable, LaunchConfiguration, P
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from cho_bringup_common import (
-    bringup_params,
     chain_spawners,
     make_spawner_node,
     runtime_param_cleanup,
-    write_runtime_param_file,
+    write_position_arm_param_file,
 )
 from cho_robot_config import motion_limit_parameters
 
@@ -44,18 +44,7 @@ def launch_setup(context, *args, **kwargs):
     ee_name = LaunchConfiguration('ee_name').perform(context)
     bringup_type = LaunchConfiguration('bringup_type').perform(context)
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
-    # The controller_manager lives inside the Gazebo plugin, so the runtime
-    # parameters reach the controllers through the spawners' -p. The robot's
-    # MoveIt joint/Cartesian limits bound the point-to-point goals.
-    runtime_param_file = write_runtime_param_file(
-        {
-            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
-            'task_space_ik_controller': bringup_params(bringup_type, 'position', ee_name),
-        },
-        shared_params=motion_limit_parameters('ur5e'),
-        prefix='cho_ur_gz_runtime_params_',
-    )
-
+    # Refuse before writing the runtime file: a refusal registers no cleanup.
     if controller_name not in CONTROLLER_MODES:
         if controller_name == 'moveit':
             raise RuntimeError(
@@ -65,6 +54,12 @@ def launch_setup(context, *args, **kwargs):
             f"Unknown controller_name '{controller_name}'. "
             f"Valid options: {CONTROLLER_MODES}"
         )
+    # The controller_manager lives inside the Gazebo plugin, so the runtime
+    # parameters reach the controllers through the spawners' -p. The robot's
+    # MoveIt joint/Cartesian limits bound the point-to-point goals.
+    runtime_param_file = write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('ur5e'),
+        prefix='cho_ur_gz_runtime_params_')
     load_gripper = requested_load_gripper
     active_controller = controller_name
 
@@ -134,12 +129,14 @@ def launch_setup(context, *args, **kwargs):
     )
 
     gz_launch_with_gui = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([FindPackageShare('ros_gz_sim'), '/launch/gz_sim.launch.py']),
+        PythonLaunchDescriptionSource(
+            [FindPackageShare('ros_gz_sim'), '/launch/gz_sim.launch.py']),
         launch_arguments={'gz_args': [' -r -v 4 ', world_file]}.items(),
         condition=IfCondition(gazebo_gui),
     )
     gz_launch_without_gui = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([FindPackageShare('ros_gz_sim'), '/launch/gz_sim.launch.py']),
+        PythonLaunchDescriptionSource(
+            [FindPackageShare('ros_gz_sim'), '/launch/gz_sim.launch.py']),
         launch_arguments={'gz_args': [' -s -r -v 4 ', world_file]}.items(),
         condition=UnlessCondition(gazebo_gui),
     )

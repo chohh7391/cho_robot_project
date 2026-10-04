@@ -1,0 +1,108 @@
+LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['hand:=false', 'ee_name:=openarm_hand']
+  ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
+  ARG mujoco_position_profile default='standard' choices=['standard', 'moveit']
+  ARG mujoco_mit_prototype default='false' choices=['true', 'false']
+  ARG mujoco_mit_headless default='false' choices=['true', 'false']
+  ARG return_to_zero default='false' choices=['true', 'false']
+  ARG mit_controller_name default='joint_position_mit_controller' choices=['joint_position_mit_controller', 'joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'vla_mit_controller', 'single_arm_follow_joint_trajectory_mit_controller', 'bimanual_follow_joint_trajectory_mit_controller']
+  ARG mit_arm default='both_independent' choices=['left', 'right', 'both_independent', 'both']
+  ARG controller_name default='joint_space_impedance_controller' choices=None
+  ARG bimanual default='false' choices=['true', 'false']
+  ARG use_sim_time default='true' choices=None
+  ARG bringup_type default='mujoco' choices=None
+  ARG xacro_file default='<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro' choices=None
+  ARG controllers_file default='' choices=None
+  ARG ee_name default='' choices=None
+  ARG hand default='true' choices=['true', 'false']
+  ARG use_rviz default='false' choices=None
+  NODE robot_state_publisher/robot_state_publisher
+    name=None namespace=None
+    args=[]
+    param {use_sim_time: True}
+    param {robot_description: <description #1 openarm>}
+    output='screen' on_exit=NoneType
+  NODE rviz2/rviz2 [cond=False]
+    name=None namespace=None
+    args=[]
+    param {use_sim_time: True}
+    output='log' on_exit=NoneType
+  OPAQUE setup_control_environment
+    COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=mujoco', 'control_mode:=torque', 'mujoco_position_profile:=standard', 'mujoco_mit_prototype:=false', 'mujoco_mit_headless:=false', 'bimanual:=false', 'hand:=false']
+    NODE mujoco_ros2_control/ros2_control_node
+      name=None namespace=None
+      args=[]
+      remap=[('~/robot_description', '/robot_description')]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 openarm>}
+      param FILE <share:cho_bringup_openarm>/config/mujoco/controllers.yaml
+      param FILE <RT:cho_openarm_runtime_params_#0>
+      output='screen' on_exit=Shutdown
+    ON OnProcessIO target=<mujoco_ros2_control/ros2_control_node args=[]>
+      [stdout-noise] -> None
+      [stderr-marker] ->
+        NODE controller_manager/spawner
+          name=None namespace=None
+          args=['joint_state_broadcaster', 'ee_state_broadcaster', 'joint_space_impedance_controller', '|', '--controller-manager-timeout 60']
+          param {use_sim_time: True}
+          output='screen' on_exit=NoneType
+      [stdout-marker] -> None
+      [stdout-marker-again] -> None
+    ON_SHUTDOWN
+      OPAQUE cleanup (not run) closure=['<RT:cho_openarm_runtime_params_#0>']
+DESCRIPTION #1
+  robot name='openarm'
+  joint openarm_joint1 revolute openarm_link0 -> openarm_link1
+  joint openarm_joint2 revolute openarm_link1 -> openarm_link2
+  joint openarm_joint3 revolute openarm_link2 -> openarm_link3
+  joint openarm_joint4 revolute openarm_link3 -> openarm_link4
+  joint openarm_joint5 revolute openarm_link4 -> openarm_link5
+  joint openarm_joint6 revolute openarm_link5 -> openarm_link6
+  joint openarm_joint7 revolute openarm_link6 -> openarm_link7
+  joint openarm_hand_joint fixed openarm_link7 -> openarm_hand
+  joint openarm_hand_tcp_joint fixed openarm_hand -> openarm_hand_tcp
+  joint openarm_finger_joint1 prismatic openarm_link7 -> openarm_right_finger
+  joint openarm_finger_joint2 prismatic openarm_link7 -> openarm_left_finger
+  joint openarm_base_joint fixed world -> openarm_link0
+  ros2_control name='OpenArmHardwareInterface' type='system'
+    hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_openarm>/xml/openarm_v10/scene_torque.xml]
+    joint name='openarm_joint1' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint2' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint3' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint4' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.3], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint5' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint6' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+    joint name='openarm_joint7' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
+RUNTIME_FILE <RT:cho_openarm_runtime_params_#0> aliases=False
+  /**:
+    ee_state_broadcaster:
+      ros__parameters: {}
+    joint_space_impedance_controller:
+      ros__parameters: {}
+    joint_state_broadcaster:
+      ros__parameters: {}
+  /** (every controller):
+    bringup_type: mujoco
+    control_mode: effort
+    ee_name: openarm_hand
+    joint_limits:
+      openarm_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_left_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}
+      openarm_right_joint7: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 5.4}

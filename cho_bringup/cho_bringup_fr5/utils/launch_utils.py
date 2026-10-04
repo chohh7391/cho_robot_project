@@ -20,7 +20,8 @@ cho_bringup_openarm load theirs. Everything robot-independent is
 cho_bringup_common's.
 """
 
-from cho_bringup_common import bringup_params, write_runtime_param_file
+# strict_bool is re-exported: the FR5 launch files take it from here.
+from cho_bringup_common import strict_bool, write_position_arm_param_file  # noqa: F401
 from cho_robot_config import motion_limit_parameters
 
 # The gripper names fr5.ros2_control.xacro switches on.
@@ -70,26 +71,7 @@ def tool_envelope_parameters(gripper):
     return dict(TOOL_ENVELOPES.get(gripper, {}))
 
 
-_TRUE = ('true', '1', 'yes', 'on')
-_FALSE = ('false', '0', 'no', 'off')
 _DEFER = ('', 'config')
-
-
-def strict_bool(value):
-    """Parse a launch argument that means true or false, and nothing else.
-
-    Unlike cho_bringup_common.as_bool, which reads anything unrecognised as
-    false, this refuses it: `load_gripper:=ture` must not quietly mean "no
-    gripper".
-    """
-    text = str(value).strip().lower()
-    if text in _TRUE:
-        return True
-    if text in _FALSE:
-        return False
-    raise RuntimeError(
-        f"Expected a boolean launch argument, got '{value}'. "
-        f"Valid: {', '.join(_TRUE + _FALSE)}")
 
 
 def resolve_gripper(gripper_arg, load_gripper_arg, config_value):
@@ -139,14 +121,6 @@ def create_runtime_param_file(bringup_type, ee_name, gripper='none', prefix='cho
     flange, so its workspace floor guard measures the thing that actually
     reaches the bench rather than the flange above it (nothing for a bare one).
     """
-    return write_runtime_param_file(
-        {
-            'joint_space_position_controller': bringup_params(bringup_type, 'position'),
-            'task_space_ik_controller': {
-                **bringup_params(bringup_type, 'position', ee_name),
-                **tool_envelope_parameters(gripper),
-            },
-        },
-        shared_params=motion_limit_parameters('fr5'),
-        prefix=prefix,
-    )
+    return write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('fr5'), prefix,
+        task_space_params=tool_envelope_parameters(gripper))

@@ -1,0 +1,102 @@
+LAUNCH cho_bringup_fr5/bringup_real_moveit.launch.py ['gripper:=none']
+  ARG robot_ip default='' choices=None
+  ARG gripper default='' choices=None
+  ARG load_gripper default='config' choices=None
+  ARG config_file default='<share:cho_bringup_fr5>/config/real/fr5.config.yaml' choices=None
+  ARG launch_rviz default='true' choices=None
+  ARG floor_frame default='world' choices=None
+  ARG floor_size default='4.0,4.0,0.10' choices=None
+  ARG floor_position default='0.0,0.0,-0.05' choices=None
+  ARG scene_ready_timeout default='210.0' choices=None
+  ARG controller_ready_timeout default='90.0' choices=None
+  ARG max_velocity_scaling_factor default='' choices=None
+  ARG max_acceleration_scaling_factor default='' choices=None
+  OPAQUE setup_includes
+    INCLUDE <share:cho_bringup_fr5>/launch/bringup_real_robot.launch.py
+      arg controller_name='joint_space_position_controller'
+      arg robot_ip=''
+      arg config_file='<share:cho_bringup_fr5>/config/real/fr5.config.yaml'
+      arg gripper='none'
+        ARG controller_name default='joint_space_position_controller' choices=None
+        ARG robot_ip default='' choices=None
+        ARG ee_name default='' choices=None
+        ARG gripper default='' choices=None
+        ARG load_gripper default='config' choices=None
+        ARG bringup_type default='real' choices=None
+        ARG config_file default='<share:cho_bringup_fr5>/config/real/fr5.config.yaml' choices=None
+        ARG controller_manager_timeout default='30' choices=None
+        OPAQUE setup_control_environment
+          NODE robot_state_publisher/robot_state_publisher
+            name=None namespace=None
+            args=[]
+            param {robot_description: <description #1 fr5>}
+            output='screen' on_exit=NoneType
+          NODE controller_manager/ros2_control_node
+            name=None namespace=None
+            args=[]
+            param FILE <share:cho_bringup_fr5>/config/real/controllers.yaml
+            param FILE <RT:cho_fr5_real_runtime_params_#0>
+            param {robot_description: <description #1 fr5>}
+            param {bringup_type: 'real', ee_name: 'wrist3_link'}
+            output='screen' on_exit=Shutdown
+          ON OnProcessStart target=<controller_manager/ros2_control_node args=[]>
+            ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_fr5_real_runtime_params_#0>']>
+              NODE controller_manager/spawner
+                name=None namespace=None
+                args=['joint_trajectory_controller', 'task_space_ik_controller', 'pouring_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '--inactive', '-p <RT:cho_fr5_real_runtime_params_#0>']
+                output='screen' on_exit=NoneType
+            NODE controller_manager/spawner
+              name=None namespace=None
+              args=['joint_state_broadcaster', 'joint_space_position_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '-p <RT:cho_fr5_real_runtime_params_#0>']
+              output='screen' on_exit=NoneType
+          ON_SHUTDOWN
+            OPAQUE cleanup (not run) closure=['<RT:cho_fr5_real_runtime_params_#0>']
+    INCLUDE <share:cho_moveit_fr5>/launch/moveit.launch.py
+      arg use_sim_time='false'
+      arg launch_rviz='true'
+      arg publish_static_scene='true'
+      arg gripper='none'
+      arg floor_frame='world'
+      arg floor_size='4.0,4.0,0.10'
+      arg floor_position='0.0,0.0,-0.05'
+      arg scene_ready_timeout='210.0'
+      arg controller_ready_timeout='90.0'
+      arg max_velocity_scaling_factor='0.25'
+      arg max_acceleration_scaling_factor='0.25'
+      arg activate_controller_after_scene='joint_trajectory_controller'
+      arg deactivate_controller_after_scene='joint_space_position_controller'
+DESCRIPTION #1
+  robot name='fr5'
+  joint base_joint fixed world -> base_link
+  joint j1 revolute base_link -> shoulder_link
+  joint j2 revolute shoulder_link -> upperarm_link
+  joint j3 revolute upperarm_link -> forearm_link
+  joint j4 revolute forearm_link -> wrist1_link
+  joint j5 revolute wrist1_link -> wrist2_link
+  joint j6 revolute wrist2_link -> wrist3_link
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp
+  ros2_control name='fr5_system' type='system'
+    hardware [plugin: fairino_hardware/FairinoHardwareInterface, param name='robot_ip': 192.168.58.2, param name='sdk_serialise': false]
+    joint name='j1' [command_interface name='position', state_interface name='position' [param name='initial_value': -0.0836], state_interface name='velocity']
+    joint name='j2' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.1209], state_interface name='velocity']
+    joint name='j3' [command_interface name='position', state_interface name='position' [param name='initial_value': -2.0723], state_interface name='velocity']
+    joint name='j4' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.7125], state_interface name='velocity']
+    joint name='j5' [command_interface name='position', state_interface name='position' [param name='initial_value': 1.6049], state_interface name='velocity']
+    joint name='j6' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.0798], state_interface name='velocity']
+RUNTIME_FILE <RT:cho_fr5_real_runtime_params_#0> aliases=False
+  /**:
+    joint_space_position_controller:
+      ros__parameters: {}
+    task_space_ik_controller:
+      ros__parameters: {ee_name: wrist3_link}
+  /** (every controller):
+    bringup_type: real
+    cartesian_limits: {max_rot_vel: 0.5, max_trans_acc: 0.5, max_trans_dec: -0.5, max_trans_vel: 0.25}
+    control_mode: position
+    joint_limits:
+      j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+      j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+      j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}

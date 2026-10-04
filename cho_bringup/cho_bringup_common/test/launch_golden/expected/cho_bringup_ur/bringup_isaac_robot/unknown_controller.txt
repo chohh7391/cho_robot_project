@@ -1,0 +1,16 @@
+LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robot/robot.usda', 'controller_name:=bogus']
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG bringup_type default='isaac' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG urdf_file default='<share:cho_description_ur>/urdf/ur5e.urdf' choices=None
+  ARG controllers_file default='<share:cho_bringup_ur>/config/isaac/controllers.yaml' choices=None
+  ARG controller_manager_timeout default='60' choices=None
+  ARG robot_usd default='<share:cho_description_ur>/usd/ur5e/ur5e.usda' choices=None
+  ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
+  ARG physics_rate default='250' choices=None
+  ARG headless default='false' choices=None
+  ARG device default='cpu' choices=['cpu', 'cuda']
+  ARG shutdown_on_gate_failure default='false' choices=None
+  OPAQUE setup_control_environment
+    ERROR RuntimeError: Unknown controller_name 'bogus'. Valid options: ['joint_space_position_controller', 'task_space_ik_controller']

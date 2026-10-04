@@ -1,0 +1,20 @@
+LAUNCH cho_bringup_ur/bringup_gz_robot.launch.py ['controller_name:=bogus']
+  ARG ur_type default='ur5e' choices=None
+  ARG description_file default='ur.urdf.xacro' choices=None
+  ARG controllers_file default='gz/controllers.yaml' choices=None
+  ARG controller_name default='joint_space_position_controller' choices=None
+  ARG load_gripper default='true' choices=None
+  ARG use_sim_time default='true' choices=None
+  ARG launch_rviz default='true' choices=None
+  ARG gazebo_gui default='true' choices=None
+  ARG world_file default='empty.sdf' choices=None
+  ARG robot_name default='ur' choices=None
+  ARG allow_renaming default='true' choices=None
+  ARG safety_pos_margin default='0.15' choices=None
+  ARG safety_k_position default='20' choices=None
+  ARG bringup_type default='gz' choices=None
+  ARG tf_prefix default='' choices=None
+  ARG ee_name default='tool0' choices=None
+  ARG controller_manager_timeout default='30' choices=None
+  OPAQUE launch_setup
+    ERROR RuntimeError: Unknown controller_name 'bogus'. Valid options: ['joint_trajectory_controller', 'joint_space_position_controller', 'task_space_ik_controller']

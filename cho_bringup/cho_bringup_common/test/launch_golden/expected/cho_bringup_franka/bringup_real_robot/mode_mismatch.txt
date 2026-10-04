@@ -1,0 +1,10 @@
+LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['control_mode:=position']
+  ARG robot_config_file default='<share:cho_bringup_franka>/config/real/franka.config.yaml' choices=None
+  ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
+  ARG controller_name default='operational_space_controller' choices=None
+  ARG load_gripper default='config' choices=['true', 'false', 'config']
+  ARG vla default='false' choices=None
+  ARG bringup_type default='real' choices=None
+  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+  OPAQUE generate_robot_nodes
+    ERROR RuntimeError: controller_name:=operational_space_controller is a torque controller, but control_mode:=position. Pass control_mode:=torque, or a position controller: ['joint_space_position_controller', 'task_space_ik_controller'] (or vla:=true).
