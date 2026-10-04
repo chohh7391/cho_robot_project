@@ -3,39 +3,28 @@
 <package format="3">
   <name>bota_ft_sensor</name>
   <version>1.0.0</version>
-  <description>Configuration, launch files and URDF for the Bota Systems FT sensor on the robots here, running the bota_driver_node from extern/bota_driver_ros2</description>
+  <description>
+    Bota Systems FT sensor launch for the arms here, on top of Bota's own
+    bota_driver and bota_driver_example (extern/).
+  </description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
-  <license>BSD-3-Clause-Attribution</license>
-  <author email="support@botasys.com">Bota Systems AG</author>
+  <license>Apache-2.0</license>
+  <author email="chohh7391@gmail.com">Hyunho Cho</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Bota Driver Package -->
-  <depend>bota_driver</depend>
+  <exec_depend>bota_driver</exec_depend>
+  <exec_depend>bota_driver_example</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
-  <!-- Core dependencies -->
-  <depend>rclcpp</depend>
-  <depend>std_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>robot_state_publisher</depend>
-  <depend>xacro</depend>
-  <depend>launch</depend>
-  <depend>launch_ros</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
-
-  <!-- Rviz visualization -->
-  <exec_depend>rviz2</exec_depend>
-
-  <!-- For orientation estimation -->
-  <exec_depend>imu_filter_madgwick</exec_depend>
-
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_copyright</test_depend>
+  <test_depend>ament_cmake_flake8</test_depend>
+  <test_depend>ament_cmake_lint_cmake</test_depend>
+  <test_depend>ament_cmake_pep257</test_depend>
+  <test_depend>ament_cmake_xmllint</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
   </export>
 </package>
-

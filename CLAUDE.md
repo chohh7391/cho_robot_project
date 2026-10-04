@@ -215,7 +215,10 @@ cho_control_tools/
   cho_control_tools/         # Interactive clients, VLA tools, and bag plotters
 
 cho_sensor/                  # Sensor stacks; grouping directory, not a package
-  bota_ft_sensor/            # Bota FT config/launch/urdf over extern/bota_driver_ros2
+  bota_ft_sensor/            # Bota FT driver launch for the arms here. Uses Bota's own
+                             # bota_driver (extern/bota_driver_ros2) and, for its default
+                             # config, bota_driver_example (extern/bota_driver_ros2_example)
+                             # instead of copies; only what differs lives here.
   hansung_scale/             # Hansung HS-AA RS232 scale driver + its msgs.
                              # SELF-CONTAINED: no cho_* dependencies, meant to be
                              # usable as a standalone module. Do not entangle it
@@ -498,6 +501,21 @@ Use FastDDS discovery server on PC2 and set `ROS_DISCOVERY_SERVER=<PC2_IP>:11811
 - ROS link/joint/topic/controller names are stable — configs and tests depend on them. Do not rename without updating all YAMLs and launch files.
 - Launch args and xacro properties: `snake_case`.
 - Python: `setup.cfg` enforces flake8 max-line 120.
+
+## File Headers
+
+Every C++, Python and CMake source outside `extern/` starts with a copyright and
+license header that `ament_copyright` recognises; the Lint workflow checks the whole
+tree. NOTICE ("File headers") is the rule:
+
+- Written here: `ament_copyright --add-missing "Hyunho Cho" apache2 <files>` adds it.
+- Adapted from upstream: the upstream copyright line(s), then `Copyright <year> Hyunho Cho`,
+  the upstream license in full, and a `Derived from ... see NOTICE` line (the TSID
+  files in `cho_controller_common` are the pattern). Add a NOTICE entry.
+- A package whose files carry more than one license lists each in `package.xml`.
+- Never edit `extern/`. To build on a vendor's package, add it there as a submodule
+  and include or reference it (as `bota_ft_sensor` does with Bota's example) rather
+  than copying its files.
 
 ## Build Alias
 we set alias related to build below.

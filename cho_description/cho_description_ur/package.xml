@@ -10,6 +10,8 @@
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
 
   <license file="LICENSE">BSD-3-Clause</license>
+  <!-- The launch file written here. -->
+  <license>Apache-2.0</license>
   <!-- The UR8LONG, UR15, UR18, UR20 and UR30 meshes constitutes “Graphical Documentation” the use of which is subject to and governed by our “Terms and Conditions for use of Graphical Documentation”, which can be found here: https://www.universal-robots.com/legal/terms-and-conditions/terms_and_conditions_for_use_of_graphical_documentation.txt -->
   <license file="meshes/ur20/LICENSE.txt">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>
   <!--<license file="meshes/ur8long/LICENSE.txt" source-files="meshes/ur8long/*" type="freeform">Universal Robots A/S’ Terms and Conditions for Use of Graphical Documentation</license>-->

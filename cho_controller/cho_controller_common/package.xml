@@ -6,7 +6,9 @@
 
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <author>CNRS (TSID upstream)</author>
+  <!-- TSID-derived sources: BSD-2-Clause; the trajectory code written here: Apache-2.0. -->
   <license>BSD-2-Clause</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

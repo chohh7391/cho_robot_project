@@ -1,47 +1,25 @@
 cmake_minimum_required(VERSION 3.8)
 project(bota_ft_sensor)
 
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
-
-# find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
 
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
-  set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
-  set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
-endif()
-
-# Install directories
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
-install(DIRECTORY urdf/
-  DESTINATION share/${PROJECT_NAME}/urdf
-)
-
-install(DIRECTORY bota_config/
-  DESTINATION share/${PROJECT_NAME}/bota_config
-)
-
-install(DIRECTORY rviz/
-  DESTINATION share/${PROJECT_NAME}/rviz
-)
-
-install(DIRECTORY plotjuggler/
-  DESTINATION share/${PROJECT_NAME}/plotjuggler
-)
+if(BUILD_TESTING)
+  find_package(ament_cmake_copyright REQUIRED)
+  find_package(ament_cmake_flake8 REQUIRED)
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_pep257 REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_copyright()
+  ament_flake8()
+  ament_lint_cmake()
+  # D212 (summary on the first line) and D213 (on the second) are mutually
+  # exclusive; ament ignores D212, this repo writes D212.
+  ament_pep257(--add-ignore D213)
+  ament_xmllint()
+endif()
 
 ament_package()

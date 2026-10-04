@@ -19,3 +19,6 @@
 [submodule "extern/openarm_can"]
 	path = extern/openarm_can
 	url = https://github.com/enactic/openarm_can.git
+[submodule "extern/bota_driver_ros2_example"]
+	path = extern/bota_driver_ros2_example
+	url = https://gitlab.com/botasys/drivers/bota_driver_ros2_example.git

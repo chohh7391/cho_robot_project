@@ -33,6 +33,7 @@ jobs:
             python3-pytest \
             ros-humble-ament-flake8 \
             ros-humble-ament-pep257 \
+            ros-humble-ament-copyright \
             ros-humble-ament-xmllint
 
       # Covers every package, including the ones ci.yml cannot build yet.
@@ -64,3 +65,17 @@ jobs:
             (cd "${pkg}" && python3 -m pytest ${tests} -v)
             echo "::endgroup::"
           done
+
+      # Every C++, Python and CMake source outside extern/ carries a copyright
+      # and license header ament_copyright recognises; NOTICE ("File headers")
+      # says which.
+      - name: Copyright headers
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          find . -type f \( -name '*.py' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \
+                             -o -name '*.c' -o -name '*.cc' -o -name '*.cxx' -o -name '*.hh' \
+                             -o -name '*.hxx' -o -name '*.cmake' \) \
+            -not -path './extern/*' -not -path './.git/*' -not -name setup.py -print0 \
+            | xargs -0 ament_copyright

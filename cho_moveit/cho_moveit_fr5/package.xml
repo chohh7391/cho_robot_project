@@ -5,7 +5,11 @@
   <version>0.1.0</version>
   <description>MoveIt 2 planning configuration for the FAIRINO FR5 robot.</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
+  <!-- Launch and gate code written here: Apache-2.0; semantic and planning
+       configuration adapted from FAIRINO frcobot_ros2, declared BSD upstream
+       (UPSTREAM.md). -->
   <license>Apache-2.0</license>
+  <license>BSD</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

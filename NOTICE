@@ -6,7 +6,16 @@ licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Not all packages in this repository are original work. The sections below
 record the upstream origin and license of each third-party component.
-Full license texts for vendored sources are in LICENSES/.
+Full license texts for vendored sources are in LICENSES/ or in the package.
+
+File headers. Every C++, Python and CMake source outside extern/ carries one,
+checked by ament_copyright in CI (.github/workflows/lint.yml):
+  - written here: "Copyright <year> Hyunho Cho" and the Apache-2.0 notice;
+  - adapted from upstream: the upstream copyright line(s), then
+    "Copyright <year> Hyunho Cho", the upstream license in full, and a
+    "Derived from ... see NOTICE" line;
+  - extern/ is never edited.
+A package whose files carry more than one license lists each in package.xml.
 
 
 ================================================================================
@@ -26,11 +35,8 @@ cho_controller/cho_controller_common/
     BSD-2-Clause grant is the one relied on here. File headers were restored
     to match upstream after the original copy dropped them.
 
-cho_controller/cho_controller_common/src/util/stop_watch.cpp
-cho_controller/cho_controller_common/include/cho_controller_common/util/stop_watch.hpp
-    Copyright (c) 2010-2013 Tommaso Urli <tommaso.urli@uniud.it>
-    University of Udine
-    License: MIT  ->  LICENSES/MIT-stop-watch.txt
+    The trajectory sources (point_to_point, motion_limits*) were written here
+    and are Apache-2.0.
 
 ================================================================================
 Forked upstream packages (retain their original license and authorship)
@@ -57,10 +63,24 @@ cho_description/cho_description_ur/
     Documentation" — see the per-model LICENSE.txt files in each mesh
     directory. Redistribution of those meshes is subject to those terms.
 
-cho_sensor/bota_ft_sensor/
-    Configuration, launch and URDF files for Bota Systems force/torque sensors.
-    Copyright Bota Systems AG
-    License: see package.xml
+cho_moveit/cho_moveit_franka/
+    MoveIt configuration adapted from franka_fr3_moveit_config
+    (extern/franka_ros2), Copyright (c) 2023-2025 Franka Robotics GmbH
+    License: Apache-2.0
+
+cho_moveit/cho_moveit_ur/
+    Semantic, limit, kinematics, OMPL and controller configuration adapted from
+    ur_moveit_config (extern/Universal_Robots_ROS2_Driver)
+    Copyright (c) 2021 PickNik, Inc. and the Universal_Robots_ROS2_Driver authors
+    License: BSD-3-Clause  ->  cho_moveit/cho_moveit_ur/LICENSE
+    The launch files were written here and are Apache-2.0.
+
+cho_moveit/cho_moveit_fr5/
+    Semantic model, collision matrix, KDL settings and joint limits adapted from
+    FAIRINO's fairino5_v6_moveit2_config (frcobot_ros2 0.3.0), whose package
+    declares "BSD" without shipping a license text; see UPSTREAM.md. The launch
+    and gate code was written here and is Apache-2.0.
+
 
 
 ================================================================================
@@ -73,4 +93,23 @@ own licenses in their own repositories:
     extern/franka_ros2                    Franka Robotics GmbH, Apache-2.0
     extern/Universal_Robots_ROS2_Driver   Universal Robots A/S, BSD-3-Clause
     extern/mujoco_ros2_control            ros-controls, Apache-2.0
-    extern/bota_driver_ros2               Bota Systems AG
+    extern/bota_driver_ros2               Bota Systems AG,
+                                          BSD-3-Clause with Attribution
+    extern/bota_driver_ros2_example       Bota Systems AG,
+                                          BSD-3-Clause with Attribution
+                                          (cho_sensor/bota_ft_sensor launches
+                                          on top of it)
+    extern/openarm_can                    Enactic, Inc., Apache-2.0
+    extern/openarm_ros2                   Enactic, Inc., Apache-2.0
+
+Vendored, not submodules (tracked in this repository, see CHO_PATCHES.md):
+
+    extern/fairino_hardware_v3_8_0        FAIR-INNOVATION frcobot_ros2,
+    extern/fairino_msgs                   tag V3.0.0_RobotV3.8.0, with
+                                          libfairino.so.2.1.7. Upstream
+                                          declares no license
+                                          (package.xml: "TODO"), and the
+                                          GitHub repository has no LICENSE
+                                          file (checked 2026-10-05). Its
+                                          "license-free" is about fees, not
+                                          a grant to redistribute.
