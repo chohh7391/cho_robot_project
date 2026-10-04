@@ -12,12 +12,12 @@
 namespace
 {
 using Action = control_msgs::action::FollowJointTrajectory;
-std::string urdf(const std::string & side)
+std::string urdf(const std::string & side, const std::string & extra_hardware_params = "")
 {
   std::ostringstream x; x << "<robot name='single'><link name='base'/>";
   for(int i=1;i<=7;++i)
     x<<"<link name='"<<side<<i<<"'/><joint name='openarm_"<<side<<"_joint"<<i<<"' type='fixed'><parent link='base'/><child link='"<<side<<i<<"'/></joint>";
-  x<<"<ros2_control name='fake' type='system'><hardware><plugin>cho_hardware_openarm_mit_test/FakeMitSystem</plugin><param name='arm_side'>"<<side<<"</param><param name='max_abs_position'>6.4</param><param name='max_abs_velocity'>20</param><param name='max_stiffness'>500</param><param name='max_damping'>50</param><param name='max_abs_effort'>100</param><param name='max_lease_cycles'>100</param><param name='safe_hold_damping'>2</param></hardware>";
+  x<<"<ros2_control name='fake' type='system'><hardware><plugin>cho_hardware_openarm_mit_test/FakeMitSystem</plugin><param name='arm_side'>"<<side<<"</param><param name='max_abs_position'>6.4</param><param name='max_abs_velocity'>20</param><param name='max_stiffness'>500</param><param name='max_damping'>50</param><param name='max_abs_effort'>100</param><param name='max_lease_cycles'>100</param><param name='safe_hold_damping'>2</param>"<<extra_hardware_params<<"</hardware>";
   {for(int i=1;i<=7;++i){x<<"<joint name='openarm_"<<side<<"_joint"<<i<<"'>";for(const auto*n:{"position","velocity","stiffness","damping","effort"})x<<"<command_interface name='"<<n<<"'/>";for(const auto*n:{"position","velocity","effort"})x<<"<state_interface name='"<<n<<"'/>";x<<"</joint>";}x<<"<gpio name='openarm_"<<side<<"_arm'>";for(const auto*n:{"mit_session_echo","mit_lease_cycles","mit_commit_generation","mit_safe_request_generation"})x<<"<command_interface name='"<<n<<"'/>";for(const auto*n:{"mit_session_id","mit_ack_generation","mit_safe_generation","mit_safe_ack_generation","mit_status"})x<<"<state_interface name='"<<n<<"'/>";x<<"</gpio>";}
   x<<"</ros2_control></robot>";return x.str();
 }
@@ -125,4 +125,87 @@ TEST_F(SingleFixture, MultiPointSuccessCancelPreemptAndControlledStop)
   auto old=send(goal(.1,500));ASSERT_TRUE(old);cycle(3);auto replacement=send(goal(0,100));ASSERT_TRUE(replacement);auto ro=client->async_get_result(old),rr=client->async_get_result(replacement);for(int i=0;i<400&&(ro.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready||rr.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready);++i)cycle();EXPECT_EQ(ro.get().code,rclcpp_action::ResultCode::ABORTED);EXPECT_EQ(rr.get().code,rclcpp_action::ResultCode::SUCCEEDED);
   auto cancel=send(goal(.1,500));ASSERT_TRUE(cancel);cycle(2);auto cf=client->async_cancel_goal(cancel);while(cf.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready)cycle();auto cr=client->async_get_result(cancel);for(int i=0;i<300&&cr.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready;++i)cycle();EXPECT_EQ(cr.get().code,rclcpp_action::ResultCode::CANCELED);
   cycle(20);
+}
+
+TEST(SingleArmFjtHold, ReadyHoldsWhereItBeganInsteadOfFollowingTheMeasurement)
+{
+  // Between goals the FJT holds with the profile's safe gains. It used to
+  // re-latch q_des to the measured position every cycle, which makes
+  // kp*(q_des - q) zero: the hold held nothing, and an arm that sags settled on
+  // damping alone. The fake's mirror_position_offset is that sag -- the
+  // measurement lands 1 mrad from every accepted q_des -- so a re-latching
+  // hold walks away by 1 mrad per cycle, and a real hold stays put.
+  if (!rclcpp::ok()) {int argc = 0; rclcpp::init(argc, nullptr);}
+  const std::string side = TEST_ARM_SIDE;
+  const std::string name = side + "_mit_hold";
+  auto exec = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
+  auto owned = std::make_unique<hardware_interface::ResourceManager>(
+    urdf(side, "<param name='mirror_position_offset'>0.001</param>"), true, true);
+  auto * resources = owned.get();
+  auto cm = std::make_shared<controller_manager::ControllerManager>(
+    std::move(owned), exec, "controller_manager", "/single_hold_" + side);
+  auto controller =
+    std::make_shared<cho_controller_openarm_mit::SingleArmFollowJointTrajectoryController>();
+  ASSERT_TRUE(cm->add_controller(
+    controller, name, "cho_controller_openarm_mit/SingleArmFollowJointTrajectoryController"));
+  controller->get_node()->set_parameter(rclcpp::Parameter("arm", side));
+  controller->get_node()->set_parameter(
+    rclcpp::Parameter("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE));
+  controller->get_node()->set_parameter(rclcpp::Parameter("safety_profile_name", "mujoco_sim_safe"));
+  ASSERT_EQ(cm->configure_controller(name), controller_interface::return_type::OK);
+  std::atomic<bool> running{true};
+  std::atomic<unsigned long long> updates{0};
+  std::thread loop([&] {
+      while (running) {
+        const auto now = cm->now();
+        const auto period = rclcpp::Duration::from_seconds(.001);
+        cm->read(now, period); cm->update(now, period); cm->write(now, period);
+        updates.fetch_add(1, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+  const auto cycle = [&](unsigned long long n) {
+      const auto target = updates.load(std::memory_order_acquire) + n;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+      while (updates.load(std::memory_order_acquire) < target &&
+        std::chrono::steady_clock::now() < deadline)
+      {
+        exec->spin_some();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    };
+  ASSERT_EQ(
+    cm->switch_controller({name}, {}, controller_manager_msgs::srv::SwitchController::Request::STRICT),
+    controller_interface::return_type::OK);
+  cycle(30);
+  const auto measured = [&] {
+      return resources->claim_state_interface("openarm_" + side + "_joint1/position").get_value();
+    };
+  const double settled = measured();
+  cycle(200);
+  EXPECT_NEAR(measured(), settled, 1e-9);
+  EXPECT_DOUBLE_EQ(
+    resources->claim_state_interface("openarm_" + side + "_arm/mit_status").get_value(),
+    static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE));
+  // Leave through the ordinary handshake.
+  auto node = std::make_shared<rclcpp::Node>("hold_client_" + side);
+  exec->add_node(node);
+  auto stop = node->create_client<std_srvs::srv::Trigger>(
+    "/single_hold_" + side + "/" + name + "/request_safe_stop");
+  ASSERT_TRUE(stop->wait_for_service(std::chrono::seconds(1)));
+  bool stopped = false;
+  for (int i = 0; i < 300 && !stopped; ++i) {
+    auto f = stop->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    while (f.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle(1);
+    stopped = f.get()->success;
+    if (!stopped) cycle(2);
+  }
+  EXPECT_TRUE(stopped);
+  EXPECT_EQ(
+    cm->switch_controller({}, {name}, controller_manager_msgs::srv::SwitchController::Request::STRICT),
+    controller_interface::return_type::OK);
+  cm->unload_controller(name);
+  running = false;
+  loop.join();
+  exec->remove_node(node);
 }

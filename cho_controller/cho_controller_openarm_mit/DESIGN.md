@@ -35,10 +35,12 @@ goals then repeat measured seeding and ack-before-ramp. Missing ack, session cha
 DISABLED or FAULT produces a bounded abort/error. A normal lifecycle stop first calls the
 `~/request_safe_stop` service until it reports SAFE acknowledged, then deactivation returns SUCCESS
 immediately. Service completion additionally requires the hardware-owned pair stop-ready state,
-which is true only for equal, nonzero SAFE acknowledgements on both arms. Direct deactivation also returns immediately and relies on the SystemInterface
-`prepare_command_mode_switch()` measured-SAFE fallback; lifecycle callbacks never wait or request a
-retry. Explicit safe-request transitions used for cancel/preempt are recoverable in the same session, while invalid,
-transport-fault and external-switch latches require cleanup/configure. This package still has no CAN,
+which is true only for equal, nonzero SAFE acknowledgements on both arms. Direct deactivation also returns immediately and relies on the hardware's controller-switch rule,
+`cho_openarm_mit_core::SwitchGate` (the same in the real, MuJoCo and test backends): the hardware
+puts the arm in measured SAFE itself and discards the outgoing producer's last unacknowledged commit
+at `perform_command_mode_switch()`; lifecycle callbacks never wait or request a retry. Explicit
+safe-request transitions used for cancel/preempt are recoverable in the same session; a transport
+fault requires the hardware to be reactivated. This package still has no CAN,
 MuJoCo, Isaac, or other actuator connection.
 
 ## Single-arm TaskSpace MIT impedance
@@ -131,3 +133,34 @@ aborts and requests SAFE.
 The hardware SAFE hold that these requests reach keeps the per-joint profile safe-hold gains and the
 last accepted `tau_ff` (see `cho_openarm_mit_core::ArmConsumer::submit_safe_transition`), because an
 MIT motor has no gravity model of its own and a hold with `tau_ff = 0` would let the arm fall.
+
+## Action contract of the direct and TaskSpace producers
+
+The JointSpace server of `JointImpedanceActionController` and the TaskSpace server of
+`TaskSpaceImpedanceController` follow `cho_interfaces/CONTRACT.md`; VLA follows it for its own
+action. (The FollowJointTrajectory controllers keep FollowJointTrajectory's semantics, which MoveIt
+relies on: a new goal preempts the running one through a SAFE handshake.)
+
+- **One goal at a time.** A goal arriving while another is held -- running, or finished on the
+  control thread but not yet delivered -- is rejected; it never replaces the running one. Nothing in
+  the repository relied on replacement (the task trees and the operator tools wait for each result).
+- **`duration_sec` is a minimum.** JointSpace: when a goal starts, its duration is stretched to the
+  shortest cubic whose peak velocity `1.5*|dq|/T` stays inside the profile's command velocity on
+  every joint, the bound the consumer validates `dq_des` against; a faster request used to be
+  rejected. TaskSpace: stretched to 0.25 s (formerly a rejection floor) and to the duration at which
+  the cubic's peak twist, mapped through the start pose's damped pseudo-inverse, keeps `dq_des` inside
+  the command velocity -- the bound `joint_velocity_reference()` clamps at. That estimate is first
+  order: it uses the Jacobian where the goal starts, not along the path.
+- **Every result that is not a success says why** in `message`: canceled on request, a SAFE stop,
+  a SAFE the controller requested itself, a fault, the timeout 2 s after the motion, a failed
+  computation, or deactivation.
+- **Every way out of ACTIVE ends the goals** (`DirectControllerBase::stop_goals()`): an operator's
+  `request_safe_stop`, a SAFE the controller requests itself (an acknowledgement timeout, a failed
+  check), a fault (`protocol_ok()` false: the hardware went SAFE on its own -- a controller switch,
+  lease expiry, a rejected commit -- or the session changed), and deactivation. From that moment the
+  goal API rejects, the running goal ends with the reason, and the non-RT tick aborts every goal still
+  held, including one accepted in the instant the API closed. Goals used to end only on an operator's
+  stop; after any other SAFE they hung without a result.
+- **Deactivation without the handshake returns SUCCESS** (with a warning): every MIT backend's switch
+  rule puts the arm in SAFE itself. It used to return ERROR, which did not stop the switch and left
+  the controller finalized, to be reloaded.

@@ -113,9 +113,12 @@ controller_interface::return_type JointSpaceVelocityController::update(
 
     const Eigen::VectorXd q_ref_prev = q_ref_;
 
-    const bool running = action_server_ && action_server_->is_running();
-    if (running) {
+    // compute() is false when the goal ended this cycle -- canceled, aborted, or
+    // one that outlived a deactivation: then its trajectory is not sampled and
+    // q_ref_ holds, as when idle.
+    const bool running = action_server_ && action_server_->is_running() &&
         action_server_->compute(traj_time, state_);
+    if (running) {
         if (!prev_running_) {
             // Seed from the frozen reference, not the measurement: the holding
             // tracking error would otherwise leave as a one-cycle velocity step.

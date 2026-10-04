@@ -566,6 +566,40 @@ TEST_F(Fixture, CancelReleasesTheReferenceAndLeavesTheServerAvailable)
   EXPECT_NE(send_goal(vla_goal()), nullptr);
 }
 
+TEST_F(Fixture, ASafeStopEndsTheGoalWithTheReason)
+{
+  // The controller stops computing references once STOPPING, so nothing else
+  // would ever finish the goal: it used to stay accepted with no result and
+  // block every later one.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  auto client = rclcpp_action::create_client<VlaAction>(
+    client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
+  auto goal_future = client->async_send_goal(*vla_goal());
+  for (int i = 0; i < 400 &&
+    goal_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
+  {
+    cycle();
+  }
+  auto handle = goal_future.get();
+  ASSERT_NE(handle, nullptr);
+  publish(joint_chunk(0.2), 40);
+  auto result = client->async_get_result(handle);
+  ASSERT_TRUE(safe_stop());
+  for (int i = 0; i < 400 &&
+    result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
+  {
+    cycle();
+  }
+  ASSERT_EQ(result.wait_for(std::chrono::milliseconds(0)), std::future_status::ready);
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_NE(wrapped.result->message.find("SAFE stop"), std::string::npos)
+    << wrapped.result->message;
+}
+
 TEST_F(Fixture, ChunksAreIgnoredWithoutAnActiveGoal)
 {
   ASSERT_EQ(configured, controller_interface::return_type::OK);

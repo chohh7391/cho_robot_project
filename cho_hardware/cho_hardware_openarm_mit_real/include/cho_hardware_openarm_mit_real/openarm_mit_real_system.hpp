@@ -50,6 +50,31 @@ struct TransportConfig
   double gripper_mit_kd{0.1};
 };
 
+// Whether a read() has to ask the arm motors for their state (the 0xCC
+// refresh) or can rely on the replies to the previous cycle's MIT commands.
+// Every Damiao motor answers both with one state frame. With
+// state_from_command_reply the refresh is dropped -- but a reply to a command
+// exists only once an arm command has gone out since the motors were last
+// (re)enabled: enable() drains whatever was pending, and a disabled motor
+// answers nothing. This is VendorCanTransport's decision, kept here so a test
+// transport can make the same one.
+class StateQuery
+{
+public:
+  explicit StateQuery(bool from_command_reply = false)
+  : from_command_reply_(from_command_reply) {}
+  void enabled() {command_sent_ = false;}
+  void disabled() {command_sent_ = false;}
+  // An MIT command frame to every arm motor. Not the gripper's: its replies
+  // say nothing about the arm.
+  void command_sent() {command_sent_ = true;}
+  bool refresh_needed() const {return !from_command_reply_ || !command_sent_;}
+
+private:
+  bool from_command_reply_{false};
+  bool command_sent_{false};
+};
+
 // The vendor object opens a SocketCAN descriptor in its constructor.  Keeping
 // it behind this interface makes configuration failure paths unit-testable.
 class MitTransport
@@ -62,6 +87,8 @@ public:
   virtual bool read(
     std::array<double, kArmDof> & position, std::array<double, kArmDof> & velocity,
     std::array<double, kArmDof> & effort) = 0;
+  // False when any frame of the tuple could not be handed to the bus. The
+  // adapter treats that as a transport FAULT.
   virtual bool send(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & command) = 0;
 
   // Which joints' motors answered during the last read(). A transport that
@@ -72,6 +99,8 @@ public:
     all.fill(true);
     return all;
   }
+  // Whether the gripper motor answered during the last read(); same convention.
+  virtual bool gripper_replied() const {return true;}
 
   // Gripper, optional. A transport that answers false to supports_gripper()
   // makes a `hand:=true` configuration fail at configure time rather than at
@@ -108,8 +137,10 @@ public:
   hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
   hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
   // Contract v1: an external switch cannot rely on the outgoing controller for
-  // safety. prepare rejects a partial claim of this arm and asks write() to put
-  // the arm in measured SAFE; until perform, no commit is accepted.
+  // safety. The rule is cho_openarm_mit_core::SwitchGate, shared with the MuJoCo
+  // and test backends: prepare rejects a partial claim of this arm and asks
+  // write() to put the arm in measured SAFE, accepting no commit until perform;
+  // perform discards the commit the outgoing producer left unacknowledged.
   hardware_interface::return_type prepare_command_mode_switch(
     const std::vector<std::string> & start_interfaces,
     const std::vector<std::string> & stop_interfaces) override;
@@ -143,12 +174,16 @@ private:
   // Watchdog thread: disable transport now, leave the consumer and protocol
   // state to the next read()/write() on the control thread.
   void trip_watchdog() noexcept;
-  // The command interface names this arm owns (all five fields of every joint
-  // plus the four protocol commands); a switch must claim all or none of them.
-  std::vector<std::string> arm_claims() const;
-  bool claims_whole_arm_or_none(const std::vector<std::string> & interfaces) const;
   bool dispatch_safe_hold(bool force_new_generation = false);
   bool dispatch(const cho_openarm_mit_core::ArmCommand & command);
+  // The controller-switch fence: whatever the commit handle holds now is never
+  // evaluated, and the ack advances past it (ArmConsumer::discard_commit).
+  void discard_leftover_commit();
+  // A producer's SAFE request or commit, outside the switch gate. False: the
+  // arm FAULTed (transition_to_safe has run).
+  bool apply_producer_input();
+  // The effort command interfaces := the tau_ff the consumer's hold applies.
+  void publish_held_effort();
   void watchdog_loop();
   void start_watchdog();
   void stop_watchdog() noexcept;
@@ -205,11 +240,20 @@ private:
   // profile's stale_cycles the bus is treated as lost (FAULT, transport off).
   std::array<std::size_t, kArmDof> missed_replies_{};
   std::size_t stale_cycles_{0};
-  // prepare_command_mode_switch() -> write(): enter measured SAFE, and accept
-  // no commit until perform_command_mode_switch() (or the bound below, in case
-  // the controller_manager abandons the switch after a successful prepare).
-  std::atomic<bool> switch_safe_requested_{false};
-  std::atomic<bool> switch_gated_{false};
-  std::size_t switch_gate_cycles_{0};
+  // The same for the gripper, whose state frames arrive at most every
+  // gripper_write_decimation_ cycles when the per-cycle refresh is off.
+  std::size_t missed_gripper_replies_{0};
+  // Set under transport_mutex_ by every enable/disable. dispatch() sends
+  // nothing while it is false, so a write() racing the watchdog's disable
+  // cannot put one more MIT frame on the bus after it.
+  bool transport_enabled_{false};
+  // The controller-switch rule shared by every OpenArm MIT backend; it expires
+  // a switch the controller_manager abandons after one second of cycles.
+  cho_openarm_mit_core::SwitchGate switch_gate_;
+  // The commit generation write() evaluated last, accepted or not. A commit is
+  // evaluated once: a rejected one used to be retried every cycle, each retry
+  // re-latching the SAFE hold to a fresh measurement, so the hold followed a
+  // sagging arm down. NaN-safe comparison (same_commit()).
+  double observed_commit_{0.0};
 };
 }  // namespace cho_hardware_openarm_mit_real

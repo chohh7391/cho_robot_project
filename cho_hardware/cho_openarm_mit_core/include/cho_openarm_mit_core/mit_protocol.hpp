@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -158,6 +159,13 @@ public:
   bool successful_write_cycle();
   void request_safe_transition(bool recoverable = false);
   bool submit_safe_transition(bool transport_succeeded);
+  // The controller-switch fence (SwitchGate). A commit the outgoing producer
+  // left unacknowledged is consumed WITHOUT being accepted: the ack advances to
+  // it and nothing else changes, so it can never run after the switch, and the
+  // incoming producer -- which continues from the ack -- commits above it.
+  // False, and no change, unless `generation` is an exact generation newer than
+  // the ack.
+  bool discard_commit(double generation);
   void inject_fault();
   MitStatus status() const {return status_;}
   std::uint64_t session() const {return session_;}
@@ -199,12 +207,80 @@ public:
   bool successful_write_cycle();
   void request_safe_transition(bool left, bool right, bool recoverable = false);
   bool submit_safe_transition(bool left, bool right, bool transport_succeeded = true);
+  // ArmConsumer::discard_commit() for both arms.
+  void discard_commit(double left_generation, double right_generation);
   void inject_fault(bool left);
   const ArmConsumer & left() const {return left_;}
   const ArmConsumer & right() const {return right_;}
 private:
   ArmConsumer left_;
   ArmConsumer right_;
+};
+
+// How one controller_manager switch list names one arm's MIT command interfaces
+// (complete_claims(side)): not at all, all of them, or only some.
+enum class ArmClaim : std::uint8_t {NONE, COMPLETE, PARTIAL};
+ArmClaim classify_arm_claim(const std::vector<std::string> & interfaces, const std::string & side);
+
+// Contract v1, "External switch": the controller-switch rule every OpenArm MIT
+// backend applies -- the real adapter, MuJoCo and the test fake -- one instance
+// per arm. An external switch cannot rely on the outgoing producer for safety:
+//
+//  - prepare(): a switch naming only part of the arm is refused. One that starts
+//    or stops the arm is accepted, SAFE or not. The next write() puts the arm in
+//    measured SAFE (an arm already in SAFE keeps its hold, with no new SAFE
+//    generation), and until perform() no producer SAFE request or commit is
+//    evaluated.
+//  - perform(): returns true when the backend must discard the commit the
+//    outgoing producer left unacknowledged (ArmConsumer::discard_commit), and
+//    must do it right there: controller_manager activates the incoming producer
+//    after perform and before the next write(), and that producer reads the ack
+//    to continue its generations from. The arm is put in SAFE again in case
+//    anything ran since prepare, and commits are evaluated again.
+//  - A switch controller_manager abandons after a successful prepare (another
+//    component refused it) never performs. After `expiry_cycles` write() cycles
+//    the gate opens by itself, asking for the same discard first.
+//
+// prepare() may run on controller_manager's service thread; perform() and
+// on_write() run on the control loop (Humble calls perform_command_mode_switch()
+// from update(), before write()). This class only decides: the backend owns the
+// SAFE tuple and the commit bookkeeping.
+class SwitchGate
+{
+public:
+  struct Cycle
+  {
+    bool enter_safe{false};  // put the arm in measured SAFE now, unless it already is
+    bool closed{false};      // between prepare and perform: evaluate no producer input
+    bool discard{false};     // the switch was abandoned: discard the leftover commit now
+    // The first write() after perform. A SAFE request still pending then was
+    // written by the outgoing producer, and the switch's own SAFE satisfies it;
+    // a commit with a new generation can only be the incoming producer's.
+    bool performed{false};
+  };
+  explicit SwitchGate(std::size_t expiry_cycles = 1000);
+  SwitchGate(const SwitchGate & other);
+  SwitchGate & operator=(const SwitchGate & other);
+  void set_expiry_cycles(std::size_t cycles);
+  // False: refuse the switch.
+  bool prepare(
+    const std::vector<std::string> & start, const std::vector<std::string> & stop,
+    const std::string & side);
+  // True: discard the leftover commit now (see above).
+  bool perform(
+    const std::vector<std::string> & start, const std::vector<std::string> & stop,
+    const std::string & side);
+  // Once per write(), first.
+  Cycle on_write();
+  void reset();
+  bool closed() const {return closed_.load();}
+
+private:
+  std::atomic<bool> safe_requested_{false};
+  std::atomic<bool> closed_{false};
+  std::atomic<bool> performed_{false};
+  std::size_t closed_cycles_{0};  // control loop only
+  std::size_t expiry_cycles_{1000};
 };
 
 // Couples ownership and command acceptance so a command cannot bypass the selected mode.

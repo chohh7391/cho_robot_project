@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <gtest/gtest.h>
 #include <limits>
 #include <set>
@@ -34,6 +35,10 @@ public:
     std::array<double, 7> &) override
   {
     events.push_back("read");
+    if (!scripted_replies.empty()) {
+      replies = scripted_replies.front();
+      scripted_replies.pop_front();
+    }
     position = next_position;
     if (read_nan) {
       position[0] = std::numeric_limits<double>::quiet_NaN();
@@ -41,6 +46,7 @@ public:
     return true;
   }
   std::array<bool, 7> replied() const override {return replies;}
+  bool gripper_replied() const override {return gripper_reply;}
   bool
   send(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuple) override
   {
@@ -73,6 +79,9 @@ public:
   bool read_nan{false};
   std::array<double, 7> next_position{};
   std::array<bool, 7> replies{true, true, true, true, true, true, true};
+  // Consumed one per read(), each replacing `replies` for that read.
+  std::deque<std::array<bool, 7>> scripted_replies;
+  bool gripper_reply{true};
   bool gripper_supported{true};
   bool fail_gripper_read{false};
   bool fail_gripper_send{false};
@@ -808,6 +817,55 @@ TEST(OpenArmMitRealGripper, AGripperFailureSafesTheSameBusArm)
   }
 }
 
+TEST(OpenArmMitRealGripper, AGripperThatStopsAnsweringFaultsTheArmAfterTheStaleLimit)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate_with_hand(system, transport, "5");
+  // The finger answers at least once per write decimation, so a few silent
+  // cycles are normal...
+  transport->gripper_reply = false;
+  for (int cycle = 0; cycle < 4; ++cycle) {
+    ASSERT_EQ(system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+      hardware_interface::return_type::OK);
+  }
+  transport->gripper_reply = true;
+  ASSERT_EQ(system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  // ...but past the stale limit (75 cycles) plus that decimation it is a dead
+  // hand on the arm's own bus.
+  transport->gripper_reply = false;
+  for (int cycle = 0; cycle < 80; ++cycle) {
+    ASSERT_EQ(system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+      hardware_interface::return_type::OK) << cycle;
+  }
+  EXPECT_EQ(system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+}
+
+TEST(OpenArmMitRealGripper, AGripperCanIdInsideTheArmsRangeIsRejected)
+{
+  for (const auto & [parameter, value] : std::vector<std::pair<std::string, std::string>>{
+      {"gripper_recv_can_id", "19"},   // 0x13: joint 3's reply id
+      {"gripper_recv_can_id", "17"},   // 0x11: joint 1's reply id
+      {"gripper_send_can_id", "7"},    // joint 7's command id
+      {"gripper_send_can_id", "24"}})  // 0x18 on both ids
+  {
+    OpenArmMitRealSystem system;
+    auto info = hardware_info_with_hand();
+    info.hardware_parameters[parameter] = value;
+    EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR)
+      << parameter << "=" << value;
+  }
+  OpenArmMitRealSystem system;
+  EXPECT_EQ(system.on_init(hardware_info_with_hand()), hardware_interface::CallbackReturn::SUCCESS);
+}
+
 namespace
 {
 // Writes a whole valid commit (every joint at `position`) for generation `generation`.
@@ -940,9 +998,455 @@ TEST(OpenArmMitRealSwitch, AnExternalSwitchSafesTheArmAndGatesCommitsUntilPerfor
   ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   EXPECT_EQ(status->get_value(), kSafe);
 
+  // perform: generation 2 is the outgoing producer's leftover. It must not
+  // run after the switch -- not even for one lease. The write right after
+  // perform is the one that used to accept it.
+  const auto sent_before = transport->sent.size();
   ASSERT_EQ(system.perform_command_mode_switch({}, claims), hardware_interface::return_type::OK);
-  commit(commands, states, 3.0, 0.06);
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(status->get_value(), kSafe) << cycle;
+  }
+  for (auto sent = transport->sent.begin() + static_cast<std::ptrdiff_t>(sent_before);
+    sent != transport->sent.end(); ++sent)
+  {
+    EXPECT_NE((*sent)[0].position, 0.06);
+  }
+  // It was discarded, not accepted: the ack moved past it, which is what the
+  // incoming producer continues from.
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_ack_generation")->get_value(), 2.0);
+  commit(commands, states, 3.0, 0.07);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status->get_value(), kActive);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.07);
+}
+
+std::vector<std::string> all_claims(std::vector<hardware_interface::CommandInterface> & commands)
+{
+  std::vector<std::string> claims;
+  for (const auto & command : commands) {
+    claims.push_back(command.get_name());
+  }
+  return claims;
+}
+
+TEST(OpenArmMitRealSwitch, AnExternalStopNeverRunsTheOutgoingProducersLastCommit) {
+  // controller_manager's order inside one control cycle: update() (the
+  // outgoing producer writes generation g+1), perform_command_mode_switch(),
+  // deactivate, then write(). Nobody overwrites g+1 on a stop-only switch, so
+  // write() used to accept it and run the outgoing tuple for a whole lease.
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  const auto * status = state_interface(states, "openarm_arm/mit_status");
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status->get_value(), kActive);
+  const auto claims = all_claims(commands);
+  ASSERT_EQ(system.prepare_command_mode_switch({}, claims), hardware_interface::return_type::OK);
+  // The switch's cycle: the producer commits once more, then perform, then write.
+  commit(commands, states, 2.0, 0.30);
+  ASSERT_EQ(system.perform_command_mode_switch({}, claims), hardware_interface::return_type::OK);
+  const auto sent_before = transport->sent.size();
+  // Longer than the 10-cycle lease the leftover asks for.
+  for (int cycle = 0; cycle < 20; ++cycle) {
+    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(status->get_value(), kSafe) << cycle;
+  }
+  ASSERT_GT(transport->sent.size(), sent_before);
+  for (auto sent = transport->sent.begin() + static_cast<std::ptrdiff_t>(sent_before);
+    sent != transport->sent.end(); ++sent)
+  {
+    EXPECT_DOUBLE_EQ((*sent)[0].position, 0.0);  // the measured SAFE hold, never 0.30
+  }
+}
+
+TEST(OpenArmMitRealSwitch, TheIncomingProducerContinuesAboveTheDiscardedCommit) {
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  const auto * status = state_interface(states, "openarm_arm/mit_status");
+  const auto * ack = state_interface(states, "openarm_arm/mit_ack_generation");
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  const auto claims = all_claims(commands);
+  // A swap: the same claims stop and start.
+  ASSERT_EQ(system.prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  commit(commands, states, 4.0, 0.30);  // the outgoing producer, still writing
+  ASSERT_EQ(system.perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  // The incoming producer's on_activate() runs here, before the next write():
+  // it reads the ack and seeds at ack + 1.
+  EXPECT_EQ(ack->get_value(), 4.0);
+  commit(commands, states, ack->get_value() + 1.0, 0.0);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status->get_value(), kActive);
+  EXPECT_EQ(ack->get_value(), 5.0);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.0);
+}
+
+TEST(OpenArmMitRealSwitch, AnAbandonedSwitchDiscardsTheLeftoverWhenItsGateExpires) {
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  const auto * status = state_interface(states, "openarm_arm/mit_status");
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(
+    system.prepare_command_mode_switch({}, all_claims(commands)), hardware_interface::return_type::OK);
+  commit(commands, states, 2.0, 0.30);
+  // Another component refused the switch: perform never comes. 750 cycles is
+  // the gate's one second at this profile's rate; run past it.
+  for (int cycle = 0; cycle < 800; ++cycle) {
+    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(status->get_value(), kSafe) << cycle;
+  }
+  EXPECT_NE(transport->sent.back()[0].position, 0.30);
+  // Commits are evaluated again.
+  commit(commands, states, 3.0, 0.07);
   ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   EXPECT_EQ(status->get_value(), kActive);
 }
+
+TEST(OpenArmMitRealSwitch, StoppingAnArmAlreadyInSafeAddsNoSafeGeneration) {
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  const auto * safe_generation = state_interface(states, "openarm_arm/mit_safe_generation");
+  const double before = safe_generation->get_value();
+  const auto claims = all_claims(commands);
+  ASSERT_EQ(system.prepare_command_mode_switch({}, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system.perform_command_mode_switch({}, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(safe_generation->get_value(), before);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kSafe);
+}
+
+TEST(OpenArmMitRealSafety, ARejectedCommitEntersSafeOnceAndDoesNotFollowTheSag) {
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  const auto * status = state_interface(states, "openarm_arm/mit_status");
+  const auto * safe_generation = state_interface(states, "openarm_arm/mit_safe_generation");
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status->get_value(), kActive);
+  // Generation 2 asks for more stiffness than the profile allows: rejected.
+  commit(commands, states, 2.0, 0.05);
+  command_interface(commands, "openarm_joint1/stiffness")->set_value(1.0e6);
+  transport->next_position.fill(0.04);
+  ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status->get_value(), kSafe);
+  const double entered = safe_generation->get_value();
+  EXPECT_DOUBLE_EQ(transport->sent.back()[1].position, 0.04);
+  // The producer leaves generation 2 where it is (a faulted producer does)
+  // while the arm sags under the low SAFE gains.
+  for (int cycle = 1; cycle <= 50; ++cycle) {
+    transport->next_position.fill(0.04 - 0.001 * cycle);
+    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(status->get_value(), kSafe);
+    // The hold stays where the arm was when SAFE happened.
+    EXPECT_DOUBLE_EQ(transport->sent.back()[1].position, 0.04) << cycle;
+  }
+  EXPECT_EQ(safe_generation->get_value(), entered);
+  // A new, valid generation is evaluated.
+  commit(commands, states, 3.0, 0.02);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status->get_value(), kActive);
+}
+
+TEST(OpenArmMitRealSafety, AFailedCommandSendFaultsTheArm) {
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+      auto out = std::make_unique<CountingTransport>();
+      transport = out.get();
+      return out;
+    });
+  activate(system, transport);
+  auto commands = system.export_command_interfaces();
+  auto states = system.export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  transport->fail_send = true;
+  EXPECT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kFault);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+}
+
+TEST(OpenArmMitRealSafety, ActivationSeedsOnlyFromMotorsThatAnswered) {
+  // A motor that has not answered still reads the vendor's initial zero, and a
+  // SAFE hold seeded from it commands a jump to zero.
+  {
+    CountingTransport * transport = nullptr;
+    OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+        auto out = std::make_unique<CountingTransport>();
+        transport = out.get();
+        return out;
+      });
+    ASSERT_EQ(system.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    transport->replies[5] = false;
+    EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::ERROR);
+    EXPECT_TRUE(transport->sent.empty());
+    EXPECT_GE(transport->disable_calls.load(), 1);
+  }
+  {
+    // A reply that missed the first receive window arrives on a later read.
+    CountingTransport * transport = nullptr;
+    OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+        auto out = std::make_unique<CountingTransport>();
+        transport = out.get();
+        return out;
+      });
+    ASSERT_EQ(system.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    transport->next_position.fill(0.2);
+    transport->scripted_replies.push_back({true, true, true, true, true, false, true});
+    transport->scripted_replies.push_back({false, false, false, false, false, true, false});
+    EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_FALSE(transport->sent.empty());
+    for (const auto & joint : transport->sent.front()) {
+      EXPECT_DOUBLE_EQ(joint.position, 0.2);
+    }
+  }
+}
 }  // namespace
+
+namespace
+{
+std::vector<std::string> claims_of(std::vector<hardware_interface::CommandInterface> & commands)
+{
+  std::vector<std::string> claims;
+  for (const auto & command : commands) {
+    claims.push_back(command.get_name());
+  }
+  return claims;
+}
+
+void set_effort(std::vector<hardware_interface::CommandInterface> & commands, double effort)
+{
+  for (int index = 1; index <= 7; ++index) {
+    command_interface(commands, "openarm_joint" + std::to_string(index) + "/effort")->set_value(effort);
+  }
+}
+
+// What a producer activated now would seed its tau_ff from.
+double effort_command(std::vector<hardware_interface::CommandInterface> & commands, int joint)
+{
+  return command_interface(commands, "openarm_joint" + std::to_string(joint) + "/effort")->get_value();
+}
+
+std::unique_ptr<OpenArmMitRealSystem> counting_system(CountingTransport * & transport)
+{
+  return std::make_unique<OpenArmMitRealSystem>([&transport](const TransportConfig &) {
+             auto out = std::make_unique<CountingTransport>();
+             transport = out.get();
+             return out;
+           });
+}
+}  // namespace
+
+// The incoming producer seeds its first tau_ff from the effort command
+// interfaces, so while the arm holds they must read what the hold APPLIES --
+// the last accepted tau_ff -- not what a producer last wrote there.
+TEST(OpenArmMitRealHeldEffort, ARejectedCommitsFeedForwardIsNotLeftInTheEffortCommands) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.5);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kActive);
+  commit(commands, states, 2.0, 0.05);
+  set_effort(commands, 0.9);
+  command_interface(commands, "openarm_joint1/stiffness")->set_value(1.0e6);  // rejected
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kSafe);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.5);  // the hold
+  for (int joint = 1; joint <= 7; ++joint) {
+    EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.5) << joint;
+  }
+}
+
+TEST(OpenArmMitRealHeldEffort, ANewSessionStartsWithTheEffortCommandsAtZero) {
+  // A FAULT disables the motors and the arm drops; the next session's hold has
+  // no tau_ff. The previous producer's gravity torque left in the effort
+  // commands would be the next producer's seed -- a step on the dropped arm.
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.8);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.0);  // the fresh session's hold
+  for (int joint = 1; joint <= 7; ++joint) {
+    EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.0) << joint;
+  }
+}
+
+TEST(OpenArmMitRealHeldEffort, TheIncomingProducerFindsTheHeldFeedForwardNotTheDiscardedOne) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.5);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  const auto claims = claims_of(commands);
+  ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  // The outgoing producer's last commit, discarded at perform.
+  commit(commands, states, 2.0, 0.05);
+  set_effort(commands, 0.9);
+  ASSERT_EQ(system->perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  // The incoming producer's on_activate() reads these now, before any write().
+  for (int joint = 1; joint <= 7; ++joint) {
+    EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.5) << joint;
+  }
+}
+
+TEST(OpenArmMitRealSwitch, AStaleSafeRequestDoesNotSwallowTheIncomingSeed) {
+  // The arm is already SAFE when the switch starts, and the outgoing producer
+  // writes a SAFE request while the gate is closed. Left pending, it was served
+  // in the next write -- the one that, with the incoming producer updated
+  // before it, also carried that producer's seed, which then went unevaluated
+  // while the producer saw SAFE and faulted.
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  const auto * status = state_interface(states, "openarm_arm/mit_status");
+  const auto * ack = state_interface(states, "openarm_arm/mit_ack_generation");
+  const auto * safe_generation = state_interface(states, "openarm_arm/mit_safe_generation");
+  const auto * safe_ack = state_interface(states, "openarm_arm/mit_safe_ack_generation");
+  auto * safe_request = command_interface(commands, "openarm_arm/mit_safe_request_generation");
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  safe_request->set_value(safe_generation->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status->get_value(), kSafe);
+  const double safe_before = safe_generation->get_value();
+  const auto claims = claims_of(commands);
+  ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  safe_request->set_value(safe_before + 1.0);  // stale, from the outgoing producer
+  ASSERT_EQ(system->perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  commit(commands, states, ack->get_value() + 1.0, 0.02);  // the incoming producer's seed
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status->get_value(), kActive);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.02);
+  // The stale request was consumed by the switch's own SAFE: no request left.
+  EXPECT_EQ(safe_generation->get_value(), safe_before + 1.0);
+  EXPECT_EQ(safe_ack->get_value(), safe_before + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status->get_value(), kActive);
+}
+
+namespace
+{
+// Motors that answer only what was sent to them since the last receive -- a
+// state query or an MIT command -- as on the real bus, where enable() also
+// drains whatever was pending. It decides when to query with the vendor
+// transport's own StateQuery.
+class BusTransport final : public MitTransport
+{
+public:
+  explicit BusTransport(bool from_command_reply)
+  : query_(from_command_reply) {}
+  bool initialize() override {return true;}
+  bool enable() override
+  {
+    pending_ = false;
+    query_.enabled();
+    return true;
+  }
+  void disable() noexcept override
+  {
+    pending_ = false;
+    query_.disabled();
+  }
+  bool read(std::array<double, 7> & position, std::array<double, 7> &, std::array<double, 7> &) override
+  {
+    if (query_.refresh_needed()) {
+      pending_ = true;
+    }
+    replies_.fill(pending_);
+    pending_ = false;
+    position.fill(0.1);
+    return true;
+  }
+  std::array<bool, 7> replied() const override {return replies_;}
+  bool send(const std::array<cho_openarm_mit_core::JointTuple, 7> &) override
+  {
+    pending_ = true;
+    query_.command_sent();
+    return true;
+  }
+
+private:
+  cho_hardware_openarm_mit_real::StateQuery query_;
+  bool pending_{false};
+  std::array<bool, 7> replies_{};
+};
+}  // namespace
+
+TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCycle) {
+  // With mit_state_from_command_reply the refresh is skipped once a command has
+  // gone out -- but enable() drains the replies, so after a deactivate/activate
+  // nothing answered the seed read and activation failed every time.
+  OpenArmMitRealSystem system([](const TransportConfig & config) {
+      return std::make_unique<BusTransport>(config.state_from_command_reply);
+    });
+  auto info = hardware_info();
+  info.hardware_parameters["mit_state_from_command_reply"] = "true";
+  ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  for (int cycle = 0; cycle < 20; ++cycle) {
+    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+  }
+  ASSERT_EQ(system.on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+}

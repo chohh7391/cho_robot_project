@@ -54,6 +54,10 @@ bool valid_gravity_joint_scale(const std::vector<double> & values)
   });
 }
 
+// The shortest TaskSpace goal. It used to be an admission floor below which a
+// goal was rejected; duration_sec is a minimum, so it is now a stretch.
+constexpr double kMinimumTaskDurationSec = 0.25;
+
 // Slew and blend steps must never see a zero, negative or non-finite period.
 double bounded_dt(const double dt)
 {
@@ -622,7 +626,9 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_activate(
   task_last_started_id_ = task_goal_buffer_.readFromNonRT()->id;
   task_q_ref_ = measured();
   for (std::size_t i = 0; i < 7; ++i) task_q_reference_observed_[i].store(task_q_ref_[i]);
-  task_last_model_feedforward_.fill(0.0);
+  // From the tau_ff the consumer's SAFE hold is still applying (see
+  // DirectControllerBase::on_activate), not from zero.
+  task_last_model_feedforward_ = seed_.feedforward;
   task_dynamics_valid_ = false;
   startup_start_ = task_q_ref_; startup_elapsed_ = 0.0; startup_active_ = false;
   idle_pose_valid_ = false;
@@ -649,7 +655,8 @@ rclcpp_action::GoalResponse TaskSpaceImpedanceController::goal_callback(
   // Cartesian goals have no independent displacement, orientation, workspace,
   // or path-speed admission cap. The direct torque path remains bounded by
   // max_task_wrench, the final motor torque tuple, and the hardware contract.
-  if (goal->duration_sec < 0.25) return rclcpp_action::GoalResponse::REJECT;
+  // duration_sec is a minimum: a short one is stretched when the goal starts
+  // (write_task_target()), not refused here.
   // This controller transforms nothing: the goal must already be in the frame
   // its mode is defined in.
   if (!cho_controller_base::task_goal_frame_allowed(
@@ -659,8 +666,15 @@ rclcpp_action::GoalResponse TaskSpaceImpedanceController::goal_callback(
       goal->relative ? "relative" : "absolute", goal->target_pose.header.frame_id.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
+  // One goal at a time (CONTRACT.md): a goal arriving while another is held --
+  // running, or finished on the control thread but not yet delivered -- is
+  // rejected, not used to replace the running one.
   std::lock_guard<std::mutex> lock(task_handles_mutex_);
-  return task_handles_.size() < 2U ? rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE : rclcpp_action::GoalResponse::REJECT;
+  if (!task_handles_.empty()) {
+    RCLCPP_WARN(get_node()->get_logger(), "TaskSpace goal rejected: another goal is active");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse TaskSpaceImpedanceController::cancel_callback(const std::shared_ptr<GoalHandle> & handle)
@@ -713,14 +727,20 @@ bool TaskSpaceImpedanceController::model_nle(const std::array<double, 7> & q,
   } catch (...) {return false;}
 }
 
-void TaskSpaceImpedanceController::finish(std::uint64_t id, Terminal terminal)
+void TaskSpaceImpedanceController::finish(std::uint64_t id, Terminal terminal, const ActionReason reason)
 {
-  if (id && !task_terminal_queue_.push(TerminalEvent{id, terminal})) {state_ = State::FAULT; stop_failed_.store(true);}
+  if (id && !task_terminal_queue_.push(TerminalEvent{id, terminal, reason})) {
+    // Never lost silently: the tick aborts it once the goals are closed.
+    state_ = State::FAULT; stop_failed_.store(true); close_goal_api();
+    std::uint8_t open = static_cast<std::uint8_t>(ActionReason::NONE);
+    goals_closed_.compare_exchange_strong(open, static_cast<std::uint8_t>(ActionReason::FAULT));
+  }
 }
-void TaskSpaceImpedanceController::abort_active()
+void TaskSpaceImpedanceController::abort_active(const ActionReason reason)
 {
-  if (task_id_) {finish(task_id_, Terminal::ABORTED); task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);}
+  if (task_id_) {finish(task_id_, Terminal::ABORTED, reason); task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);}
 }
+
 
 bool TaskSpaceImpedanceController::latch_idle_pose()
 {
@@ -905,18 +925,44 @@ void TaskSpaceImpedanceController::joint_limit_torque(
   }
 }
 
+bool TaskSpaceImpedanceController::damped_joint_velocity(
+  const Jacobian & jacobian, const Vector6 & twist, Vector7 & dq) const
+{
+  dq.setZero();
+  if (twist.squaredNorm() == 0.0) return true;
+  Eigen::Matrix<double, 6, 6> jjt = jacobian * jacobian.transpose();
+  jjt.diagonal().array() += task_velocity_reference_damping_;
+  const Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(jjt);
+  if (llt.info() != Eigen::Success) return false;
+  dq = jacobian.transpose() * llt.solve(twist);
+  return dq.allFinite();
+}
+
+double TaskSpaceImpedanceController::minimum_task_duration(
+  const Jacobian & jacobian, const pinocchio::SE3 & start, const pinocchio::SE3 & goal) const
+{
+  // sample_pose_trajectory()'s twist is ds * path, with ds peaking at 1.5 / T.
+  Vector6 path;
+  path.head<3>() = goal.translation() - start.translation();
+  path.tail<3>() = start.rotation() * pinocchio::log3(start.rotation().transpose() * goal.rotation());
+  Vector7 dq;
+  if (!path.allFinite() || !damped_joint_velocity(jacobian, path, dq)) return 0.0;
+  double duration = 0.0;
+  for (std::size_t i = 0; i < 7; ++i) {
+    if (command_velocity_[i] > 0.0) {
+      duration = std::max(duration, 1.5 * std::abs(dq[static_cast<Eigen::Index>(i)]) / command_velocity_[i]);
+    }
+  }
+  return duration;
+}
+
 void TaskSpaceImpedanceController::joint_velocity_reference(
   const Jacobian & jacobian, const Vector6 & twist, std::array<double, 7> & dq_des) const
 {
   dq_des.fill(0.0);
-  if (twist.squaredNorm() == 0.0) return;
-  Eigen::Matrix<double, 6, 6> jjt = jacobian * jacobian.transpose();
-  jjt.diagonal().array() += task_velocity_reference_damping_;
-  const Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(jjt);
+  Vector7 dq;
   // A failed solve degrades to the pure-damping behaviour rather than aborting.
-  if (llt.info() != Eigen::Success) return;
-  const Vector7 dq = jacobian.transpose() * llt.solve(twist);
-  if (!dq.allFinite()) return;
+  if (!damped_joint_velocity(jacobian, twist, dq)) return;
   for (std::size_t i = 0; i < 7; ++i) {
     // The consumer rejects the whole arm tuple when one dq_des leaves the
     // profile command-velocity window, so this clamp is mandatory.
@@ -1138,7 +1184,7 @@ bool TaskSpaceImpedanceController::write_task_target(
   const Goal incoming = *task_goal_buffer_.readFromRT();
   const auto canceled = task_cancel_id_.exchange(0, std::memory_order_acq_rel);
   const auto cancel_active = [this]() {
-    finish(task_id_, Terminal::CANCELED); task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);
+    finish(task_id_, Terminal::CANCELED, ActionReason::CANCELED); task_id_ = 0; task_public_id_.store(0); task_percent_.store(0.0);
     // A canceled trajectory must neither keep its loaded reference nor hand
     // the arm to the hardware SAFE hold, which has no gravity model of its
     // own. Release the reference toward the measured pose and stay ready.
@@ -1147,7 +1193,7 @@ bool TaskSpaceImpedanceController::write_task_target(
   };
   if (canceled && canceled == task_id_ && !cancel_active()) return false;
   if (incoming.id && incoming.id != task_last_started_id_) {
-    abort_active(); task_id_ = incoming.id; task_last_started_id_ = incoming.id; task_public_id_.store(task_id_);
+    abort_active(ActionReason::REPLACED); task_id_ = incoming.id; task_last_started_id_ = incoming.id; task_public_id_.store(task_id_);
     task_start_time_ = control_time;
     // Continue from the exact Cartesian reference emitted on the preceding
     // idle/action cycle, including a partially released one. Rebasing to
@@ -1166,8 +1212,18 @@ bool TaskSpaceImpedanceController::write_task_target(
     task_goal_pose_ = incoming.relative ? task_start_pose_ * pinocchio::SE3(incoming.rotation.toRotationMatrix(), incoming.translation) :
       pinocchio::SE3(incoming.rotation.toRotationMatrix(), incoming.translation);
     if (!task_goal_pose_.translation().allFinite() || !task_goal_pose_.rotation().allFinite()) {
-      finish(task_id_, Terminal::ABORTED); task_id_ = 0; task_public_id_.store(0);
+      finish(task_id_, Terminal::ABORTED, ActionReason::COMPUTE_FAILED); task_id_ = 0; task_public_id_.store(0);
       task_capacity_rejected_ = true; return false;
+    }
+    // duration_sec is a minimum: stretch it to what the profile's command
+    // velocity allows from here, and to the floor the server used to reject
+    // below.
+    pinocchio::SE3 measured_start;
+    Jacobian start_jacobian;
+    task_duration_ = std::max(incoming.duration, kMinimumTaskDurationSec);
+    if (task_pose_and_jacobian(measured(), measured_start, start_jacobian)) {
+      task_duration_ = std::max(
+        task_duration_, minimum_task_duration(start_jacobian, task_start_pose_, task_goal_pose_));
     }
   }
   // A replacement canceled before its first cycle releases from the reference
@@ -1194,10 +1250,10 @@ bool TaskSpaceImpedanceController::write_task_target(
     return true;
   }
   const double elapsed = std::max(0.0, control_time - task_start_time_);
-  const double u = std::clamp(elapsed / incoming.duration, 0.0, 1.0);
+  const double u = std::clamp(elapsed / task_duration_, 0.0, 1.0);
   pinocchio::SE3 desired;
   Vector6 v_des;
-  sample_pose_trajectory(task_start_pose_, task_goal_pose_, u, incoming.duration, desired, v_des);
+  sample_pose_trajectory(task_start_pose_, task_goal_pose_, u, task_duration_, desired, v_des);
   Vector6 pose_error;
   pinocchio::SE3 measured_pose;
   if (!write_cartesian_torque_target(
@@ -1219,12 +1275,12 @@ bool TaskSpaceImpedanceController::write_task_target(
       idle_pose_ = task_goal_pose_;
       idle_pose_valid_ = true;
       finish(task_id_, Terminal::SUCCEEDED); task_id_ = 0; task_public_id_.store(0);
-    } else if (elapsed > incoming.duration + 2.0) {
+    } else if (elapsed > task_duration_ + 2.0) {
       // An unreachable goal must not remain loaded indefinitely. Release the
       // reference toward the measured pose over release_duration; the blend,
       // not a torque rate limiter, keeps the saturated wrench from dropping in
       // one control period.
-      finish(task_id_, Terminal::ABORTED); task_id_ = 0; task_public_id_.store(0);
+      finish(task_id_, Terminal::ABORTED, ActionReason::TASK_TIMEOUT); task_id_ = 0; task_public_id_.store(0);
       begin_idle_release_from(measured_pose);
     }
   }
@@ -1241,17 +1297,13 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   action_time_offset_.store(
     get_node()->now().seconds() - action_control_time_, std::memory_order_release);
   const double slew_dt = bounded_dt(dt);
-  if (!protocol_ok()) {state_ = State::FAULT; stop_failed_.store(true); return controller_interface::return_type::ERROR;}
-  if (stop_requested_.exchange(false) && state_ != State::STOPPING) {abort_active(); if (!request_safe()) return controller_interface::return_type::ERROR;}
-  if (state_ == State::STOPPING) {
-    if (exact_safe_stop_ack(static_cast<double>(requested_safe_generation_), state_interfaces_[16].get_value(), state_interfaces_[17].get_value(), state_interfaces_[18].get_value())) {state_ = State::SAFE_STOPPED; safe_stopped_.store(true); task_ready_.store(false);}
-    else if (++wait_cycles_ > max_wait_cycles_) {state_ = State::FAULT; stop_failed_.store(true); return controller_interface::return_type::ERROR;}
-    return controller_interface::return_type::OK;
-  }
-  if (generation_ && state_interfaces_[15].get_value() != static_cast<double>(generation_)) {if (++wait_cycles_ > max_wait_cycles_ && !request_safe()) return controller_interface::return_type::ERROR; return controller_interface::return_type::OK;}
-  wait_cycles_ = 0;
-  if (state_ == State::SEEDING && generation_) {
-    state_ = State::ACTIVE;
+  // The shared MIT state machine (DirectControllerBase::protocol_step). It
+  // continues generations from the consumer's ack, which is what lets this
+  // controller -- and VLA through it -- be the second producer of a session.
+  const auto step = protocol_step();
+  if (step == ProtocolStep::FAULTED) return controller_interface::return_type::ERROR;
+  if (step == ProtocolStep::HOLD) return controller_interface::return_type::OK;
+  if (step == ProtocolStep::SEEDED) {
     startup_start_ = measured(); task_q_ref_ = startup_start_; startup_elapsed_ = 0.0;
     if (!return_to_zero_) {
       if (!latch_idle_pose()) {
@@ -1362,8 +1414,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   }
   if (state_ == State::ACTIVE && !startup_command && !task_command) {
     if (task_compute_failed_) {
-      abort_active();
-      if (!request_safe()) return controller_interface::return_type::ERROR;
+      if (!request_safe(ActionReason::COMPUTE_FAILED)) return controller_interface::return_type::ERROR;
       return controller_interface::return_type::OK;
     }
     if (task_capacity_rejected_) {
@@ -1376,7 +1427,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
     target.position = task_q_ref_;
     const auto q = measured(); std::array<double, 7> dq{}, nle{};
     for (std::size_t i = 0; i < 7; ++i) dq[i] = state_interfaces_[2 * i + 1].get_value();
-    if (!model_nle(q, dq, nle)) {state_ = State::FAULT; stop_failed_.store(true); return controller_interface::return_type::ERROR;}
+    if (!model_nle(q, dq, nle)) {fault(ActionReason::COMPUTE_FAILED); return controller_interface::return_type::ERROR;}
     for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity_scale_.load(std::memory_order_acquire) * gravity_joint_scale_[i].load(std::memory_order_acquire) * nle[i], slew_dt);
   }
   auto command_kp = startup_command ? startup_kp_ : kp_;
@@ -1414,17 +1465,41 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   auto command = map_direct_mit_command(
     command_mode, target, measured(), command_kp, command_kd, torque_limit_);
   clamp_command_positions(command);
-  ++generation_; for (std::size_t i = 0; i < 7; ++i) {const auto o = 5 * i; command_interfaces_[o].set_value(command.joints[i].position); command_interfaces_[o + 1].set_value(command.joints[i].velocity); command_interfaces_[o + 2].set_value(command.joints[i].stiffness); command_interfaces_[o + 3].set_value(command.joints[i].damping); command_interfaces_[o + 4].set_value(command.joints[i].effort);}
-  command_interfaces_[35].set_value(session_); command_interfaces_[36].set_value(lease_); command_interfaces_[37].set_value(generation_);
+  commit(command);
   return controller_interface::return_type::OK;
 }
 
 void TaskSpaceImpedanceController::non_rt_tick()
 {
+  // Before the drain, as in DirectControllerBase::action_non_realtime_tick().
+  const auto closed = goals_closed();
   TerminalEvent event; while (task_terminal_queue_.pop(event)) {
     std::shared_ptr<GoalHandle> handle; {std::lock_guard<std::mutex> lock(task_handles_mutex_); const auto it = task_handles_.find(event.id); if (it == task_handles_.end()) continue; handle = it->second; task_handles_.erase(it);}
     auto result = std::make_shared<Action::Result>(); result->is_completed = event.terminal == Terminal::SUCCEEDED;
+    result->message = action_reason_text(event.reason);
     if (event.terminal == Terminal::SUCCEEDED) handle->succeed(result); else if (event.terminal == Terminal::CANCELED) handle->canceled(result); else handle->abort(result);
+  }
+  const auto through = task_abort_through_.exchange(0, std::memory_order_acq_rel);
+  if (closed != ActionReason::NONE || through) {
+    // Stopped, faulted or deactivated: every goal still held ends with that
+    // reason. Activated again: the ones from before the activation do.
+    std::unordered_map<std::uint64_t, std::shared_ptr<GoalHandle>> held;
+    {
+      std::lock_guard<std::mutex> lock(task_handles_mutex_);
+      for (auto it = task_handles_.begin(); it != task_handles_.end();) {
+        if (closed != ActionReason::NONE || it->first <= through) {
+          held.emplace(it->first, it->second); it = task_handles_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    for (const auto & entry : held) {
+      auto result = std::make_shared<Action::Result>();
+      result->message = action_reason_text(
+        closed != ActionReason::NONE ? closed : ActionReason::DEACTIVATED);
+      if (entry.second->is_active()) entry.second->abort(result);
+    }
   }
   const auto id = task_public_id_.load(std::memory_order_acquire); if (!id) return;
   std::shared_ptr<GoalHandle> active; {std::lock_guard<std::mutex> lock(task_handles_mutex_); const auto it = task_handles_.find(id); if (it != task_handles_.end()) active = it->second;}

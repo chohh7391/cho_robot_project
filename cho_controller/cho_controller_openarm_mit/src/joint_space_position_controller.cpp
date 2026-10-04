@@ -74,9 +74,13 @@ controller_interface::return_type JointSpacePositionController::update(
     traj_clock_ += dt;
     const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
 
-    const bool running = action_server_ && action_server_->is_running();
-    if (running) {
+    // compute() is false when the goal ended this cycle -- canceled, aborted, or
+    // one that outlived a deactivation. Its trajectory is then not sampled and
+    // q_arm_des holds as when idle: sampling it would walk the arm toward the old
+    // goal through clip_position.
+    const bool running = action_server_ && action_server_->is_running() &&
         action_server_->compute(traj_time, state_);
+    if (running) {
         if (!prev_running_) {
             // Goal start: the action server seeds from the measured position,
             // but the actuator is continuing from the last command. Re-seed from

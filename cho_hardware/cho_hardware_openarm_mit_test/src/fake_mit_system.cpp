@@ -40,6 +40,15 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
       }
     }
     for (auto & joint_state : state_) joint_state[0] = initial_position;
+    // Test knob, default 0: the mirrored "measured" position is the accepted
+    // q_des plus this offset -- a plant that never quite reaches its command,
+    // like an arm sagging under gravity. A producer that re-latches q_des to
+    // the measurement every cycle then walks away by this much per cycle.
+    if (const auto offset = info_.hardware_parameters.find("mirror_position_offset");
+      offset != info_.hardware_parameters.end()) {
+      mirror_position_offset_ = std::stod(offset->second);
+      if (!std::isfinite(mirror_position_offset_)) throw std::invalid_argument("mirror_position_offset");
+    }
     left_ = ArmConsumer(limits_, safe_hold_damping_);
     right_ = ArmConsumer(limits_, safe_hold_damping_);
     auto f = info_.hardware_parameters.find("fail_transport_generation");
@@ -95,8 +104,16 @@ FakeMitSystem::on_configure(const rclcpp_lifecycle::State &) {
     return hardware_interface::CallbackReturn::ERROR;
   ++next_session_;
   ownership_selected_ = direct_ownership_active_ = false;
-  stop_left_pending_ = stop_right_pending_ = false;
+  left_gate_.reset();
+  right_gate_.reset();
+  // A new session starts with no producer input: its hold has no tau_ff, and
+  // the effort commands must say so (publish_held_effort()).
+  command_ = {};
+  left_protocol_.fill(0);
+  right_protocol_.fill(0);
+  left_observed_ = right_observed_ = 0.0;
   sync_protocol();
+  publish_held_effort();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 hardware_interface::CallbackReturn
@@ -109,7 +126,8 @@ FakeMitSystem::on_cleanup(const rclcpp_lifecycle::State &) {
   left_protocol_.fill(0);
   right_protocol_.fill(0);
   pair_protocol_.fill(0);
-  stop_left_pending_ = stop_right_pending_ = false;
+  left_gate_.reset();
+  right_gate_.reset();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 std::vector<hardware_interface::StateInterface>
@@ -196,8 +214,20 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     if (!pair_)
       return hardware_interface::return_type::ERROR;
     if (direct_ownership_active_) {
-      auto write_arm = [&](ArmConsumer & consumer, auto & protocol, std::size_t offset) {
+      auto write_arm = [&](ArmConsumer & consumer, auto & protocol, std::size_t offset,
+          SwitchGate & gate) {
         const auto command = make(offset, protocol);
+        const auto cycle = gate.on_write();
+        if (cycle.discard) {
+          consumer.discard_commit(protocol[7]);
+          (offset == 0 ? left_observed_ : right_observed_) = protocol[7];
+        }
+        bool entered = true;
+        if (cycle.enter_safe && enter_switch_safe(consumer, entered)) return entered;
+        if (cycle.closed || cycle.discard) {
+          return consumer.status() == MitStatus::SAFE ||
+            (consumer.status() == MitStatus::SAFE_TRANSITION && consumer.submit_safe_transition(true));
+        }
         if (protocol[8] > static_cast<double>(consumer.safe_generation())) {
           const bool valid = is_exact_nonnegative_integer(protocol[8]) &&
             protocol[8] == static_cast<double>(consumer.safe_generation() + 1);
@@ -205,20 +235,32 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
           consumer.request_safe_transition(true);
           return consumer.submit_safe_transition(true);
         }
-        const auto status = consumer.status();
-        if (status == MitStatus::SAFE && command.generation == consumer.ack_generation()) return true;
-        if (status == MitStatus::ACTIVE && command.generation == consumer.ack_generation())
-          return consumer.successful_write_cycle();
-        if (status == MitStatus::SAFE || status == MitStatus::ACTIVE)
-          return consumer.accept_and_write(
-            command, command.generation != static_cast<double>(fail_transport_generation_));
-        return status == MitStatus::SAFE_TRANSITION && consumer.submit_safe_transition(true);
+        return evaluate_commit(consumer, offset == 0 ? left_observed_ : right_observed_, command);
       };
-      const bool left_ok = write_arm(left_, left_protocol_, 0);
-      const bool right_ok = write_arm(right_, right_protocol_, 7);
+      const bool left_ok = write_arm(left_, left_protocol_, 0, left_gate_);
+      const bool right_ok = write_arm(right_, right_protocol_, 7, right_gate_);
       ok = left_ok && right_ok;
     } else {
-    if (left_protocol_[8] > static_cast<double>(pair_->left().safe_generation()) ||
+    // Both arms of a pair are always switched together.
+    const auto left_cycle = left_gate_.on_write();
+    const auto right_cycle = right_gate_.on_write();
+    if (left_cycle.discard || right_cycle.discard) {
+      const double newest = std::max(left_protocol_[7], right_protocol_[7]);
+      pair_->discard_commit(newest, newest);
+    }
+    const bool enter_left = left_cycle.enter_safe && pair_->left().status() != MitStatus::SAFE;
+    const bool enter_right = right_cycle.enter_safe && pair_->right().status() != MitStatus::SAFE;
+    const bool closed = left_cycle.closed || right_cycle.closed || left_cycle.discard ||
+      right_cycle.discard;
+    if (enter_left || enter_right) {
+      // The hardware owns this SAFE, aligned on both arms like any pair SAFE.
+      pair_->request_safe_transition(
+        enter_left && pair_->left().status() != MitStatus::SAFE_TRANSITION,
+        enter_right && pair_->right().status() != MitStatus::SAFE_TRANSITION, true);
+      ok = pair_->submit_safe_transition(enter_left, enter_right, true);
+    } else if (closed) {
+      ok = pair_->left().status() == MitStatus::SAFE && pair_->right().status() == MitStatus::SAFE;
+    } else if (left_protocol_[8] > static_cast<double>(pair_->left().safe_generation()) ||
         right_protocol_[8] > static_cast<double>(pair_->right().safe_generation())) {
       const bool valid = is_exact_nonnegative_integer(left_protocol_[8]) &&
         left_protocol_[8] == right_protocol_[8] && pair_protocol_[0] == left_protocol_[0] &&
@@ -226,10 +268,7 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
         right_protocol_[8] == static_cast<double>(pair_->right().safe_generation() + 1);
       if (valid) {pair_->request_safe_transition(true, true, true);ok = pair_->submit_safe_transition(true, true, true);}
       else ok = false;
-    } else if (stop_left_pending_ || stop_right_pending_)
-      ok = pair_->submit_safe_transition(stop_left_pending_,
-                                         stop_right_pending_);
-    else if (pair_protocol_[0] != left_protocol_[0] && left_protocol_[7] != 0.0)
+    } else if (pair_protocol_[0] != left_protocol_[0] && left_protocol_[7] != 0.0)
       ok = false;
     else {
       auto l = make(0, left_protocol_), r = make(7, right_protocol_);
@@ -259,22 +298,22 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     }
   } else {
     auto c = make(0, left_protocol_);
+    const auto cycle = left_gate_.on_write();
+    if (cycle.discard) {
+      left_.discard_commit(left_protocol_[7]);
+      left_observed_ = left_protocol_[7];
+    }
     auto s = left_.status();
-    if (left_protocol_[8] > static_cast<double>(left_.safe_generation())) {
+    if (cycle.enter_safe && enter_switch_safe(left_, ok)) {
+      // This cycle put the arm in SAFE for a controller switch.
+    } else if (cycle.closed || cycle.discard) {
+      ok = s == MitStatus::SAFE;
+    } else if (left_protocol_[8] > static_cast<double>(left_.safe_generation())) {
       const bool valid=is_exact_nonnegative_integer(left_protocol_[8])&&
         left_protocol_[8]==static_cast<double>(left_.safe_generation()+1);
       if(valid){left_.request_safe_transition(true);ok=left_.submit_safe_transition(true);}else ok=false;
-    } else if (stop_left_pending_)
-      ok = left_.submit_safe_transition(true);
-    else if (s == MitStatus::SAFE && c.generation == left_.ack_generation())
-      ok = true;
-    else if (s == MitStatus::ACTIVE && c.generation == left_.ack_generation())
-      ok = left_.successful_write_cycle();
-    else if (s == MitStatus::SAFE || s == MitStatus::ACTIVE)
-      ok = left_.accept_and_write(
-          c, c.generation != static_cast<double>(fail_transport_generation_));
-    else
-      ok = false;
+    } else
+      ok = evaluate_commit(left_, left_observed_, c);
     if (!ok && left_.status() == MitStatus::SAFE_TRANSITION &&
         left_.submit_safe_transition(true))
       ok = true;
@@ -286,12 +325,12 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     if (bimanual_ && direct_ownership_active_) {
       for (size_t i = 0; i < 7; ++i) {
         if (left_.status() == MitStatus::ACTIVE) {
-          state_[i][0] = left_.submitted().joints[i].position;
+          state_[i][0] = left_.submitted().joints[i].position + mirror_position_offset_;
           state_[i][1] = left_.submitted().joints[i].velocity;
           state_[i][2] = left_.submitted().joints[i].effort;
         }
         if (right_.status() == MitStatus::ACTIVE) {
-          state_[i + 7][0] = right_.submitted().joints[i].position;
+          state_[i + 7][0] = right_.submitted().joints[i].position + mirror_position_offset_;
           state_[i + 7][1] = right_.submitted().joints[i].velocity;
           state_[i + 7][2] = right_.submitted().joints[i].effort;
         }
@@ -299,24 +338,66 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     } else if (bimanual_ && pair_ && pair_->left().status() == MitStatus::ACTIVE &&
         pair_->right().status() == MitStatus::ACTIVE) {
       for (size_t i = 0; i < 7; ++i) {
-        state_[i][0] = pair_->left().submitted().joints[i].position;
+        state_[i][0] = pair_->left().submitted().joints[i].position + mirror_position_offset_;
         state_[i][1] = pair_->left().submitted().joints[i].velocity;
         state_[i][2] = pair_->left().submitted().joints[i].effort;
-        state_[i + 7][0] = pair_->right().submitted().joints[i].position;
+        state_[i + 7][0] = pair_->right().submitted().joints[i].position + mirror_position_offset_;
         state_[i + 7][1] = pair_->right().submitted().joints[i].velocity;
         state_[i + 7][2] = pair_->right().submitted().joints[i].effort;
       }
     } else if (!bimanual_ && left_.status() == MitStatus::ACTIVE) {
       for (size_t i = 0; i < 7; ++i) {
-        state_[i][0] = left_.submitted().joints[i].position;
+        state_[i][0] = left_.submitted().joints[i].position + mirror_position_offset_;
         state_[i][1] = left_.submitted().joints[i].velocity;
         state_[i][2] = left_.submitted().joints[i].effort;
       }
     }
   }
   sync_protocol();
+  publish_held_effort();
   return ok ? hardware_interface::return_type::OK
             : hardware_interface::return_type::ERROR;
+}
+bool FakeMitSystem::evaluate_commit(ArmConsumer &consumer, double &observed,
+                                    const ArmCommand &c) {
+  // As the real adapter: a commit generation is evaluated once, accepted or
+  // not, and on a copy of the consumer first. A rejected one puts the arm in
+  // measured SAFE, recoverably -- a later valid generation is evaluated again.
+  // The fake used to latch INVALID for the session and re-evaluate the same
+  // rejected generation every cycle, failing write() each time.
+  const auto status = consumer.status();
+  const bool fresh = !(c.generation == observed ||
+                       (std::isnan(c.generation) && std::isnan(observed)));
+  if (fresh && (status == MitStatus::SAFE || status == MitStatus::ACTIVE)) {
+    observed = c.generation;
+    if (c.generation == static_cast<double>(fail_transport_generation_))
+      return consumer.accept_and_write(c, false);  // transport FAULT, latched
+    ArmConsumer shadow = consumer;
+    if (shadow.accept_and_write(c, true)) {
+      consumer = shadow;
+      return true;
+    }
+    consumer.request_safe_transition(true);
+    return consumer.submit_safe_transition(true);
+  }
+  if (status == MitStatus::SAFE) return true;
+  if (status == MitStatus::ACTIVE) return consumer.successful_write_cycle();
+  return status == MitStatus::SAFE_TRANSITION && consumer.submit_safe_transition(true);
+}
+void FakeMitSystem::publish_held_effort() {
+  // As the real adapter: while an arm holds, its effort command interfaces
+  // read the tau_ff the hold applies (the last accepted one, 0 in a fresh
+  // session), which is what a producer seeds its first commit from.
+  auto publish = [&](const ArmConsumer &c, std::size_t offset) {
+    if (c.status() == MitStatus::ACTIVE) return;
+    for (std::size_t i = 0; i < 7; ++i)
+      command_[offset + i][4] = c.submitted().joints[i].effort;
+  };
+  if (bimanual_ && pair_) {
+    publish(direct_ownership_active_ ? left_ : pair_->left(), 0);
+    publish(direct_ownership_active_ ? right_ : pair_->right(), 7);
+  } else
+    publish(left_, 0);
 }
 void FakeMitSystem::sync_protocol() {
   auto s = [](const ArmConsumer &c, auto &p) {
@@ -340,34 +421,36 @@ void FakeMitSystem::sync_protocol() {
   } else
     s(left_, left_protocol_);
 }
-bool FakeMitSystem::exact_owned_claim(const std::vector<std::string> &c,
-                                      const std::string &s) const {
-  auto r = complete_claims(s);
-  std::set<std::string> owned(r.begin(), r.end());
-  std::vector<std::string> f;
-  std::copy_if(c.begin(), c.end(), std::back_inserter(f),
-               [&](auto &x) { return owned.count(x); });
-  return f.empty() || (f.size() == r.size() &&
-                       std::set<std::string>(f.begin(), f.end()) == owned);
+bool FakeMitSystem::enter_switch_safe(ArmConsumer & consumer, bool & ok) {
+  const auto status = consumer.status();
+  if (status == MitStatus::ACTIVE || status == MitStatus::STALE) {
+    consumer.request_safe_transition(true);
+  } else if (status != MitStatus::SAFE_TRANSITION) {
+    return false;  // already SAFE (or latched): nothing to enter
+  }
+  ok = consumer.submit_safe_transition(true);
+  return true;
 }
 hardware_interface::return_type FakeMitSystem::prepare_command_mode_switch(
     const std::vector<std::string> &start,
     const std::vector<std::string> &stop) {
-  bool valid =
-      bimanual_ ? exact_owned_claim(start, "left") &&
-                      exact_owned_claim(start, "right") &&
-                      exact_owned_claim(stop, "left") &&
-                      exact_owned_claim(stop, "right")
-                : exact_owned_claim(start, single_arm_side_) && exact_owned_claim(stop, single_arm_side_);
-  if (!valid)
-    return hardware_interface::return_type::ERROR;
+  const std::string l = bimanual_ ? "left" : single_arm_side_;
+  for (const auto &side : bimanual_ ? std::vector<std::string>{l, "right"}
+                                    : std::vector<std::string>{l}) {
+    if (classify_arm_claim(start, side) == ArmClaim::PARTIAL ||
+        classify_arm_claim(stop, side) == ArmClaim::PARTIAL)
+      return hardware_interface::return_type::ERROR;
+  }
   if (bimanual_ && !start.empty()) {
     const bool wants_pair = std::find(
       start.begin(), start.end(), "openarm_bimanual/mit_pair_ownership") != start.end();
     const bool wants_direct = !wants_pair;
     if (ownership_selected_ && direct_ownership_active_ != wants_direct) {
-      // A mode change is permitted only as one atomic CM stop/start after the old
-      // owner has completed SAFE.  Never infer a transition from command values.
+      // An OWNERSHIP change (direct <-> paired) is still permitted only as one
+      // atomic CM stop/start after the old owner has completed SAFE: the pair
+      // transaction needs both arms' generations aligned, which a hardware
+      // SAFE cannot provide. A stop within one ownership mode follows the
+      // shared SwitchGate rule instead.
       const bool old_safe = direct_ownership_active_ ?
         left_.status() == MitStatus::SAFE && right_.status() == MitStatus::SAFE :
         pair_ && pair_->left().status() == MitStatus::SAFE && pair_->right().status() == MitStatus::SAFE;
@@ -378,44 +461,52 @@ hardware_interface::return_type FakeMitSystem::prepare_command_mode_switch(
     direct_ownership_active_ = wants_direct;
     ownership_selected_ = true;
   }
-  auto any = [&](auto &s) {
-    auto r = complete_claims(s);
-    return std::any_of(stop.begin(), stop.end(), [&](auto &x) {
-      return std::find(r.begin(), r.end(), x) != r.end();
-    });
-  };
-  std::string l = bimanual_ ? "left" : single_arm_side_;
-  const ArmConsumer & left_consumer =
-    bimanual_ && !direct_ownership_active_ ? pair_->left() : left_;
-  stop_left_pending_ = any(l) && left_consumer.status() != MitStatus::SAFE;
-  if (bimanual_) {
-    std::string r = "right";
-    const ArmConsumer & right_consumer = direct_ownership_active_ ? right_ : pair_->right();
-    stop_right_pending_ = any(r) && right_consumer.status() != MitStatus::SAFE;
-  }
-  // Switching claims is not a safety transport.  The active controller must
-  // have completed its explicit measured-SAFE handshake before CM reaches
-  // prepare_command_mode_switch().
-  if (stop_left_pending_ || stop_right_pending_) {
-    stop_left_pending_ = stop_right_pending_ = false;
-    return hardware_interface::return_type::ERROR;
-  }
+  // Contract v1 "External switch", the rule all three backends share: the
+  // outgoing producer is not relied on for safety. A stop of an arm that is not
+  // SAFE is accepted, and write() puts the arm in SAFE itself.
+  left_gate_.prepare(start, stop, l);
+  if (bimanual_) right_gate_.prepare(start, stop, "right");
   sync_protocol();
   return hardware_interface::return_type::OK;
 }
 hardware_interface::return_type
-FakeMitSystem::perform_command_mode_switch(const std::vector<std::string> &,
-                                           const std::vector<std::string> &) {
-  const ArmConsumer &l = bimanual_ && pair_ && !direct_ownership_active_ ? pair_->left() : left_;
-  bool ld =
-      !stop_left_pending_ || l.safe_ack_generation() == l.safe_generation();
-  bool rd =
-      !stop_right_pending_ || (bimanual_ &&
-        (direct_ownership_active_ ? right_ : pair_->right()).safe_ack_generation() ==
-        (direct_ownership_active_ ? right_ : pair_->right()).safe_generation());
-  if (!ld || !rd)
-    return hardware_interface::return_type::ERROR;
-  stop_left_pending_ = stop_right_pending_ = false;
+FakeMitSystem::perform_command_mode_switch(const std::vector<std::string> &start,
+                                           const std::vector<std::string> &stop) {
+  const std::string l = bimanual_ ? "left" : single_arm_side_;
+  const bool fence_left = left_gate_.perform(start, stop, l);
+  const bool fence_right = bimanual_ && right_gate_.perform(start, stop, "right");
+  if (fence_left || fence_right) {
+    // Every consumer the incoming producer could read its ack from: the
+    // ownership mode may have just changed.
+    if (fence_left) {
+      left_.discard_commit(left_protocol_[7]);
+      left_observed_ = left_protocol_[7];
+    }
+    if (fence_right) {
+      right_.discard_commit(right_protocol_[7]);
+      right_observed_ = right_protocol_[7];
+    }
+    if (pair_) {
+      // The pair's two acks must stay equal (the paired producer requires it),
+      // so both move to the newer of the two leftovers.
+      double newest = 0.0;
+      for (const double g : {left_protocol_[7], right_protocol_[7]})
+        if (is_exact_nonnegative_integer(g)) newest = std::max(newest, g);
+      pair_->discard_commit(newest, newest);
+    }
+    sync_protocol();
+    // The leftover's tau_ff is not what the hold applies; the incoming
+    // producer, activated right after this, must not seed from it.
+    auto restore = [&](const ArmConsumer &c, std::size_t offset) {
+      for (std::size_t i = 0; i < 7; ++i)
+        command_[offset + i][4] = c.submitted().joints[i].effort;
+    };
+    if (bimanual_ && pair_) {
+      restore(direct_ownership_active_ ? left_ : pair_->left(), 0);
+      restore(direct_ownership_active_ ? right_ : pair_->right(), 7);
+    } else
+      restore(left_, 0);
+  }
   return hardware_interface::return_type::OK;
 }
 } // namespace cho_hardware_openarm_mit_test

@@ -38,6 +38,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_safety_profile ${PROJECT_NAME})
   ament_add_gtest(test_arm_consumer test/test_arm_consumer.cpp)
   target_link_libraries(test_arm_consumer ${PROJECT_NAME})
+  ament_add_gtest(test_switch_gate test/test_switch_gate.cpp)
+  target_link_libraries(test_switch_gate ${PROJECT_NAME})
   target_compile_definitions(test_safety_profile PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 endif()

@@ -34,6 +34,14 @@ struct DirectControllerTestAccess
   {
     return controller.action_ready_.load(std::memory_order_acquire);
   }
+  static double velocity(const DirectControllerBase & controller, const std::size_t joint)
+  {
+    return controller.command_interfaces_[5 * joint + 1].get_value();
+  }
+  static double command_velocity(const DirectControllerBase & controller, const std::size_t joint)
+  {
+    return controller.command_velocity_[joint];
+  }
 };
 }  // namespace cho_controller_openarm_mit
 
@@ -246,22 +254,70 @@ TEST_F(Fixture, ExistingJointSpaceHomeReachCancelAndPreemptWorkflow)
   // MuJoCo runtime gate.
   auto home = send(goal(0.0, 0.03)); ASSERT_TRUE(home);
   EXPECT_EQ(wait_result(home).code, rclcpp_action::ResultCode::SUCCEEDED);
-  // Admission has the same velocity boundary as raw MIT q/dq input; a cubic
-  // segment's peak is 1.5*|delta|/duration and cannot bypass that profile cap.
-  EXPECT_FALSE(send(goal(0.10, 0.001)));
   auto reach = send(goal(0.02, 0.03)); ASSERT_TRUE(reach);
   EXPECT_EQ(wait_result(reach).code, rclcpp_action::ResultCode::SUCCEEDED);
 
-  auto old = send(goal(0.10, 0.25)); ASSERT_TRUE(old); cycle(4);
-  auto replacement = send(goal(0.01, 0.03)); ASSERT_TRUE(replacement);
-  EXPECT_EQ(wait_result(old).code, rclcpp_action::ResultCode::ABORTED);
-  EXPECT_EQ(wait_result(replacement).code, rclcpp_action::ResultCode::SUCCEEDED);
+  // One goal at a time (cho_interfaces/CONTRACT.md): a goal sent while another
+  // runs is rejected, and the running one is not disturbed.
+  auto running = send(goal(0.10, 0.25)); ASSERT_TRUE(running); cycle(4);
+  EXPECT_FALSE(send(goal(0.01, 0.03)));
+  const auto finished = wait_result(running);
+  EXPECT_EQ(finished.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(finished.result->message.empty());
 
-  auto canceled = send(goal(0.10, 0.25)); ASSERT_TRUE(canceled); cycle(4);
+  auto canceled = send(goal(0.0, 0.25)); ASSERT_TRUE(canceled); cycle(4);
   auto cancel_future = client->async_cancel_goal(canceled);
   while (cancel_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle();
-  EXPECT_EQ(wait_result(canceled).code, rclcpp_action::ResultCode::CANCELED);
+  const auto cancel_result = wait_result(canceled);
+  EXPECT_EQ(cancel_result.code, rclcpp_action::ResultCode::CANCELED);
+  EXPECT_EQ(cancel_result.result->message, "canceled on request");
+
+  // A SAFE stop ends a running goal with the reason.
+  auto stopped = send(goal(0.10, 0.5)); ASSERT_TRUE(stopped); cycle(4);
   EXPECT_TRUE(safe_stop());
+  const auto stop_result = wait_result(stopped);
+  EXPECT_EQ(stop_result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_NE(stop_result.result->message.find("SAFE stop"), std::string::npos)
+    << stop_result.result->message;
+}
+
+TEST_F(Fixture, AGoalFasterThanTheProfileAllowsIsStretchedNotRejected)
+{
+  // duration_sec is a minimum. A cubic segment peaks at 1.5*|delta|/duration;
+  // a goal that would put that past the profile's command velocity is no
+  // longer refused: it takes as long as the limit requires, and dq_des stays
+  // inside it the whole way -- the bound the consumer validates.
+  using Access = cho_controller_openarm_mit::DirectControllerTestAccess;
+  auto client = rclcpp_action::create_client<Action>(
+    client_node, "/mit_action_test/joint_impedance_mit_controller/joint_space");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
+  for (int i = 0; i < 400 && !Access::action_ready(*controller); ++i) cycle();
+  ASSERT_TRUE(Access::action_ready(*controller));
+  Action::Goal fast;
+  fast.target_joints.position.assign(7, 0.0);
+  fast.target_joints.position[2] = 0.5;  // joint 3, the slowest DM4340 axis
+  fast.duration_sec = 0.001;
+  const auto started = update_count.load(std::memory_order_acquire);
+  auto sent = client->async_send_goal(fast);
+  while (sent.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) cycle();
+  auto handle = sent.get();
+  ASSERT_TRUE(handle);
+  auto result = client->async_get_result(handle);
+  double peak_ratio = 0.0;
+  for (int i = 0; i < 2000 && result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i) {
+    cycle();
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      peak_ratio = std::max(
+        peak_ratio, std::abs(Access::velocity(*controller, joint)) / Access::command_velocity(*controller, joint));
+    }
+  }
+  ASSERT_EQ(result.wait_for(std::chrono::milliseconds(0)), std::future_status::ready);
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_LE(peak_ratio, 1.0);
+  EXPECT_GT(peak_ratio, 0.9);  // and it was stretched to the limit, not past it
+  // 1.5 * 0.5 rad / 5.445 rad/s = 138 ms at 1 kHz.
+  const double minimum_cycles = 1.5 * 0.5 / Access::command_velocity(*controller, 2) * 1000.0;
+  EXPECT_GE(static_cast<double>(update_count.load(std::memory_order_acquire) - started), minimum_cycles);
 }
 
 TEST_F(Fixture, ActionImpedanceAddsNonzeroModelFeedforward)

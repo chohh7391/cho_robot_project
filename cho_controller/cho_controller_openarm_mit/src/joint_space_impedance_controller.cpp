@@ -163,8 +163,11 @@ controller_interface::return_type JointSpaceImpedanceController::update(
         return controller_interface::return_type::ERROR;
     }
 
-    action_server_->compute(time, state_);
-    if (action_server_->is_running()) {
+    // compute() is false when the goal ended this cycle -- canceled, aborted, or
+    // one that outlived a deactivation. Its trajectory is then not sampled: the
+    // reference holds (or homing continues) as when idle.
+    const bool running = action_server_->is_running() && action_server_->compute(time, state_);
+    if (running) {
         // A goal always wins: homing is only the startup default.
         homing_ = false;
         const auto sample = action_server_->trajectory_->computeNext();

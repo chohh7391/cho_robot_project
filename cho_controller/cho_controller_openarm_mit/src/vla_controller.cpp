@@ -3,6 +3,7 @@
 #include "cho_controller_openarm_mit/vla_controller.hpp"
 
 #include <algorithm>
+#include <map>
 #include <chrono>
 #include <cmath>
 #include <vector>
@@ -16,6 +17,9 @@ constexpr std::uint8_t kReasonStreamDead = 1;
 constexpr std::uint8_t kReasonGoalTimeout = 2;
 constexpr std::uint8_t kReasonComputeFailed = 3;
 constexpr std::uint8_t kReasonUserSuccess = 4;
+// Codes from here up carry a DirectControllerBase::ActionReason: the reasons
+// every MIT producer shares (stop, fault, deactivation).
+constexpr std::uint8_t kReasonShared = 0x80;
 
 bool stamp_is_set(const builtin_interfaces::msg::Time & stamp)
 {
@@ -25,6 +29,9 @@ bool stamp_is_set(const builtin_interfaces::msg::Time & stamp)
 
 const char * VlaController::terminal_reason(const std::uint8_t reason)
 {
+  if (reason >= kReasonShared) {
+    return action_reason_text(static_cast<ActionReason>(reason - kReasonShared));
+  }
   switch (reason) {
     case kReasonNone: return "";
     case kReasonStreamDead:
@@ -302,6 +309,23 @@ controller_interface::CallbackReturn VlaController::on_deactivate(
   return TaskSpaceImpedanceController::on_deactivate(previous);
 }
 
+void VlaController::end_running_goal(const ActionReason reason)
+{
+  TaskSpaceImpedanceController::end_running_goal(reason);
+  // Control thread. A goal the executor accepted but this loop has not started
+  // yet is ended too, and marked started so it never runs afterwards.
+  const std::uint64_t published = vla_public_id_.load(std::memory_order_acquire);
+  const std::uint64_t id = vla_id_ ? vla_id_ : (published != vla_started_id_ ? published : 0);
+  if (id) {
+    finish_vla(
+      id, VlaTerminal::ABORTED,
+      static_cast<std::uint8_t>(kReasonShared + static_cast<std::uint8_t>(reason)));
+    vla_started_id_ = std::max(vla_started_id_, id);
+  }
+  vla_id_ = 0;
+  vla_public_id_.store(0, std::memory_order_release);
+}
+
 // ---------------------------------------------------------------------------
 // Goal lifecycle (executor)
 // ---------------------------------------------------------------------------
@@ -394,6 +418,8 @@ void VlaController::vla_non_rt_tick()
 
 void VlaController::vla_non_rt_tick_impl()
 {
+  // Before the drain, as in DirectControllerBase::action_non_realtime_tick().
+  const auto closed = goals_closed();
   VlaTerminalEvent event;
   while (vla_terminal_queue_.pop(event)) {
     std::shared_ptr<VlaGoalHandle> handle;
@@ -423,6 +449,30 @@ void VlaController::vla_non_rt_tick_impl()
     {
       notify_completion_client_->async_send_request(
         std::make_shared<std_srvs::srv::Trigger::Request>());
+    }
+  }
+
+  const auto through = vla_abort_through_.exchange(0, std::memory_order_acq_rel);
+  if (closed != ActionReason::NONE || through) {
+    // Stopped, faulted or deactivated: every goal still held ends with that
+    // reason. Activated again: the ones from before the activation do.
+    std::map<std::uint64_t, std::shared_ptr<VlaGoalHandle>> held;
+    {
+      std::lock_guard<std::mutex> lock(vla_handles_mutex_);
+      for (auto it = vla_handles_.begin(); it != vla_handles_.end();) {
+        if (closed != ActionReason::NONE || it->first <= through) {
+          held.emplace(it->first, it->second);
+          it = vla_handles_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    for (const auto & entry : held) {
+      auto result = std::make_shared<VlaAction::Result>();
+      result->message = action_reason_text(
+        closed != ActionReason::NONE ? closed : ActionReason::DEACTIVATED);
+      if (entry.second->is_active()) {entry.second->abort(result);}
     }
   }
 

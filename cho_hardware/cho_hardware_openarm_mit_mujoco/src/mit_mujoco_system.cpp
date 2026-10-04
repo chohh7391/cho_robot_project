@@ -5,6 +5,11 @@
 #include <pluginlib/class_list_macros.hpp>
 namespace cho_hardware_openarm_mit_mujoco
 {
+namespace
+{
+// Two commit generations are the same commit when equal, NaN included.
+bool same_generation(double a, double b) { return a == b || (std::isnan(a) && std::isnan(b)); }
+}  // namespace
 hardware_interface::CallbackReturn MitMujocoSystem::on_init(
   const hardware_interface::HardwareInfo & i)
 {
@@ -44,6 +49,8 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_init(
       }
       a.limiter = std::make_unique<Limiter>(p, rate);
       a.shadow = std::make_unique<Limiter>(p, rate);
+      // A switch abandoned after a successful prepare opens after one second.
+      a.gate.set_expiry_cycles(rate);
       arms_.push_back(std::move(a));
     }
   } catch (const std::exception &) {
@@ -121,6 +128,15 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
     a.limiter->reset(q);
     a.protocol.fill(0);
     a.protocol[0] = session;
+    a.submitted = 0;
+    a.observed = 0;
+    a.gate.reset();
+    // A new session starts with no producer input. A SAFE request left from
+    // the previous session would read as a new one against a SAFE generation
+    // back at 0, and the effort commands must read the fresh hold's tau_ff
+    // (0): a producer seeds its first commit from them.
+    a.safe_request = 0;
+    for (auto & joint : a.command) joint.fill(0);
   }
   pair_ownership_token_ = 0;
   pair_stop_ready_ = 0;
@@ -142,7 +158,8 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_cleanup(const rclcpp_life
   for (auto & a : arms_) {
     a.protocol.fill(0);
     a.protocol[4] = 6;
-    a.submitted = a.observed = 0;
+    a.submitted = 0;
+    a.observed = 0;
     a.direct_owned = false;
   }
   paired_owned_ = false;
@@ -208,15 +225,21 @@ hardware_interface::return_type MitMujocoSystem::prepare_command_mode_switch(
     full_starts += starts == required.size();
     full_stops += stops == required.size();
     pending_direct_[i] = starts == required.size();
-    if (
-      stops == required.size() &&
-      (a.protocol[4] != 0 || a.protocol[2] == 0 || a.protocol[2] != a.protocol[3]))
-      return fail();
   }
+  // A stop within one ownership mode follows the shared SwitchGate rule: it is
+  // accepted SAFE or not, and write() puts the arm in SAFE itself. An OWNERSHIP
+  // change (direct <-> paired) still needs the old owner in an acknowledged
+  // SAFE first: the pair transaction needs both arms' generations aligned,
+  // which a hardware SAFE cannot provide.
+  const auto acknowledged_safe = [](const Arm & a) {
+    return a.protocol[4] == 0 && a.protocol[2] != 0 && a.protocol[2] == a.protocol[3];
+  };
   const bool both_direct = arms_.size() == 2 && arms_[0].direct_owned && arms_[1].direct_owned;
   if (token_starts == 1) {
     if (arms_.size() != 2 || full_starts != 2 || paired_owned_ || token_stops != 0) return fail();
     if ((arms_[0].direct_owned || arms_[1].direct_owned) && (!both_direct || full_stops != 2))
+      return fail();
+    if (both_direct && (!acknowledged_safe(arms_[0]) || !acknowledged_safe(arms_[1])))
       return fail();
     if (
       both_direct && (arms_[0].protocol[2] != arms_[1].protocol[2] ||
@@ -227,6 +250,7 @@ hardware_interface::return_type MitMujocoSystem::prepare_command_mode_switch(
   } else if (paired_owned_) {
     if (full_starts != 0) {
       if (full_starts != 2 || full_stops != 2 || token_stops != 1) return fail();
+      if (!acknowledged_safe(arms_[0]) || !acknowledged_safe(arms_[1])) return fail();
       pending_clear_pair_ = true;
     } else if (full_stops != 0) {
       if (full_stops != 2 || token_stops != 1) return fail();
@@ -241,22 +265,15 @@ hardware_interface::return_type MitMujocoSystem::prepare_command_mode_switch(
     rollback_pending();
     return result;
   }
+  // Only once the whole switch is accepted: a refused prepare latches nothing.
+  for (auto & a : arms_) a.gate.prepare(start, stop, a.side);
   return hardware_interface::return_type::OK;
 }
 hardware_interface::return_type MitMujocoSystem::perform_command_mode_switch(
   const std::vector<std::string> & start, const std::vector<std::string> & stop)
 {
-  auto fail = [this]() {
-    rollback_pending();
-    return hardware_interface::return_type::ERROR;
-  };
-  for (auto & a : arms_) {
-    auto required = cho_openarm_mit_core::complete_claims(a.side);
-    bool stopping = std::all_of(required.begin(), required.end(), [&](auto & x) {
-      return std::count(stop.begin(), stop.end(), x) == 1;
-    });
-    if (stopping && a.protocol[3] != a.protocol[2]) return fail();
-  }
+  // No SAFE precondition here any more: the shared SwitchGate rule accepts a
+  // stop of an arm that is not SAFE, and write() safes it.
   auto result = MujocoSystemInterface::perform_command_mode_switch(
     filter_base_claims(start), filter_base_claims(stop));
   if (result != hardware_interface::return_type::OK) {
@@ -277,30 +294,87 @@ hardware_interface::return_type MitMujocoSystem::perform_command_mode_switch(
     for (auto & a : arms_) a.direct_owned = false;
   }
   rollback_pending();
+  // Here, not in write(): controller_manager activates the incoming producer
+  // right after this, and it continues its generations from the ack.
+  std::array<bool, 2> fence{false, false};
+  for (std::size_t i = 0; i < arms_.size(); ++i)
+    fence[i] = arms_[i].gate.perform(start, stop, arms_[i].side);
+  discard_leftover_commits(fence);
   return result;
+}
+void MitMujocoSystem::discard_leftover_commits(const std::array<bool, 2> & arms)
+{
+  const auto exact = [](double g) {
+    return std::isfinite(g) && g >= 0 && g <= cho_openarm_mit_core::kMaxExactInteger &&
+           std::floor(g) == g;
+  };
+  std::uint64_t newest = 0;
+  std::array<std::uint64_t, 2> leftover{0, 0};
+  for (std::size_t i = 0; i < arms_.size(); ++i) {
+    auto & a = arms_[i];
+    if (!arms[i]) continue;
+    // Handled, whatever was written: this value is never evaluated again.
+    a.observed = a.protocol[7];
+    if (!exact(a.protocol[7])) continue;
+    leftover[i] = static_cast<std::uint64_t>(a.protocol[7]);
+    newest = std::max(newest, leftover[i]);
+  }
+  for (std::size_t i = 0; i < arms_.size(); ++i) {
+    auto & a = arms_[i];
+    const std::uint64_t floor = paired_owned_ ? newest : leftover[i];
+    if ((arms[i] || paired_owned_) && floor > a.submitted) {
+      a.submitted = floor;
+      a.protocol[1] = static_cast<double>(floor);
+    }
+    // The incoming producer seeds from the effort commands: they must read
+    // what the hold applies, not the discarded commit's tau_ff.
+    if (arms[i]) publish_held_effort(i);
+  }
+}
+void MitMujocoSystem::publish_held_effort(std::size_t i)
+{
+  auto & a = arms_[i];
+  for (std::size_t j = 0; j < N; ++j) a.command[j][4] = a.limiter->held_effort(j);
 }
 hardware_interface::return_type MitMujocoSystem::write(
   const rclcpp::Time & t, const rclcpp::Duration & p)
 {
   std::array<bool, 2> valid{true, true}, safe_new{false, false};
   std::array<std::uint64_t, 2> generations{}, safe_values{};
+  // The controller-switch rule (SwitchGate). `hold`: this cycle evaluates no
+  // producer SAFE request or commit for the arm; `hardware_safe`: the arm is put
+  // in measured SAFE by the hardware itself, with a SAFE generation of its own.
+  std::array<bool, 2> hold{false, false}, hardware_safe{false, false}, discard{false, false};
   for (std::size_t i = 0; i < arms_.size(); ++i) {
     auto & a = arms_[i];
+    const auto cycle = a.gate.on_write();
+    discard[i] = cycle.discard;
+    hardware_safe[i] = cycle.enter_safe && !(a.limiter->safe() && a.protocol[4] == 0);
+    hold[i] = hardware_safe[i] || cycle.closed || cycle.discard;
+  }
+  discard_leftover_commits(discard);
+  if (paired_owned_ && (hold[0] || hold[1])) hold[0] = hold[1] = true;
+  for (std::size_t i = 0; i < arms_.size(); ++i) {
+    auto & a = arms_[i];
+    if (hold[i]) continue;
     double s = a.safe_request;
     bool numeric = std::isfinite(s) && s >= 0 && s <= cho_openarm_mit_core::kMaxExactInteger &&
                    std::floor(s) == s;
-    bool encoded = numeric && (s == a.protocol[2] || a.protocol[5] == a.protocol[0]);
-    if (!encoded || s < a.protocol[2])
+    // A request at or below the current SAFE generation is no request, as on
+    // the real adapter: the hardware advances that generation itself on a
+    // controller switch, past whatever the producer last asked for.
+    if (numeric && s <= a.protocol[2]) continue;
+    if (!numeric || a.protocol[5] != a.protocol[0])
       valid[i] = false;
-    else if (s > a.protocol[2]) {
+    else {
       safe_new[i] = true;
       safe_values[i] = static_cast<std::uint64_t>(s);
     }
   }
-  if (paired_owned_) {
+  if (paired_owned_ && !hold[0]) {
     const bool safe_event = safe_new[0] || safe_new[1];
-    const bool left_commit = arms_[0].protocol[7] != arms_[0].observed;
-    const bool right_commit = arms_[1].protocol[7] != arms_[1].observed;
+    const bool left_commit = !same_generation(arms_[0].protocol[7], arms_[0].observed);
+    const bool right_commit = !same_generation(arms_[1].protocol[7], arms_[1].observed);
     const bool commit_event = left_commit || right_commit;
     const double common_session = arms_[0].protocol[0];
     const bool token_ok = std::isfinite(pair_ownership_token_) && pair_ownership_token_ >= 0 &&
@@ -322,15 +396,24 @@ hardware_interface::return_type MitMujocoSystem::write(
     *a.shadow = *a.limiter;
     generations[i] = a.submitted;
     if (!valid[i]) continue;
+    if (hold[i]) {
+      if (hardware_safe[i]) {
+        a.shadow->request_safe();
+        safe_new[i] = true;
+        safe_values[i] = static_cast<std::uint64_t>(a.protocol[2]) + 1;
+      }
+      continue;
+    }
     if (safe_new[i]) {
       a.shadow->request_safe();
       continue;
     }
     double g = a.protocol[7], l = a.protocol[6];
-    if (g == a.observed) continue;
-    a.observed = std::isfinite(g) && g >= 0 && g <= cho_openarm_mit_core::kMaxExactInteger
-                   ? static_cast<std::uint64_t>(g)
-                   : a.observed;
+    if (same_generation(g, a.observed)) continue;
+    // Evaluated once, valid or not. A NaN or fractional value used to be
+    // recorded truncated or not at all, so it was re-evaluated -- INVALID and
+    // a fresh SAFE latch -- on every cycle it stayed there.
+    a.observed = g;
     bool encoding = std::isfinite(g) && std::isfinite(l) && g > 0 && l > 0 &&
                     g <= cho_openarm_mit_core::kMaxExactInteger &&
                     l <= cho_openarm_mit_core::kMaxExactInteger && std::floor(g) == g &&
@@ -389,6 +472,11 @@ hardware_interface::return_type MitMujocoSystem::write(
       a.protocol[4] = 5;
     }
   }
+  // While an arm holds, its effort commands read the tau_ff the hold applies,
+  // which is what a producer seeds its first commit from -- not a rejected
+  // commit's.
+  for (std::size_t i = 0; i < arms_.size(); ++i)
+    if (arms_[i].limiter->safe()) publish_held_effort(i);
   pair_stop_ready_ = paired_owned_ && arms_.size() == 2 && arms_[0].protocol[4] == 0 &&
                      arms_[1].protocol[4] == 0 && arms_[0].protocol[2] == arms_[0].protocol[3] &&
                      arms_[1].protocol[2] == arms_[1].protocol[3] &&

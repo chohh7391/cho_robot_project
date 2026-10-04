@@ -423,6 +423,16 @@ bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
   return true;
 }
 
+bool ArmConsumer::discard_commit(const double generation)
+{
+  if (session_ == 0 || !is_exact_nonnegative_integer(generation) ||
+      static_cast<std::uint64_t>(generation) <= ack_generation_) {
+    return false;
+  }
+  ack_generation_ = static_cast<std::uint64_t>(generation);
+  return true;
+}
+
 void ArmConsumer::inject_fault()
 {
   latched_ = true; permanent_latched_ = true; status_ = MitStatus::FAULT;
@@ -495,6 +505,12 @@ bool PairedConsumer::submit_safe_transition(bool left, bool right, bool transpor
   left_ = l; right_ = r; return true;
 }
 
+void PairedConsumer::discard_commit(const double left_generation, const double right_generation)
+{
+  left_.discard_commit(left_generation);
+  right_.discard_commit(right_generation);
+}
+
 void PairedConsumer::inject_fault(bool left)
 {
   left_.request_safe_transition(); right_.request_safe_transition();
@@ -555,6 +571,101 @@ bool BimanualCommandRouter::successful_write_cycle()
   left_.request_safe_transition(); right_.request_safe_transition();
   left_.submit_safe_transition(true); right_.submit_safe_transition(true);
   return false;
+}
+
+ArmClaim classify_arm_claim(const std::vector<std::string> & interfaces, const std::string & side)
+{
+  const auto required = complete_claims(side);
+  const auto named = static_cast<std::size_t>(std::count_if(
+    required.begin(), required.end(), [&interfaces](const std::string & claim) {
+      return std::find(interfaces.begin(), interfaces.end(), claim) != interfaces.end();
+    }));
+  if (named == 0) return ArmClaim::NONE;
+  return named == required.size() ? ArmClaim::COMPLETE : ArmClaim::PARTIAL;
+}
+
+SwitchGate::SwitchGate(const std::size_t expiry_cycles)
+: expiry_cycles_(std::max<std::size_t>(1, expiry_cycles)) {}
+
+SwitchGate::SwitchGate(const SwitchGate & other)
+: safe_requested_(other.safe_requested_.load()), closed_(other.closed_.load()),
+  performed_(other.performed_.load()), closed_cycles_(other.closed_cycles_),
+  expiry_cycles_(other.expiry_cycles_) {}
+
+SwitchGate & SwitchGate::operator=(const SwitchGate & other)
+{
+  safe_requested_.store(other.safe_requested_.load());
+  closed_.store(other.closed_.load());
+  performed_.store(other.performed_.load());
+  closed_cycles_ = other.closed_cycles_;
+  expiry_cycles_ = other.expiry_cycles_;
+  return *this;
+}
+
+void SwitchGate::set_expiry_cycles(const std::size_t cycles)
+{
+  expiry_cycles_ = std::max<std::size_t>(1, cycles);
+}
+
+bool SwitchGate::prepare(
+  const std::vector<std::string> & start, const std::vector<std::string> & stop,
+  const std::string & side)
+{
+  const auto starting = classify_arm_claim(start, side);
+  const auto stopping = classify_arm_claim(stop, side);
+  if (starting == ArmClaim::PARTIAL || stopping == ArmClaim::PARTIAL) return false;
+  if (starting == ArmClaim::COMPLETE || stopping == ArmClaim::COMPLETE) {
+    // Closed first: on_write() reads the request first, so seeing it implies
+    // seeing the gate closed too.
+    closed_.store(true);
+    safe_requested_.store(true);
+  }
+  return true;
+}
+
+bool SwitchGate::perform(
+  const std::vector<std::string> & start, const std::vector<std::string> & stop,
+  const std::string & side)
+{
+  const bool touched = classify_arm_claim(start, side) == ArmClaim::COMPLETE ||
+    classify_arm_claim(stop, side) == ArmClaim::COMPLETE;
+  // A gate an earlier, abandoned prepare left closed is opened here too, with
+  // the same discard, rather than by an unrelated switch quietly.
+  const bool was_closed = closed_.exchange(false);
+  closed_cycles_ = 0;
+  if (touched || was_closed) {
+    performed_.store(true);
+    safe_requested_.store(true);
+  }
+  return touched || was_closed;
+}
+
+SwitchGate::Cycle SwitchGate::on_write()
+{
+  Cycle cycle;
+  cycle.performed = performed_.exchange(false);
+  if (safe_requested_.exchange(false)) {
+    cycle.enter_safe = true;
+    closed_cycles_ = 0;
+  }
+  if (closed_.load()) {
+    if (++closed_cycles_ > expiry_cycles_) {
+      closed_.store(false);
+      closed_cycles_ = 0;
+      cycle.discard = true;
+    } else {
+      cycle.closed = true;
+    }
+  }
+  return cycle;
+}
+
+void SwitchGate::reset()
+{
+  safe_requested_.store(false);
+  closed_.store(false);
+  performed_.store(false);
+  closed_cycles_ = 0;
 }
 
 std::vector<std::string> joint_names(const std::string & side)

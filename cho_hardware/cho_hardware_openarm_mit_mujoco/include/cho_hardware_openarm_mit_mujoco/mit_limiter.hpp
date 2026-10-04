@@ -35,6 +35,9 @@ public:
     capture_safe_position_ = true;
   }
   bool safe() const { return safe_; }
+  // The tau_ff a SAFE hold applies on joint j: the last accepted one (0 after
+  // reset(), and 0 once faulted, when the limiter commands nothing).
+  double held_effort(std::size_t j) const { return fault_ ? 0.0 : command_[j].tau; }
   std::uint64_t ack() const { return ack_; }
 
 private:

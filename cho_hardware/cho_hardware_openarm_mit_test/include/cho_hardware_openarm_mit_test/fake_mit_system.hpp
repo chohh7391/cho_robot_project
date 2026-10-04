@@ -27,8 +27,12 @@ public:
     const std::vector<std::string> & start, const std::vector<std::string> & stop) override;
 
 private:
-  bool exact_owned_claim(const std::vector<std::string> & claims, const std::string & side) const;
   void sync_protocol();
+  void publish_held_effort();
+  bool evaluate_commit(ArmConsumer & consumer, double & observed, const ArmCommand & command);
+  // SwitchGate::Cycle::enter_safe for one consumer: an arm that is not SAFE
+  // enters measured SAFE now. True when that spent the cycle.
+  static bool enter_switch_safe(ArmConsumer & consumer, bool & ok);
   ValidationLimits limits_{6.4, 20.0, 500.0, 50.0, 100.0, 100};  // test-double only
   ArmConsumer left_{limits_}, right_{limits_};
   std::unique_ptr<PairedConsumer> pair_;
@@ -46,7 +50,13 @@ private:
   std::uint64_t next_session_{1};
   std::uint64_t fail_transport_generation_{0};
   double safe_hold_damping_{1.0};
-  bool stop_left_pending_{false};
-  bool stop_right_pending_{false};
+  double mirror_position_offset_{0.0};
+  // The controller-switch rule every OpenArm MIT backend shares, so the
+  // controller integration tests run against the real adapter's rule: a stop is
+  // accepted SAFE or not, the hardware itself puts the arm in SAFE, and the
+  // outgoing producer's leftover commit is discarded at perform.
+  SwitchGate left_gate_, right_gate_;
+  // The commit generation each direct arm evaluated last (evaluate_commit()).
+  double left_observed_{0.0}, right_observed_{0.0};
 };
 }  // namespace cho_hardware_openarm_mit_test

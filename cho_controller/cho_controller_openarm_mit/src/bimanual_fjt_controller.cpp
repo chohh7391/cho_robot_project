@@ -197,11 +197,14 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
 controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
-  // Production orchestration must call request_safe_stop until SAFE_STOPPED
-  // before requesting the switch.  Hardware rejects an unsafe direct switch;
-  // this lifecycle callback remains nonblocking and cannot provide the handshake.
+  // Production orchestration should call request_safe_stop until SAFE_STOPPED
+  // before requesting the switch. This lifecycle callback remains nonblocking
+  // and cannot provide the handshake; when it was skipped, the hardware's
+  // switch rule (cho_openarm_mit_core::SwitchGate) put the arms in measured SAFE
+  // itself and discarded this producer's last unacknowledged commit.
   if (run_state_ != RunState::SAFE_STOPPED && run_state_ != RunState::INACTIVE) {
-    RCLCPP_ERROR(get_node()->get_logger(), "unsafe direct deactivate reached lifecycle callback; hardware switch must reject it");
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "deactivated without the SAFE handshake; the hardware switch gate put the arm(s) in SAFE");
   }
   active_.store(false); run_state_ = RunState::INACTIVE;
   public_run_state_.store(static_cast<std::uint8_t>(run_state_)); return CallbackReturn::SUCCESS;
@@ -511,7 +514,11 @@ controller_interface::return_type BimanualFollowJointTrajectoryController::updat
       request_stop(StopReason::FAULT); return controller_interface::return_type::OK;
     }
     if (ack_l == static_cast<double>(generation_) && ack_r == ack_l) {
-      write_safe_hold(measured_position());
+      // Hold where READY began -- the seed, or the last trajectory point --
+      // not the measurement: a q_des re-latched to the measured pose every
+      // cycle makes kp*(q_des - q) zero, so safe_stiffness held nothing and the
+      // arm settled on damping alone.
+      write_safe_hold(last_command_);
     }
     return controller_interface::return_type::OK;
   }

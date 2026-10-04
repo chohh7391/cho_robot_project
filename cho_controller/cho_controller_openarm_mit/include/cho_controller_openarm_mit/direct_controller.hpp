@@ -89,10 +89,69 @@ protected:
     std::array<double, 7> target{};
     double duration{0.0};
   };
-  struct ActionTerminal {std::uint64_t id{0}; ActionTerminalKind kind{ActionTerminalKind::ABORTED};};
+  // Why a goal ended. It crosses the RT -> non-RT queue as a code, because the
+  // control loop must not allocate, and becomes the result's `message`
+  // (cho_interfaces/CONTRACT.md: empty on success, the reason otherwise).
+  enum class ActionReason : std::uint8_t
+  {
+    NONE, CANCELED, SAFE_STOP, ACK_TIMEOUT, SAFE_REQUESTED, FAULT, TIMEOUT, TASK_TIMEOUT,
+    REPLACED, DEACTIVATED, COMPUTE_FAILED
+  };
+  static const char * action_reason_text(ActionReason reason);
+  struct ActionTerminal
+  {
+    std::uint64_t id{0};
+    ActionTerminalKind kind{ActionTerminalKind::ABORTED};
+    ActionReason reason{ActionReason::NONE};
+  };
 
   enum class State : std::uint8_t {INACTIVE, SEEDING, ACTIVE, STOPPING, SAFE_STOPPED, FAULT};
-  bool request_safe();
+
+  // The MIT session/ACK/SAFE state machine. Every producer derived from this
+  // class -- the direct joint producers, TaskSpace and so VLA -- runs it once
+  // per update() before computing anything, and commits through commit(). It
+  // used to be copied into TaskSpace, and the copy missed the fix that made a
+  // second producer continue from the consumer's ack: TaskSpace/VLA went
+  // ACTIVE without a seed when activated after another producer, then FAULTed.
+  enum class ProtocolStep : std::uint8_t
+  {
+    HOLD,     // nothing to command this cycle: stopping, or waiting for an ACK
+    FAULTED,  // the protocol faulted (state_ is FAULT); update() returns ERROR
+    SEEDED,   // the seed was acknowledged and state_ just became ACTIVE
+    COMMAND,  // compute a command and commit() it
+  };
+  ProtocolStep protocol_step();
+  // The tuple, session and lease, then the next generation last.
+  void commit(const ArmCommand & command);
+  // Every way out of ACTIVE -- a SAFE stop on request, a SAFE the controller
+  // requests itself (an acknowledgement timeout, a failed check), a fault (the
+  // hardware left the state this producer expects: a controller switch, lease
+  // expiry, a rejected commit), deactivation -- goes through stop_goals(). From
+  // that moment the goal API rejects (close_goal_api()), the running goal ends
+  // with `reason` (end_running_goal()), and the non-RT tick aborts every goal
+  // still held with it (goals_closed_), including one accepted in the instant
+  // the API closed. Goals used to end only on an operator's request_safe_stop;
+  // a hardware-initiated SAFE or a fault left them, and anything accepted in
+  // the meantime, without a result forever.
+  void stop_goals(ActionReason reason);
+  virtual void close_goal_api() {action_ready_.store(false, std::memory_order_release);}
+  // Control thread: the running goal (each goal server overrides it for its own).
+  virtual void end_running_goal(ActionReason reason) {action_abort_current(reason);}
+  ActionReason goals_closed() const
+  {
+    return static_cast<ActionReason>(goals_closed_.load(std::memory_order_acquire));
+  }
+  // state_ := FAULT, and stop_goals(reason).
+  ProtocolStep fault(ActionReason reason);
+  // Called by on_activate(): every goal accepted before it is aborted (each
+  // goal server overrides it for its own ids).
+  virtual void abort_goals_from_before()
+  {
+    action_abort_through_.store(next_action_id_.load() - 1, std::memory_order_release);
+  }
+
+  // stop_goals(reason), then the SAFE request.
+  bool request_safe(ActionReason reason = ActionReason::SAFE_REQUESTED);
   std::array<double, 7> measured() const;
   void ramped_return_to_zero_gains(
     const std::array<double, 7> & target_kp, const std::array<double, 7> & target_kd,
@@ -109,7 +168,7 @@ protected:
   rclcpp_action::CancelResponse action_cancel(const std::shared_ptr<JointSpaceGoalHandle> & handle);
   void action_accepted(const std::shared_ptr<JointSpaceGoalHandle> & handle);
   void action_non_realtime_tick();
-  void action_finish(std::uint64_t id, ActionTerminalKind kind);
+  void action_finish(std::uint64_t id, ActionTerminalKind kind, ActionReason reason = ActionReason::NONE);
   bool action_write_target(double control_time, DirectMitTarget & target);
   // This is deliberately action-adapter-only.  Raw direct MIT topics preserve
   // their explicit caller-provided tau_ff contract, and the MIT hardware
@@ -118,7 +177,13 @@ protected:
   // at the profile's tau_ff_slew per second; dt is this cycle's period.
   bool action_apply_mujoco_feedforward(DirectMitTarget & target, double dt);
   CallbackReturn configure_action_mujoco_dynamics();
-  void action_abort_current();
+  void action_abort_current(ActionReason reason);
+  // duration_sec is a minimum (cho_interfaces/CONTRACT.md): the shortest
+  // duration whose cubic peak velocity 1.5*|dq|/T stays inside the profile's
+  // command velocity on every joint -- the same bound the consumer validates
+  // dq_des against.
+  double minimum_cubic_duration(
+    const std::array<double, 7> & start, const std::array<double, 7> & target) const;
   std::string side_{"left"};
   std::array<double, 7> kp_{}, torque_limit_{};
   // Runtime-settable. Actuator-side damping is the effective lever against
@@ -200,6 +265,17 @@ protected:
   // terminal delivery so a completed goal cannot restart from the same buffer.
   std::uint64_t action_last_started_id_{0};
   std::array<double, 7> action_start_{};
+  // The running goal's duration: the request, stretched to what the profile's
+  // command velocity allows from where the goal actually starts.
+  double action_duration_{0.0};
+  // Goals with an id at or below this are aborted by the non-RT tick. Set at
+  // every deactivation and activation (abort_goals_from_before()), so no goal
+  // survives a deactivation and none left from an earlier activation can block
+  // the one-goal-at-a-time admission.
+  std::atomic<std::uint64_t> action_abort_through_{0};
+  // An ActionReason; NONE while goals are accepted. Set by stop_goals() (the
+  // first reason wins), cleared by on_activate().
+  std::atomic<std::uint8_t> goals_closed_{0};
   DirectMitTarget action_hold_{};
   // Non-RT goal admission reads this atomically published MIT q_des reference;
   // it never races the RT-owned action_hold_ aggregate.

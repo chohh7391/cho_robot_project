@@ -24,7 +24,8 @@ arm-scoped protocol interfaces (ROS handle form `<arm_resource>/<interface>`):
 - command `mit_safe_request_generation`: monotonically increasing integer-valued double, written
   last instead of tuple commit when requesting hardware-owned measured SAFE
 - state `mit_session_id`: consumer session changed on configure/activate restart
-- state `mit_ack_generation`: last whole-arm generation accepted by the consumer
+- state `mit_ack_generation`: last whole-arm generation accepted by the consumer, or discarded
+  by a controller switch (see the external-switch paragraph below)
 - state `mit_safe_generation`: hardware-requested safe transition generation
 - state `mit_safe_ack_generation`: safe generation actually submitted by consumer `write()`
 - state `mit_status`: enum (`0=SAFE`, `1=ACTIVE`, `2=SAFE_TRANSITION`, `3=STALE`,
@@ -40,10 +41,16 @@ only after both arms report SAFE with equal nonzero safe acknowledgements; contr
 orchestration must observe this before switching/deactivating the paired producer.
 
 Session/generation values are exact non-negative integers no larger than `2^53-1`; wrap is forbidden
-while active. After a session change the producer echoes it and restarts generation at one. It writes
+while active. A producer continues its generations from the `ack_generation` it reads when it is
+activated: the consumer keeps its ack across controller switches within a session, so only the first
+producer of a session (ack 0) starts at one, and a second producer that restarted at one would be
+rejected as stale. All producers share one state machine for this
+(`DirectControllerBase::protocol_step()`; TaskSpace and VLA run it too). It writes
 all 35 joint fields, session echo and `lease_cycles`, then writes `commit_generation`
 last. The consumer snapshots only after observing a new generation, validates the entire snapshot,
-then updates `ack_generation`. Ack means the consumer accepted the complete tuple into a shadow
+then updates `ack_generation`. Each generation value is evaluated once, accepted or not: a rejected
+commit puts the arm in measured SAFE once, and is not re-evaluated (or the hold re-latched) while
+the producer leaves it in place. Ack means the consumer accepted the complete tuple into a shadow
 buffer and submitted it to transport in `write()`, not that every motor physically applied it;
 CAN/motor feedback health is reported through
 status. It never acknowledges a partial/invalid snapshot. Freshness is a
@@ -74,9 +81,18 @@ It is selected only by
 `mujoco_mit_prototype:=true bimanual:=true arm:=both`; legacy MoveIt continues
 to use its position-controller map.
 
-On activation the consumer itself enters SAFE from its latest measured position. The producer's
-first commit is `q_des=q_measured,dq_des=0,kp=safe_hold_stiffness,kd=safe_hold_damping,tau_ff=0`; it waits for the
-matching ack before ramping. The consumer's own SAFE hold tuple is
+On activation the consumer itself enters SAFE from its latest measured position. A direct,
+TaskSpace or VLA producer's first commit is a seed at `q_des=q_measured,dq_des=0` whose `tau_ff` is
+what the effort command interfaces hold. Every backend keeps those equal to the feed-forward its
+hold applies whenever the arm is not ACTIVE: zeroed when a session starts (a fresh hold has no
+`tau_ff`), the last ACCEPTED `tau_ff` after a rejected commit or a SAFE, and restored at
+`perform_command_mode_switch()` when the outgoing producer's leftover commit is discarded. So a producer
+switch does not drop the arm's gravity support for a cycle and slew it back from zero, and a stale
+`tau_ff` -- a rejected commit's, or a previous session's on an arm that faulted and dropped -- never
+becomes a seed. It waits for the matching ack before ramping. (The
+FollowJointTrajectory producer carries `tau_ff=0` throughout, by design: its seed is the measured
+SAFE-gain hold, and between goals it holds where it began -- the seed or the last trajectory point --
+not the latest measurement.) The consumer's own SAFE hold tuple is
 `q_des=q_measured,dq_des=0,kp=safe_hold_stiffness[i],kd=safe_hold_damping[i],tau_ff=last accepted tau_ff`:
 gains are per joint, and the feed-forward is retained because the MIT equation inside the motor has no
 gravity model, so a hold with `tau_ff=0` would let the arm fall at the moment it stops being commanded.
@@ -92,16 +108,53 @@ echoes the session each update, commits generation one, and retries until ack fo
 maximum handshake-cycle count. It rejects action goals while seeding and reports activation failure
 when that bound expires. A session mismatch never refreshes lease or ack.
 
-External switch/unload/shutdown cannot rely on the outgoing controller for safety.
-`prepare_command_mode_switch()` rejects partial five-field claims, increments `safe_generation`, and
-latches `SAFE_TRANSITION`; `perform_command_mode_switch()` keeps new commands gated. Only consumer
-`write()` can submit the safe tuple, copy safe generation to safe ack, and publish `SAFE`. Merely
-requesting a transition is never reported as SAFE.
-`on_deactivate()` performs a bounded safe/disable sequence itself. A steady-clock watchdog owned by
+External switch/unload/shutdown cannot rely on the outgoing controller for safety. One rule,
+`cho_openarm_mit_core::SwitchGate`, is applied per arm by every backend (real, MuJoCo, and the test
+fake the controller integration tests run on):
+
+- `prepare_command_mode_switch()` rejects a switch that claims only part of an arm's five fields and
+  four protocol handles. A switch that starts or stops the arm is accepted whether or not the arm is
+  SAFE. The next `write()` puts the arm in measured SAFE (a new `safe_generation`, `SAFE_TRANSITION`
+  until submitted); an arm already in SAFE keeps its hold and gets no new generation. Until perform,
+  no producer SAFE request or commit is evaluated.
+- `perform_command_mode_switch()` discards the commit the outgoing producer left unacknowledged
+  (typically written in the switch's own control cycle, before perform): it is never evaluated, and
+  `ack_generation` advances to it. Humble calls perform from the control loop, inside `update()` and
+  before `write()`, and activates the incoming controllers right after it, so the incoming producer
+  reads the advanced ack and commits above it. The next `write()` enters SAFE again if anything ran
+  since prepare, then evaluates commits. Without the discard, a stop-only switch ran the outgoing
+  producer's last tuple for a whole lease. In that first write after perform, a SAFE request still
+  pending is the outgoing producer's: the switch's own SAFE consumes it (it takes the next SAFE
+  generation, which a valid request asks for), and a commit with a new generation -- only the incoming
+  producer's -- is still evaluated in the same write (real adapter; under Humble's order the incoming
+  producer first commits one write later, so this only removes a dependence on that order).
+- A switch the controller_manager abandons after a successful prepare never performs. After one
+  second of `write()` cycles (the profile's `update_rate_hz`) the gate opens by itself, with the same
+  discard.
+- Ownership changes on the bimanual simulation backends (direct <-> paired) additionally require the
+  old owner to have completed an acknowledged SAFE with aligned generations: the pair transaction
+  needs both arms' generations equal, which a hardware SAFE cannot provide.
+
+Only consumer `write()` can submit the safe tuple, copy safe generation to safe ack, and publish
+`SAFE`. Merely requesting a transition is never reported as SAFE. A producer SAFE request at or below
+the current `safe_generation` is no request (the hardware advances that generation itself on a
+switch).
+A producer's `on_deactivate()` returns SUCCESS without its SAFE handshake too (with a warning):
+the switch rule above makes the external switch safe, and an ERROR would only leave the controller
+finalized. The hardware's `on_deactivate()` performs a bounded safe/disable sequence itself. A steady-clock watchdog owned by
 the real adapter disables its CAN sockets if controller-manager `write()` stops. SIGKILL, power and
 transceiver failures additionally require the motor communication watchdog and physical E-stop.
-FAULT/external-stop latches reject new active commands until lifecycle cleanup/configure creates a
-new session; a new generation alone never clears a latch.
+A FAULT (transport, stale state, watchdog) disables the transport and rejects new active commands
+until the hardware is reactivated, which creates a new session; a new generation alone never clears
+it. An external switch does not latch: the incoming producer commits after perform. An invalid commit
+puts the arm in SAFE once -- each generation value, NaN or fractional included, is evaluated once --
+and a later, valid generation is evaluated again (real, MuJoCo, and the test fake's single and direct
+arms; the fake's paired path keeps `PairedConsumer`'s latch).
+
+Every way a producer leaves ACTIVE -- a SAFE stop on request, a SAFE it requests itself (an
+acknowledgement timeout, a failed check), a fault (the hardware left the state it expects: a SAFE it
+did not request, a session change), deactivation -- ends its running goal with that reason in the
+result's `message`, aborts every goal still held, and rejects new goals from that moment.
 
 ## Consumer ADR
 

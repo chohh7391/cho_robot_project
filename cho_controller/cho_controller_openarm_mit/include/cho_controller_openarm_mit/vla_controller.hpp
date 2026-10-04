@@ -83,6 +83,16 @@ public:
 protected:
   bool uses_task_space_action() const override {return false;}
   bool write_task_target(double control_time, double dt, DirectMitTarget & target) override;
+  // DirectControllerBase::stop_goals() ends the VLA goal too. Without this it
+  // stayed accepted with no result: the controller stops computing references
+  // once it leaves ACTIVE, so nothing else would ever finish it, and the goal
+  // blocked every later one.
+  void end_running_goal(ActionReason reason) override;
+  void abort_goals_from_before() override
+  {
+    TaskSpaceImpedanceController::abort_goals_from_before();
+    vla_abort_through_.store(vla_next_id_.load() - 1, std::memory_order_release);
+  }
 
 private:
   friend struct VlaControllerTestAccess;
@@ -144,6 +154,8 @@ private:
   std::mutex vla_handles_mutex_;
   std::unordered_map<std::uint64_t, std::shared_ptr<VlaGoalHandle>> vla_handles_;
   std::atomic<std::uint64_t> vla_next_id_ {1};
+  // DirectControllerBase::action_abort_through_, for the VLA server.
+  std::atomic<std::uint64_t> vla_abort_through_ {0};
   std::atomic<std::uint64_t> vla_cancel_id_ {0};
   std::atomic<std::uint64_t> vla_public_id_ {0};
   std::atomic<bool> vla_success_flag_ {false};

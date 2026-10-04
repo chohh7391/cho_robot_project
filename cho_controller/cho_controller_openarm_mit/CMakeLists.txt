@@ -139,6 +139,14 @@ if(BUILD_TESTING)
   target_compile_definitions(test_vla_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
+  ament_add_gtest(test_producer_contract test/test_producer_contract.cpp TIMEOUT 120)
+  target_link_libraries(test_producer_contract ${PROJECT_NAME})
+  ament_target_dependencies(test_producer_contract
+    cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
+    rclcpp rclcpp_action cho_interfaces std_msgs std_srvs)
+  target_compile_definitions(test_producer_contract PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
+
   ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
   target_link_libraries(test_task_space_return_to_zero ${PROJECT_NAME})
   ament_target_dependencies(test_task_space_return_to_zero

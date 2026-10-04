@@ -24,6 +24,12 @@ public:
 private:
   void rollback_pending();
   std::vector<std::string> filter_base_claims(const std::vector<std::string> &) const;
+  // The controller-switch fence (SwitchGate): the commits the outgoing
+  // producers left are marked handled and the acks advance past them, equally
+  // on both arms while they are paired.
+  void discard_leftover_commits(const std::array<bool, 2> & arms);
+  // The effort command interfaces of arm i := the tau_ff its hold applies.
+  void publish_held_effort(std::size_t i);
   struct Arm
   {
     std::string side, resource;
@@ -34,8 +40,13 @@ private:
     std::array<hardware_interface::CommandInterface *, N> raw_effort{};
     std::array<const hardware_interface::StateInterface *, N> position{}, velocity{};
     std::unique_ptr<Limiter> limiter, shadow;
-    std::uint64_t submitted{0}, observed{0};
+    std::uint64_t submitted{0};
+    // The commit generation last evaluated, as written (NaN or a fraction
+    // included), so any value is evaluated once.
+    double observed{0.0};
     bool direct_owned{false};
+    // The controller-switch rule every OpenArm MIT backend shares.
+    cho_openarm_mit_core::SwitchGate gate;
   };
   std::vector<Arm> arms_;
   std::vector<hardware_interface::CommandInterface> base_commands_;

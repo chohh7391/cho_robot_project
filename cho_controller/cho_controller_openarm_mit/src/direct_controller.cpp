@@ -493,20 +493,70 @@ bool DirectControllerBase::protocol_ok() const
 controller_interface::CallbackReturn DirectControllerBase::on_activate(const rclcpp_lifecycle::State &)
 {
   if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
+  // Goals from before this activation end; the API opens again once seeded.
+  abort_goals_from_before();
+  goals_closed_.store(static_cast<std::uint8_t>(ActionReason::NONE), std::memory_order_release);
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
   const double ack=state_interfaces_[15].get_value();if(!is_exact_nonnegative_integer(ack)||ack>=kMaxExactInteger)return CallbackReturn::ERROR;
-  session_=static_cast<std::uint64_t>(s);base_generation_=static_cast<std::uint64_t>(ack);generation_=base_generation_;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(0.0,std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
+  session_=static_cast<std::uint64_t>(s);base_generation_=static_cast<std::uint64_t>(ack);generation_=base_generation_;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();
+  // The consumer's SAFE hold keeps applying the outgoing producer's last tau_ff,
+  // because the drive has no gravity model of its own. Seeding with tau_ff = 0
+  // dropped that support for the seed cycle and then slewed it back from zero:
+  // the arm sagged on every producer switch. The effort command interfaces still
+  // hold what the outgoing producer wrote (0 in a fresh session, whose hold
+  // carries 0 too), so the seed carries it and the feed-forward slew starts
+  // from it.
+  for (std::size_t i = 0; i < 7; ++i) {
+    const double held = command_interfaces_[5 * i + 4].get_value();
+    const double limit = std::min(feedforward_limit_[i], torque_limit_[i]);
+    seed_.feedforward[i] = std::isfinite(held) ? std::clamp(held, -limit, limit) : 0.0;
+  }
+  action_hold_=seed_;for(std::size_t i=0;i<7;++i){action_reference_[i].store(seed_.position[i],std::memory_order_release);action_last_feedforward_[i].store(seed_.feedforward[i],std::memory_order_release);}target_buffer_.writeFromNonRT(seed_);state_=State::SEEDING;return CallbackReturn::SUCCESS;
 }
 controller_interface::CallbackReturn DirectControllerBase::on_deactivate(const rclcpp_lifecycle::State &)
-{if(!safe_stopped_.load()){RCLCPP_ERROR(get_node()->get_logger(),"unsafe deactivate before SAFE ACK");return CallbackReturn::ERROR;}action_ready_.store(false);state_=State::INACTIVE;return CallbackReturn::SUCCESS;}
-bool DirectControllerBase::request_safe()
 {
+  // A goal never survives its controller's deactivation (CONTRACT.md); the
+  // non-RT tick delivers the aborts, off this callback.
+  stop_goals(ActionReason::DEACTIVATED);
+  if (!safe_stopped_.load()) {
+    // Not an error: every OpenArm MIT backend applies the shared switch rule
+    // (cho_openarm_mit_core::SwitchGate), which puts the arm in measured SAFE
+    // itself and discards this producer's unacknowledged commit. Refusing here
+    // never stopped the switch anyway; it only left this controller finalized,
+    // to be reloaded before it could run again.
+    RCLCPP_WARN(get_node()->get_logger(),
+      "deactivated without the SAFE handshake (request_safe_stop); the hardware's switch "
+      "rule puts the arm in measured SAFE");
+  }
+  state_=State::INACTIVE;return CallbackReturn::SUCCESS;
+}
+void DirectControllerBase::stop_goals(const ActionReason reason)
+{
+  close_goal_api();
+  end_running_goal(reason);
+  // After the running goal's terminal is queued: the tick reads this before it
+  // drains the queue, so it never aborts a goal whose own reason is on its way.
+  std::uint8_t open = static_cast<std::uint8_t>(ActionReason::NONE);
+  goals_closed_.compare_exchange_strong(
+    open, static_cast<std::uint8_t>(reason), std::memory_order_acq_rel);
+}
+DirectControllerBase::ProtocolStep DirectControllerBase::fault(const ActionReason reason)
+{
+  state_ = State::FAULT;
+  stop_failed_.store(true, std::memory_order_release);
+  stop_goals(reason);
+  return ProtocolStep::FAULTED;
+}
+bool DirectControllerBase::request_safe(const ActionReason reason)
+{
+  stop_goals(reason);
   const double safe_ack=state_interfaces_[17].get_value();
   const double safe_generation=state_interfaces_[16].get_value();
   if(session_==0 || session_>static_cast<std::uint64_t>(kMaxExactInteger) ||
     !is_exact_nonnegative_integer(safe_ack) ||
     !is_exact_nonnegative_integer(safe_generation) || safe_generation>=kMaxExactInteger) {
-    state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return false;
+    fault(ActionReason::FAULT);
+    return false;
   }
   requested_safe_generation_=static_cast<std::uint64_t>(safe_generation)+1;
   // Publish the current session before generation-last commit. This also makes a stop
@@ -530,20 +580,11 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
   // stale one.
   action_time_offset_.store(
     get_node()->now().seconds() - action_control_time_, std::memory_order_release);
-  if(!protocol_ok()){state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return controller_interface::return_type::ERROR;}
-  if(stop_requested_.exchange(false)&&state_!=State::STOPPING) {
-    action_abort_current();
-    if(!request_safe())return controller_interface::return_type::ERROR;
-  }
-  if(state_==State::STOPPING){if(exact_safe_stop_ack(
-      static_cast<double>(requested_safe_generation_),state_interfaces_[16].get_value(),
-      state_interfaces_[17].get_value(),state_interfaces_[18].get_value())){
-      state_=State::SAFE_STOPPED;safe_stopped_.store(true,std::memory_order_release);
-    }else if(++wait_cycles_>max_wait_cycles_){state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);return controller_interface::return_type::ERROR;}return controller_interface::return_type::OK;}
-  if(generation_!=base_generation_&&state_interfaces_[15].get_value()!=double(generation_)){if(++wait_cycles_>max_wait_cycles_&&!request_safe())return controller_interface::return_type::ERROR;return controller_interface::return_type::OK;}
-  wait_cycles_=0;
-  if(state_==State::SEEDING&&generation_!=base_generation_){
-    state_=State::ACTIVE; command_age_cycles_=0;
+  const auto step = protocol_step();
+  if (step == ProtocolStep::FAULTED) return controller_interface::return_type::ERROR;
+  if (step == ProtocolStep::HOLD) return controller_interface::return_type::OK;
+  if (step == ProtocolStep::SEEDED) {
+    command_age_cycles_ = 0;
     if (return_to_zero_) {
       return_to_zero_start_ = measured();
       for (std::size_t i = 0; i < 7; ++i) {
@@ -622,7 +663,7 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
     (uses_joint_space_action() ? action_hold_ : *target_buffer_.readFromRT());
   if (state_ != State::SEEDING && uses_joint_space_action() &&
     !action_apply_mujoco_feedforward(target, dt)) {
-    state_=State::FAULT;stop_failed_.store(true,std::memory_order_release);
+    fault(ActionReason::COMPUTE_FAILED);
     return controller_interface::return_type::ERROR;
   }
   auto active_kp = kp_; auto active_kd = current_kd();
@@ -634,9 +675,67 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
       return_to_zero_handoff_source_kp_, return_to_zero_handoff_source_kd_,
       return_to_zero_handoff_elapsed_, active_kp, active_kd);
   }
-  auto cmd=map_direct_mit_command(state_==State::SEEDING?DirectMitMode::POSITION:mode_,target,measured(),active_kp,active_kd,torque_limit_);
-  ++generation_;for(std::size_t i=0;i<7;++i){const auto o=5*i;command_interfaces_[o].set_value(cmd.joints[i].position);command_interfaces_[o+1].set_value(cmd.joints[i].velocity);command_interfaces_[o+2].set_value(cmd.joints[i].stiffness);command_interfaces_[o+3].set_value(cmd.joints[i].damping);command_interfaces_[o+4].set_value(cmd.joints[i].effort);}command_interfaces_[35].set_value(session_);command_interfaces_[36].set_value(lease_);command_interfaces_[37].set_value(generation_);
+  commit(map_direct_mit_command(
+    state_ == State::SEEDING ? DirectMitMode::POSITION : mode_, target, measured(),
+    active_kp, active_kd, torque_limit_));
   return controller_interface::return_type::OK;
+}
+
+DirectControllerBase::ProtocolStep DirectControllerBase::protocol_step()
+{
+  // The hardware is not where this producer expects: a SAFE it did not ask
+  // for (a controller switch, lease expiry, a rejected commit), a session
+  // change, or a fault.
+  if (!protocol_ok()) return fault(ActionReason::FAULT);
+  if (stop_requested_.exchange(false) && state_ != State::STOPPING) {
+    if (!request_safe(ActionReason::SAFE_STOP)) return ProtocolStep::FAULTED;
+  }
+  if (state_ == State::STOPPING) {
+    if (exact_safe_stop_ack(
+        static_cast<double>(requested_safe_generation_), state_interfaces_[16].get_value(),
+        state_interfaces_[17].get_value(), state_interfaces_[18].get_value()))
+    {
+      state_ = State::SAFE_STOPPED;
+      safe_stopped_.store(true, std::memory_order_release);
+    } else if (++wait_cycles_ > max_wait_cycles_) {
+      return fault(ActionReason::FAULT);
+    }
+    return ProtocolStep::HOLD;
+  }
+  // Generations continue from the consumer's ack at activation
+  // (base_generation_), so "nothing committed yet" is generation_ ==
+  // base_generation_, never generation_ == 0: a second producer in the same
+  // hardware session starts from a nonzero ack.
+  const bool committed = generation_ != base_generation_;
+  if (committed && state_interfaces_[15].get_value() != static_cast<double>(generation_)) {
+    if (++wait_cycles_ > max_wait_cycles_ && !request_safe(ActionReason::ACK_TIMEOUT)) {
+      return ProtocolStep::FAULTED;
+    }
+    return ProtocolStep::HOLD;
+  }
+  wait_cycles_ = 0;
+  if (state_ == State::SEEDING && committed) {
+    state_ = State::ACTIVE;
+    return ProtocolStep::SEEDED;
+  }
+  return ProtocolStep::COMMAND;
+}
+
+void DirectControllerBase::commit(const ArmCommand & command)
+{
+  ++generation_;
+  for (std::size_t i = 0; i < 7; ++i) {
+    const auto o = 5 * i;
+    command_interfaces_[o].set_value(command.joints[i].position);
+    command_interfaces_[o + 1].set_value(command.joints[i].velocity);
+    command_interfaces_[o + 2].set_value(command.joints[i].stiffness);
+    command_interfaces_[o + 3].set_value(command.joints[i].damping);
+    command_interfaces_[o + 4].set_value(command.joints[i].effort);
+  }
+  command_interfaces_[35].set_value(static_cast<double>(session_));
+  command_interfaces_[36].set_value(lease_);
+  // Last: the consumer snapshots the tuple when it sees a new generation.
+  command_interfaces_[37].set_value(static_cast<double>(generation_));
 }
 
 rclcpp_action::GoalResponse DirectControllerBase::action_goal(
@@ -654,19 +753,26 @@ rclcpp_action::GoalResponse DirectControllerBase::action_goal(
   }
   for (std::size_t i = 0; i < 7; ++i) {
     const auto q = target[i];
-    const double q_start = action_reference_[i].load(std::memory_order_acquire);
-    const double cubic_peak_velocity = 1.5 * std::abs(q - q_start) / goal->duration_sec;
-    if (!std::isfinite(q) || q < position_lower_[i] || q > position_upper_[i] ||
-      !std::isfinite(cubic_peak_velocity) || cubic_peak_velocity > command_velocity_[i]) {
+    if (!std::isfinite(q) || q < position_lower_[i] || q > position_upper_[i]) {
+      RCLCPP_ERROR(get_node()->get_logger(),
+        "JointSpace goal rejected: joint %zu target %.4f is outside [%.4f, %.4f]",
+        i + 1, q, position_lower_[i], position_upper_[i]);
       return rclcpp_action::GoalResponse::REJECT;
     }
   }
-  // A RealtimeBuffer represents one pending replacement, not an unbounded
-  // queue.  Keep exactly one executing plus one replacement GoalHandle so no
-  // accepted goal can be overwritten without a terminal result.
+  // duration_sec is a minimum: a goal faster than the profile's command
+  // velocity allows is stretched when it starts (minimum_cubic_duration()),
+  // not refused here.
+  //
+  // One goal at a time (CONTRACT.md): a goal arriving while another is held --
+  // running, or finished on the control thread but not yet delivered -- is
+  // rejected, not used to replace the running one.
   {
     std::lock_guard<std::mutex> lock(action_handles_mutex_);
-    if (action_handles_.size() >= 2U) return rclcpp_action::GoalResponse::REJECT;
+    if (!action_handles_.empty()) {
+      RCLCPP_WARN(get_node()->get_logger(), "JointSpace goal rejected: another goal is active");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
   }
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
@@ -698,28 +804,78 @@ void DirectControllerBase::action_accepted(const std::shared_ptr<JointSpaceGoalH
     std::lock_guard<std::mutex> lock(action_handles_mutex_);
     action_handles_.emplace(action_goal.id, handle);
   }
-  // The RT side notices a new id and terminally aborts the prior active goal
-  // before it starts this one; preemption never leaves a stale command running.
+  // Admission allows one goal at a time. Should a second id still reach the
+  // control thread, it terminally aborts the prior goal before starting this
+  // one, so a stale command never keeps running.
   action_goal_buffer_.writeFromNonRT(action_goal);
 }
 
-void DirectControllerBase::action_finish(std::uint64_t id, ActionTerminalKind kind)
+const char * DirectControllerBase::action_reason_text(const ActionReason reason)
+{
+  switch (reason) {
+    case ActionReason::NONE: return "";
+    case ActionReason::CANCELED: return cho_controller_base::kReasonCanceled;
+    case ActionReason::SAFE_STOP:
+      return "a SAFE stop was requested (request_safe_stop); the controller stopped driving the arm";
+    case ActionReason::ACK_TIMEOUT:
+      return "the hardware stopped acknowledging this controller's commits; SAFE requested";
+    case ActionReason::SAFE_REQUESTED:
+      return "the controller requested SAFE (a startup, watchdog or capacity check failed) and "
+             "stopped driving the arm";
+    case ActionReason::FAULT:
+      return "the hardware left the state this controller expects -- a SAFE it did not request "
+             "(a controller switch, lease expiry, a rejected commit) or a fault -- and the "
+             "controller faulted";
+    case ActionReason::TIMEOUT:
+      return "timed out 2 s after the motion with a joint error over 0.05 rad";
+    case ActionReason::TASK_TIMEOUT:
+      return "timed out 2 s after the motion with the TCP error over 0.02 m or 0.10 rad";
+    case ActionReason::REPLACED: return "replaced by a newer goal";
+    case ActionReason::DEACTIVATED: return cho_controller_base::kReasonDeactivated;
+    case ActionReason::COMPUTE_FAILED:
+      return "the controller could not compute its command (kinematics, dynamics or an invalid "
+             "target) and stopped driving the arm";
+  }
+  return "unknown";
+}
+
+double DirectControllerBase::minimum_cubic_duration(
+  const std::array<double, 7> & start, const std::array<double, 7> & target) const
+{
+  double duration = 0.0;
+  for (std::size_t i = 0; i < 7; ++i) {
+    if (command_velocity_[i] > 0.0) {
+      duration = std::max(duration, 1.5 * std::abs(target[i] - start[i]) / command_velocity_[i]);
+    }
+  }
+  // A hair over the bound, so rounding can never put the peak exactly on the
+  // limit the consumer rejects a tuple beyond.
+  return duration * (1.0 + 1e-6);
+}
+
+void DirectControllerBase::action_finish(
+  std::uint64_t id, ActionTerminalKind kind, const ActionReason reason)
 {
   if (id != 0U) {
-    if (!action_terminal_queue_.push(ActionTerminal{id, kind})) {
+    if (!action_terminal_queue_.push(ActionTerminal{id, kind, reason})) {
       // An action result must never be silently lost. The bounded server allows
       // only an active goal plus a replacement, so this indicates a programming
-      // error rather than a recoverable transport condition.
+      // error rather than a recoverable transport condition. The tick then
+      // aborts the goal whose terminal could not be queued (goals_closed_).
       state_ = State::FAULT;
       stop_failed_.store(true, std::memory_order_release);
+      close_goal_api();
+      std::uint8_t open = static_cast<std::uint8_t>(ActionReason::NONE);
+      goals_closed_.compare_exchange_strong(
+        open, static_cast<std::uint8_t>(ActionReason::FAULT), std::memory_order_acq_rel);
     }
   }
 }
 
-void DirectControllerBase::action_abort_current()
+void DirectControllerBase::action_abort_current(const ActionReason reason)
 {
   if (uses_joint_space_action() && action_id_ != 0U) {
-    action_finish(action_id_, ActionTerminalKind::ABORTED);
+    action_finish(action_id_, ActionTerminalKind::ABORTED, reason);
     action_id_ = 0;
     action_public_id_.store(0, std::memory_order_release);
     action_percent_.store(0.0, std::memory_order_release);
@@ -732,13 +888,13 @@ bool DirectControllerBase::action_write_target(double control_time, DirectMitTar
   const auto canceled_id = action_cancel_id_.exchange(0, std::memory_order_acq_rel);
   // Cancel takes precedence over simultaneous preemption of the active goal.
   if (canceled_id != 0U && canceled_id == action_id_) {
-    action_finish(action_id_, ActionTerminalKind::CANCELED);
+    action_finish(action_id_, ActionTerminalKind::CANCELED, ActionReason::CANCELED);
     action_id_ = 0;
     action_public_id_.store(0, std::memory_order_release);
     action_percent_.store(0.0, std::memory_order_release);
   }
   if (incoming.id != 0U && incoming.id != action_last_started_id_) {
-    action_abort_current();
+    action_abort_current(ActionReason::REPLACED);
     action_id_ = incoming.id;
     action_last_started_id_ = incoming.id;
     action_public_id_.store(action_id_, std::memory_order_release);
@@ -747,18 +903,20 @@ bool DirectControllerBase::action_write_target(double control_time, DirectMitTar
     // introducing a first-cycle reference step.
     action_start_ = action_hold_.position;
     action_start_time_ = control_time;
+    // From where the goal actually starts: the requested duration is a minimum.
+    action_duration_ = std::max(incoming.duration, minimum_cubic_duration(action_start_, incoming.target));
   }
   if (action_id_ == 0U) return false;
   // This also terminalizes an accepted-but-not-yet-started replacement before
   // it emits a trajectory command.
   if (canceled_id != 0U && canceled_id == action_id_) {
-    action_finish(action_id_, ActionTerminalKind::CANCELED);
+    action_finish(action_id_, ActionTerminalKind::CANCELED, ActionReason::CANCELED);
     action_id_ = 0;
     action_public_id_.store(0, std::memory_order_release);
     action_percent_.store(0.0, std::memory_order_release);
     return false;
   }
-  const double duration = incoming.duration;
+  const double duration = action_duration_;
   const double elapsed = std::max(0.0, control_time - action_start_time_);
   const double u = std::clamp(elapsed / duration, 0.0, 1.0);
   // Cubic smoothstep produces q_des and dq_des with zero endpoint velocity,
@@ -782,7 +940,7 @@ bool DirectControllerBase::action_write_target(double control_time, DirectMitTar
       action_public_id_.store(0, std::memory_order_release);
       action_percent_.store(100.0, std::memory_order_release);
     } else if (elapsed > duration + 2.0) {
-      action_finish(action_id_, ActionTerminalKind::ABORTED);
+      action_finish(action_id_, ActionTerminalKind::ABORTED, ActionReason::TIMEOUT);
       action_id_ = 0;
       action_public_id_.store(0, std::memory_order_release);
       action_percent_.store(0.0, std::memory_order_release);
@@ -794,6 +952,9 @@ bool DirectControllerBase::action_write_target(double control_time, DirectMitTar
 void DirectControllerBase::action_non_realtime_tick()
 {
   if (!uses_joint_space_action()) return;
+  // Before the drain: whatever the control thread queued before closing the
+  // goals is delivered with its own reason first.
+  const auto closed = goals_closed();
   ActionTerminal terminal;
   while (action_terminal_queue_.pop(terminal)) {
     std::shared_ptr<JointSpaceGoalHandle> handle;
@@ -806,9 +967,34 @@ void DirectControllerBase::action_non_realtime_tick()
     }
     auto result = std::make_shared<JointSpaceAction::Result>();
     result->is_completed = terminal.kind == ActionTerminalKind::SUCCEEDED;
+    result->message = action_reason_text(terminal.reason);
     if (terminal.kind == ActionTerminalKind::SUCCEEDED) handle->succeed(result);
     else if (terminal.kind == ActionTerminalKind::CANCELED) handle->canceled(result);
     else handle->abort(result);
+  }
+  const auto through = action_abort_through_.exchange(0, std::memory_order_acq_rel);
+  if (closed != ActionReason::NONE || through != 0U) {
+    // Stopped, faulted or deactivated: every goal still held -- running, or
+    // accepted and never started -- ends with that reason. Activated again:
+    // the ones from before the activation do.
+    std::unordered_map<std::uint64_t, std::shared_ptr<JointSpaceGoalHandle>> held;
+    {
+      std::lock_guard<std::mutex> lock(action_handles_mutex_);
+      for (auto it = action_handles_.begin(); it != action_handles_.end();) {
+        if (closed != ActionReason::NONE || it->first <= through) {
+          held.emplace(it->first, it->second); it = action_handles_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    for (const auto & entry : held) {
+      auto result = std::make_shared<JointSpaceAction::Result>();
+      result->is_completed = false;
+      result->message = action_reason_text(
+        closed != ActionReason::NONE ? closed : ActionReason::DEACTIVATED);
+      if (entry.second->is_active()) entry.second->abort(result);
+    }
   }
   std::shared_ptr<JointSpaceGoalHandle> active_handle;
   const auto active_id = action_public_id_.load(std::memory_order_acquire);

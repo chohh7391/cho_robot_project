@@ -61,15 +61,32 @@ protected:
     Eigen::Vector3d translation{Eigen::Vector3d::Zero()};
     Eigen::Quaterniond rotation{Eigen::Quaterniond::Identity()};
   };
-  struct TerminalEvent {std::uint64_t id{0}; Terminal terminal{Terminal::ABORTED};};
+  struct TerminalEvent
+  {
+    std::uint64_t id{0};
+    Terminal terminal{Terminal::ABORTED};
+    ActionReason reason{ActionReason::NONE};
+  };
 
   rclcpp_action::GoalResponse goal_callback(
     const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal> goal);
   rclcpp_action::CancelResponse cancel_callback(const std::shared_ptr<GoalHandle> & handle);
   void accepted_callback(const std::shared_ptr<GoalHandle> & handle);
   void non_rt_tick();
-  void finish(std::uint64_t id, Terminal terminal);
-  void abort_active();
+  void finish(std::uint64_t id, Terminal terminal, ActionReason reason = ActionReason::NONE);
+  void abort_active(ActionReason reason);
+  // DirectControllerBase::stop_goals() for the TaskSpace goal API.
+  void close_goal_api() override
+  {
+    DirectControllerBase::close_goal_api();
+    task_ready_.store(false, std::memory_order_release);
+  }
+  void end_running_goal(ActionReason reason) override {abort_active(reason);}
+  void abort_goals_from_before() override
+  {
+    DirectControllerBase::abort_goals_from_before();
+    task_abort_through_.store(task_next_id_.load() - 1, std::memory_order_release);
+  }
   // The single reference source for Cartesian control. update() calls it once
   // per ACTIVE cycle that is not a startup ramp, and everything downstream (the
   // MIT tuple mapping, gain ramping, position clamping, the protocol write) is
@@ -160,6 +177,15 @@ protected:
   // -kd*dq.
   void joint_velocity_reference(
     const Jacobian & jacobian, const Vector6 & twist, std::array<double, 7> & dq_des) const;
+  // The same damped least-squares solve, unclamped. False if it failed.
+  bool damped_joint_velocity(const Jacobian & jacobian, const Vector6 & twist, Vector7 & dq) const;
+  // duration_sec is a minimum (cho_interfaces/CONTRACT.md). The shortest
+  // duration for which the cubic path's peak twist, mapped through the start
+  // pose's damped pseudo-inverse, keeps dq_des inside the profile command
+  // velocity -- the bound joint_velocity_reference() clamps at. First order: it
+  // uses the Jacobian where the goal starts, not along the path.
+  double minimum_task_duration(
+    const Jacobian & jacobian, const pinocchio::SE3 & start, const pinocchio::SE3 & goal) const;
   // dq = J^+ (x_des ominus x) (damped least squares), clamped per joint by
   // reference_offset_limit_.  Added to measured q it becomes the MIT q_des, so
   // the drive's own kp closes the Cartesian loop inside its current loop
@@ -296,6 +322,8 @@ protected:
   std::mutex task_handles_mutex_;
   std::unordered_map<std::uint64_t, std::shared_ptr<GoalHandle>> task_handles_;
   std::atomic<std::uint64_t> task_next_id_{1};
+  // DirectControllerBase::action_abort_through_, for the TaskSpace server.
+  std::atomic<std::uint64_t> task_abort_through_{0};
   std::atomic<std::uint64_t> task_cancel_id_{0};
   std::atomic<bool> task_ready_{false};
   std::atomic<std::uint64_t> task_public_id_{0};
@@ -304,6 +332,9 @@ protected:
   bool task_compute_failed_{false};
   bool task_capacity_rejected_{false};
   double task_start_time_{0.0};
+  // The running goal's duration: the request, stretched to the floor below and
+  // to minimum_task_duration() from where the goal starts.
+  double task_duration_{0.0};
   pinocchio::SE3 task_start_pose_{pinocchio::SE3::Identity()};
   pinocchio::SE3 task_goal_pose_{pinocchio::SE3::Identity()};
   pinocchio::SE3 idle_pose_{pinocchio::SE3::Identity()};

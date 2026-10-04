@@ -7,7 +7,7 @@
 #include <ifaddrs.h>
 #include <linux/can.h>
 #include <net/if.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <unistd.h>
 #include <pluginlib/class_list_macros.hpp>
 #include <stdexcept>
@@ -120,18 +120,28 @@ public:
         openarm::damiao_motor::ControlMode::MIT);
     }
     // The motors, found once by reply id: get_motors() copies all seven into
-    // a new vector on every call, which the control loop cannot afford.
-    for (const auto & entry : arm_->get_master_can_device_collection().get_devices()) {
+    // a new vector on every call, which the control loop cannot afford. The
+    // devices too, because send() frames each command itself (see send()).
+    for (const auto & entry : arm_->get_arm().get_device_collection().get_devices()) {
       const auto device = std::dynamic_pointer_cast<openarm::damiao_motor::DMCANDevice>(entry.second);
       if (!device) {
         continue;
       }
       const auto reply_id = device->get_motor().get_recv_can_id();
       if (reply_id >= kArmReplyBase && reply_id < kArmReplyBase + kArmDof) {
+        devices_[reply_id - kArmReplyBase] = device.get();
         motors_[reply_id - kArmReplyBase] = &device->get_motor();
       }
     }
-    parameters_.reserve(kArmDof);
+    if (config_.hand) {
+      for (const auto & entry : arm_->get_gripper().get_device_collection().get_devices()) {
+        gripper_device_ =
+          std::dynamic_pointer_cast<openarm::damiao_motor::DMCANDevice>(entry.second).get();
+      }
+      if (gripper_device_ == nullptr) {
+        return false;
+      }
+    }
     return std::all_of(motors_.begin(), motors_.end(), [](const auto * motor) {return motor != nullptr;});
   }
 
@@ -156,17 +166,26 @@ public:
 
   bool send_gripper(const double position, const double torque_pu) override
   {
-    if (!arm_ || !config_.hand) {
+    if (!arm_ || !config_.hand || gripper_device_ == nullptr) {
       return false;
     }
-    if (config_.gripper_pos_force) {
-      arm_->get_gripper().set_position(position, config_.gripper_speed_rad_s, torque_pu);
-    } else {
-      arm_->get_gripper().set_position_mit(
-        position, config_.gripper_mit_kp, config_.gripper_mit_kd);
+    // Framed here rather than through GripperComponent::set_position(), which
+    // discards the socket write's result (see send()). Same packets, same
+    // clamps, and the same refusal when the drive is not in the expected mode.
+    using openarm::damiao_motor::CanPacketEncoder;
+    using openarm::damiao_motor::ControlMode;
+    const auto expected = config_.gripper_pos_force ? ControlMode::POS_FORCE : ControlMode::MIT;
+    if (gripper_device_->get_control_mode() != expected) {
+      return false;
     }
-    command_written_ = true;
-    return true;
+    const auto & motor = gripper_device_->get_motor();
+    const auto packet = config_.gripper_pos_force ?
+      CanPacketEncoder::create_posforce_control_command(
+      motor, {position, std::clamp(config_.gripper_speed_rad_s, 0.0, 100.0),
+        std::clamp(torque_pu, 0.0, 1.0)}) :
+      CanPacketEncoder::create_mit_control_command(
+      motor, {config_.gripper_mit_kp, config_.gripper_mit_kd, position, 0.0, 0.0});
+    return write_frame(*gripper_device_, packet);
   }
 
   bool enable() override
@@ -182,11 +201,17 @@ public:
     // controller samples its activation seed.
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     arm_->recv_all();
+    // That drained every reply that was pending: nothing answers the next
+    // read() unless it asks. Without this a deactivate/activate cycle under
+    // state_from_command_reply never refreshed, no motor answered the seed
+    // read, and activation failed every time after the first.
+    query_.enabled();
     return true;
   }
 
   void disable() noexcept override
   {
+    query_.disabled();
     try {
       if (arm_) {
         arm_->disable_all();
@@ -206,10 +231,9 @@ public:
       return false;
     }
     // Without the refresh, state is whatever the previous write's MIT command
-    // replies carried. Before that first write there is nothing pending, so
-    // the query still has to go out or the controller would seed from an
-    // all-zero state and command a jump to it.
-    if (!config_.state_from_command_reply || !command_written_) {
+    // replies carried. Before the first command since enable() there is
+    // nothing pending, so the query still has to go out (StateQuery).
+    if (query_.refresh_needed()) {
       arm_->refresh_all();
     }
     receive();
@@ -222,44 +246,75 @@ public:
   }
 
   std::array<bool, kArmDof> replied() const override {return replied_;}
+  bool gripper_replied() const override {return !config_.hand || gripper_replied_;}
 
+  // Frames each MIT command with the vendor's own encoder and writes it with
+  // the vendor socket's write_can_frame()/write_canfd_frame(), which report
+  // whether the kernel took the frame. ArmComponent::mit_control_all() builds
+  // the same frames but discards that result (DMDeviceCollection::
+  // send_command_to_device), so a bus-off interface (ENETDOWN) or a full
+  // transmit queue (ENOBUFS, e.g. nothing acknowledging on the bus) used to look
+  // like a successful send until the stale-reply limit caught it ~100 ms later.
+  // Every joint is still attempted when one fails; the adapter then faults.
   bool send(const std::array<JointTuple, kArmDof> & command) override
   {
     if (!arm_) {
       return false;
     }
-    parameters_.clear();  // reserved in initialize(): no allocation here
-    for (const auto & tuple : command) {
-      parameters_.push_back(
-        {tuple.stiffness, tuple.damping, tuple.position,
-          tuple.velocity, tuple.effort});
+    using openarm::damiao_motor::CanPacketEncoder;
+    bool all_written = true;
+    for (std::size_t index = 0; index < kArmDof; ++index) {
+      auto * const device = devices_[index];
+      // mit_control_one()'s guard, kept: a drive in another mode would read
+      // the MIT payload as something else.
+      if (device->get_control_mode() != openarm::damiao_motor::ControlMode::MIT) {
+        all_written = false;
+        continue;
+      }
+      const auto & tuple = command[index];
+      const auto packet = CanPacketEncoder::create_mit_control_command(
+        device->get_motor(),
+        {tuple.stiffness, tuple.damping, tuple.position, tuple.velocity, tuple.effort});
+      all_written = write_frame(*device, packet) && all_written;
     }
-    arm_->get_arm().mit_control_all(parameters_);
     // Each MIT command frame is answered with a state frame, so from here on
     // read() has something to receive without asking for it.
-    command_written_ = true;
-    return true;
+    query_.command_sent();
+    return all_written;
   }
 
 private:
-  // OpenArm::recv_all(), plus a record of which arm motors answered: recv_all()
+  bool write_frame(
+    openarm::damiao_motor::DMCANDevice & device,
+    const openarm::damiao_motor::CANPacket & packet)
+  {
+    auto & socket = arm_->get_master_can_device_collection().get_can_socket();
+    if (config_.can_fd) {
+      return socket.write_canfd_frame(device.create_canfd_frame(packet.send_can_id, packet.data));
+    }
+    return socket.write_can_frame(device.create_can_frame(packet.send_can_id, packet.data));
+  }
+
+  // OpenArm::recv_all(), plus a record of which motors answered: recv_all()
   // reports nothing, so a dead bus or a send that never reached it left read()
   // returning the last state forever, indistinguishable from a still arm. The
   // frames still reach the motors through the vendor's own dispatch.
   void receive()
   {
     replied_.fill(false);
+    gripper_replied_ = false;
     auto & bus = arm_->get_master_can_device_collection();
     const int fd = bus.get_socket_fd();
-    // The vendor's 500 us for the first reply, then drain what is queued. select()
-    // for its microsecond timeout: poll()'s milliseconds would double the wait.
-    long timeout_us = kFirstReplyTimeoutUs;
-    while (true) {
-      fd_set readable;
-      FD_ZERO(&readable);
-      FD_SET(fd, &readable);
-      timeval timeout{0, timeout_us};
-      if (::select(fd + 1, &readable, nullptr, nullptr, &timeout) <= 0) {
+    // The vendor's 500 us for the first reply, then drain what is already
+    // queued. ppoll() for its sub-millisecond timeout (poll()'s milliseconds
+    // would double the wait), and not select(), which is undefined for a
+    // descriptor at or above FD_SETSIZE. The drain is bounded: a babbling bus
+    // must not hold the control loop here; what is left is read next cycle.
+    long timeout_ns = kFirstReplyTimeoutUs * 1000L;
+    for (std::size_t frames = 0; frames < kMaxFramesPerReceive; ++frames) {
+      pollfd readable{fd, POLLIN, 0};
+      const timespec timeout{0, timeout_ns};
+      if (::ppoll(&readable, 1, &timeout, nullptr) <= 0 || (readable.revents & POLLIN) == 0) {
         break;
       }
       canid_t id = 0;
@@ -276,21 +331,37 @@ private:
       }
       if (id >= kArmReplyBase && id < kArmReplyBase + kArmDof) {
         replied_[id - kArmReplyBase] = true;
+      } else if (config_.hand && id == config_.gripper_recv_can_id) {
+        gripper_replied_ = true;
       }
-      timeout_us = 0;
+      timeout_ns = 0;
     }
   }
 
   static constexpr canid_t kArmReplyBase = 0x11;  // joint i answers on 0x11 + i
-  static constexpr int kFirstReplyTimeoutUs = 500;
+  static constexpr long kFirstReplyTimeoutUs = 500;
+  // Eight motors answer about twice a cycle; four times that is still bounded.
+  static constexpr std::size_t kMaxFramesPerReceive = 4 * 2 * (kArmDof + 1);
 
   TransportConfig config_;
   std::unique_ptr<openarm::can::socket::OpenArm> arm_;
+  std::array<openarm::damiao_motor::DMCANDevice *, kArmDof> devices_{};
   std::array<openarm::damiao_motor::Motor *, kArmDof> motors_{};
+  openarm::damiao_motor::DMCANDevice * gripper_device_{nullptr};
   std::array<bool, kArmDof> replied_{};
-  std::vector<openarm::damiao_motor::MITParam> parameters_;
-  bool command_written_{false};
+  bool gripper_replied_{false};
+  StateQuery query_{config_.state_from_command_reply};
 };
+
+// Two commit generations are the same commit when equal, NaN included: a
+// producer that wrote NaN once must not be evaluated again every cycle.
+bool same_commit(const double a, const double b)
+{
+  return a == b || (std::isnan(a) && std::isnan(b));
+}
+
+// Reads allowed at activation for every motor to answer the seed.
+constexpr std::size_t kSeedReadAttempts = 10;
 
 TransportFactory default_factory()
 {
@@ -377,6 +448,20 @@ bool OpenArmMitRealSystem::parse_and_validate_static_config()
       std::abs(gripper_joint_open_ - gripper_joint_closed_) > 1e-9 &&
       std::abs(gripper_motor_open_ - gripper_motor_closed_) > 1e-9;
     if (!finite_map || !(gripper_max_force_ > 0.0) || gripper_write_decimation_ == 0) {
+      return false;
+    }
+    // The gripper shares the arm's bus and the vendor dispatches replies by
+    // id: a gripper id inside the arm's 0x01..0x07 / 0x11..0x17 would take an
+    // arm motor's place, and that joint would read as stale while it is not.
+    const auto arm_id = [](const std::uint32_t id, const std::uint32_t base) {
+        return id >= base && id < base + kArmDof;
+      };
+    if (arm_id(transport_config_.gripper_send_can_id, 0x01) ||
+      arm_id(transport_config_.gripper_send_can_id, 0x11) ||
+      arm_id(transport_config_.gripper_recv_can_id, 0x01) ||
+      arm_id(transport_config_.gripper_recv_can_id, 0x11) ||
+      transport_config_.gripper_send_can_id == transport_config_.gripper_recv_can_id)
+    {
       return false;
     }
   }
@@ -583,7 +668,8 @@ bool OpenArmMitRealSystem::write_gripper()
   const double effective_force = force > 0.0 ? force : gripper_max_force_;
   const double torque_pu = std::clamp(effective_force / gripper_max_force_, 0.0, 1.0);
   std::lock_guard<std::mutex> lock(transport_mutex_);
-  return transport_ && transport_->send_gripper(gripper_joint_to_motor(clamped), torque_pu);
+  return transport_ && transport_enabled_ &&
+         transport_->send_gripper(gripper_joint_to_motor(clamped), torque_pu);
 }
 
 bool OpenArmMitRealSystem::finite_state() const
@@ -602,9 +688,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
     return hardware_interface::CallbackReturn::ERROR;
   }
   missed_replies_.fill(0);
+  missed_gripper_replies_ = 0;
   watchdog_tripped_.store(false);
-  switch_safe_requested_.store(false);
-  switch_gated_.store(false);
+  switch_gate_.reset();
+  switch_gate_.set_expiry_cycles(safety_profile_.update_rate_hz);
+  observed_commit_ = 0.0;
   try {
     std::array<double, kArmDof> position{}, velocity{}, effort{};
     // Follow the vendor OpenArmHW activation sequence: enable first, then use
@@ -613,22 +701,59 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
     {
       std::lock_guard<std::mutex> lock(transport_mutex_);
       enabled = transport_->enable();
+      transport_enabled_ = enabled;
     }
     if (!enabled) {
       transition_to_safe(true, "activation: enabling the motors failed");
       return hardware_interface::CallbackReturn::ERROR;
     }
-    bool initial_read_ok = false;
-    {
-      std::lock_guard<std::mutex> lock(transport_mutex_);
-      initial_read_ok = transport_->read(position, velocity, effort);
+    // The seed is where the first SAFE hold commands the arm, so every motor
+    // must have answered it: one that has not still reads the vendor's initial
+    // zero, and holding it there is a jump to zero. A reply can miss one
+    // receive window, so a few reads are allowed; each motor keeps the state of
+    // the read it answered.
+    std::array<bool, kArmDof> answered{};
+    bool gripper_answered = !hand_;
+    bool initial_read_ok = true;
+    for (std::size_t attempt = 0; attempt < kSeedReadAttempts; ++attempt) {
+      std::array<bool, kArmDof> replied{};
+      bool gripper_replied = false;
+      {
+        std::lock_guard<std::mutex> lock(transport_mutex_);
+        initial_read_ok = transport_->read(position, velocity, effort);
+        if (initial_read_ok) {
+          replied = transport_->replied();
+          gripper_replied = transport_->gripper_replied();
+        }
+      }
+      if (!initial_read_ok) {
+        break;
+      }
+      for (std::size_t index = 0; index < kArmDof; ++index) {
+        if (replied[index]) {
+          answered[index] = true;
+          state_[index] = {position[index], velocity[index], effort[index]};
+        }
+      }
+      gripper_answered = gripper_answered || gripper_replied;
+      if (gripper_answered &&
+        std::all_of(answered.begin(), answered.end(), [](const bool value) {return value;}))
+      {
+        break;
+      }
     }
     if (!initial_read_ok) {
       transition_to_safe(true, "activation: the first state read failed");
       return hardware_interface::CallbackReturn::ERROR;
     }
+    if (!gripper_answered ||
+      !std::all_of(answered.begin(), answered.end(), [](const bool value) {return value;}))
+    {
+      transition_to_safe(true, "activation: a motor did not answer the seed read");
+      return hardware_interface::CallbackReturn::ERROR;
+    }
     for (std::size_t index = 0; index < kArmDof; ++index) {
-      state_[index] = {position[index], velocity[index], effort[index]};
+      position[index] = state_[index][0];
     }
     if (!finite_state() || !consumer_->configure(next_session_++, position)) {
       transition_to_safe(true, "activation: the first state is non-finite or the session could not be configured");
@@ -656,6 +781,15 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
     active_.store(true);
     {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); last_write_ = std::chrono::steady_clock::now();}
     watchdog_armed_.store(false);
+    // A new session starts with no producer input. In particular the effort
+    // command interfaces must read the hold's tau_ff, which a fresh session
+    // does not have (0): an incoming producer seeds its first commit from them,
+    // and a gravity torque left there by the previous session's producer
+    // would arrive as a step on an arm that has meanwhile been disabled.
+    for (auto & joint : command_) {
+      joint.fill(0.0);
+    }
+    publish_held_effort();
     protocol_.fill(0.0);
     protocol_[0] = static_cast<double>(consumer_->session());
     protocol_[1] = static_cast<double>(consumer_->ack_generation());
@@ -683,13 +817,23 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
   try {
     std::array<double, kArmDof> position{}, velocity{}, effort{};
     std::array<bool, kArmDof> replied{};
+    bool gripper_replied = false;
     bool read_ok = false;
+    bool enabled = false;
     {
       std::lock_guard<std::mutex> lock(transport_mutex_);
-      read_ok = transport_ && transport_->read(position, velocity, effort);
+      // Under the same lock as every disable: a read() racing the watchdog's
+      // disable must not send the state query to motors it just disabled.
+      enabled = transport_enabled_;
+      read_ok = enabled && transport_ && transport_->read(position, velocity, effort);
       if (read_ok) {
         replied = transport_->replied();
+        gripper_replied = transport_->gripper_replied();
       }
+    }
+    if (!enabled) {
+      // Disabled under us (the watchdog thread); its own path reports why.
+      return hardware_interface::return_type::ERROR;
     }
     if (!read_ok) {
       transition_to_safe(true, "transport read failed");
@@ -722,6 +866,19 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
     consumer_->observe(measured);
     // A gripper that stopped answering is evidence about the shared CAN
     // socket, not just about the hand, so the contract safes the same-bus arm.
+    // Its state frames come at least every gripper_write_decimation_ cycles
+    // (each of its commands is answered), hence the slack on the stale limit.
+    if (hand_) {
+      missed_gripper_replies_ = gripper_replied ? 0 : missed_gripper_replies_ + 1;
+      if (stale_cycles_ > 0 && missed_gripper_replies_ > stale_cycles_ + gripper_write_decimation_) {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("OpenArmMitRealSystem"),
+          "the gripper has not answered for %zu cycles (stale limit %zu)",
+          missed_gripper_replies_, stale_cycles_ + gripper_write_decimation_);
+        transition_to_safe(true, "gripper state went stale");
+        return hardware_interface::return_type::ERROR;
+      }
+    }
     if (hand_ && !read_gripper()) {
       transition_to_safe(true, "gripper read failed");
       return hardware_interface::return_type::ERROR;
@@ -737,7 +894,26 @@ bool OpenArmMitRealSystem::dispatch(
   const cho_openarm_mit_core::ArmCommand & command)
 {
   std::lock_guard<std::mutex> lock(transport_mutex_);
-  return transport_ && transport_->send(command.joints);
+  return transport_ && transport_enabled_ && transport_->send(command.joints);
+}
+
+void OpenArmMitRealSystem::discard_leftover_commit()
+{
+  // Whatever the commit handle holds was written by a producer the switch has
+  // just removed (or by nobody). It is marked evaluated, so it can never run,
+  // and the ack advances past it, so the incoming producer -- which reads the
+  // ack in on_activate() to continue its generations -- commits above it.
+  observed_commit_ = protocol_[7];
+  if (consumer_ && consumer_->discard_commit(protocol_[7])) {
+    protocol_[1] = static_cast<double>(consumer_->ack_generation());
+  }
+  // Its tau_ff too: the incoming producer seeds from the effort command
+  // interfaces, and must find what the SAFE hold applies there -- the last
+  // ACCEPTED tau_ff, which the next write's SAFE keeps -- not the discarded
+  // commit's.
+  if (consumer_) {
+    publish_held_effort();
+  }
 }
 
 bool OpenArmMitRealSystem::dispatch_safe_hold(const bool force_new_generation)
@@ -786,6 +962,7 @@ bool OpenArmMitRealSystem::transition_to_safe(
   }
   try {
     std::lock_guard<std::mutex> lock(transport_mutex_);
+    transport_enabled_ = false;
     if (transport_ && transport_disable) {
       transport_->disable();
     }
@@ -829,92 +1006,56 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
       transition_to_safe(true, "non-finite motor state");
       return hardware_interface::return_type::ERROR;
     }
-    if (switch_safe_requested_.exchange(false)) {
-      // An external switch is under way: measured SAFE now, from this thread
-      // (only write() may submit a SAFE tuple).
-      switch_gate_cycles_ = 0;
-      if (!dispatch_safe_hold(true)) {
+    // The controller-switch rule (cho_openarm_mit_core::SwitchGate). Only
+    // write() submits a SAFE tuple; prepare/perform only ask for it.
+    const auto gate = switch_gate_.on_write();
+    if (gate.discard) {
+      RCLCPP_WARN(
+        rclcpp::get_logger("OpenArmMitRealSystem"),
+        "%s: controller switch never completed; discarding the commit it left and accepting "
+        "commits again", arm_resource_name().c_str());
+      discard_leftover_commit();
+    }
+    if (gate.closed || gate.discard) {
+      // Between prepare and perform: measured SAFE (entered now if the arm is
+      // not in it yet), and nothing the producers write is evaluated.
+      if (!dispatch_safe_hold()) {
         transition_to_safe(true, "could not submit the controller switch's SAFE hold");
         return hardware_interface::return_type::ERROR;
       }
-    } else if (switch_gated_.load()) {
-      // Hold SAFE and accept no commit until perform_command_mode_switch(). A
-      // switch the controller_manager abandons after a successful prepare never
-      // performs, so the gate lifts by itself after one second of cycles.
-      if (++switch_gate_cycles_ > std::max<std::size_t>(1, safety_profile_.update_rate_hz)) {
-        switch_gated_.store(false);
-        RCLCPP_WARN(
-          rclcpp::get_logger("OpenArmMitRealSystem"),
-          "%s: controller switch never completed; accepting commits again",
-          arm_resource_name().c_str());
-      }
-      if (!dispatch_safe_hold()) {
-        transition_to_safe(true, "could not submit the SAFE hold");
-        return hardware_interface::return_type::ERROR;
-      }
-    } else if (protocol_[8] > static_cast<double>(consumer_->safe_generation())) {
-      const bool valid =
-        cho_openarm_mit_core::is_exact_nonnegative_integer(protocol_[8]) &&
-        protocol_[8] == static_cast<double>(consumer_->safe_generation() + 1);
-      if (!valid || !dispatch_safe_hold(true)) {
-        transition_to_safe(true, "invalid SAFE request generation, or its SAFE hold could not be sent");
-        return hardware_interface::return_type::ERROR;
-      }
     } else {
-      cho_openarm_mit_core::ArmCommand command;
-      for (std::size_t index = 0; index < kArmDof; ++index) {
-        command.joints[index] = {command_[index][0], command_[index][1],
-          command_[index][2], command_[index][3],
-          command_[index][4]};
+      const bool safe = consumer_->status() == cho_openarm_mit_core::MitStatus::SAFE;
+      // In the first write after perform, a SAFE request still pending was
+      // written by the outgoing producer. The switch's own SAFE consumes it: it
+      // takes the next SAFE generation, which is what a valid request asks for.
+      // Left pending, it was served one write later -- possibly in the same
+      // write as the incoming producer's first commit, which then went
+      // unevaluated while that producer saw SAFE and faulted.
+      const bool stale_safe_request = gate.performed &&
+        protocol_[8] > static_cast<double>(consumer_->safe_generation());
+      const bool switch_safe = (gate.enter_safe && !safe) || stale_safe_request;
+      if (switch_safe && !dispatch_safe_hold(true)) {
+        transition_to_safe(true, "could not submit the controller switch's SAFE hold");
+        return hardware_interface::return_type::ERROR;
       }
-      command.session_echo = protocol_[5];
-      command.lease_cycles = protocol_[6];
-      command.generation = protocol_[7];
-      bool per_joint_limits_valid = true;
-      for (std::size_t index = 0; index < kArmDof; ++index) {
-        const auto & tuple = command.joints[index];
-        per_joint_limits_valid =
-          per_joint_limits_valid &&
-          tuple.position >= safety_profile_.position_lower[index] &&
-          tuple.position <= safety_profile_.position_upper[index] &&
-          std::abs(tuple.velocity) <=
-          safety_profile_.command_velocity[index] &&
-          tuple.stiffness <= safety_profile_.kp_max[index] &&
-          tuple.damping <= safety_profile_.kd_max[index] &&
-          std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
+      // The switch's SAFE does not swallow a commit with a new generation: after
+      // perform that can only be the incoming producer's first one. (Under
+      // Humble the incoming producer first runs after this write -- manage_switch
+      // follows the controllers' update -- so this keeps the rule independent of
+      // that order. When it does apply, the cycle sends two tuples: the hold,
+      // then the commit.)
+      const bool new_commit = !same_commit(protocol_[7], observed_commit_);
+      if ((!switch_safe || new_commit) && !apply_producer_input()) {
+        return hardware_interface::return_type::ERROR;
       }
-      const auto status = consumer_->status();
-      bool ok = false;
-      if ((status == cho_openarm_mit_core::MitStatus::SAFE ||
-        status == cho_openarm_mit_core::MitStatus::ACTIVE) &&
-        command.generation !=
-        static_cast<double>(consumer_->ack_generation()))
-      {
-        // Validate on a shadow consumer before *any* CAN transmission.  An
-        // invalid session/generation/tuple must never put its target on the
-        // bus, even transiently.
-        auto shadow = *consumer_;
-        if (per_joint_limits_valid && shadow.accept_and_write(command, true) &&
-          dispatch(shadow.submitted()))
-        {
-          *consumer_ = shadow;
-          ok = true;
-        }
-      } else if (status == cho_openarm_mit_core::MitStatus::ACTIVE) {
-        auto shadow = *consumer_;
-        if (shadow.successful_write_cycle() && dispatch(shadow.submitted())) {
-          *consumer_ = shadow;
-          ok = true;
-        }
-      } else if (status == cho_openarm_mit_core::MitStatus::SAFE) {
-        ok = dispatch_safe_hold();
-      }
-      if (!ok) {
-        if (!dispatch_safe_hold(true)) {
-          transition_to_safe(true, "a rejected commit's SAFE hold could not be sent");
-          return hardware_interface::return_type::ERROR;
-        }
-      }
+    }
+    // While the arm holds, its effort command interfaces read the feed-forward
+    // the hold applies (the last accepted tau_ff, 0 in a fresh session), not
+    // what a producer last wrote there. A producer seeds its first commit from
+    // them, so a rejected or discarded commit's tau_ff can never become the
+    // next producer's seed.
+    if (consumer_->status() != cho_openarm_mit_core::MitStatus::ACTIVE) {
+      publish_held_effort();
     }
     protocol_[1] = static_cast<double>(consumer_->ack_generation());
     protocol_[2] = static_cast<double>(consumer_->safe_generation());
@@ -935,31 +1076,84 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
   }
 }
 
-std::vector<std::string> OpenArmMitRealSystem::arm_claims() const
+bool OpenArmMitRealSystem::apply_producer_input()
 {
-  std::vector<std::string> claims;
-  static const std::array<std::string, 5> fields{"position", "velocity", "stiffness", "damping", "effort"};
-  for (std::size_t index = 0; index < kArmDof; ++index) {
-    for (const auto & field : fields) {
-      claims.push_back(info_.joints[index].name + "/" + field);
+  if (protocol_[8] > static_cast<double>(consumer_->safe_generation())) {
+    const bool valid =
+      cho_openarm_mit_core::is_exact_nonnegative_integer(protocol_[8]) &&
+      protocol_[8] == static_cast<double>(consumer_->safe_generation() + 1);
+    if (!valid || !dispatch_safe_hold(true)) {
+      return transition_to_safe(true, "invalid SAFE request generation, or its SAFE hold could not be sent");
     }
+    return true;
   }
-  for (const char * protocol :
-    {"mit_session_echo", "mit_lease_cycles", "mit_commit_generation", "mit_safe_request_generation"})
+  cho_openarm_mit_core::ArmCommand command;
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    command.joints[index] = {command_[index][0], command_[index][1],
+      command_[index][2], command_[index][3],
+      command_[index][4]};
+  }
+  command.session_echo = protocol_[5];
+  command.lease_cycles = protocol_[6];
+  command.generation = protocol_[7];
+  bool per_joint_limits_valid = true;
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    const auto & tuple = command.joints[index];
+    per_joint_limits_valid =
+      per_joint_limits_valid &&
+      tuple.position >= safety_profile_.position_lower[index] &&
+      tuple.position <= safety_profile_.position_upper[index] &&
+      std::abs(tuple.velocity) <=
+      safety_profile_.command_velocity[index] &&
+      tuple.stiffness <= safety_profile_.kp_max[index] &&
+      tuple.damping <= safety_profile_.kd_max[index] &&
+      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
+  }
+  // A commit is evaluated once, accepted or not. A rejected one used to be
+  // re-evaluated every cycle, and each rejection re-latched the SAFE hold to
+  // that cycle's measurement: at the commissioning safe gains the hold followed
+  // a sagging arm down for as long as the producer left it there (a faulted
+  // Direct producer leaves it forever). MuJoCo has always handled a generation
+  // once.
+  const bool new_commit = !same_commit(command.generation, observed_commit_);
+  const auto status = consumer_->status();
+  bool ok = false;
+  if ((status == cho_openarm_mit_core::MitStatus::SAFE ||
+    status == cho_openarm_mit_core::MitStatus::ACTIVE) && new_commit)
   {
-    claims.push_back(arm_resource_name() + "/" + protocol);
+    observed_commit_ = command.generation;
+    // Validate on a shadow consumer before *any* CAN transmission.  An invalid
+    // session/generation/tuple must never put its target on the bus, even
+    // transiently.
+    auto shadow = *consumer_;
+    if (per_joint_limits_valid && shadow.accept_and_write(command, true) &&
+      dispatch(shadow.submitted()))
+    {
+      *consumer_ = shadow;
+      ok = true;
+    }
+  } else if (status == cho_openarm_mit_core::MitStatus::ACTIVE) {
+    auto shadow = *consumer_;
+    if (shadow.successful_write_cycle() && dispatch(shadow.submitted())) {
+      *consumer_ = shadow;
+      ok = true;
+    }
+  } else if (status == cho_openarm_mit_core::MitStatus::SAFE) {
+    ok = dispatch_safe_hold();
   }
-  return claims;
+  if (!ok && !dispatch_safe_hold(true)) {
+    return transition_to_safe(true, "a rejected commit's SAFE hold could not be sent");
+  }
+  return true;
 }
 
-bool OpenArmMitRealSystem::claims_whole_arm_or_none(const std::vector<std::string> & interfaces) const
+void OpenArmMitRealSystem::publish_held_effort()
 {
-  const auto owned = arm_claims();
-  std::size_t claimed = 0;
-  for (const auto & name : owned) {
-    claimed += std::count(interfaces.begin(), interfaces.end(), name) > 0 ? 1 : 0;
+  // Every hold retains the last accepted tau_ff (ArmConsumer), so that is what
+  // submitted() carries in any status but ACTIVE.
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    command_[index][4] = consumer_->submitted().joints[index].effort;
   }
-  return claimed == 0 || claimed == owned.size();
 }
 
 hardware_interface::return_type OpenArmMitRealSystem::prepare_command_mode_switch(
@@ -968,32 +1162,30 @@ hardware_interface::return_type OpenArmMitRealSystem::prepare_command_mode_switc
 {
   // Splitting the five fields (or the protocol handles) between controllers is
   // forbidden by the contract: refuse it here, before anything is switched.
-  if (!claims_whole_arm_or_none(start_interfaces) || !claims_whole_arm_or_none(stop_interfaces)) {
+  // Off the control thread: write() makes the SAFE transition.
+  if (!switch_gate_.prepare(start_interfaces, stop_interfaces, arm_side_)) {
     RCLCPP_ERROR(
       rclcpp::get_logger("OpenArmMitRealSystem"),
       "%s: refusing a controller switch that claims only part of the arm's MIT interfaces",
       arm_resource_name().c_str());
     return hardware_interface::return_type::ERROR;
   }
-  const auto owned = arm_claims();
-  const bool touches_arm = std::any_of(owned.begin(), owned.end(), [&](const std::string & name) {
-        return std::count(start_interfaces.begin(), start_interfaces.end(), name) > 0 ||
-               std::count(stop_interfaces.begin(), stop_interfaces.end(), name) > 0;
-      });
-  if (touches_arm && active_.load()) {
-    // This runs off the control thread; write() makes the transition.
-    switch_gated_.store(true);
-    switch_safe_requested_.store(true);
-  }
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type OpenArmMitRealSystem::perform_command_mode_switch(
-  const std::vector<std::string> &, const std::vector<std::string> &)
+  const std::vector<std::string> & start_interfaces,
+  const std::vector<std::string> & stop_interfaces)
 {
-  // The incoming producer starts from the SAFE hold write() has submitted and
-  // seeds its own session handshake; commits are accepted from here on.
-  switch_gated_.store(false);
+  // controller_manager calls this from its control loop (inside update(),
+  // before write()) and activates the incoming controllers right after it, so
+  // this is the one place the outgoing producer's leftover commit can be
+  // discarded before anything reads the ack: the incoming producer continues
+  // its generations from that ack. The next write() puts the arm in SAFE again
+  // if anything ran since prepare, then evaluates commits.
+  if (switch_gate_.perform(start_interfaces, stop_interfaces, arm_side_) && active_.load()) {
+    discard_leftover_commit();
+  }
   return hardware_interface::return_type::OK;
 }
 
@@ -1026,6 +1218,7 @@ void OpenArmMitRealSystem::trip_watchdog() noexcept
   watchdog_tripped_.store(true);
   try {
     std::lock_guard<std::mutex> lock(transport_mutex_);
+    transport_enabled_ = false;
     if (transport_) {
       transport_->disable();
     }
@@ -1067,6 +1260,9 @@ OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
   consumer_.reset();
   configured_ = false;
   protocol_.fill(0.0);
+  for (auto & joint : command_) {
+    joint.fill(0.0);
+  }
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 }  // namespace cho_hardware_openarm_mit_real
