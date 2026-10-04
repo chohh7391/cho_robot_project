@@ -168,3 +168,27 @@ def test_no_orphaned_expected_files():
             os.remove(path)
         return
     assert not orphans, f'expected files no case produces: {orphans}'
+
+
+# ------------------------------------------------------------ the walker itself
+
+def test_an_include_missing_a_required_argument_is_an_error_as_in_humble():
+    from cho_bringup_common.launch_golden import Walker
+    from launch import LaunchDescription
+    from launch.actions import DeclareLaunchArgument
+
+    child = LaunchDescription([DeclareLaunchArgument('robot_ip'),
+                               DeclareLaunchArgument('use_sim_time', default_value='false')])
+    with pytest.raises(RuntimeError, match="missing required argument 'robot_ip'"):
+        Walker.check_required_arguments(child, ['use_sim_time'])
+    Walker.check_required_arguments(child, ['robot_ip'])
+
+
+def test_spawner_flags_without_a_value_do_not_swallow_the_next_argument():
+    from cho_bringup_common.launch_golden import Walker
+
+    assert Walker.canonical_args(
+        'spawner', ['arm', '--load-only', '-c', '/controller_manager', 'extra', '--inactive']) == [
+        'arm', 'extra', '|', '--inactive', '--load-only', '-c /controller_manager']
+    # An option left without its value at the end is kept, not an IndexError.
+    assert Walker.canonical_args('spawner', ['arm', '-p']) == ['arm', '|', '-p']

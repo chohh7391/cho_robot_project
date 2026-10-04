@@ -13,14 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Convert a cho_description URDF or xacro into a USD asset for Isaac Sim.
+r"""Convert a cho_description URDF or xacro into a USD asset for Isaac Sim.
 
 Run under Isaac Sim's interpreter, once, whenever the URDF changes:
 
-    ~/isaacsim/python.sh convert_urdf_to_usd.py \\
-        --urdf <description-share>/urdf/<robot>.urdf.xacro \\
-        --usd-path <description-share>/usd \\
-        --ros-package <description-package>:<description-share> \\
+    ~/isaacsim/python.sh convert_urdf_to_usd.py \
+        --urdf <description-share>/urdf/<robot>.urdf.xacro \
+        --usd-path <description-share>/usd \
+        --ros-package <description-package>:<description-share> \
         --require-link <controller-ee-frame>
 
 This is a thin wrapper around Isaac's own URDF importer that pins the settings
@@ -78,7 +78,8 @@ def parse_args():
                    help="Override the default. Breaks fr3_hand_tcp and the FT frame; "
                         "only useful for a visual-only asset.")
     p.add_argument("--collision-from-visuals", action="store_true",
-                   help="Derive colliders from visual meshes instead of the URDF <collision> meshes")
+                   help="Derive colliders from visual meshes instead of the URDF <collision> "
+                        "meshes")
     p.add_argument("--strip-links", default=r".*_sc$", metavar="REGEX",
                    help="Drop links whose name matches, and the joints attaching them, before "
                         "importing. Defaults to the URDF's *_sc self-collision helper links: they "

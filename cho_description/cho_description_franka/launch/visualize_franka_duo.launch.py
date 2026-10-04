@@ -23,7 +23,8 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 
 
-def robot_state_publisher_spawner(context: LaunchContext, robot_type, arm_prefix, load_gripper, ee_id):
+def robot_state_publisher_spawner(context: LaunchContext, robot_type, arm_prefix, load_gripper,
+                                  ee_id):
     robot_type_str = robot_type
     arm_prefix_str = arm_prefix
     load_gripper_str = context.perform_substitution(load_gripper)

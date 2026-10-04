@@ -18,7 +18,12 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_pep257 REQUIRED)
+  # D212 (summary on the first line) and D213 (on the second) are mutually
+  # exclusive; ament ignores D212, this repo writes D212 (as cho_oak does).
+  set(AMENT_LINT_AUTO_EXCLUDE ament_cmake_pep257)
   ament_lint_auto_find_test_dependencies()
+  ament_pep257(--add-ignore D213)
 endif()
 
 ament_package()

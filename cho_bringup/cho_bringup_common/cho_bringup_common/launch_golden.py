@@ -349,7 +349,11 @@ class Walker:
         while i < len(arguments):
             arg = arguments[i]
             if arg.startswith('-'):
-                if arg in ('--inactive', '--activate-as-group', '-u', '--unload-on-kill'):
+                # Humble's spawner flags that take no value; any other option
+                # takes the next argument, unless there is none to take.
+                valueless = arg in ('--inactive', '--stopped', '--load-only', '--activate-as-group',
+                                    '-u', '--unload-on-kill')
+                if valueless or i + 1 >= len(arguments) or arguments[i + 1].startswith('-'):
                     options.append(arg)
                     i += 1
                 else:
@@ -482,19 +486,39 @@ class Walker:
         cond = getattr(e, 'condition', None)
         if not _BRINGUP_LAUNCH.search(location) or not (cond is None or cond.evaluate(self.ctx)):
             return
-        # As Humble's IncludeLaunchDescription does it: the include's arguments
-        # are set as configurations in the parent's scope, not a pushed one, so
-        # they (and whatever the child sets) stay visible to the parent after.
-        for k, v in args:
-            self.ctx.launch_configurations[k] = v
         try:
             included = source.get_launch_description(self.ctx)
+            self.check_required_arguments(included, [k for k, _ in args])
+            # As Humble's IncludeLaunchDescription does it: the include's
+            # arguments are set as configurations in the parent's scope, not a
+            # pushed one, so they (and whatever the child sets) stay visible to
+            # the parent after.
+            for k, v in args:
+                self.ctx.launch_configurations[k] = v
             self.flush(depth + 2)
             self.walk(included.entities, depth + 2, execute_opaque)
         except SkipCase:
             raise
         except Exception as exc:  # noqa: B902
             self.emit(depth + 2, f'ERROR {type(exc).__name__}: {self.norm(exc)}')
+
+    @staticmethod
+    def check_required_arguments(description, given):
+        """Raise as Humble's include does when a required argument is not passed.
+
+        Required means declared with no default and not under a condition; only
+        the include's own arguments count, not the parent's configurations.
+        """
+        for argument, nested in description.get_launch_arguments_with_include_launch_description_actions():
+            if argument._conditionally_included or argument.default_value is not None:
+                continue
+            names = list(given)
+            for include in nested or []:
+                names.extend(include._try_get_arguments_names_without_context())
+            if argument.name not in names:
+                raise RuntimeError(
+                    f"Included launch description missing required argument '{argument.name}' "
+                    f"(description: '{argument.description}'), given: [{', '.join(names)}]")
 
     def handler(self, h, depth):
         from launch.event_handlers import OnProcessExit, OnProcessIO, OnProcessStart, OnShutdown

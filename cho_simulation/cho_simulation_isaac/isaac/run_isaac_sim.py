@@ -611,7 +611,7 @@ simulation_app.update()
 
 arm_controller_node = og.Controller.node(f"{GRAPH_PATH}/ArmController")
 hand_controller_node = (og.Controller.node(f"{GRAPH_PATH}/HandController")
-                       if HAND_DOF_NAMES else None)
+                        if HAND_DOF_NAMES else None)
 gate_node = og.Controller.node(f"{GRAPH_PATH}/SubscribeGate")
 
 ft_node = None
@@ -705,6 +705,7 @@ def _apply_newton_runtime_properties():
     # position and velocity target, which is how the 'mujoco' variant wasted a
     # debugging session: torque still worked, so nothing looked wrong until
     # velocity mode drifted under gravity.
+
     def _expected_mode(k, d):
         k = max(abs(v) for v in ([k] if isinstance(k, (int, float)) else k))
         d = max(abs(v) for v in ([d] if isinstance(d, (int, float)) else d))
@@ -714,7 +715,8 @@ def _apply_newton_runtime_properties():
 
     log(f"newton arm drive  : {_expected_mode(ARM_STIFFNESS, ARM_DAMPING)} "
         f"(from the authored DriveAPI gains)")
-    if args.control_mode != "torque" and _expected_mode(ARM_STIFFNESS, ARM_DAMPING).startswith("EFFORT"):
+    arm_mode = _expected_mode(ARM_STIFFNESS, ARM_DAMPING)
+    if args.control_mode != "torque" and arm_mode.startswith("EFFORT"):
         log(f"WARNING: control_mode={args.control_mode} but both drive gains are zero, so no "
             f"actuator is installed and the targets will be ignored. Check the profile.")
 
@@ -826,7 +828,7 @@ def open_gate():
 
 
 def gate_signalled():
-    """True once anything has been received on the gate topic.
+    """Report whether anything has been received on the gate topic yet.
 
     The subscriber leaves outputs:jointNames empty until a message arrives and
     keeps the last value afterwards, so a non-empty list is a latch.
