@@ -89,6 +89,12 @@ install(FILES DESIGN.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Build-file and manifest lint, as cho_controller_base. The C++ predates any
+  # formatter here.
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   find_package(cho_description_openarm REQUIRED)
   # The description's installed share directory (symlinked to the source
   # under --symlink-install), not a path back into the source tree.

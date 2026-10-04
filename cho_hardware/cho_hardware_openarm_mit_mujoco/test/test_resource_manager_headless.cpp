@@ -344,3 +344,62 @@ TEST(MitMujocoSystem, TheEffortCommandsReadTheHeldFeedForwardAndAGenerationIsEva
   loaned.clear();
   EXPECT_TRUE(manager.shutdown_components());
 }
+TEST(MitMujocoSystem, ADeactivatedArmKeepsItsSafeHoldAndAcceptsNoCommit)
+{
+  // As the real adapter: deactivation leaves the arm in a measured SAFE hold
+  // that keeps running, and an INACTIVE write() evaluates no producer input.
+  // It used to zero the torque for a cycle and then go on accepting commits.
+  if (!rclcpp::ok()) {
+    int argc = 0;
+    char ** argv = nullptr;
+    rclcpp::init(argc, argv);
+  }
+  std::ifstream input(MIT_SINGLE_URDF);
+  ASSERT_TRUE(input.good());
+  const std::string urdf((std::istreambuf_iterator<char>(input)), {});
+  hardware_interface::ResourceManager manager(urdf, true, false);
+  rclcpp_lifecycle::State active(lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE, "active");
+  rclcpp_lifecycle::State inactive(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
+  ASSERT_EQ(
+    manager.set_component_state("OpenArmHardwareInterface", active),
+    hardware_interface::return_type::OK);
+  const auto claims = cho_openarm_mit_core::complete_claims("");
+  ASSERT_TRUE(manager.prepare_command_mode_switch(claims, {}));
+  ASSERT_TRUE(manager.perform_command_mode_switch(claims, {}));
+  std::vector<hardware_interface::LoanedCommandInterface> loaned;
+  for (const auto & key : claims) loaned.push_back(manager.claim_command_interface(key));
+  const auto state = [&manager](const std::string & name) {
+    return manager.claim_state_interface("openarm_arm/" + name).get_value();
+  };
+  const auto set = [&loaned](const std::string & suffix, double value) {
+    for (auto & handle : loaned) {
+      const auto & name = handle.get_name();
+      if (
+        name.size() >= suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+        handle.set_value(value);
+    }
+  };
+  const auto cycle = [&manager]() {
+    const auto ok = manager.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.001)).ok &&
+                    manager.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.001)).ok;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return ok;
+  };
+  for (auto & handle : loaned) handle.set_value(0.0);
+  set("mit_session_echo", state("mit_session_id"));
+  set("mit_lease_cycles", 50.0);
+  set("mit_commit_generation", 1.0);
+  ASSERT_TRUE(cycle());
+  ASSERT_DOUBLE_EQ(state("mit_ack_generation"), 1.0);
+  ASSERT_EQ(
+    manager.set_component_state("OpenArmHardwareInterface", inactive),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("mit_status"), 6.0);  // DISABLED
+  set("mit_commit_generation", 2.0);
+  for (int i = 0; i < 20; ++i) ASSERT_TRUE(cycle());
+  EXPECT_DOUBLE_EQ(state("mit_ack_generation"), 1.0);  // not evaluated
+  EXPECT_DOUBLE_EQ(state("mit_status"), 6.0);
+  loaned.clear();
+  EXPECT_TRUE(manager.shutdown_components());
+}

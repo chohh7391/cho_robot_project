@@ -1289,6 +1289,7 @@ bool TaskSpaceImpedanceController::write_task_target(
 
 controller_interface::return_type TaskSpaceImpedanceController::update(const rclcpp::Time &, const rclcpp::Duration & period)
 {
+  publish_protocol_snapshot();
   if (state_ == State::INACTIVE || state_ == State::SAFE_STOPPED) return controller_interface::return_type::OK;
   const double dt = period.seconds(); if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) action_control_time_ += dt;
   // Unconditional: the offset must stay valid even on a cycle whose dt was

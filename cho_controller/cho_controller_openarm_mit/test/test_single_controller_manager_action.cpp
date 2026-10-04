@@ -9,6 +9,33 @@
 
 #include "cho_controller_openarm_mit/single_arm_fjt_controller.hpp"
 
+namespace cho_controller_openarm_mit
+{
+struct BimanualFjtTestAccess
+{
+  // The goal callback, called directly. An accepted goal reserves the pending
+  // slot for its accepted callback, which a direct call never gets.
+  static rclcpp_action::GoalResponse goal(
+    BimanualFollowJointTrajectoryController & controller,
+    const control_msgs::action::FollowJointTrajectory::Goal & request)
+  {
+    const auto response = controller.goal(
+      rclcpp_action::GoalUUID{},
+      std::make_shared<const control_msgs::action::FollowJointTrajectory::Goal>(request));
+    controller.pending_reserved_.store(false);
+    return response;
+  }
+  static void snapshot(BimanualFollowJointTrajectoryController & controller, double q)
+  {
+    for (auto & value : controller.measured_snapshot_) value.store(q);
+  }
+  static void publish_snapshot(BimanualFollowJointTrajectoryController & controller)
+  {
+    controller.publish_measured_snapshot();
+  }
+};
+}  // namespace cho_controller_openarm_mit
+
 namespace
 {
 using Action = control_msgs::action::FollowJointTrajectory;
@@ -208,4 +235,37 @@ TEST(SingleArmFjtHold, ReadyHoldsWhereItBeganInsteadOfFollowingTheMeasurement)
   running = false;
   loop.join();
   exec->remove_node(node);
+}
+
+TEST_F(SingleFixture, TheGoalCheckReadsTheControlLoopsSnapshotNotTheInterfaces)
+{
+  // The goal callback runs on the executor. It used to read the loaned state
+  // interfaces, which a deactivation on the control thread releases under it;
+  // it now reads the snapshot update() publishes. With the loop stopped, a
+  // snapshot far from the live pose decides: a 50 ms move from it is too fast.
+  using Access = cho_controller_openarm_mit::BimanualFjtTestAccess;
+  running = false;
+  if (thread.joinable()) thread.join();
+  Action::Goal request;
+  request.trajectory.joint_names = cho_openarm_mit_core::joint_names(side);
+  trajectory_msgs::msg::JointTrajectoryPoint point;
+  point.positions.assign(7, 0.0);  // where the fake arm is
+  point.velocities.assign(7, 0.0);
+  point.time_from_start.nanosec = 50000000;
+  request.trajectory.points = {point};
+  Access::snapshot(*controller, 1.0);
+  EXPECT_EQ(Access::goal(*controller, request), rclcpp_action::GoalResponse::REJECT);
+  Access::publish_snapshot(*controller);  // the live pose again
+  EXPECT_EQ(Access::goal(*controller, request), rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE);
+  running = true;
+  thread = std::thread([this] {
+      while (running) {
+        auto n = cm->now();
+        auto d = rclcpp::Duration::from_seconds(.001);
+        cm->read(n, d); cm->update(n, d); cm->write(n, d);
+        update_count.fetch_add(1, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+  cycle(5);
 }

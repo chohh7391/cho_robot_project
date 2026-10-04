@@ -783,3 +783,73 @@ TEST_F(SecondProducer, AnExternalSwitchLeavesTheProducerInactiveAndReusable)
   activate("task");
   expect_drives_as_second_producer(*task, ack);
 }
+
+// ---------------------------------------------------------------------------
+// The way out of FAULT is a new activation (deactivate, then activate): it
+// re-seeds from the measured pose through the hardware's switch rule, and it
+// only drives again where the hardware holds the arm in SAFE.
+// ---------------------------------------------------------------------------
+TEST_F(HardwareSafe, AFaultedProducerRecoversThroughDeactivateAndActivate)
+{
+  auto task = add<cho_controller_openarm_mit::TaskSpaceImpedanceController>(
+    "task", "cho_controller_openarm_mit/TaskSpaceImpedanceController");
+  activate("task");
+  for (int i = 0; i < 600 && !Access::ready(*task); ++i) {cycle();}
+  ASSERT_TRUE(Access::ready(*task));
+  auto client = rclcpp_action::create_client<TaskAction>(
+    client_, std::string(kNamespace) + "/task/task_space");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
+  TaskAction::Goal goal;
+  goal.relative = true;
+  goal.duration_sec = 0.5;
+  goal.target_pose.pose.position.z = 0.2;  // too fast for this consumer: rejected mid-motion
+  goal.target_pose.pose.orientation.w = 1.0;
+  auto handle = send_to<TaskAction>(client, goal);
+  ASSERT_TRUE(handle);
+  EXPECT_EQ(result_of<TaskAction>(client, handle).code, rclcpp_action::ResultCode::ABORTED);
+  ASSERT_EQ(protocol("mit_status"), static_cast<double>(MitStatus::SAFE));
+  // The faulted producer says how to recover.
+  auto stop = client_->create_client<std_srvs::srv::Trigger>(
+    std::string(kNamespace) + "/task/request_safe_stop");
+  ASSERT_TRUE(stop->wait_for_service(std::chrono::seconds(1)));
+  auto answer = stop->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+  while (answer.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {cycle();}
+  const auto response = answer.get();
+  EXPECT_FALSE(response->success);
+  EXPECT_NE(response->message.find("deactivate and activate"), std::string::npos) << response->message;
+
+  switch_off_without_handshake("task");
+  const double ack = protocol("mit_ack_generation");
+  activate("task");
+  expect_drives_as_second_producer(*task, ack);
+}
+
+// ---------------------------------------------------------------------------
+// ~/protocol_status is served from what the control loop last read, never
+// from the loaned state interfaces, which a deactivation releases under it.
+// ---------------------------------------------------------------------------
+TEST_F(SecondProducer, ProtocolStatusIsServedFromTheControlLoopsSnapshot)
+{
+  add<cho_controller_openarm_mit::JointPositionController>(
+    "first", "cho_controller_openarm_mit/JointPositionController");
+  auto status = client_->create_client<std_srvs::srv::Trigger>(
+    std::string(kNamespace) + "/first/protocol_status");
+  ASSERT_TRUE(status->wait_for_service(std::chrono::seconds(1)));
+  const auto ask = [&]() {
+      auto future = status->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+      while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {cycle();}
+      return future.get();
+    };
+  EXPECT_FALSE(ask()->success);  // never active: nothing to report
+  activate("first");
+  cycle(20);
+  auto live = ask();
+  ASSERT_TRUE(live->success) << live->message;
+  EXPECT_NE(live->message.find("status=1"), std::string::npos) << live->message;
+  EXPECT_NE(live->message.find("controller_active=1"), std::string::npos) << live->message;
+  deactivate("first");
+  auto after = ask();
+  ASSERT_TRUE(after->success) << after->message;
+  EXPECT_NE(after->message.find("status=0"), std::string::npos) << after->message;
+  EXPECT_NE(after->message.find("controller_active=0"), std::string::npos) << after->message;
+}

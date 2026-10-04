@@ -17,6 +17,13 @@ public:
   hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override;
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
   hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override;
+  // As the real adapter: deactivation and shutdown leave every arm in its
+  // measured SAFE hold and evaluate nothing afterwards; on_error() too (the
+  // fake has no motors to disable). None of them throws.
+  hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State &) override;
+  hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override;
+  hardware_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override;
+  hardware_interface::CallbackReturn on_error(const rclcpp_lifecycle::State &) override;
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
   hardware_interface::return_type read(const rclcpp::Time &, const rclcpp::Duration &) override;
@@ -28,6 +35,8 @@ public:
 
 private:
   void sync_protocol();
+  void stop_holding();
+  bool driving_{false};
   void publish_held_effort();
   bool evaluate_commit(ArmConsumer & consumer, double & observed, const ArmCommand & command);
   // SwitchGate::Cycle::enter_safe for one consumer: an arm that is not SAFE

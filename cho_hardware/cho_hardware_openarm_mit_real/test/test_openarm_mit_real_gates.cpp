@@ -1450,3 +1450,124 @@ TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCyc
   EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
 }
+
+// ---------------------------------------------------------------------------
+// The orderly stop. The arm has no brakes: disabling the motors drops it. A
+// Damiao motor keeps executing its last MIT frame, so deactivation, cleanup,
+// shutdown and destruction send one more measured SAFE hold as the LAST frame
+// and nothing after it. A FAULT, and on_error(), still disable at once.
+// ---------------------------------------------------------------------------
+namespace
+{
+constexpr double kDisabled = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
+}  // namespace
+
+TEST(OpenArmMitRealStop, ADeactivateLeavesTheMotorsHoldingTheMeasuredPose) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.5);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_position.fill(0.04);  // where the arm is when it is deactivated
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  ASSERT_GE(transport->events.size(), 2u);
+  EXPECT_EQ(transport->events[transport->events.size() - 2], "read");  // a fresh measurement
+  EXPECT_EQ(transport->events.back(), "send");                         // then the last frame
+  const auto & hold = transport->sent.back();
+  EXPECT_DOUBLE_EQ(hold[0].position, 0.04);
+  EXPECT_DOUBLE_EQ(hold[0].velocity, 0.0);
+  EXPECT_DOUBLE_EQ(hold[0].stiffness, 3.0);  // the profile's safe gains
+  EXPECT_DOUBLE_EQ(hold[0].damping, 0.40);
+  EXPECT_DOUBLE_EQ(hold[0].effort, 0.5);     // the last accepted tau_ff: gravity support
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kDisabled);
+  // INACTIVE: Humble keeps calling read() and write(). They put nothing on the
+  // bus -- the motors keep that frame -- and they are not errors, which would
+  // send the component through on_error().
+  const auto events = transport->events.size();
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  }
+  EXPECT_EQ(transport->events.size(), events);
+  // Reactivating continues from the hold: a new session seeded where the arm is.
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.04);
+}
+
+TEST(OpenArmMitRealStop, AConfiguredButInactiveComponentIsNotAnError) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_TRUE(transport->events.empty());
+}
+
+TEST(OpenArmMitRealStop, TheDisableStopBehaviourDisablesInstead) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  auto info = hardware_info();
+  info.hardware_parameters["mit_stop_behavior"] = "disable";
+  ASSERT_EQ(system->on_init(info), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  const auto sent = transport->sent.size();
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  EXPECT_EQ(transport->sent.size(), sent);
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+}
+
+TEST(OpenArmMitRealStop, AnUnknownStopBehaviourIsRejected) {
+  OpenArmMitRealSystem system;
+  auto info = hardware_info();
+  info.hardware_parameters["mit_stop_behavior"] = "drop";
+  EXPECT_EQ(system.on_init(info), hardware_interface::CallbackReturn::ERROR);
+}
+
+TEST(OpenArmMitRealStop, ShutdownHoldsAndClosesTheTransport) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  transport->next_position.fill(0.03);
+  ASSERT_EQ(system->on_shutdown(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  EXPECT_EQ(transport->events.back(), "send");
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.03);
+  EXPECT_FALSE(system->socket_opened_for_test());
+}
+
+TEST(OpenArmMitRealStop, OnErrorDisablesAndClosesTheTransport) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  const auto sent = transport->sent.size();
+  ASSERT_EQ(system->on_error(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  EXPECT_EQ(transport->sent.size(), sent);  // no hold: an error is a FAULT stop
+  EXPECT_FALSE(system->socket_opened_for_test());
+  // And from a component that never got a transport, it neither throws nor fails.
+  OpenArmMitRealSystem bare;
+  EXPECT_EQ(bare.on_error(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(bare.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(bare.on_error(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+}
+
+TEST(OpenArmMitRealStop, AFaultStillDisablesAtOnceAndStaysAnError) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  transport->read_nan = true;
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  // A deactivation after the fault sends nothing more.
+  const auto sent = transport->sent.size();
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(transport->sent.size(), sent);
+}

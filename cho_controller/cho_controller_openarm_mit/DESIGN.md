@@ -161,6 +161,15 @@ relies on: a new goal preempts the running one through a SAFE handshake.)
   goal API rejects, the running goal ends with the reason, and the non-RT tick aborts every goal still
   held, including one accepted in the instant the API closed. Goals used to end only on an operator's
   stop; after any other SAFE they hung without a result.
+- **FAULT is left by a new activation** (deactivate, then activate; no handshake needed). It re-runs
+  the activation reset and re-seeds at the measured pose through the hardware's switch rule, and
+  only drives where the hardware holds the arm in SAFE. There is no in-place `clear_fault`; see
+  `docs/openarm_mit_contract_v1.md`, "Leaving FAULT". `~/request_safe_stop` on a faulted producer
+  says how to recover.
+- **No non-RT callback reads the loaned state interfaces.** `~/protocol_status` (Direct/TaskSpace/VLA)
+  and the FollowJointTrajectory goal check read snapshots that `on_activate()` and `update()` publish
+  (`protocol_snapshot_`, `measured_snapshot_`): a deactivation releases the loans on the control
+  thread while the executor may be mid-callback.
 - **Deactivation without the handshake returns SUCCESS** (with a warning): every MIT backend's switch
   rule puts the arm in SAFE itself. It used to return ERROR, which did not stop the switch and left
   the controller finalized, to be reloaded.

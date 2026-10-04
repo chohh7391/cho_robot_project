@@ -152,6 +152,14 @@ protected:
 
   // stop_goals(reason), then the SAFE request.
   bool request_safe(ActionReason reason = ActionReason::SAFE_REQUESTED);
+  // The protocol state interfaces as the control loop last read them, for the
+  // ~/protocol_status service: no thread but the control loop reads the loaned
+  // interfaces, which a concurrent deactivation releases. Published by
+  // on_activate() and at the top of every update().
+  void publish_protocol_snapshot();
+  std::array<std::atomic<double>, 5> protocol_snapshot_{};
+  std::atomic<bool> protocol_snapshot_valid_{false};
+  std::atomic<bool> protocol_snapshot_live_{false};
   std::array<double, 7> measured() const;
   void ramped_return_to_zero_gains(
     const std::array<double, 7> & target_kp, const std::array<double, 7> & target_kd,

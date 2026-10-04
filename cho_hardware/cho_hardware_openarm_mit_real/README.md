@@ -38,6 +38,20 @@ profile before calling the vendor factory.
 measured-position safe hold. NaN/read/write faults and the 100 ms profile
 watchdog disable the vendor motors immediately, and the reason is logged.
 
+**Stopping.** The arm has no brakes. `on_deactivate`, `on_cleanup`,
+`on_shutdown` and the destructor do not disable the motors: they take one
+fresh read and send a final measured SAFE hold (the profile's safe gains, the
+last accepted `tau_ff`) as the last frame, and send nothing after it. A Damiao
+motor keeps executing its last MIT frame, so the arm stays where it is --
+unsupervised -- until the motors are disabled, lose power, or their own CAN
+timeout expires. That timeout is a motor register (`RID::TIMEOUT`, 9, "CAN
+Timeout") that nothing here writes and whose semantics `extern/openarm_can`
+does not document; read it on every motor during commissioning
+(`openarm-can-cli`). While INACTIVE, `read()`/`write()` (still called by Humble)
+put nothing on the bus and return OK. Set `mit_stop_behavior: disable` for the
+old behaviour (motors disabled, arm dropped). A fault and `on_error()` still
+disable at once and close the socket.
+
 - **The activation seed is measured, by every motor.** The first SAFE hold is
   commanded to the state read at activation, so every arm motor (and the
   gripper, with `hand`) must have answered that read; one that has not still
@@ -111,7 +125,8 @@ watchdog disable the vendor motors immediately, and the reason is logged.
   bus afterwards.
 
 Not verified on hardware: everything above is exercised against a fake
-transport (`test/test_openarm_mit_real_gates.cpp`); the vendor transport itself
+transport -- including what the motors do with the final hold, which is the
+firmware's behaviour, not this adapter's (`test/test_openarm_mit_real_gates.cpp`); the vendor transport itself
 (`VendorCanTransport`) is only compiled, since this repository's CI has no CAN
 interface.
 

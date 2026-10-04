@@ -1,4 +1,5 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>cho_controller_openarm_mit</name>
   <version>0.1.0</version>
@@ -29,6 +30,8 @@
   <depend>std_srvs</depend>
   <depend>trajectory_msgs</depend>
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_lint_cmake</test_depend>
+  <test_depend>ament_cmake_xmllint</test_depend>
   <test_depend>cho_description_openarm</test_depend>
   <test_depend>cho_hardware_openarm_mit_test</test_depend>
   <test_depend>controller_manager</test_depend>

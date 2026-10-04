@@ -94,6 +94,12 @@ private:
   void non_realtime_tick();
   bool sample(double elapsed, std::array<double, 14> & q, std::array<double, 14> & dq) const;
   std::array<double, 14> measured_position() const;
+  // The control loop's latest measured joint positions, for the goal callback:
+  // no thread but the control loop reads the loaned state interfaces, which a
+  // concurrent deactivation releases. Published by on_activate() and update().
+  void publish_measured_snapshot();
+  std::array<std::atomic<double>, 14> measured_snapshot_{};
+  std::atomic<bool> measured_snapshot_valid_{false};
   std::mutex handles_mutex_;
   BimanualTrajectoryGate gate_;
   std::unordered_map<std::uint64_t, std::shared_ptr<GoalHandle>> goal_handles_;

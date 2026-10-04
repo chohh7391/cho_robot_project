@@ -140,18 +140,70 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
   }
   pair_ownership_token_ = 0;
   pair_stop_ready_ = 0;
+  driving_ = true;
+  held_ = true;
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 hardware_interface::CallbackReturn MitMujocoSystem::on_deactivate(const rclcpp_lifecycle::State & s)
 {
-  for (auto & h : base_commands_)
-    if (h.get_interface_name() == "effort") h.set_value(0);
-  if (
-    MujocoSystemInterface::write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0)) !=
-    hardware_interface::return_type::OK)
-    return hardware_interface::CallbackReturn::ERROR;
-  for (auto & a : arms_) a.protocol[4] = 6;
+  // As the real adapter's orderly stop: the arm is left in a measured SAFE
+  // hold that keeps running (hold_without_producers()) instead of being
+  // dropped. Zeroing the torque here dropped it for one cycle, after which the
+  // INACTIVE write() went on evaluating producer commits.
+  for (auto & a : arms_) {
+    a.limiter->request_safe();
+    a.protocol[4] = 6;  // DISABLED: no producer input is accepted
+  }
+  driving_ = false;
   return MujocoSystemInterface::on_deactivate(s);
+}
+hardware_interface::CallbackReturn MitMujocoSystem::on_shutdown(const rclcpp_lifecycle::State & s)
+{
+  for (auto & a : arms_) {
+    a.limiter->request_safe();
+    a.protocol[4] = 6;
+  }
+  driving_ = false;
+  return MujocoSystemInterface::on_shutdown(s);
+}
+hardware_interface::CallbackReturn MitMujocoSystem::on_error(const rclcpp_lifecycle::State &)
+{
+  // A fault, as on the real adapter, which disables the motors: no torque.
+  try {
+    for (auto & a : arms_) {
+      a.limiter->fault();
+      a.protocol[4] = 5;
+      for (std::size_t j = 0; j < N; ++j)
+        if (a.raw_effort[j]) a.raw_effort[j]->set_value(0.0);
+    }
+    driving_ = false;
+    held_ = false;
+    (void)MujocoSystemInterface::write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0));
+  } catch (...) {
+  }
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+hardware_interface::return_type MitMujocoSystem::hold_without_producers(
+  const rclcpp::Time & t, const rclcpp::Duration & p)
+{
+  if (!held_) return MujocoSystemInterface::write(t, p);  // never activated: apply nothing
+  for (auto & a : arms_) {
+    std::array<double, N> q{}, dq{};
+    for (std::size_t j = 0; j < N; ++j) {
+      q[j] = a.position[j]->get_value();
+      dq[j] = a.velocity[j]->get_value();
+      if (!std::isfinite(q[j]) || !std::isfinite(dq[j])) a.limiter->fault();
+    }
+    const auto tau = a.limiter->update(q, dq, p.seconds());
+    for (std::size_t j = 0; j < N; ++j) a.raw_effort[j]->set_value(tau[j]);
+  }
+  const auto r = MujocoSystemInterface::write(t, p);
+  if (r != hardware_interface::return_type::OK)
+    for (auto & a : arms_) {
+      a.limiter->fault();
+      a.protocol[4] = 5;
+    }
+  return r;
 }
 hardware_interface::CallbackReturn MitMujocoSystem::on_cleanup(const rclcpp_lifecycle::State & s)
 {
@@ -339,6 +391,7 @@ void MitMujocoSystem::publish_held_effort(std::size_t i)
 hardware_interface::return_type MitMujocoSystem::write(
   const rclcpp::Time & t, const rclcpp::Duration & p)
 {
+  if (!driving_) return hold_without_producers(t, p);
   std::array<bool, 2> valid{true, true}, safe_new{false, false};
   std::array<std::uint64_t, 2> generations{}, safe_values{};
   // The controller-switch rule (SwitchGate). `hold`: this cycle evaluates no

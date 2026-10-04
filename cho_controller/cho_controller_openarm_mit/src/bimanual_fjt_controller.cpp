@@ -189,14 +189,24 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
   last_goal_buffer_id_ = buffered ? buffered->id : 0;
   pending_reserved_.store(false);
   for (auto & slot : cancel_requested_) slot.store(0);
-  run_state_ = RunState::SEEDING; stop_reason_ = StopReason::NONE; active_.store(true);
+  run_state_ = RunState::SEEDING; stop_reason_ = StopReason::NONE;
+  publish_measured_snapshot();
+  active_.store(true);
   public_run_state_.store(static_cast<std::uint8_t>(run_state_));
   return CallbackReturn::SUCCESS;
+}
+
+void BimanualFollowJointTrajectoryController::publish_measured_snapshot()
+{
+  const auto q = measured_position();
+  for (std::size_t i = 0; i < dof(); ++i) measured_snapshot_[i].store(q[i], std::memory_order_relaxed);
+  measured_snapshot_valid_.store(true, std::memory_order_release);
 }
 
 controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
+  measured_snapshot_valid_.store(false, std::memory_order_release);
   // Production orchestration should call request_safe_stop until SAFE_STOPPED
   // before requesting the switch. This lifecycle callback remains nonblocking
   // and cannot provide the handshake; when it was skipped, the hardware's
@@ -419,6 +429,7 @@ controller_interface::return_type BimanualFollowJointTrajectoryController::updat
   const rclcpp::Time & time, const rclcpp::Duration &)
 {
   if (!active_.load()) return controller_interface::return_type::OK;
+  publish_measured_snapshot();
   struct StatePublish {
     RunState & state; std::atomic<std::uint8_t> & out; std::atomic<std::uint64_t> & cycle;
     ~StatePublish(){out.store(static_cast<std::uint8_t>(state));cycle.fetch_add(1);}
@@ -587,7 +598,11 @@ rclcpp_action::GoalResponse BimanualFollowJointTrajectoryController::goal(
   // The first segment uses the measured state and zero initial velocity, as
   // start_goal()/sample() do.  Cubic Hermite position and velocity extrema
   // are evaluated analytically over the closed segment.
-  auto q0 = measured_position();
+  // The control loop's snapshot, never the loaned interfaces (see
+  // publish_measured_snapshot()).
+  if (!measured_snapshot_valid_.load(std::memory_order_acquire)) return rclcpp_action::GoalResponse::REJECT;
+  std::array<double, 14> q0{};
+  for (std::size_t i = 0; i < dof(); ++i) q0[i] = measured_snapshot_[i].load(std::memory_order_relaxed);
   std::array<double, 14> v0{};
   double t0 = 0.0;
   bool previous_has_velocity = true;

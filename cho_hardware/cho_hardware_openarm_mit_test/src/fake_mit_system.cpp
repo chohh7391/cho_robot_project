@@ -117,6 +117,48 @@ FakeMitSystem::on_configure(const rclcpp_lifecycle::State &) {
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 hardware_interface::CallbackReturn
+FakeMitSystem::on_activate(const rclcpp_lifecycle::State &) {
+  driving_ = true;
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+void FakeMitSystem::stop_holding() {
+  auto hold = [](ArmConsumer &c) {
+    if (c.status() == MitStatus::ACTIVE || c.status() == MitStatus::STALE)
+      c.request_safe_transition(true);
+    if (c.status() == MitStatus::SAFE_TRANSITION) c.submit_safe_transition(true);
+  };
+  hold(left_);
+  if (bimanual_) {
+    hold(right_);
+    if (pair_) {
+      const bool l = pair_->left().status() != MitStatus::SAFE;
+      const bool r = pair_->right().status() != MitStatus::SAFE;
+      if (l || r) {
+        pair_->request_safe_transition(l, r, true);
+        pair_->submit_safe_transition(l, r, true);
+      }
+    }
+  }
+  driving_ = false;
+  sync_protocol();
+  publish_held_effort();
+}
+hardware_interface::CallbackReturn
+FakeMitSystem::on_deactivate(const rclcpp_lifecycle::State &) {
+  stop_holding();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+hardware_interface::CallbackReturn
+FakeMitSystem::on_shutdown(const rclcpp_lifecycle::State &) {
+  try { stop_holding(); } catch (...) {}
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+hardware_interface::CallbackReturn
+FakeMitSystem::on_error(const rclcpp_lifecycle::State &) {
+  try { stop_holding(); } catch (...) {}
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+hardware_interface::CallbackReturn
 FakeMitSystem::on_cleanup(const rclcpp_lifecycle::State &) {
   left_.cleanup();
   right_.cleanup();
@@ -184,6 +226,9 @@ hardware_interface::return_type FakeMitSystem::read(const rclcpp::Time &,
 }
 hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
                                                      const rclcpp::Duration &) {
+  // Not driving (configured, or deactivated): the hold stands, and no
+  // producer input is evaluated.
+  if (!driving_) return hardware_interface::return_type::OK;
   auto make = [&](size_t off, auto &p) {
     ArmCommand c;
     for (size_t i = 0; i < 7; ++i)

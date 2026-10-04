@@ -1,6 +1,8 @@
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 #include <gtest/gtest.h>
 #include <hardware_interface/resource_manager.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
+#include <rclcpp_lifecycle/state.hpp>
 #include <sstream>
 
 using cho_openarm_mit_core::complete_claims;
@@ -290,4 +292,32 @@ TEST(ResourceManager, TheEffortCommandsReadTheFeedForwardTheHoldApplies) {
   generation.set_value(4.0);
   ASSERT_TRUE(rm.perform_command_mode_switch(full, full));
   for (auto &e : effort) EXPECT_DOUBLE_EQ(e.get_value(), 0.5);
+}
+
+TEST(ResourceManager, ADeactivatedArmHoldsSafeAndEvaluatesNoCommit) {
+  hardware_interface::ResourceManager rm(urdf(), true, true);
+  auto session = rm.claim_state_interface("openarm_arm/mit_session_id");
+  auto ack = rm.claim_state_interface("openarm_arm/mit_ack_generation");
+  auto status = rm.claim_state_interface("openarm_arm/mit_status");
+  auto echo = rm.claim_command_interface("openarm_arm/mit_session_echo");
+  auto lease = rm.claim_command_interface("openarm_arm/mit_lease_cycles");
+  auto generation = rm.claim_command_interface("openarm_arm/mit_commit_generation");
+  const auto write = [&rm]() {
+    return rm.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(.01)).ok;
+  };
+  echo.set_value(session.get_value());
+  lease.set_value(50.0);
+  generation.set_value(1.0);
+  ASSERT_TRUE(write());
+  ASSERT_DOUBLE_EQ(status.get_value(),
+                   static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE));
+  rclcpp_lifecycle::State inactive(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
+  ASSERT_EQ(rm.set_component_state("mit_fake", inactive), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(status.get_value(),
+                   static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE));
+  generation.set_value(2.0);
+  EXPECT_TRUE(write());
+  EXPECT_DOUBLE_EQ(ack.get_value(), 1.0);
+  EXPECT_DOUBLE_EQ(status.get_value(),
+                   static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE));
 }

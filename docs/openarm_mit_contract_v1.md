@@ -141,9 +141,31 @@ the current `safe_generation` is no request (the hardware advances that generati
 switch).
 A producer's `on_deactivate()` returns SUCCESS without its SAFE handshake too (with a warning):
 the switch rule above makes the external switch safe, and an ERROR would only leave the controller
-finalized. The hardware's `on_deactivate()` performs a bounded safe/disable sequence itself. A steady-clock watchdog owned by
-the real adapter disables its CAN sockets if controller-manager `write()` stops. SIGKILL, power and
-transceiver failures additionally require the motor communication watchdog and physical E-stop.
+finalized.
+
+**Stopping the hardware.** The arm has no brakes, so a disabled motor drops it. A Damiao motor keeps
+executing the last MIT frame it received; the vendor code in `extern/openarm_can` neither documents
+nor sets what the firmware does after that, beyond exposing a "CAN Timeout" register (`RID::TIMEOUT`,
+9, RW uint32) that nothing in this repository writes. The hardware's orderly stops --
+`on_deactivate()`, `on_cleanup()`, `on_shutdown()` and the destructor (controller_manager may be torn
+down without shutting its components down) -- therefore take one fresh read and send one more
+measured SAFE hold (`q_des = q_measured`, `dq_des = 0`, the profile's per-joint safe gains, the last
+accepted `tau_ff`) as the LAST frame, and nothing after it. While INACTIVE, `read()` and `write()`
+(which Humble 2.54 keeps calling then) put nothing on the bus and return OK; they used to return
+ERROR, which Humble turns straight into `on_error()`. What happens next is the motors' own: they hold
+that pose, unsupervised -- no lease, no stale-state check, no write watchdog -- until they are disabled,
+lose power, or their CAN timeout expires if one is configured, at which point the arm is unpowered and
+drops. Commissioning must read that register on every motor (`openarm-can-cli`, read parameters).
+`mit_stop_behavior: disable` restores the old stop (motors disabled, arm dropped). A **fault** --
+transport, stale or non-finite state, write watchdog -- and `on_error()` (reached only through a failed
+`read()`/`write()` or transition) still disable at once: a hold cannot be trusted on a bus or a state
+that just failed. `on_error()` and `on_shutdown()` close the CAN socket and never throw. MuJoCo
+mirrors this (INACTIVE keeps the limiter's SAFE hold running and evaluates no producer input; after
+`on_shutdown()` the last torque it computed stays applied, as FINALIZED gets no more writes;
+`on_error()` zeroes the torque); the test fake holds SAFE and evaluates nothing while not active.
+A steady-clock watchdog owned by the real adapter disables its CAN sockets if controller-manager
+`write()` stops. SIGKILL, power and transceiver failures additionally require the motor communication
+watchdog and physical E-stop.
 A FAULT (transport, stale state, watchdog) disables the transport and rejects new active commands
 until the hardware is reactivated, which creates a new session; a new generation alone never clears
 it. An external switch does not latch: the incoming producer commits after perform. An invalid commit
@@ -155,6 +177,17 @@ Every way a producer leaves ACTIVE -- a SAFE stop on request, a SAFE it requests
 acknowledgement timeout, a failed check), a fault (the hardware left the state it expects: a SAFE it
 did not request, a session change), deactivation -- ends its running goal with that reason in the
 result's `message`, aborts every goal still held, and rejects new goals from that moment.
+
+**Leaving FAULT.** A faulted producer has one way out: a new activation (deactivate it, then activate
+it; no handshake needed). That re-runs `on_activate()` -- a fresh seed at the measured pose, a fresh
+goal API -- through the hardware's switch rule, which discards whatever the faulted producer left. It
+drives again only where the hardware holds the arm in an acknowledged SAFE: seeding requires status
+SAFE, so after a hardware FAULT (status 5) it faults again until the hardware itself is reactivated.
+There is deliberately no in-place `clear_fault`: it would re-implement the activation reset inside
+ACTIVE, and could not use the switch rule's discard of the commit the producer left behind.
+`~/request_safe_stop` on a faulted producer says so. `~/protocol_status` reports the protocol state
+interfaces as the control loop last read them (`controller_active=0` once deactivated); no non-RT
+callback reads the loaned interfaces.
 
 ## Consumer ADR
 

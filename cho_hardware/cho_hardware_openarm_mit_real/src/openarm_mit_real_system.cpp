@@ -385,11 +385,11 @@ OpenArmMitRealSystem::OpenArmMitRealSystem(TransportFactory factory)
 
 OpenArmMitRealSystem::~OpenArmMitRealSystem()
 {
-  stop_watchdog();
-  std::lock_guard<std::mutex> lock(transport_mutex_);
-  if (transport_) {
-    transport_->disable();
-  }
+  // controller_manager may be torn down without shutting its components down
+  // first; this is then the only stop. Same as on_shutdown(): a final hold if
+  // still active, nothing after a fault (which disabled already).
+  stop_with_final_frame("destruction");
+  close_transport();
 }
 
 bool OpenArmMitRealSystem::parse_and_validate_static_config()
@@ -409,6 +409,19 @@ bool OpenArmMitRealSystem::parse_and_validate_static_config()
   profile_file_ =
     required(info_.hardware_parameters, "mit_safety_profile_file");
   profile_name_ = required(info_.hardware_parameters, "mit_safety_profile");
+
+  {
+    const auto found = info_.hardware_parameters.find("mit_stop_behavior");
+    const std::string behavior =
+      found == info_.hardware_parameters.end() || found->second.empty() ? "hold" : found->second;
+    if (behavior == "hold") {
+      stop_behavior_ = StopBehavior::HOLD;
+    } else if (behavior == "disable") {
+      stop_behavior_ = StopBehavior::DISABLE;
+    } else {
+      return false;
+    }
+  }
 
   hand_ = strict_bool(info_.hardware_parameters, "hand");
   transport_config_.hand = hand_;
@@ -690,6 +703,7 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
   missed_replies_.fill(0);
   missed_gripper_replies_ = 0;
   watchdog_tripped_.store(false);
+  faulted_.store(false);
   switch_gate_.reset();
   switch_gate_.set_expiry_cycles(safety_profile_.update_rate_hz);
   observed_commit_ = 0.0;
@@ -812,7 +826,9 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
     return hardware_interface::return_type::ERROR;
   }
   if (!active_.load()) {
-    return hardware_interface::return_type::ERROR;
+    // Not driving: nothing on the bus. Only a FAULT is an error (faulted_).
+    return faulted_.load() ? hardware_interface::return_type::ERROR :
+           hardware_interface::return_type::OK;
   }
   try {
     std::array<double, kArmDof> position{}, velocity{}, effort{};
@@ -955,6 +971,7 @@ bool OpenArmMitRealSystem::transition_to_safe(
     } catch (...) {
     }
   }
+  faulted_.store(true);
   active_.store(false);
   watchdog_armed_.store(false);
   if (consumer_) {
@@ -980,7 +997,8 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
     return hardware_interface::return_type::ERROR;
   }
   if (!active_.load() || !consumer_) {
-    return hardware_interface::return_type::ERROR;
+    return faulted_.load() ? hardware_interface::return_type::ERROR :
+           hardware_interface::return_type::OK;
   }
   const auto now = std::chrono::steady_clock::now();
   std::chrono::steady_clock::time_point previous_write;
@@ -1242,27 +1260,142 @@ void OpenArmMitRealSystem::stop_watchdog() noexcept
   }
 }
 
+void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion) noexcept
+{
+  stop_watchdog();
+  // Never activated, already stopped, or faulted -- a fault disabled the
+  // motors already, and a hold cannot be trusted on a bus that failed.
+  if (!active_.load() || !consumer_) {
+    return;
+  }
+  try {
+    // A fresh measurement, so the hold is where the arm is now. Humble runs
+    // hardware lifecycle callbacks and read()/write() under one lock
+    // (ResourceManager::resources_lock_), so nothing else touches the
+    // consumer or the bus meanwhile.
+    std::array<double, kArmDof> position{}, velocity{}, effort{};
+    std::array<bool, kArmDof> replied{};
+    bool read_ok = false;
+    {
+      std::lock_guard<std::mutex> lock(transport_mutex_);
+      read_ok = transport_ && transport_enabled_ && transport_->read(position, velocity, effort);
+      if (read_ok) {
+        replied = transport_->replied();
+      }
+    }
+    if (!read_ok) {
+      transition_to_safe(true, "the stop's final read failed");
+      return;
+    }
+    // A joint that missed this one reply keeps the previous cycle's state.
+    for (std::size_t index = 0; index < kArmDof; ++index) {
+      if (replied[index] && std::isfinite(position[index]) && std::isfinite(velocity[index]) &&
+        std::isfinite(effort[index]))
+      {
+        state_[index] = {position[index], velocity[index], effort[index]};
+      }
+    }
+    std::array<double, kArmDof> measured{};
+    for (std::size_t index = 0; index < kArmDof; ++index) {
+      measured[index] = state_[index][0];
+    }
+    consumer_->observe(measured);
+    if (stop_behavior_ == StopBehavior::DISABLE) {
+      std::lock_guard<std::mutex> lock(transport_mutex_);
+      transport_enabled_ = false;
+      if (transport_) {
+        transport_->disable();
+      }
+      RCLCPP_WARN(
+        rclcpp::get_logger("OpenArmMitRealSystem"),
+        "%s: %s: motors disabled (mit_stop_behavior: disable); the arm is not held",
+        arm_resource_name().c_str(), occasion);
+    } else {
+      if (!dispatch_safe_hold(true)) {
+        transition_to_safe(true, "the stop's final SAFE hold could not be sent");
+        return;
+      }
+      RCLCPP_WARN(
+        rclcpp::get_logger("OpenArmMitRealSystem"),
+        "%s: %s: the motors stay enabled, executing the last frame: a SAFE hold at the measured "
+        "pose with the profile's safe gains and the last accepted tau_ff. Nothing supervises it "
+        "now. It lasts until the motors are disabled, lose power, or their own CAN timeout "
+        "(register 9) expires, if one is configured; then the arm is unpowered.",
+        arm_resource_name().c_str(), occasion);
+    }
+    active_.store(false);
+    watchdog_armed_.store(false);
+    protocol_[1] = static_cast<double>(consumer_->ack_generation());
+    protocol_[2] = static_cast<double>(consumer_->safe_generation());
+    protocol_[3] = static_cast<double>(consumer_->safe_ack_generation());
+    // No producer input is accepted any more.
+    protocol_[4] = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
+  } catch (...) {
+    transition_to_safe(true, "the stop threw");
+  }
+}
+
+void OpenArmMitRealSystem::close_transport() noexcept
+{
+  try {
+    std::lock_guard<std::mutex> lock(transport_mutex_);
+    // The vendor object closes its socket in its destructor. Nothing is sent:
+    // whatever the motors execute now, they keep executing.
+    transport_.reset();
+    transport_enabled_ = false;
+  } catch (...) {
+  }
+  consumer_.reset();
+  configured_ = false;
+  active_.store(false);
+  // The transport that faulted is gone; a new configure starts clean.
+  faulted_.store(false);
+  protocol_.fill(0.0);
+  for (auto & joint : command_) {
+    joint.fill(0.0);
+  }
+}
+
 hardware_interface::CallbackReturn
 OpenArmMitRealSystem::on_deactivate(const rclcpp_lifecycle::State &)
 {
-  stop_watchdog();
-  transition_to_safe(true);
+  // It used to disable the motors here, and the arm -- which has no brakes --
+  // dropped on every deactivation, Ctrl-C included.
+  stop_with_final_frame("deactivation");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn
 OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
 {
-  stop_watchdog();
-  transition_to_safe(true);
-  std::lock_guard<std::mutex> lock(transport_mutex_);
-  transport_.reset();
-  consumer_.reset();
-  configured_ = false;
-  protocol_.fill(0.0);
-  for (auto & joint : command_) {
-    joint.fill(0.0);
+  stop_with_final_frame("cleanup");
+  close_transport();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn
+OpenArmMitRealSystem::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  stop_with_final_frame("shutdown");
+  close_transport();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn
+OpenArmMitRealSystem::on_error(const rclcpp_lifecycle::State &)
+{
+  // A failure brought us here, so this is a FAULT stop: the motors are
+  // disabled (again, if the failing path did it already) and the socket is
+  // closed. SUCCESS leaves the component UNCONFIGURED, which on_configure()
+  // can recover from with a new transport and session.
+  try {
+    stop_watchdog();
+    if (transport_) {
+      transition_to_safe(true, "on_error: a read/write or a transition failed");
+    }
+  } catch (...) {
   }
+  close_transport();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 }  // namespace cho_hardware_openarm_mit_real

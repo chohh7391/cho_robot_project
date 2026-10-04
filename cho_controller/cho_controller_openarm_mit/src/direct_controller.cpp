@@ -235,20 +235,34 @@ controller_interface::CallbackReturn DirectControllerBase::on_configure(const rc
       if(safe_stopped_.load(std::memory_order_acquire)){
         response->success=true;response->message="SAFE acknowledged";
       }else if(stop_failed_.load(std::memory_order_acquire)){
-        response->success=false;response->message="SAFE request failed; controller faulted";
+        // FAULT has no way out but a new activation, which re-seeds from the
+        // measured pose through the hardware's switch rule. It only drives
+        // again where the hardware holds the arm in SAFE: seeding requires it.
+        response->success=false;
+        response->message="controller faulted; to recover, deactivate and activate it (no "
+          "handshake needed) -- it seeds again once the arm's mit_status reads SAFE (0)";
       }else{
         stop_requested_.store(true);response->success=false;response->message="SAFE requested; retry";
       }});
   status_service_=get_node()->create_service<std_srvs::srv::Trigger>("~/protocol_status",[this](
     const std_srvs::srv::Trigger::Request::SharedPtr,
     std_srvs::srv::Trigger::Response::SharedPtr response){
-      if(state_interfaces_.size()!=19){response->success=false;response->message="interfaces unavailable";return;}
-      std::ostringstream out;out<<"session="<<state_interfaces_[14].get_value()
-        <<" ack="<<state_interfaces_[15].get_value()
-        <<" safe_generation="<<state_interfaces_[16].get_value()
-        <<" safe_ack="<<state_interfaces_[17].get_value()
-        <<" status="<<state_interfaces_[18].get_value();
-      response->success=true;response->message=out.str();});
+      // From the control loop's snapshot, never the loaned interfaces.
+      if (!protocol_snapshot_valid_.load(std::memory_order_acquire)) {
+        response->success = false;
+        response->message = "no protocol state yet: the controller has not been active";
+        return;
+      }
+      std::ostringstream out;
+      out << "session=" << protocol_snapshot_[0].load()
+          << " ack=" << protocol_snapshot_[1].load()
+          << " safe_generation=" << protocol_snapshot_[2].load()
+          << " safe_ack=" << protocol_snapshot_[3].load()
+          << " status=" << protocol_snapshot_[4].load()
+          // While inactive this is the state as last seen when it was active.
+          << " controller_active=" << (protocol_snapshot_live_.load() ? 1 : 0);
+      response->success = true;
+      response->message = out.str();});
   return CallbackReturn::SUCCESS;
 }
 
@@ -495,6 +509,8 @@ controller_interface::CallbackReturn DirectControllerBase::on_activate(const rcl
   if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
   // Goals from before this activation end; the API opens again once seeded.
   abort_goals_from_before();
+  publish_protocol_snapshot();
+  protocol_snapshot_live_.store(true, std::memory_order_release);
   goals_closed_.store(static_cast<std::uint8_t>(ActionReason::NONE), std::memory_order_release);
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
   const double ack=state_interfaces_[15].get_value();if(!is_exact_nonnegative_integer(ack)||ack>=kMaxExactInteger)return CallbackReturn::ERROR;
@@ -518,6 +534,7 @@ controller_interface::CallbackReturn DirectControllerBase::on_deactivate(const r
   // A goal never survives its controller's deactivation (CONTRACT.md); the
   // non-RT tick delivers the aborts, off this callback.
   stop_goals(ActionReason::DEACTIVATED);
+  protocol_snapshot_live_.store(false, std::memory_order_release);
   if (!safe_stopped_.load()) {
     // Not an error: every OpenArm MIT backend applies the shared switch rule
     // (cho_openarm_mit_core::SwitchGate), which puts the arm in measured SAFE
@@ -566,8 +583,18 @@ bool DirectControllerBase::request_safe(const ActionReason reason)
   state_=State::STOPPING;wait_cycles_=0;return true;
 }
 
+void DirectControllerBase::publish_protocol_snapshot()
+{
+  if (state_interfaces_.size() != 19U) return;
+  for (std::size_t i = 0; i < 5; ++i) {
+    protocol_snapshot_[i].store(state_interfaces_[14 + i].get_value(), std::memory_order_relaxed);
+  }
+  protocol_snapshot_valid_.store(true, std::memory_order_release);
+}
+
 controller_interface::return_type DirectControllerBase::update(const rclcpp::Time &,const rclcpp::Duration & period)
 {
+  publish_protocol_snapshot();
   if(state_==State::INACTIVE||state_==State::SAFE_STOPPED)return controller_interface::return_type::OK;
   // Trajectory time is controller-local rather than ROS/wall time. MuJoCo's
   // /clock can pause or jump during GUI reset; a fixed accumulated period keeps

@@ -132,6 +132,13 @@ public:
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
+  // Both end with the transport closed. on_shutdown() stops as on_deactivate()
+  // does; on_error() -- reached only through a failure: a read()/write() that
+  // returned ERROR, which Humble turns straight into on_error() and, on
+  // SUCCESS, UNCONFIGURED, or a failed transition -- disables the motors like
+  // any other fault. Neither throws.
+  hardware_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State & previous_state) override;
+  hardware_interface::CallbackReturn on_error(const rclcpp_lifecycle::State & previous_state) override;
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
   hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
@@ -167,6 +174,14 @@ private:
   // evidence about the bus, not just about the hand.
   bool read_gripper();
   bool write_gripper();
+  // The orderly stop of deactivate, shutdown, cleanup and destruction: one
+  // fresh read, then one more measured SAFE hold as the LAST frame -- the
+  // Damiao motors keep executing their last MIT frame -- and no frame after
+  // it. With mit_stop_behavior "disable" the motors are disabled instead.
+  // A no-op unless active; a failed read or send falls back to a FAULT stop.
+  void stop_with_final_frame(const char * occasion) noexcept;
+  // Closes the CAN socket and forgets the session. Sends nothing.
+  void close_transport() noexcept;
   // Faults the consumer, publishes FAULT and (optionally) disables transport;
   // `reason` is logged. Control thread or lifecycle only -- the watchdog thread
   // uses trip_watchdog(), since the consumer is the control thread's.
@@ -200,6 +215,16 @@ private:
   // position [m] and max_effort [N], written by the gripper controller.
   std::array<double, 2> gripper_command_{};
   bool hand_{false};
+  // What an orderly stop leaves the motors doing (stop_with_final_frame()).
+  enum class StopBehavior : std::uint8_t {HOLD, DISABLE};
+  StopBehavior stop_behavior_{StopBehavior::HOLD};
+  // Set by every FAULT (transition_to_safe()), cleared by on_activate(). While
+  // the adapter is not active, read() and write() -- which Humble keeps
+  // calling while INACTIVE -- put nothing on the bus and return OK, so the
+  // motors keep the last frame an orderly stop sent and their own CAN timeout
+  // stays meaningful; only a FAULT is reported as ERROR. Returning ERROR there
+  // made Humble run on_error() one cycle after every orderly deactivation.
+  std::atomic<bool> faulted_{false};
   std::string gripper_joint_;
   double gripper_joint_closed_{0.0};
   double gripper_joint_open_{0.044};
