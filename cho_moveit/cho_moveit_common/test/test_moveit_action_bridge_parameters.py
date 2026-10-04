@@ -26,6 +26,13 @@ def test_single_controller_launches_initialize_the_optional_array():
         # ~/joint_space and ~/task_space resolve to what the registry lists.
         assert node._joint_action == '/fr5_moveit_action_bridge/joint_space'
         assert node._task_action == '/fr5_moveit_action_bridge/task_space'
+        # The planning budget is a parameter of its own; duration_sec is the
+        # motion's minimum length, not a planning budget.
+        assert node._planning_time == 5.0
+        assert node._execute_action == '/execute_trajectory'
+        # An absolute goal may also name the registry's arm_base_link, where TF
+        # puts it at the planning frame.
+        assert node._arm_base_link == 'base_link'
     finally:
         if node is not None:
             node.destroy_node()
@@ -41,6 +48,17 @@ def test_a_bridge_under_a_name_no_client_looks_for_refuses_to_start(remap):
     rclpy.init(args=['--ros-args', *remap, '-p', 'robot_type:=fr5'])
     try:
         with pytest.raises(ValueError, match='/fr5_moveit_action_bridge/joint_space'):
+            MODULE.MoveItActionBridge()
+    finally:
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize('value', ['0.0', '-1.0'])
+def test_a_planning_budget_that_cannot_plan_is_refused(value):
+    rclpy.init(args=['--ros-args', '-r', '__node:=fr5_moveit_action_bridge',
+                     '-p', 'robot_type:=fr5', '-p', f'planning_time_sec:={value}'])
+    try:
+        with pytest.raises(ValueError, match='planning_time_sec'):
             MODULE.MoveItActionBridge()
     finally:
         rclpy.shutdown()

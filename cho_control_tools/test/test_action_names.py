@@ -47,6 +47,25 @@ def test_the_copy_agrees_with_the_registry(robot_type, profile):
     for space, kind in action_names.ACTION_KINDS.items():
         assert action_names.controller_action_name('a_controller', space) == (
             cho_robot_config.controller_action_name('a_controller', kind))
+    assert action_names.static_scene_ready_service(robot_type, profile) == (
+        cho_robot_config.static_scene_ready_service(robot_type, profile))
+    config = cho_robot_config.load_robot_config(robot_type, profile)
+    for relative in (False, True):
+        assert action_names.task_goal_frame(config, relative) == (
+            cho_robot_config.task_goal_frame(config, relative))
+    assert action_names.goal_joint_names(config) == config['model']['joints']
+
+
+def test_each_profile_has_its_own_scene_gate():
+    names = {action_names.static_scene_ready_service('openarm', profile)
+             for profile in ('single', 'left', 'right', 'both')}
+    assert len(names) == 4
+
+
+def test_metadata_without_goal_frames_stamps_nothing():
+    assert action_names.task_goal_frame({}, relative=False) == ''
+    assert action_names.task_goal_frame({'model': {'joints': []}}, relative=True) == ''
+    assert action_names.goal_joint_names({}) == []
 
 
 def _pose_values(base):

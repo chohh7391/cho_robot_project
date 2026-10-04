@@ -57,23 +57,30 @@ from tf2_ros import Buffer, TransformListener
 import yaml
 
 from cho_interfaces.action import JointSpace
+from cho_robot_config import controller_action_name, load_robot_config
 
-#: The controller that drives the poses. Its JointSpace action is its own
-#: ~/joint_space (cho_interfaces/CONTRACT.md).
+#: The controller that drives the poses, by default. Its JointSpace action is
+#: its own ~/joint_space (cho_interfaces/CONTRACT.md), named through the
+#: registry's helper like every other client's.
 CONTROLLER = 'joint_space_position_controller'
+#: The bench this was written for. The joint names, and the frames the arm's
+#: pose is read between, are this robot's registry entry.
+ROBOT_TYPE = 'fr5'
 MOVE_SEC = 7.0
 SETTLE_SEC = 2.5
 SAMPLE_SEC = 2.0
 
 
 class Recorder(Node):
-    def __init__(self, topics):
+    def __init__(self, topics, action_name, model):
         super().__init__('record_corners')
         group = ReentrantCallbackGroup()
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
-        self.client = ActionClient(
-            self, JointSpace, f'/{CONTROLLER}/joint_space', callback_group=group)
+        self.client = ActionClient(self, JointSpace, action_name, callback_group=group)
+        self.joint_names = list(model['joints'])
+        self.base_frame = model['arm_base_link']
+        self.ee_frame = model['ee_link']
         self.topics = topics
         self.latest = {key: None for key in topics}
         for key, topic in topics.items():
@@ -86,7 +93,10 @@ class Recorder(Node):
         goal = JointSpace.Goal()
         # A minimum: the controller takes longer if its joint limits require.
         goal.duration_sec = float(seconds)
-        goal.target_joints = JointState(position=[float(v) for v in joints])
+        # Named, so the server matches them by name and refuses a pose file
+        # written for another arm instead of driving this one with it.
+        goal.target_joints = JointState(
+            name=self.joint_names, position=[float(v) for v in joints])
         future = self.client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, future, executor=EXEC)
         handle = future.result()
@@ -110,7 +120,7 @@ class Recorder(Node):
             EXEC.spin_once(timeout_sec=0.05)
             try:
                 tf = self.buffer.lookup_transform(
-                    'base_link', 'wrist3_link', rclpy.time.Time())
+                    self.base_frame, self.ee_frame, rclpy.time.Time())
                 t, r = tf.transform.translation, tf.transform.rotation
                 arm.append([t.x, t.y, t.z, r.x, r.y, r.z, r.w])
             except Exception:
@@ -140,7 +150,13 @@ parser.add_argument('--moving-detections', required=True,
 parser.add_argument('--static-detections', nargs='*', default=[],
                     metavar='NAME=TOPIC',
                     help='the same from each fixed camera, named; may be repeated')
+parser.add_argument('--robot-type', default=ROBOT_TYPE,
+                    help=f'cho_robot_config robot (default {ROBOT_TYPE})')
+parser.add_argument('--controller', default=CONTROLLER,
+                    help=f'controller whose JointSpace action drives the poses '
+                         f'(default {CONTROLLER})')
 args = parser.parse_args()
+MODEL = load_robot_config(args.robot_type)['model']
 
 TOPICS = {'moving': args.moving_detections}
 STATIC = {}
@@ -155,9 +171,14 @@ for item in args.static_detections:
     STATIC[label] = topic
     TOPICS[f'static:{label}'] = topic
 poses = yaml.safe_load(open(args.poses, encoding='utf-8'))['poses']
+for pose in poses:
+    if len(pose['joints']) != len(MODEL['joints']):
+        raise SystemExit(
+            f"pose {pose['name']!r} has {len(pose['joints'])} joints; "
+            f"{args.robot_type} has {len(MODEL['joints'])} ({MODEL['joints']})")
 
 rclpy.init()
-node = Recorder(TOPICS)
+node = Recorder(TOPICS, controller_action_name(args.controller, 'joint_space'), MODEL)
 EXEC = MultiThreadedExecutor()
 EXEC.add_node(node)
 if not node.client.wait_for_server(timeout_sec=15.0):

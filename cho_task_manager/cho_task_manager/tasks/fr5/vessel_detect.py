@@ -72,10 +72,11 @@ def create_fr5_vessel_detect_tree(robot_config=None) -> py_trees.behaviour.Behav
     """Wait for each vessel's pose, in the robot's base frame, and latch it."""
     robot_config = robot_config or load_robot_config('fr5')
 
-    # The frame an absolute task-space goal would be interpreted in, taken from
-    # the same registry cho_object_pose reads, so the producer's frame_id and
-    # the consumer's expectation cannot drift. Deliberately arm_base_link and
-    # not base_frame: the latter is a MoveIt notion and is not in the TF tree.
+    # The frame cho_object_pose publishes in (the registry's arm_base_link),
+    # read from the same registry it reads, so the producer's frame_id and the
+    # consumer's expectation cannot drift. On the FR5 it is at the root of the
+    # description beside 'world', so the task-space controller would also
+    # accept a goal stamped in it.
     base_frame = robot_config['arm_base_link']
 
     mission = py_trees.composites.Sequence(

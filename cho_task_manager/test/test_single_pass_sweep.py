@@ -18,6 +18,7 @@ from cho_task_manager.utils import occlusion
 from cho_task_manager.utils.controller_names import ControllerNames
 import py_trees
 import pytest
+from rclpy.task import Future
 
 RUNNING = py_trees.common.Status.RUNNING
 SUCCESS = py_trees.common.Status.SUCCESS
@@ -34,6 +35,7 @@ def _fresh_blackboard():
 class FakeTime:
     def __init__(self, seconds):
         self.seconds = seconds
+        self.nanoseconds = int(round(seconds * 1e9))
 
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
@@ -49,7 +51,8 @@ class FakeTime:
 
 
 class FakeClock:
-    def __init__(self, start=0.0):
+    def __init__(self, start=100.0):
+        # Running: a clock at 0 is sim time before the first /clock.
         self.seconds = start
 
     def now(self):
@@ -377,6 +380,42 @@ def test_failing_mid_motion_cancels_the_goal():
     goal_handle.cancel_goal_async.assert_called_once()
 
 
+def test_failing_before_the_waypoint_goal_is_accepted_cancels_it_on_acceptance():
+    # The tick after a waypoint goal goes out can be the one the whole-pass
+    # deadline expires on. The goal has no handle yet; it must still be
+    # cancelled once the server accepts it, or it drives the arm through the
+    # abort branch.
+    behaviour = _behaviour()
+    behaviour.initialise()
+    _see(behaviour, _snapshot(_standing('beaker'), _standing('flask')))
+    send_future = Future()
+    behaviour.client.send_goal_async.return_value = send_future
+    assert behaviour.update() == RUNNING       # goal sent, acceptance in flight
+    behaviour.clock.advance(61.0)
+    assert behaviour.update() == FAILURE
+    behaviour.terminate(FAILURE)
+
+    late = MagicMock(accepted=True)
+    send_future.set_result(late)
+    late.cancel_goal_async.assert_called_once()
+
+
+def test_losing_an_object_before_the_goal_is_accepted_cancels_it_on_acceptance():
+    behaviour = _behaviour()
+    behaviour.initialise()
+    _see(behaviour, _snapshot(_standing('beaker'), _standing('flask')))
+    send_future = Future()
+    behaviour.client.send_goal_async.return_value = send_future
+    assert behaviour.update() == RUNNING
+    _see(behaviour, _snapshot(_standing('beaker')))   # the flask is gone from the topic
+    assert behaviour.update() == FAILURE
+    behaviour.terminate(FAILURE)
+
+    late = MagicMock(accepted=True)
+    send_future.set_result(late)
+    late.cancel_goal_async.assert_called_once()
+
+
 def test_a_second_run_starts_from_the_first_waypoint_with_nothing_in_hand():
     behaviour = _behaviour()
     _start(behaviour)
@@ -428,3 +467,31 @@ def test_a_sweep_has_no_default_controller():
     # It used to default to a Franka controller no FR5 bringup loads.
     with pytest.raises(ValueError, match='controller_name is required'):
         SinglePassSweepBehavior('Recover_Vessels', _targets(), required_frame='base_link')
+
+
+# ------------------------------------------------ sim time before /clock
+
+def test_the_pass_ceiling_starts_with_the_clock_not_before_it():
+    behaviour = _behaviour()
+    behaviour.clock.seconds = 0.0
+    behaviour.initialise()
+    _see(behaviour, _snapshot(_standing('beaker'), _standing('flask')))
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING       # goal sent
+
+    behaviour.clock.seconds = 5000.0           # /clock arrives
+    assert behaviour.update() == RUNNING       # not 'gave up after 60s'
+    behaviour.clock.advance(61.0)
+    assert behaviour.update() == FAILURE
+
+
+def test_an_outage_seen_before_the_clock_is_not_the_simulators_uptime():
+    behaviour = _behaviour(_targets(min_unseen_sec=2.0))
+    behaviour.clock.seconds = 0.0
+    behaviour.initialise()
+    gone = _entry('flask', side_1='not_in_frame', publishing=False)
+    _see(behaviour, _snapshot(_standing('beaker'), gone))
+
+    behaviour.clock.seconds = 5000.0
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_not_called()

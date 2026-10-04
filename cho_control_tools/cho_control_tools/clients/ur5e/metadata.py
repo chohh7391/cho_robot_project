@@ -8,6 +8,13 @@ from cho_control_tools.action_names import controller_action_name, moveit_bridge
 _CONFIG = {
     'robot_type': 'ur5e',
     'supports_task': True,
+    # See clients/fr5/metadata.py.
+    'model': {
+        'joints': ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+                   'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'],
+        'ee_link': 'tool0',
+        'absolute_goal_frame': 'base_link',
+    },
     'controllers': {'moveit_trajectory': 'joint_trajectory_controller'},
     'moveit': {},
     'actions': {

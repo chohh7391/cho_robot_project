@@ -96,17 +96,30 @@ seq.add_children([
         topic='/detector/grasp', required_frame='fr3_link0'),
     TaskSpaceActionBehavior(
         name='Move_To_Object', target_pose_key='grasp_pose',
-        controller_name=robot_config['task_space'], duration=3.0),
+        controller_name=robot_config['task_space'], duration=3.0,
+        # The frame the pose was checked in, passed through to the goal.
+        frame_id='fr3_link0'),
 ])
 ```
 
 `required_frame` has no default and is checked against `header.frame_id`. Nothing
-transforms frames: an absolute `TaskSpace` goal is driven in the robot's arm base
-link (`fr3_link0` on Franka, `model.arm_base_link` in the registry generally,
-which is also what `ee_state_broadcaster` stamps on `/ee_state/pose`). A pose
-arriving in a camera frame is rejected rather than obeyed; transform it before it
-reaches the blackboard. `required_frame=None` disables the check and warns on
-every sample.
+transforms frames. The goal goes out stamped with `frame_id`, and the server
+rejects any frame it does not accept (`cho_interfaces/CONTRACT.md`, Frames): a
+pose latched in `required_frame` is driven to stamped with that same frame, which
+therefore has to be one the controller accepts -- `fr3_link0` is, on every Franka
+bringup. A pose arriving in a camera frame is rejected rather than obeyed;
+transform it before it reaches the blackboard. `required_frame=None` disables the
+check and warns on every sample.
+
+Literal goals are stamped and named from the registry, never by hand:
+`goal_frame(robot_config, relative)` (`cho_task_manager.utils.controller_names`)
+is the profile's `model.absolute_goal_frame` / `model.relative_goal_frame`, which
+`test/test_goal_frames.py` proves against every bringup's description, and
+`JointSpaceActionBehavior(joint_names=arm_joint_names(robot_config))` names the
+target with the profile's `model.joints`. Note that `model.arm_base_link` is not
+the absolute goal frame everywhere: on the OpenArm bimanual profiles each arm's
+`link0` is offset from the torso the controllers' model is rooted at, so their
+goals say `world`.
 
 `best_effort=True` is needed for a publisher using sensor-data QoS — including
 `/ee_state/pose`, which makes "record where the arm is now, come back to exactly

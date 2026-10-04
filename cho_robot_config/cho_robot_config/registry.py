@@ -20,8 +20,9 @@ CONTROL_MODES = ('position', 'velocity', 'torque')
 
 # What a controller serves under its own node (cho_interfaces/CONTRACT.md):
 # `/<controller>/<kind>`. The MoveIt bridge, which is not a controller, follows
-# the same rule under its node, so a namespace or an arm prefix never needs a
-# code change.
+# the same rule under its node. The names built here are ABSOLUTE, so a robot
+# started under a ROS namespace needs its registry entry (and the bridge's node
+# name check) to say so; an arm prefix is just part of the controller name.
 ACTION_KINDS = ('joint_space', 'task_space', 'gripper', 'vla', 'follow_joint_trajectory')
 
 # The FR5 pour action is application-specific and keeps the name it had before
@@ -72,6 +73,57 @@ def moveit_bridge_node(robot_type, profile='single'):
     if profile in (None, '', 'single'):
         return f'{robot_type}_moveit_action_bridge'
     return f'{robot_type}_{profile}_moveit_action_bridge'
+
+
+def static_scene_ready_service(robot_type, profile='single'):
+    """The service the static planning-scene gate answers on for one robot profile.
+
+    Each profile's MoveIt stack has its own gate, so a client waiting for one
+    arm's scene never takes another's as ready.
+    """
+    robot_type = str(robot_type).strip('/')
+    if not robot_type:
+        raise ValueError('robot_type must be non-empty')
+    if profile in (None, '', 'single'):
+        return f'/cho_moveit/{robot_type}/static_scene_ready'
+    return f'/cho_moveit/{robot_type}/{profile}/static_scene_ready'
+
+
+def task_goal_frame(config, relative):
+    """The ``frame_id`` a client stamps on a TaskSpace goal for this robot profile.
+
+    Absolute goals: ``model.absolute_goal_frame``, a frame every task-space
+    controller of the profile has among its root frames
+    (cho_controller_base::root_frames()) on every bringup -- cho_task_manager's
+    test_goal_frames proves it against the descriptions. Relative goals:
+    ``model.relative_goal_frame``, the EE frame, declared only where it is the
+    task-space controllers' fixed ``ee_name``. ``''`` when the registry
+    declares none, which every controller reads as the frame it means.
+    """
+    model = _mapping(config, 'config').get('model', {})
+    key = 'relative_goal_frame' if relative else 'absolute_goal_frame'
+    return model.get(key) or ''
+
+
+def _validate_goal_frames(model, robot_type):
+    """Validate the optional frames clients stamp on TaskSpace goals."""
+    absolute = model.get('absolute_goal_frame')
+    _optional_name(absolute, f'{robot_type}: model.absolute_goal_frame')
+    if absolute is not None and absolute not in (model['base_frame'], model['arm_base_link']):
+        # Only a frame the registry already names: anything else would be a
+        # third frame nobody else in the stack knows about.
+        raise ValueError(
+            f"{robot_type}: model.absolute_goal_frame '{absolute}' must be model.base_frame "
+            f"('{model['base_frame']}') or model.arm_base_link ('{model['arm_base_link']}')")
+    relative = model.get('relative_goal_frame')
+    _optional_name(relative, f'{robot_type}: model.relative_goal_frame')
+    if relative is not None and relative != model['ee_link']:
+        # A profile that changes ee_link inherits this key unless it restates
+        # it; failing here keeps a bimanual arm from stamping the other arm's
+        # (or the single arm's) EE frame on its goals.
+        raise ValueError(
+            f"{robot_type}: model.relative_goal_frame '{relative}' must be model.ee_link "
+            f"('{model['ee_link']}') or null")
 
 
 def _config_dir() -> Path:
@@ -222,6 +274,7 @@ def validate_robot_config(config, expected_robot_type=None):
     for field in ('base_frame', 'arm_base_link', 'ee_link'):
         if not isinstance(model.get(field), str) or not model[field]:
             raise ValueError(f'{robot_type}: model.{field} is required')
+    _validate_goal_frames(model, robot_type)
 
     controllers = _mapping(config.get('controllers'), f'{robot_type}: controllers')
     missing = _required_controller_roles - set(controllers)
@@ -555,9 +608,6 @@ def load_moveit_metadata(robot_type, expected_config_package=None, profile=None)
         # are validated against it.
         'action_bridge_node': moveit_bridge_node(
             config['robot_type'], config.get('profile', 'single')),
-        'ready_service': (
-            f"/cho_moveit/{config['robot_type']}/static_scene_ready"
-            if config.get('profile', 'single') == 'single'
-            else f"/cho_moveit/{config['robot_type']}/"
-                 f"{config['profile']}/static_scene_ready"),
+        'ready_service': static_scene_ready_service(
+            config['robot_type'], config.get('profile', 'single')),
     }

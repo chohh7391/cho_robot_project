@@ -19,6 +19,7 @@ from cho_task_manager.behaviors.action import (
 )
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.utils.controller_names import (
+    arm_joint_names,
     controller_name_value,
     task_home_positions,
 )
@@ -31,7 +32,7 @@ def home_joint_state(robot_config):
     Where a task starts and finishes a mission is a fact about the robot, so
     it lives in its cho_robot_config entry and not in a tree.
     """
-    return make_joint_state(task_home_positions(robot_config))
+    return make_joint_state(task_home_positions(robot_config), arm_joint_names(robot_config))
 
 
 def home_subtree(
@@ -77,6 +78,7 @@ def home_subtree(
             target_joints=target_joints,
             controller_name=controller,
             duration=duration,
+            joint_names=arm_joint_names(robot_config),
         ),
     ])
     if open_gripper:

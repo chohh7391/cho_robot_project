@@ -8,6 +8,7 @@ from cho_robot_config import controller_action_name as registry_action_name
 from cho_robot_config import hold_controllers_for_control_mode as registry_hold_controllers
 from cho_robot_config import load_robot_config as load_registry_config
 from cho_robot_config import moveit_bridge_node
+from cho_robot_config import task_goal_frame as registry_task_goal_frame
 from cho_robot_config import task_home_pose as registry_task_home
 
 
@@ -75,14 +76,17 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
 
         {'robot_type': 'ur5e', 'joint_space': 'joint_space_position_controller',
          'task_space': 'task_space_ik_controller', 'gripper': None, 'vla': None,
-         'arm_base_link': 'base_link'}
+         'arm_base_link': 'base_link', 'joints': [...], ...}
 
-    ``arm_base_link`` is the frame an absolute task-space goal is interpreted
-    in, and it is here so a task that needs a frame does not have to re-open
-    the registry -- or worse, spell the frame out. Note it is the registry's
-    ``model.arm_base_link`` and NOT its ``model.base_frame``: the latter is
-    'world' for Franka, which MoveIt uses and which does not exist in the
-    published TF tree.
+    ``arm_base_link`` is the registry's ``model.arm_base_link``: the frame the
+    perception stack publishes object poses in, and the one a latched pose is
+    checked against. It is NOT, in general, the frame an absolute task-space
+    goal is stamped in: on the OpenArm bimanual profiles each arm's link0 is
+    offset from the torso the controllers' model is rooted at, and the MoveIt
+    bridge plans in ``model.base_frame``. Stamp goals with :func:`goal_frame`.
+
+    ``joints`` are this profile's arm joints (``model.joints``, per-arm
+    prefixed on a bimanual build), the names a JointSpace target carries.
 
     Raises ValueError for unknown robot types.
     """
@@ -93,6 +97,7 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
         'robot_type': raw['robot_type'],
         'profile': raw.get('profile', 'single'),
         'arm_base_link': raw['model']['arm_base_link'],
+        'joints': list(raw['model']['joints']),
         'joint_space': compatibility.get('joint_space', controllers['direct_joint']),
         'task_space': compatibility.get('task_space', controllers['direct_task']),
         'gripper': compatibility.get('gripper', controllers['gripper']),
@@ -101,6 +106,26 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
         # how every other optional role here reads.
         'pour': compatibility.get('pour', controllers.get('pour')),
     }
+
+
+def arm_joint_names(robot_config) -> List[str]:
+    """Return the arm joints of the profile, in controller order: what a JointSpace target is named with."""
+    joints = robot_config.get('joints') if robot_config else None
+    if joints:
+        return list(joints)
+    return list(_registry_entry(robot_config)['model']['joints'])
+
+
+def goal_frame(robot_config, relative: bool) -> str:
+    """The ``frame_id`` a TaskSpace goal for this robot profile is stamped with.
+
+    The registry's ``model.absolute_goal_frame`` for an absolute goal -- a
+    frame every task-space controller of the profile accepts, on every
+    bringup (test_goal_frames builds the descriptions and checks) -- and
+    ``model.relative_goal_frame`` for a relative one. ``''`` where the
+    registry declares none, which the server reads as the frame it means.
+    """
+    return registry_task_goal_frame(_registry_entry(robot_config), relative)
 
 
 # ---------------------------------------------------------------------------

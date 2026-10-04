@@ -45,11 +45,14 @@ def create_franka_tag_reach_tree(robot_config=None) -> py_trees.behaviour.Behavi
     """Home, wait for a detected pose, drive to it, home again."""
     robot_config = robot_config or load_robot_config('franka')
 
-    # The frame an absolute task-space goal is interpreted in, taken from the
-    # same registry cho_object_pose reads, so the producer's frame_id and the
+    # The frame the detected pose has to arrive in, taken from the same
+    # registry cho_object_pose reads, so the producer's frame_id and the
     # consumer's expectation cannot drift. Deliberately arm_base_link and not
-    # base_frame: the latter is 'world' for Franka and is a MoveIt notion that
-    # does not exist in the published TF tree.
+    # base_frame: the latter is 'world' for Franka, which only the Gazebo
+    # description has. The goal is stamped with it too -- the frame the pose
+    # was checked in, passed through rather than dropped -- and the Franka
+    # task-space controllers accept fr3_link0 on every bringup (it is the
+    # registry's absolute_goal_frame, which test_goal_frames proves).
     base_frame = robot_config['arm_base_link']
     # From the registry rather than a literal, the same way ur/multi_move.py
     # does it: which controller serves absolute task-space goals is the
@@ -92,6 +95,7 @@ def create_franka_tag_reach_tree(robot_config=None) -> py_trees.behaviour.Behavi
             target_pose_key=TARGET_POSE_KEY,
             controller_name=task_controller,
             duration=6.0,
+            frame_id=base_frame,
         ),
     ])
 

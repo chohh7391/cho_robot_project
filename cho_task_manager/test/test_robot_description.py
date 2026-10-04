@@ -11,7 +11,9 @@ import pytest
 from std_msgs.msg import String
 
 from cho_task_manager.behaviors.action import FollowJointTrajectoryBehavior
+from rclpy.qos import DurabilityPolicy, ReliabilityPolicy
 from cho_task_manager.utils.robot_description import (
+    LATCHED_QOS,
     DescriptionPositionLimits,
     position_limits,
 )
@@ -66,6 +68,18 @@ def test_one_subscription_however_many_segments_share_the_source():
     assert node.create_subscription.call_count == 1
     topic = node.create_subscription.call_args[0][1]
     assert topic == '/robot_description'
+
+
+def test_the_description_is_subscribed_reliable_and_latched():
+    # robot_state_publisher publishes RELIABLE + TRANSIENT_LOCAL. A best-effort
+    # reader is not sent the latched sample by every DDS, and then the replay
+    # refuses every segment for want of limits.
+    assert LATCHED_QOS.reliability == ReliabilityPolicy.RELIABLE
+    assert LATCHED_QOS.durability == DurabilityPolicy.TRANSIENT_LOCAL
+    source = DescriptionPositionLimits(JOINTS)
+    node = MagicMock()
+    source.setup(node)
+    assert node.create_subscription.call_args[0][3] is LATCHED_QOS
 
 
 def test_unknown_limits_are_a_reason_not_an_empty_dict():

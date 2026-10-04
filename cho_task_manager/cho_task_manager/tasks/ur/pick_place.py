@@ -5,6 +5,7 @@ from cho_task_manager.behaviors.action import (
 )
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
+from cho_task_manager.utils.controller_names import goal_frame
 from cho_task_manager.utils.msg_utils import make_pose, make_down_pose, make_up_pose
 
 # Every UR bringup runs the position hardware interface (control_mode is
@@ -47,6 +48,7 @@ def create_ur_pick_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             relative=False,
             controller_name=task_controller,
             duration=3.0,
+            frame_id=goal_frame(robot_config, relative=False),
         ),
         TaskSpaceActionBehavior(
             name="UR_Go_Down",
@@ -54,6 +56,7 @@ def create_ur_pick_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             relative=True,
             controller_name=task_controller,
             duration=2.0,
+            frame_id=goal_frame(robot_config, relative=True),
         ),
         # Close on the object
         GripperActionBehavior(name="UR_Close_Gripper", grasp=True, controller_name=gripper),
@@ -63,6 +66,7 @@ def create_ur_pick_place_tree(robot_config) -> py_trees.behaviour.Behaviour:
             relative=True,
             controller_name=task_controller,
             duration=2.0,
+            frame_id=goal_frame(robot_config, relative=True),
         ),
         # Release
         GripperActionBehavior(

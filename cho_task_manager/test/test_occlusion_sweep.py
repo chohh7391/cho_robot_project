@@ -16,6 +16,7 @@ from cho_task_manager.utils import occlusion
 from cho_task_manager.utils.controller_names import ControllerNames
 import py_trees
 import pytest
+from rclpy.task import Future
 
 RUNNING = py_trees.common.Status.RUNNING
 SUCCESS = py_trees.common.Status.SUCCESS
@@ -32,6 +33,7 @@ class FakeTime:
 
     def __init__(self, seconds):
         self.seconds = seconds
+        self.nanoseconds = int(round(seconds * 1e9))
 
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
@@ -47,7 +49,8 @@ class FakeTime:
 
 
 class FakeClock:
-    def __init__(self, start=0.0):
+    def __init__(self, start=100.0):
+        # Running: a clock at 0 is sim time before the first /clock.
         self.seconds = start
 
     def now(self):
@@ -354,6 +357,67 @@ def test_failing_mid_motion_cancels_the_goal():
     goal_handle.cancel_goal_async.assert_called()
 
 
+def _pending_goal(behaviour):
+    """Wire the client so the next goal's acceptance stays in flight (a real Future)."""
+    send_future = Future()
+    behaviour.client.send_goal_async.return_value = send_future
+    return send_future
+
+
+def test_running_out_of_time_before_the_goal_is_accepted_cancels_it_on_acceptance():
+    # The deadline can land on the tick after the waypoint goal went out, with
+    # the server's answer still in flight: no handle to cancel yet, and a goal
+    # that would start moving the moment it is accepted -- while the tree is in
+    # the abort branch.
+    behaviour = _behaviour(_sweep(timeout_sec=5.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    send_future = _pending_goal(behaviour)
+    assert behaviour.update() == RUNNING       # assessed, goal sent
+    assert behaviour.goal_handle is None
+
+    behaviour.clock.advance(6.0)
+    assert behaviour.update() == FAILURE
+    behaviour.terminate(FAILURE)
+
+    late = MagicMock(accepted=True)
+    send_future.set_result(late)
+    late.cancel_goal_async.assert_called_once()
+
+
+def test_losing_the_object_before_the_goal_is_accepted_cancels_it_on_acceptance():
+    # The other FAILURE that can come before acceptance: a snapshot that no
+    # longer carries the object.
+    behaviour = _behaviour()
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    send_future = _pending_goal(behaviour)
+    assert behaviour.update() == RUNNING
+
+    behaviour._on_visibility(SimpleNamespace(objects=[]))
+    assert behaviour.update() == FAILURE
+    behaviour.terminate(FAILURE)
+
+    late = MagicMock(accepted=True)
+    send_future.set_result(late)
+    late.cancel_goal_async.assert_called_once()
+
+
+def test_a_rejected_waypoint_goal_is_not_cancelled():
+    behaviour = _behaviour(_sweep(timeout_sec=5.0))
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    send_future = _pending_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    behaviour.clock.advance(6.0)
+    assert behaviour.update() == FAILURE
+    behaviour.terminate(FAILURE)
+
+    rejected = MagicMock(accepted=False)
+    send_future.set_result(rejected)
+    rejected.cancel_goal_async.assert_not_called()
+
+
 def test_preemption_cancels_the_goal_as_every_action_leaf_does():
     # watched_mission invalidates the sibling branch on a monitor trip, and
     # BaseActionBehavior's own contract is that INVALID cancels.
@@ -474,3 +538,55 @@ def test_a_caller_may_override_the_tables_threshold_for_one_stage():
     _accept_goal(behaviour)
     assert behaviour.update() == RUNNING
     assert behaviour.client.send_goal_async.call_count == 1
+
+
+# ------------------------------------------------ sim time before /clock
+#
+# Under use_sim_time the node clock reads 0 until the first /clock. Anything
+# timed from that reading is far in the past once /clock arrives.
+
+def test_the_sweep_ceiling_starts_with_the_clock_not_before_it():
+    behaviour = _behaviour(_sweep(timeout_sec=60.0))
+    behaviour.clock.seconds = 0.0
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    _goal, _result = _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING       # assessed, goal sent
+
+    behaviour.clock.seconds = 5000.0           # /clock arrives
+    assert behaviour.update() == RUNNING       # not 'gave up after 60s'
+    behaviour.clock.advance(61.0)
+    assert behaviour.update() == FAILURE
+
+
+def test_a_dwell_begun_before_the_clock_waits_its_full_length_after():
+    behaviour = _behaviour()
+    behaviour.clock.seconds = 0.0
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+    _goal, result = _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING       # goal sent
+    _arrive(behaviour, result)                 # arrived while the clock read 0
+    behaviour._on_visibility(_snapshot(publishing=True, wrist='ok'))
+
+    behaviour.clock.seconds = 5000.0
+    assert behaviour.update() == RUNNING       # the 1 s dwell starts now
+    behaviour.clock.advance(1.5)
+    assert behaviour.update() == SUCCESS
+
+
+def test_an_outage_seen_before_the_clock_is_not_the_simulators_uptime():
+    # A pose missing at clock 0 used to read as 5000 s of occlusion the moment
+    # /clock arrived, and the arm swept for what may be a dropped frame.
+    behaviour = _behaviour(_sweep(min_unseen_sec=2.0))
+    behaviour.clock.seconds = 0.0
+    behaviour.initialise()
+    behaviour._on_visibility(_snapshot())
+
+    behaviour.clock.seconds = 5000.0
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_not_called()
+    behaviour.clock.advance(2.5)
+    _accept_goal(behaviour)
+    assert behaviour.update() == RUNNING
+    behaviour.client.send_goal_async.assert_called_once()

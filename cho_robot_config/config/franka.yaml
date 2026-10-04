@@ -5,6 +5,18 @@ model:
   arm_base_link: fr3_link0
   ee_link: fr3_hand_tcp
   joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+  # Frames clients stamp on TaskSpace goals (cho_robot_config.task_goal_frame,
+  # cho_interfaces/CONTRACT.md). absolute_goal_frame is among the root frames
+  # (cho_controller_base::root_frames()) of the description EVERY bringup of
+  # this profile gives its controllers -- cho_task_manager test_goal_frames
+  # builds them and checks. relative_goal_frame is the EE frame, declared only
+  # where it is the task-space controllers' fixed ee_name; absent means ''.
+  # fr3_link0, not base_frame 'world': the real, MuJoCo and Isaac descriptions
+  # are rooted at 'base' and have no 'world'; only Gazebo's is. fr3_link0 is
+  # at the root in all four. No relative_goal_frame: the Franka bringups take
+  # ee_name as a launch argument (fr3_link8 | fr3_hand | fr3_hand_tcp), so a
+  # client cannot know the controller's EE frame is fr3_hand_tcp.
+  absolute_goal_frame: fr3_link0
 controllers:
   hold: joint_space_position_controller
   # Which controller can hold the arm depends on the bringup's control_mode:

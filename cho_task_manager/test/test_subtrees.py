@@ -16,6 +16,7 @@ from cho_task_manager.behaviors.service import (
 )
 from cho_task_manager.subtrees import (
     guarded_mission,
+    home_joint_state,
     home_subtree,
     safe_abort_subtree,
     tare_ft_children,
@@ -223,6 +224,9 @@ def test_abort_refuses_to_guess_when_no_mode_is_available():
 # ---------------------------------------------------------------------------
 
 HOME = make_joint_state([0.0, -0.397, 0.0, -2.382, 0.0, 1.985, 0.785])
+# A UR5e target is six joints wide; the home block names them, so a Franka
+# target on a UR tree is refused at build time.
+UR_HOME = make_joint_state([0.0, -1.57, 0.0, -1.57, 0.0, 0.0])
 
 
 def test_home_subtree_is_switch_move_open():
@@ -237,7 +241,7 @@ def test_home_subtree_is_switch_move_open():
 
 def test_home_subtree_suffix_and_gripper_are_per_call():
     seq = home_subtree(
-        _config('ur5e'), target_joints=HOME,
+        _config('ur5e'), target_joints=UR_HOME,
         controller='joint_space_position_controller',
         name='3_Finish', suffix='_Final', open_gripper=False)
 
@@ -253,13 +257,31 @@ def test_home_subtree_derives_the_deactivate_list_from_the_robot():
     Franka copies fell back to the historical hard-coded Franka name list.
     """
     seq = home_subtree(
-        _config('ur5e'), target_joints=HOME,
+        _config('ur5e'), target_joints=UR_HOME,
         controller='joint_space_position_controller')
     deactivate = seq.children[0].make_request().deactivate_controllers
 
     assert 'task_space_ik_controller' in deactivate
     # A Franka controller name is meaningless on a UR.
     assert not any('_qp_' in name for name in deactivate)
+
+
+def test_the_home_goal_names_the_profiles_own_joints():
+    # Unnamed, a 7-vector meant for one OpenArm arm drives whichever arm the
+    # controller is; named, the other arm's server rejects it.
+    for profile, prefix in (('single', 'openarm_joint'), ('left', 'openarm_left_joint'),
+                            ('right', 'openarm_right_joint')):
+        config = load_robot_config('openarm', profile)
+        seq = home_subtree(config, target_joints=home_joint_state(config),
+                           controller=config['joint_space'], open_gripper=False)
+        names = list(seq.children[1].target_joints.name)
+        assert names == [f'{prefix}{index}' for index in range(1, 8)]
+
+
+def test_a_home_target_of_the_wrong_width_is_refused_at_build_time():
+    with pytest.raises(ValueError, match='6 joints'):
+        home_subtree(_config('ur5e'), target_joints=HOME,
+                     controller='joint_space_position_controller', open_gripper=False)
 
 
 def test_home_subtree_lead_children_go_in_front():

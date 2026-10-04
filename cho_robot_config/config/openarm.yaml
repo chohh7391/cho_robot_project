@@ -5,6 +5,21 @@ model:
   arm_base_link: openarm_link0
   ee_link: openarm_hand_tcp
   joints: [openarm_joint1, openarm_joint2, openarm_joint3, openarm_joint4, openarm_joint5, openarm_joint6, openarm_joint7]
+  # Frames clients stamp on TaskSpace goals (cho_robot_config.task_goal_frame,
+  # cho_interfaces/CONTRACT.md). absolute_goal_frame is among the root frames
+  # (cho_controller_base::root_frames()) of the description EVERY bringup of
+  # this profile gives its controllers -- cho_task_manager test_goal_frames
+  # builds them and checks. relative_goal_frame is the EE frame, declared only
+  # where it is the task-space controllers' fixed ee_name; absent means ''.
+  # 'world', not arm_base_link: on the bimanual torso each arm's link0 hangs
+  # off openarm_body_link0 at an offset, so it is not a root frame there, and
+  # the real bringup's base_rpy can turn the single arm's link0 away from it.
+  # 'world' is the root of every OpenArm description, single or bimanual.
+  # The profiles inherit it; relative_goal_frame they restate, per arm.
+  # No relative_goal_frame for the single arm: its bringups take ee_name as a
+  # launch argument. Each bimanual arm's EE comes from the controllers file
+  # whatever the launch says, so left/right declare theirs.
+  absolute_goal_frame: world
 controllers:
   hold: joint_space_position_controller
   # Per-control-mode hold; see franka.yaml. Names must stay in step with
@@ -101,6 +116,7 @@ profiles:
       arm_base_link: openarm_left_link0
       ee_link: openarm_left_hand_tcp
       joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7]
+      relative_goal_frame: openarm_left_hand_tcp
     controllers:
       hold: left_joint_space_position_controller
       # launch_utils.per_arm() prefixes every controller on a bimanual build,
@@ -151,6 +167,7 @@ profiles:
       arm_base_link: openarm_right_link0
       ee_link: openarm_right_hand_tcp
       joints: [openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
+      relative_goal_frame: openarm_right_hand_tcp
     controllers:
       hold: right_joint_space_position_controller
       # Per-arm instances; see the left profile.
@@ -191,6 +208,8 @@ profiles:
       arm_base_link: openarm_body_link0
       ee_link: openarm_left_hand_tcp
       joints: [openarm_left_joint1, openarm_left_joint2, openarm_left_joint3, openarm_left_joint4, openarm_left_joint5, openarm_left_joint6, openarm_left_joint7, openarm_right_joint1, openarm_right_joint2, openarm_right_joint3, openarm_right_joint4, openarm_right_joint5, openarm_right_joint6, openarm_right_joint7]
+      # No task space on this profile (supports_task: false).
+      relative_goal_frame: null
     controllers:
       hold: left_joint_space_position_controller
       # Two independent seven-axis arms: holding this profile means holding

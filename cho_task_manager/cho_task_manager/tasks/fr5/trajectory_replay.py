@@ -98,6 +98,7 @@ from cho_task_manager.subtrees.pour import (
     pour_handover_children,
 )
 from cho_task_manager.utils.controller_names import (
+    arm_joint_names,
     load_robot_config,
     moveit_joint_action_name,
 )
@@ -411,6 +412,8 @@ def _home_block(robot_config, home, home_via, hold, controller, name, suffix, pa
             target_joints=home,
             duration=HOME_DURATION_SEC,
             action_name=moveit_joint_action_name(robot_config),
+            # The bridge plans for the registry's joints, by these names.
+            joint_names=arm_joint_names(robot_config),
             # Planning and executing a whole move is slower than the straight
             # interpolation the direct path does, and the bridge only answers
             # once execution finished.

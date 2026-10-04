@@ -47,14 +47,17 @@ from cho_task_manager.behaviors.service import (
 from cho_task_manager.behaviors.topic import EeStateSampleBehavior
 from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.subtrees import guarded_mission
+from cho_task_manager.tasks.openarm.common import ee_state_names, require_one_arm
+from cho_task_manager.utils.controller_names import goal_frame
 
 # A forward-and-slightly-down TCP-local probe. The negative Z keeps a forward
 # probe inside the reach sphere when the arm sits near full extension.
 DEFAULT_PROBE_TRANSLATION = (0.03, 0.0, -0.005)
 DEFAULT_PROBE_DURATION_SEC = 5.0
 
-# The action server rejects anything shorter, so a typo cannot produce a goal
-# the controller would refuse after the tree has already started moving.
+# The TaskSpace server stretches anything shorter to this, so a shorter probe
+# would not be the motion the tuning thinks it measured; refuse it when the
+# tree is built instead.
 MIN_PROBE_DURATION_SEC = 0.25
 
 # Longer than the controller's release_duration (1 s) plus the last stick-slip
@@ -81,7 +84,7 @@ def _probe_settings(robot_config):
     if duration < MIN_PROBE_DURATION_SEC:
         raise ValueError(
             f'probe_duration must be at least {MIN_PROBE_DURATION_SEC}s '
-            f'(the TaskSpace action server rejects shorter goals), got {duration}'
+            f'(the TaskSpace action server stretches shorter goals to it), got {duration}'
         )
     return translation, duration
 
@@ -93,23 +96,12 @@ def _tolerant(behaviour):
     )
 
 
-def _profile_names(robot_config):
-    """Broadcaster and pose topic for this arm profile.
-
-    A bimanual build prefixes every per-arm resource, so the single-arm names
-    simply do not exist on it and a hard-coded check would fail before the
-    probe ever ran.
-    """
-    profile = robot_config.get('profile', 'single')
-    if profile == 'single':
-        return 'ee_state_broadcaster', '/ee_state/pose'
-    return f'{profile}_ee_state_broadcaster', f'/ee_state/{profile}/pose'
-
-
 def create_openarm_mit_task_tuning_tree(robot_config):
     """Baseline, probe, measure, return - one comparable tuning iteration."""
+    # One TCP: the 'both' profile has no task space (supports_task: false).
+    require_one_arm(robot_config, 'mit_task_tuning')
     controller = robot_config['task_space']
-    ee_broadcaster, ee_topic = _profile_names(robot_config)
+    ee_broadcaster, ee_topic = ee_state_names(robot_config)
     translation, duration = _probe_settings(robot_config)
     reverse = tuple(-v for v in translation)
     do_return = robot_config.get('probe_return', True)
@@ -139,6 +131,7 @@ def create_openarm_mit_task_tuning_tree(robot_config):
             relative=True,
             duration=duration,
             controller_name=controller,
+            frame_id=goal_frame(robot_config, relative=True),
         )),
         # An aborted leg releases its reference toward the measured pose over
         # the controller's release_duration (1 s). A goal accepted inside that
@@ -165,6 +158,7 @@ def create_openarm_mit_task_tuning_tree(robot_config):
                 relative=True,
                 duration=duration,
                 controller_name=controller,
+                frame_id=goal_frame(robot_config, relative=True),
             )),
             WaitBehavior(name='Settle_After_Return', duration_sec=SETTLE_SEC),
             EeStateSampleBehavior(

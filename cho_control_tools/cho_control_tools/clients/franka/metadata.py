@@ -8,6 +8,13 @@ from cho_control_tools.action_names import controller_action_name, moveit_bridge
 _CONFIG = {
     'robot_type': 'franka',
     'supports_task': True,
+    # See clients/fr5/metadata.py. No relative_goal_frame: the Franka bringups
+    # take ee_name as a launch argument, so relative goals go out with ''.
+    'model': {
+        'joints': [f'fr3_joint{index}' for index in range(1, 8)],
+        'ee_link': 'fr3_hand_tcp',
+        'absolute_goal_frame': 'fr3_link0',
+    },
     'controllers': {'moveit_trajectory': 'moveit_joint_trajectory_controller'},
     'moveit': {},
     'actions': {'preferences': {

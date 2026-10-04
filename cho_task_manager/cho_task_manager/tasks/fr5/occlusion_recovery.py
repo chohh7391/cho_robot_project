@@ -106,7 +106,7 @@ from cho_task_manager.behaviors.action import (
 from cho_task_manager.behaviors.topic import PoseTargetBehavior
 from cho_task_manager.subtrees import guarded_mission, home_subtree
 from cho_task_manager.tasks.fr5.common import CONTROL_MODE, VESSELS, home_joint_state
-from cho_task_manager.utils.controller_names import load_robot_config
+from cho_task_manager.utils.controller_names import arm_joint_names, load_robot_config
 from cho_task_manager.utils.occlusion import load_sweeps
 
 #: Seconds each vessel gets to be latched AFTER the sweep leaf has already said
@@ -201,6 +201,7 @@ def locate_sequences(robot_config, sweeps, vessels, visibility_topic, first_inde
                 sweep=sweeps[vessel.name],
                 controller_name=controller,
                 visibility_topic=visibility_topic,
+                joint_names=arm_joint_names(robot_config),
             ),
             PoseTargetBehavior(
                 name='Detect_%s' % vessel.name.capitalize(),
@@ -217,6 +218,7 @@ def locate_sequences(robot_config, sweeps, vessels, visibility_topic, first_inde
                 controller_name=controller,
                 duration=RETURN_DURATION_SEC,
                 timeout_sec=RETURN_DURATION_SEC + 20.0,
+                joint_names=arm_joint_names(robot_config),
             ),
         ])
         sequences.append(locate)
@@ -234,6 +236,7 @@ def single_pass_sequence(robot_config, sweeps, vessels, visibility_topic, index=
             required_frame=robot_config['arm_base_link'],
             controller_name=controller,
             visibility_topic=visibility_topic,
+            joint_names=arm_joint_names(robot_config),
         )
     except ValueError as error:
         raise ValueError('%s (sweep_mode:=%s)' % (error, SWEEP_MODE_PER_OBJECT)) from error
@@ -247,6 +250,7 @@ def single_pass_sequence(robot_config, sweeps, vessels, visibility_topic, index=
             controller_name=controller,
             duration=RETURN_DURATION_SEC,
             timeout_sec=RETURN_DURATION_SEC + 20.0,
+            joint_names=arm_joint_names(robot_config),
         ),
     ])
     return locate

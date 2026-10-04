@@ -5,6 +5,16 @@ model:
   arm_base_link: base_link
   ee_link: wrist3_link
   joints: [j1, j2, j3, j4, j5, j6]
+  # Frames clients stamp on TaskSpace goals (cho_robot_config.task_goal_frame,
+  # cho_interfaces/CONTRACT.md). absolute_goal_frame is among the root frames
+  # (cho_controller_base::root_frames()) of the description EVERY bringup of
+  # this profile gives its controllers -- cho_task_manager test_goal_frames
+  # builds them and checks. relative_goal_frame is the EE frame, declared only
+  # where it is the task-space controllers' fixed ee_name; absent means ''.
+  # No relative_goal_frame: every FR5 bringup takes ee_name as a launch
+  # argument, so a client cannot know the controller's EE frame; a relative
+  # goal goes out unstamped ('') and each controller reads it as its own.
+  absolute_goal_frame: base_link
 controllers:
   hold: joint_space_position_controller
   # Position only: every FR5 bringup hard-codes control_mode 'position'

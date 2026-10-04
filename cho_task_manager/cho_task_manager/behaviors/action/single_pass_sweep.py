@@ -40,7 +40,6 @@ from cho_interfaces.action import JointSpace
 from cho_interfaces.msg import ObjectVisibilityArray
 from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
@@ -50,6 +49,7 @@ from cho_task_manager.behaviors.action.occlusion_sweep import (
     _to_view,
 )
 from cho_task_manager.utils import occlusion
+from cho_task_manager.utils.clock import arm, deadline_after, restamp, seconds_since, stamp
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, write_client
 from cho_task_manager.utils.controller_names import controller_action_name
 from cho_task_manager.utils.msg_utils import make_joint_state
@@ -105,6 +105,7 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         goal_timeout_sec: float = 30.0,
         latch_timeout_sec: float = DEFAULT_LATCH_TIMEOUT_SEC,
         namespace: str = TASK_NAMESPACE,
+        joint_names: list = None,
     ):
         if not action_name and not controller_name:
             # No default: which controller drives the sweep is the robot's, and
@@ -127,6 +128,11 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         if not required_frame:
             raise ValueError(f'[{name}] required_frame is required')
         self.raster = occlusion.shared_raster(target.sweep for target in self.targets)
+        # See OcclusionSweepBehavior: every waypoint goal names the arm's joints.
+        self.joint_names = list(joint_names) if joint_names else None
+        if self.joint_names:
+            for waypoint in self.raster.waypoints:
+                make_joint_state(waypoint.joints, self.joint_names)
         self.required_frame = required_frame
         self.visibility_topic = visibility_topic
         self.latch_timeout_sec = latch_timeout_sec
@@ -181,7 +187,8 @@ class SinglePassSweepBehavior(BaseActionBehavior):
                 if entry.publishing:
                     target.unpublished_since = None
                 elif target.unpublished_since is None:
-                    target.unpublished_since = now
+                    # See OcclusionSweepBehavior._track_outage: never stamped 0.
+                    target.unpublished_since = stamp(now)
                 break
 
     def _on_pose(self, target, msg):
@@ -203,8 +210,8 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         self._latch_since = None
         self._latch_deadline = None
         self._after_latch = None
-        self._sweep_deadline = (
-            self.node.get_clock().now() + Duration(seconds=self.raster.timeout_sec))
+        # None until the node clock runs; _expired() takes it then.
+        self._sweep_deadline = deadline_after(self.node.get_clock(), self.raster.timeout_sec)
 
     # ------------------------------------------------------------------ tick
 
@@ -243,8 +250,10 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         assessments = []
         for target in self._pending():
             sweep = target.sweep
-            unseen = (None if target.unpublished_since is None
-                      else (now - target.unpublished_since).nanoseconds * 1e-9)
+            unseen = None
+            if target.unpublished_since is not None:
+                target.unpublished_since = restamp(target.unpublished_since, now)
+                unseen = seconds_since(target.unpublished_since, now)
             assessments.append((target, occlusion.assess(
                 views[target.name], sweep.recovery_camera, sweep.min_decision_margin,
                 sweep.min_tag_edge_px, sweep.planning_target,
@@ -286,12 +295,13 @@ class SinglePassSweepBehavior(BaseActionBehavior):
                 f"'{self.raster.waypoints[self._index].name}'")
             return status
         self._phase = 'dwell'
-        self._dwell_until = (
-            self.node.get_clock().now() + Duration(seconds=self.raster.dwell_sec))
+        self._dwell_until = deadline_after(self.node.get_clock(), self.raster.dwell_sec)
         return py_trees.common.Status.RUNNING
 
     def _dwelling(self, views):
-        if self.node.get_clock().now() < self._dwell_until:
+        clock = self.node.get_clock()
+        self._dwell_until = arm(self._dwell_until, clock, self.raster.dwell_sec)
+        if self._dwell_until is None or clock.now() < self._dwell_until:
             return py_trees.common.Status.RUNNING
 
         waypoint = self.raster.waypoints[self._index]
@@ -394,8 +404,7 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         """
         self._to_latch = list(targets)
         self._latch_since = self._latest_at
-        self._latch_deadline = (
-            self.node.get_clock().now() + Duration(seconds=self.latch_timeout_sec))
+        self._latch_deadline = deadline_after(self.node.get_clock(), self.latch_timeout_sec)
         self._after_latch = then
         self._phase = 'latch'
         return self._latch()
@@ -421,7 +430,9 @@ class SinglePassSweepBehavior(BaseActionBehavior):
 
         waiting = [target for target in self._to_latch if not target.latched]
         if waiting:
-            if self.node.get_clock().now() > self._latch_deadline:
+            clock = self.node.get_clock()
+            self._latch_deadline = arm(self._latch_deadline, clock, self.latch_timeout_sec)
+            if self._latch_deadline is not None and clock.now() > self._latch_deadline:
                 self.node.get_logger().error(
                     f'[{self.name}] '
                     + ', '.join(f"'{target.name}' on {target.topic}" for target in waiting)
@@ -452,7 +463,7 @@ class SinglePassSweepBehavior(BaseActionBehavior):
             + ', '.join(f"'{target.name}'" for target in self._pending()))
         goal = JointSpace.Goal()
         goal.duration_sec = float(waypoint.duration)
-        goal.target_joints = make_joint_state(waypoint.joints)
+        goal.target_joints = make_joint_state(waypoint.joints, self.joint_names)
         self.send_action_goal(goal)
         self._driven += 1
         self._phase = 'moving'
@@ -462,8 +473,9 @@ class SinglePassSweepBehavior(BaseActionBehavior):
         return [target for target in self.targets if not target.latched]
 
     def _expired(self):
-        return (self._sweep_deadline is not None
-                and self.node.get_clock().now() > self._sweep_deadline)
+        clock = self.node.get_clock()
+        self._sweep_deadline = arm(self._sweep_deadline, clock, self.raster.timeout_sec)
+        return self._sweep_deadline is not None and clock.now() > self._sweep_deadline
 
     def _view(self, name):
         for entry in self._latest.objects:
@@ -474,16 +486,11 @@ class SinglePassSweepBehavior(BaseActionBehavior):
     def terminate(self, new_status):
         """Cancel a sweep goal still in flight, however the leaf ended.
 
-        See OcclusionSweepBehavior.terminate: this leaf can fail mid-motion too,
-        and an abandoned goal would drive the arm through the abort branch.
+        See OcclusionSweepBehavior.terminate: this leaf can fail mid-motion
+        too, including before a waypoint goal has been accepted, and an
+        abandoned goal would drive the arm through the abort branch.
+        BaseActionBehavior.terminate() does the cancelling.
         """
-        if (new_status == py_trees.common.Status.FAILURE
-                and self.goal_handle is not None
-                and self.get_result_future is not None
-                and not self.get_result_future.done()):
-            self.node.get_logger().warn(
-                f'[{self.name}] abandoning the sweep; cancelling the goal in flight')
-            self.goal_handle.cancel_goal_async()
         self._phase = 'assess'
         self._dwell_until = None
         self._sweep_deadline = None

@@ -27,6 +27,19 @@ impedance bringup, this means `reach 0` automatically chooses the active
 single-arm endpoint, or the selected independent side endpoint with
 `--arm left` / `--arm right`.
 
+Goals follow `cho_interfaces/CONTRACT.md`: `home` and joint-space `reach` name the
+profile's joints (so a goal for one OpenArm arm is rejected by the other arm's
+server), and task-space `reach` is stamped with the profile's registry goal frame
+(`fr3_link0`, `base_link`, `world`; relative presets with the EE frame, or `''` on
+Franka). The clients carry that metadata themselves (`clients/<robot>/metadata.py`)
+and `test_robot_scoped_entrypoints` keeps it equal to `cho_robot_config`.
+
+Ctrl-C while a goal is running cancels it and returns to the prompt; Ctrl-C at the
+prompt exits. A goal whose result has not come within its duration plus 60 s is
+cancelled the same way. With a MoveIt bridge for the profile, the client waits for
+that profile's own static-scene gate (`/cho_moveit/<robot>[/<profile>]/static_scene_ready`)
+before it settles on the direct controllers.
+
 For the bimanual MuJoCo direct-controller path, start two independent 7-axis
 task controllers (this is not the MoveIt 14-axis paired controller):
 

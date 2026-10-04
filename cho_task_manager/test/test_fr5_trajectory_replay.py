@@ -660,3 +660,15 @@ def test_every_replayed_segment_gets_the_lead_in(tmp_path):
                                 segment.times, segment.positions)
         first, _ = _first_two_times(traj)
         assert first == pytest.approx(DEFAULT_START_DELAY_SEC)
+
+
+@pytest.mark.parametrize('home_via', ['direct', 'moveit'])
+def test_the_home_goals_name_the_fr5_joints(tmp_path, home_via):
+    # To the hold controller or to the MoveIt bridge, the home target names the
+    # joints, so either server matches it by name.
+    from cho_task_manager.behaviors.action import JointSpaceActionBehavior
+    tree = build_task_tree('trajectory_replay', _replay_config(tmp_path, home_via=home_via))
+    homes = [node for node in tree.iterate() if isinstance(node, JointSpaceActionBehavior)]
+    assert homes
+    for leaf in homes:
+        assert list(leaf.target_joints.name) == ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']

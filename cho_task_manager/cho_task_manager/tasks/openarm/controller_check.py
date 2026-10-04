@@ -18,6 +18,8 @@ from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
 )
 from cho_task_manager.subtrees import guarded_mission, home_joint_state
+from cho_task_manager.tasks.openarm.common import ee_state_names, require_one_arm
+from cho_task_manager.utils.controller_names import arm_joint_names
 from cho_task_manager.utils.msg_utils import make_joint_state
 
 # The legacy effort controller this check drives only exists on a
@@ -37,24 +39,31 @@ MOVE_DURATION_SEC = 3.0
 
 
 def create_openarm_controller_check_torque_tree(robot_config):
-    """Switch to the joint-space controller, move away, come back."""
+    """Switch to the joint-space controller, move away, come back.
+
+    One arm: on the bimanual torso it runs per arm (arm:=left, arm:=right),
+    each with its own controller, broadcaster and joints.
+    """
+    require_one_arm(robot_config, 'controller_check_torque')
     controller = robot_config['joint_space']
+    ee_broadcaster, _ee_topic = ee_state_names(robot_config)
 
     seq = py_trees.composites.Sequence(name='OpenArm_Controller_Check_Torque', memory=True)
     seq.add_children([
         SwitchControllerServiceBehavior(
             name=f'Switch_{controller}',
             activate=[controller],
-            # Without this the exclusive set is the Franka one, which contains
-            # no OpenArm controller at all: nothing that actually holds this
-            # arm's command interfaces would be deactivated.
+            # The exclusive set is this robot's, from its registry entry; an
+            # exclusive switch without robot_config raises (there is no
+            # robot-independent set to fall back to).
             robot_config=robot_config,
         ),
         ListControllersServiceBehavior(
             name='Broadcasters_Active',
             require_active=[
                 'joint_state_broadcaster',
-                'ee_state_broadcaster',
+                # Per arm: left_/right_ee_state_broadcaster on the torso.
+                ee_broadcaster,
                 controller,
             ],
         ),
@@ -63,12 +72,16 @@ def create_openarm_controller_check_torque_tree(robot_config):
             target_joints=POSE_AWAY,
             controller_name=controller,
             duration=MOVE_DURATION_SEC,
+            # Per profile: a bimanual arm's goals name its own left_/right_
+            # joints, so one arm's target can never drive the other.
+            joint_names=arm_joint_names(robot_config),
         ),
         JointSpaceActionBehavior(
             name=f'{controller}_Return',
             target_joints=home_joint_state(robot_config),
             controller_name=controller,
             duration=MOVE_DURATION_SEC,
+            joint_names=arm_joint_names(robot_config),
         ),
         # Cheap insurance against a controller that crashed mid-motion: the
         # action would still report success on the last goal it managed.

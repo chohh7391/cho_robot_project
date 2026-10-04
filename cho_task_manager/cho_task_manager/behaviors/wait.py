@@ -14,7 +14,8 @@ wall time otherwise, so a wait means the same amount of physics either way.
 import math
 
 import py_trees
-from rclpy.duration import Duration
+
+from cho_task_manager.utils.clock import arm, deadline_after
 
 
 class WaitBehavior(py_trees.behaviour.Behaviour):
@@ -22,6 +23,13 @@ class WaitBehavior(py_trees.behaviour.Behaviour):
 
     The clock starts in initialise(), i.e. each time the tree reaches this
     leaf, so a re-entered sequence waits the full duration again.
+
+    A node clock reading zero is sim time before the first /clock message.
+    A deadline taken from it would be met the moment /clock arrives -- the
+    simulator's time is already far past zero -- so the wait would end without
+    any physics having run. Until the clock reads something else the leaf
+    stays RUNNING and sets no deadline; the wait starts from the first real
+    reading.
     """
 
     def __init__(self, name: str, duration_sec: float):
@@ -40,10 +48,16 @@ class WaitBehavior(py_trees.behaviour.Behaviour):
         return True
 
     def initialise(self):
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.duration_sec)
+        # None while the clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.duration_sec)
 
     def update(self):
-        if self.node.get_clock().now() < self._deadline:
+        clock = self.node.get_clock()
+        self._deadline = arm(self._deadline, clock, self.duration_sec)
+        if self._deadline is None:
+            self.feedback_message = 'waiting for the clock (no /clock yet)'
+            return py_trees.common.Status.RUNNING
+        if clock.now() < self._deadline:
             return py_trees.common.Status.RUNNING
         return py_trees.common.Status.SUCCESS
 

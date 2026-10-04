@@ -2,6 +2,7 @@ import py_trees
 from cho_task_manager.behaviors.action import TaskSpaceActionBehavior
 from cho_task_manager.behaviors.service import SwitchControllerServiceBehavior
 from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
+from cho_task_manager.utils.controller_names import goal_frame
 from cho_task_manager.utils.msg_utils import make_pose
 
 # See ur/pick_place.py: every UR bringup runs the position interface.
@@ -57,6 +58,7 @@ def create_ur_multi_move_tree(robot_config) -> py_trees.behaviour.Behaviour:
                 relative=False,
                 controller_name=task_controller,
                 duration=3.0,
+                frame_id=goal_frame(robot_config, relative=False),
             )
         )
 

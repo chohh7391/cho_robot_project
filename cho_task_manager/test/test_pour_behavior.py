@@ -8,6 +8,8 @@ server's type but is refused, or worse honoured, by the controller -- and by
 then a vessel is in the gripper.
 """
 
+from unittest.mock import MagicMock
+
 import py_trees
 import pytest
 
@@ -137,10 +139,15 @@ def test_a_finished_run_leaves_nothing_for_the_next_one_to_read():
     # unwritten fails, instead of reporting the previous pour as its own. This
     # pins that: a subclass overriding terminate() without super() breaks it.
     pour = behaviour()
-    pour.send_goal_future = object()
-    pour.get_result_future = object()
-    pour.goal_handle = object()
+    # A run that finished: its result is in, so terminate() has nothing to
+    # cancel and only clears the state.
+    finished = MagicMock()
+    finished.done.return_value = True
+    pour.send_goal_future = finished
+    pour.get_result_future = finished
+    handle = pour.goal_handle = MagicMock()
     pour.stop(py_trees.common.Status.SUCCESS)
+    handle.cancel_goal_async.assert_not_called()
     assert pour.send_goal_future is None
     assert pour.get_result_future is None
     assert pour.goal_handle is None

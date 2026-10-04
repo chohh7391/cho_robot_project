@@ -26,7 +26,43 @@ def make_up_pose(height):
     p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = 0.0, 0.0, 0.0, 1.0
     return p
 
-def make_joint_state(position):
+def make_joint_state(position, names=None):
+    """A JointState target; with *names*, one per position, in the same order.
+
+    Pass the registry's ``model.joints`` (``arm_joint_names(robot_config)``):
+    a JointSpace server matches named positions by name and rejects a goal
+    that names an unknown joint or misses one (cho_interfaces/CONTRACT.md), so
+    a target meant for one arm of a bimanual robot cannot drive the other.
+    Unnamed, the positions are taken in the server's own joint order.
+    """
     js = JointState()
     js.position = [float(p) for p in position]
+    if names is not None:
+        names = [str(name) for name in names]
+        if len(names) != len(js.position):
+            raise ValueError(
+                f'{len(js.position)} joint positions but {len(names)} joint names {names}')
+        js.name = names
     return js
+
+
+def named_joint_state(target, names):
+    """*target* with its ``name`` filled from *names*, or as given when it already has one.
+
+    Returns a copy; raises ValueError when the counts differ, which is a target
+    written for another robot or arm.
+    """
+    if target.name:
+        return target
+    named = JointState()
+    named.header = target.header
+    named.position = list(target.position)
+    named.velocity = list(target.velocity)
+    named.effort = list(target.effort)
+    names = [str(name) for name in names]
+    if len(names) != len(named.position):
+        raise ValueError(
+            f'{len(named.position)} joint positions but this arm has {len(names)} '
+            f'joints {names}')
+    named.name = names
+    return named

@@ -17,12 +17,16 @@ from std_msgs.msg import String
 
 DEFAULT_ROBOT_DESCRIPTION_TOPIC = '/robot_description'
 
-# robot_state_publisher latches the description, so a late subscriber needs
-# TRANSIENT_LOCAL to receive it at all. BEST_EFFORT so it matches a publisher of
-# either reliability (see safety_monitor.py for why that matters).
+# robot_state_publisher latches the description: RELIABLE + TRANSIENT_LOCAL, so
+# a late subscriber needs TRANSIENT_LOCAL to receive it at all. And RELIABLE,
+# not the BEST_EFFORT the sensor monitors use: the latched sample is delivered
+# to a late joiner through the reliable protocol's history, which a best-effort
+# reader is not guaranteed to get (Fast DDS does not send it one). Every
+# description publisher here is robot_state_publisher, which is reliable, so
+# nothing is lost by asking for it.
 LATCHED_QOS = QoSProfile(
     depth=1,
-    reliability=ReliabilityPolicy.BEST_EFFORT,
+    reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
 )
 

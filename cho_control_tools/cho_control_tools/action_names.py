@@ -41,6 +41,34 @@ def moveit_bridge_node(robot_type, profile='single'):
     return f'{robot_type}_{profile}_{MOVEIT_BRIDGE_SUFFIX}'
 
 
+def static_scene_ready_service(robot_type, profile='single'):
+    """The service one robot profile's static planning-scene gate answers on.
+
+    Copy of ``cho_robot_config.static_scene_ready_service``: each profile has
+    its own gate, so a client for one arm never waits on, or skips, another's.
+    """
+    if profile in (None, '', 'single'):
+        return f'/cho_moveit/{robot_type}/static_scene_ready'
+    return f'/cho_moveit/{robot_type}/{profile}/static_scene_ready'
+
+
+def task_goal_frame(config, relative):
+    """The ``frame_id`` a TaskSpace goal for *config*'s robot profile is stamped with.
+
+    Copy of ``cho_robot_config.task_goal_frame``, reading the same ``model``
+    keys of the registry entry or of the bundled metadata: ``''`` where none
+    is declared, which the server reads as the frame it means.
+    """
+    model = (config or {}).get('model') or {}
+    return model.get('relative_goal_frame' if relative else 'absolute_goal_frame') or ''
+
+
+def goal_joint_names(config):
+    """The joint names a JointSpace target for *config*'s profile carries ([] if unknown)."""
+    model = (config or {}).get('model') or {}
+    return list(model.get('joints') or [])
+
+
 def serving_node(action_name):
     """The node an action is served by: everything before its kind."""
     return action_name.strip('/').rsplit('/', 1)[0]

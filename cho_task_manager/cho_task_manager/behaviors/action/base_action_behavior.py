@@ -1,9 +1,11 @@
+import threading
+
 import py_trees
 from action_msgs.msg import GoalStatus
-from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+from cho_task_manager.utils.clock import arm, deadline_after
 from cho_task_manager.utils.controller_names import valid_controller_action_names
 
 
@@ -32,6 +34,13 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         self.cb_group = None
         self.server_available = False
         self._deadline = None
+        # Cancels this leaf still owes or is waiting to hear back about, kept
+        # so whoever tears the node down can spin until they are out
+        # (cancels_outstanding()). Touched from executor threads by the
+        # done-callbacks, hence the lock.
+        self._cancel_lock = threading.Lock()
+        self._owed_cancels = set()      # send_goal futures to cancel on acceptance
+        self._cancel_requests = []      # cancel responses not yet received
 
     def setup(self, **kwargs):
         self.node = kwargs['node']
@@ -68,17 +77,94 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         self.send_goal_future = self.client.send_goal_async(goal_msg)
         self.get_result_future = None
         self.goal_handle = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock has not started (sim time before the first
+        # /clock): a deadline from 0 would be missed on the first tick after
+        # /clock arrives. _timed_out() takes it once the clock runs.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def _timed_out(self):
-        return self._deadline is not None and self.node.get_clock().now() > self._deadline
+        clock = self.node.get_clock()
+        self._deadline = arm(self._deadline, clock, self.timeout_sec)
+        return self._deadline is not None and clock.now() > self._deadline
+
+    def _send_cancel(self, goal_handle):
+        """Ask the server to cancel *goal_handle*, and remember to wait for its answer."""
+        response = goal_handle.cancel_goal_async()
+        if response is not None:
+            with self._cancel_lock:
+                self._cancel_requests.append(response)
+
+    def _cancel_late_accepted_goal(self, send_goal_future):
+        """Done-callback: cancel a goal whose acceptance arrived after we gave up on it.
+
+        Every accepted goal is cancelled. Its handle cannot say whether it has
+        already finished -- rclpy creates it at the goal response with status
+        UNKNOWN and drops status updates until then -- and cancelling a goal
+        that has finished costs one refused request. A rejected one has
+        nothing to cancel.
+        """
+        try:
+            try:
+                goal_handle = send_goal_future.result()
+            except Exception:  # noqa: B902 - the request failed; no goal to cancel
+                goal_handle = None
+            if goal_handle is not None and goal_handle.accepted:
+                self._send_cancel(goal_handle)
+        finally:
+            with self._cancel_lock:
+                self._owed_cancels.discard(send_goal_future)
+
+    def _arm_late_cancel(self, send_goal_future):
+        """Cancel the goal *send_goal_future* carries as soon as the server accepts it.
+
+        Fires at once when the response is already in but no tick has read it.
+        """
+        with self._cancel_lock:
+            self._owed_cancels.add(send_goal_future)
+        send_goal_future.add_done_callback(self._cancel_late_accepted_goal)
+
+    def cancels_outstanding(self):
+        """True while a cancel this leaf decided on has not been seen through.
+
+        Either a goal whose acceptance is still in flight and is to be
+        cancelled when it lands, or a cancel request with no response yet.
+        Both need the executor to spin, so a process that destroys its node
+        while this is True drops them (task_manager_node.shutdown_task_manager).
+        """
+        with self._cancel_lock:
+            self._cancel_requests = [
+                response for response in self._cancel_requests if not response.done()]
+            return bool(self._owed_cancels or self._cancel_requests)
+
+    def _abandon_goal(self, new_status):
+        """Cancel the goal this leaf sent if it may still be running.
+
+        Called from terminate() for EVERY status, not only INVALID: a leaf that
+        returns SUCCESS or FAILURE while its goal is in flight (a sweep giving
+        up mid-motion, say) leaves a motion running that nothing will ever
+        cancel. Nothing happens when the goal has finished -- rejected, or its
+        result already in -- which is how every plain action leaf ends.
+        """
+        if self.goal_handle is not None:
+            if self.get_result_future is not None and not self.get_result_future.done():
+                self.node.get_logger().warn(
+                    f"[{self.name}] {self._ending(new_status)} with its goal still running; "
+                    "cancelling it")
+                self._send_cancel(self.goal_handle)
+        elif self.send_goal_future is not None:
+            # Acceptance still pending: there is no handle to cancel yet, but the
+            # server may accept and execute the goal after the tree has moved on.
+            # Same remedy as the timeout path -- cancel it on acceptance.
+            self.node.get_logger().warn(
+                f"[{self.name}] {self._ending(new_status)} before the goal was accepted; "
+                "it will be cancelled on acceptance")
+            self._arm_late_cancel(self.send_goal_future)
 
     @staticmethod
-    def _cancel_late_accepted_goal(send_goal_future):
-        """Done-callback: cancel a goal whose acceptance arrived after we gave up on it."""
-        goal_handle = send_goal_future.result()
-        if goal_handle is not None and goal_handle.accepted:
-            goal_handle.cancel_goal_async()
+    def _ending(new_status):
+        if new_status == py_trees.common.Status.INVALID:
+            return 'Preempted'
+        return f'Ended {new_status.name}'
 
     def update(self):
         if self.send_goal_future is None:
@@ -115,12 +201,12 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
                 f"[{self.name}] Timed out after {self.timeout_sec}s waiting for {self.action_name}"
             )
             if self.goal_handle is not None:
-                self.goal_handle.cancel_goal_async()
+                self._send_cancel(self.goal_handle)
             else:
                 # Acceptance still pending: the server may accept (and execute) the
                 # goal after we've moved on -- make sure it gets cancelled then, or a
                 # stale motion could run while the tree is doing something else.
-                self.send_goal_future.add_done_callback(self._cancel_late_accepted_goal)
+                self._arm_late_cancel(self.send_goal_future)
             self.send_goal_future = None
             self.get_result_future = None
             self.goal_handle = None
@@ -130,21 +216,7 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
     def terminate(self, new_status):
-        if new_status == py_trees.common.Status.INVALID:
-            if self.goal_handle is not None:
-                if self.get_result_future is not None and not self.get_result_future.done():
-                    self.node.get_logger().warn(f"[{self.name}] Preempted! Canceling Goal...")
-                    self.goal_handle.cancel_goal_async()
-            elif self.send_goal_future is not None:
-                # Preempted with acceptance still pending: there is no handle to cancel
-                # yet, but the server may accept and execute the goal after the tree has
-                # moved on. Same remedy as the timeout path -- cancel it on acceptance.
-                self.node.get_logger().warn(
-                    f"[{self.name}] Preempted before the goal was accepted; "
-                    "it will be cancelled on acceptance"
-                )
-                self.send_goal_future.add_done_callback(self._cancel_late_accepted_goal)
-
+        self._abandon_goal(new_status)
         self.send_goal_future = None
         self.get_result_future = None
         self.goal_handle = None

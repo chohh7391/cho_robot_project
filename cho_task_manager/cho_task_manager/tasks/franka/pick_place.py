@@ -18,7 +18,7 @@ CONTROL_MODE = 'torque'
 def create_franka_pick_place_tree(robot_config=None) -> py_trees.behaviour.Behaviour:
     # Fill in the registry entry when built directly (tests, one-off scripts):
     # both the exclusive-switch set and the abort's hold controller derive from
-    # it, and the no-config fallback is the historical hard-coded Franka list.
+    # it, and an exclusive switch built without one raises.
     robot_config = robot_config or load_robot_config('franka')
     # The registry's poses.task_home: TCP forward and down, gripper pointing
     # straight down (cho_robot_config/config/franka.yaml).

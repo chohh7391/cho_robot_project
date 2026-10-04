@@ -6,6 +6,7 @@ import threading
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.action import get_action_names_and_types
+from rclpy.signals import SignalHandlerOptions
 from action_msgs.msg import GoalStatus
 from controller_manager_msgs.srv import ListControllers
 
@@ -26,12 +27,22 @@ from cho_control_tools.action_names import (
     MOVEIT_BRIDGE_SUFFIX,
     action_kind,
     controller_action_name,
+    goal_joint_names,
     serving_node,
+    static_scene_ready_service,
+    task_goal_frame,
 )
 
 # Every goal this shell sends asks for at least this long [s]; the controller
 # takes longer if its limits require (cho_interfaces/CONTRACT.md).
 GOAL_DURATION_SEC = 5.0
+# How long past a goal's own duration the shell waits for its result before it
+# cancels the goal and gives the prompt back [s]. Generous: a MoveIt goal plans
+# first, and a controller slows a goal its limits cannot meet in time.
+RESULT_TIMEOUT_MARGIN_SEC = 60.0
+# How long a cancel (Ctrl-C, or the result timeout) waits for the server's
+# answer before the shell says it does not know whether the arm stopped [s].
+CANCEL_WAIT_SEC = 3.0
 ACTION_TYPE_NAMES = {
     "joint": "cho_interfaces/action/JointSpace",
     "task": "cho_interfaces/action/TaskSpace",
@@ -118,7 +129,10 @@ class ControlSuiteShell(cmd.Cmd):
         self._operator_facing = operator_facing
         gripper_command = self.robot_config['actions'].get('gripper_command')
         self.has_gripper = bool(self.action_preferences['gripper'] or gripper_command)
-        rclpy.init(args=None)
+        # Ctrl-C is left to Python: rclpy's own handler would shut the context
+        # down first, and the cancel _send_goal_and_wait sends for a running
+        # goal would then fail on a dead context and leave the arm moving.
+        rclpy.init(args=None, signal_handler_options=SignalHandlerOptions.NO)
         self.node = rclpy.create_node(
             f"actions_client_{robot_type}_{arm}",
             parameter_overrides=[
@@ -204,7 +218,11 @@ class ControlSuiteShell(cmd.Cmd):
             now = time.monotonic()
             if moveit_bridge_discovered:
                 break
-            ready_service = f'/cho_moveit/{self.robot_type}/static_scene_ready'
+            # Per profile: each arm's MoveIt stack has its own gate, and the
+            # robot-wide name never exists for left/right/both, so those
+            # profiles used to skip the wait for their bridge altogether.
+            ready_service = static_scene_ready_service(
+                self.robot_type, getattr(self, 'arm', 'single'))
             service_names = {
                 name for name, _types in self.node.get_service_names_and_types()}
             if ready_service in service_names:
@@ -471,6 +489,21 @@ class ControlSuiteShell(cmd.Cmd):
         return True
 
 
+    def _joint_target(self, positions):
+        """A JointState for *positions*, named with this profile's joints.
+
+        Named, the server matches the positions by name and rejects a target
+        for the other arm of a bimanual robot rather than driving this arm
+        with it (cho_interfaces/CONTRACT.md). Metadata without joint names, or
+        with a different count, leaves the target unnamed: the server's order.
+        """
+        target = JointState()
+        target.position = [float(value) for value in positions]
+        names = goal_joint_names(self._config())
+        if len(names) == len(target.position):
+            target.name = names
+        return target
+
     def do_home(self, arg):
         """Go to the home position using joint-posture control"""
         if self.joint_space_action_client is None:
@@ -479,7 +512,6 @@ class ControlSuiteShell(cmd.Cmd):
 
         goal = JointSpace.Goal()
         goal.duration_sec = GOAL_DURATION_SEC
-        goal.target_joints = JointState()
 
         selector = arg.strip()
         robot_config = self._config()
@@ -495,7 +527,7 @@ class ControlSuiteShell(cmd.Cmd):
                 f"{policy['reason']}. Use a safe home pose instead."
             )
             return
-        goal.target_joints.position = home[selector]
+        goal.target_joints = self._joint_target(home[selector])
 
         if self._send_goal_and_wait(self.joint_space_action_client, goal):
             self._report_outcome(True)
@@ -519,8 +551,7 @@ class ControlSuiteShell(cmd.Cmd):
                 self.joint_space_action_client is not None and selector in joint_reach):
             goal = JointSpace.Goal()
             goal.duration_sec = GOAL_DURATION_SEC
-            goal.target_joints = JointState()
-            goal.target_joints.position = joint_reach[selector]
+            goal.target_joints = self._joint_target(joint_reach[selector])
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
                 self._report_outcome(True)
             else:
@@ -537,8 +568,7 @@ class ControlSuiteShell(cmd.Cmd):
                 return
             goal = JointSpace.Goal()
             goal.duration_sec = GOAL_DURATION_SEC
-            goal.target_joints = JointState()
-            goal.target_joints.position = joint_reach[selector]
+            goal.target_joints = self._joint_target(joint_reach[selector])
             if self._send_goal_and_wait(self.joint_space_action_client, goal):
                 self._report_outcome(True)
             else:
@@ -549,8 +579,6 @@ class ControlSuiteShell(cmd.Cmd):
             return
 
         goal = TaskSpace.Goal()
-        # frame_id stays '': the server's base frame for an absolute preset,
-        # its EE frame for a relative one -- the frames these presets are in.
         goal.target_pose = PoseStamped()
         reach = self.robot_config['motions']['reach']
         if selector not in reach:
@@ -559,6 +587,11 @@ class ControlSuiteShell(cmd.Cmd):
         motion = reach[selector]
         goal.duration_sec = GOAL_DURATION_SEC
         goal.relative = motion['relative']
+        # The registry's frame for this profile: for an absolute preset, a root
+        # frame of every controller of it (and one the MoveIt bridge accepts);
+        # for a relative one, the EE frame where it is the controllers' fixed
+        # ee_name, else ''. The presets are written in those frames.
+        goal.target_pose.header.frame_id = task_goal_frame(self._config(), goal.relative)
         pose = goal.target_pose.pose
         (pose.position.x, pose.position.y, pose.position.z) = motion['position']
         (pose.orientation.x, pose.orientation.y,
@@ -630,26 +663,55 @@ class ControlSuiteShell(cmd.Cmd):
 
     # Helper Functions
     def _send_goal_and_wait(self, client: ActionClient, goal_msg) -> bool:
+        """Send *goal_msg* and wait for its result; False unless it succeeded.
+
+        Ctrl-C while waiting cancels the goal and returns to the prompt
+        instead of leaving the arm moving under a goal nobody watches, and a
+        result that does not come within the goal's duration plus
+        RESULT_TIMEOUT_MARGIN_SEC is given up on the same way.
+        """
         # Side-band diagnostic state for robot-specific front ends.  The
         # established boolean return contract remains unchanged.
         self._last_goal_rejected = False
         self._last_result_message = ''
         send_goal_future = client.send_goal_async(goal_msg)
+        goal_handle = None
+        try:
+            # Callbacks run on the background spinner thread, so just wait for the future.
+            while rclpy.ok() and not send_goal_future.done():
+                time.sleep(0.1)
+            if not send_goal_future.done():
+                self._last_result_message = 'ROS shut down before the goal was answered'
+                return False
 
-        # Callbacks run on the background spinner thread, so just wait for the future.
-        while rclpy.ok() and not send_goal_future.done():
-            time.sleep(0.1)
+            goal_handle = send_goal_future.result()
+            if goal_handle is None or not goal_handle.accepted:
+                self._last_goal_rejected = True
+                print("Goal rejected")
+                return False
 
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
-            self._last_goal_rejected = True
-            print("Goal rejected")
+            get_result_future = goal_handle.get_result_async()
+            timeout = self._result_timeout(goal_msg)
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and not get_result_future.done():
+                if time.monotonic() > deadline:
+                    self._cancel(goal_handle)
+                    self._last_result_message = (
+                        f'no result within {timeout:.0f}s; the goal was cancelled')
+                    return False
+                time.sleep(0.1)
+            if not get_result_future.done():
+                self._last_result_message = 'ROS shut down before the result arrived'
+                return False
+        except KeyboardInterrupt:
+            print('\nInterrupted: cancelling the goal')
+            if goal_handle is not None:
+                self._cancel(goal_handle)
+            else:
+                # Not answered yet: cancel it the moment it is accepted.
+                send_goal_future.add_done_callback(self._cancel_if_accepted)
+            self._last_result_message = 'interrupted (Ctrl-C); the goal was cancelled'
             return False
-
-        get_result_future = goal_handle.get_result_async()
-
-        while rclpy.ok() and not get_result_future.done():
-            time.sleep(0.1)
 
         wrapped = get_result_future.result()
         # Every result carries a message now (empty on success); getattr keeps
@@ -657,6 +719,32 @@ class ControlSuiteShell(cmd.Cmd):
         self._last_result_message = getattr(wrapped.result, 'message', '') or ''
 
         return wrapped.status == GoalStatus.STATUS_SUCCEEDED
+
+    @staticmethod
+    def _result_timeout(goal_msg):
+        """How long to wait for *goal_msg*'s result: its duration plus a margin."""
+        duration = getattr(goal_msg, 'duration_sec', 0.0) or 0.0
+        return float(duration) + RESULT_TIMEOUT_MARGIN_SEC
+
+    def _cancel(self, goal_handle):
+        """Cancel *goal_handle* and wait, briefly, for the server to answer."""
+        future = goal_handle.cancel_goal_async()
+        deadline = time.monotonic() + CANCEL_WAIT_SEC
+        try:
+            while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+                time.sleep(0.05)
+        except KeyboardInterrupt:
+            pass
+        if future.done():
+            print('Goal cancelled')
+        else:
+            print('No answer to the cancel; the arm may still be moving')
+
+    @staticmethod
+    def _cancel_if_accepted(send_goal_future):
+        handle = send_goal_future.result()
+        if handle is not None and handle.accepted:
+            handle.cancel_goal_async()
 
     def _report_outcome(self, succeeded: bool) -> None:
         """Print the goal outcome, naming the reason the server reported."""

@@ -8,6 +8,14 @@ from cho_control_tools.action_names import controller_action_name, moveit_bridge
 _CONFIG = {
     'robot_type': 'fr5',
     'supports_task': True,
+    # What goals are named and stamped with (cho_robot_config model.*): joint
+    # targets name these joints, absolute task goals say absolute_goal_frame,
+    # relative ones relative_goal_frame ('' when the registry declares none).
+    'model': {
+        'joints': ['j1', 'j2', 'j3', 'j4', 'j5', 'j6'],
+        'ee_link': 'wrist3_link',
+        'absolute_goal_frame': 'base_link',
+    },
     'controllers': {'moveit_trajectory': 'joint_trajectory_controller',
                     'gripper': 'gripper_controller'},
     'moveit': {},

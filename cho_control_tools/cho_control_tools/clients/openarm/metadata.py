@@ -17,9 +17,22 @@ _REACH = {
     '2': [-0.15, -0.45, -0.1, 1.1, -0.1, 0.35, 0.0],
     '3': [0.0, -0.35, 0.0, 0.95, 0.0, 0.30, 0.0],
 }
+def _model(prefix, ee_link, relative_goal_frame):
+    """See clients/fr5/metadata.py; *prefix* is the bimanual arm's, '' for one arm."""
+    model = {
+        'joints': [f'openarm_{prefix}joint{index}' for index in range(1, 8)],
+        'ee_link': ee_link,
+        'absolute_goal_frame': 'world',
+    }
+    if relative_goal_frame:
+        model['relative_goal_frame'] = relative_goal_frame
+    return model
+
+
 _CONFIG = {
     'robot_type': 'openarm',
     'supports_task': True,
+    'model': _model('', 'openarm_hand_tcp', None),
     'controllers': {'moveit_trajectory': 'joint_trajectory_controller'},
     'moveit': {},
     'actions': {'preferences': {
@@ -79,6 +92,8 @@ _BOTH_REACH = {
 
 def _side_config(profile):
     config = deepcopy(_CONFIG)
+    tcp = f'openarm_{profile}_hand_tcp'
+    config['model'] = _model(f'{profile}_', tcp, tcp)
     config['controllers'] = {'moveit_trajectory': f'{profile}_joint_trajectory_controller'}
     config['moveit'] = {'controllers': [
         'left_joint_trajectory_controller', 'right_joint_trajectory_controller']}
@@ -102,6 +117,8 @@ def _side_config(profile):
 def _both_config():
     config = deepcopy(_CONFIG)
     config['supports_task'] = False
+    config['model'] = _model('left_', 'openarm_left_hand_tcp', None)
+    config['model']['joints'] += [f'openarm_right_joint{index}' for index in range(1, 8)]
     config['controllers'] = {'moveit_trajectory': 'left_joint_trajectory_controller'}
     config['moveit'] = {'controllers': [
         'left_joint_trajectory_controller', 'right_joint_trajectory_controller']}

@@ -15,6 +15,8 @@ from cho_robot_config import (
     load_moveit_metadata,
     load_robot_config,
     moveit_bridge_node,
+    static_scene_ready_service,
+    task_goal_frame,
     task_home_pose,
     validate_robot_config,
 )
@@ -267,6 +269,12 @@ def test_openarm_reach_targets_are_fixed_absolute_world_poses():
     (lambda c: c['controllers'].__setitem__('additional_arm', ['']), 'unique list'),
     (lambda c: c['controllers'].__setitem__(
         'additional_arm', ['gripper_controller']), 'must not name the gripper'),
+    # A third frame nobody else in the stack knows about.
+    (lambda c: c['model'].__setitem__('absolute_goal_frame', 'camera_link'),
+     'must be model.base_frame'),
+    (lambda c: c['model'].__setitem__('absolute_goal_frame', ''), 'non-empty string'),
+    (lambda c: c['model'].__setitem__('relative_goal_frame', 'tool_tcp'),
+     'must be model.ee_link'),
 ])
 def test_invalid_documents_are_rejected(mutation, message):
     config = deepcopy(load_robot_config('fr5'))
@@ -536,3 +544,66 @@ def test_declared_modes_are_a_subset_of_the_known_control_modes():
     for robot_type, profile in _all_profiles():
         config = load_robot_config(robot_type, profile)
         assert set(declared_hold_control_modes(config)) <= set(CONTROL_MODES)
+
+
+# ------------------------------------------------------- TaskSpace goal frames
+
+GOAL_FRAMES = {
+    # (robot, profile): (absolute, relative). Absolute is proven against every
+    # bringup's description by cho_task_manager test_goal_frames.
+    ('franka', 'single'): ('fr3_link0', ''),
+    # FR5, UR and the single OpenArm take ee_name at launch: relative goals unstamped.
+    ('fr5', 'single'): ('base_link', ''),
+    ('ur5e', 'single'): ('base_link', ''),
+    ('openarm', 'single'): ('world', ''),
+    ('openarm', 'left'): ('world', 'openarm_left_hand_tcp'),
+    ('openarm', 'right'): ('world', 'openarm_right_hand_tcp'),
+    ('openarm', 'both'): ('world', ''),
+}
+
+
+def test_every_profile_has_its_goal_frames_pinned():
+    profiles = {(robot, profile) for robot in available_robot_types()
+                for profile in available_profiles(robot)}
+    assert profiles == set(GOAL_FRAMES)
+
+
+@pytest.mark.parametrize('robot_type,profile', sorted(GOAL_FRAMES))
+def test_goal_frames_per_profile(robot_type, profile):
+    config = load_robot_config(robot_type, profile)
+    assert (task_goal_frame(config, relative=False),
+            task_goal_frame(config, relative=True)) == GOAL_FRAMES[(robot_type, profile)]
+
+
+def test_a_profile_that_inherits_another_arms_ee_frame_is_rejected(tmp_path, monkeypatch):
+    # A bimanual arm that changed ee_link but not relative_goal_frame would
+    # stamp the single arm's EE frame on its goals; the registry refuses it.
+    source = Path(__file__).resolve().parents[1] / 'config'
+    for path in source.glob('*.yaml'):
+        shutil.copy(path, tmp_path / path.name)
+    document = yaml.safe_load((tmp_path / 'openarm.yaml').read_text())
+    # The single arm declares none (its ee_name is a launch argument); give it
+    # one here so there is something for the left arm to inherit.
+    document['model']['relative_goal_frame'] = 'openarm_hand_tcp'
+    del document['profiles']['left']['model']['relative_goal_frame']
+    (tmp_path / 'openarm.yaml').write_text(yaml.safe_dump(document))
+    monkeypatch.setenv('CHO_ROBOT_CONFIG_DIR', str(tmp_path))
+    with pytest.raises(ValueError, match='relative_goal_frame'):
+        load_robot_config('openarm', 'left')
+
+
+def test_a_registry_without_goal_frames_stamps_nothing():
+    config = deepcopy(load_robot_config('fr5'))
+    config['model'].pop('absolute_goal_frame')
+    config['model'].pop('relative_goal_frame', None)
+    validate_robot_config(config, 'fr5')
+    assert task_goal_frame(config, relative=False) == ''
+    assert task_goal_frame(config, relative=True) == ''
+
+
+@pytest.mark.parametrize('robot_type,profile', sorted(GOAL_FRAMES))
+def test_static_scene_ready_service_is_per_profile(robot_type, profile):
+    assert static_scene_ready_service(robot_type, profile) == (
+        load_moveit_metadata(robot_type, profile=profile)['ready_service'])
+    if profile != 'single':
+        assert f'/{profile}/' in static_scene_ready_service(robot_type, profile)

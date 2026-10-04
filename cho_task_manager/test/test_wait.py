@@ -58,6 +58,33 @@ def test_a_stalled_sim_clock_holds_the_wait_however_long_the_wall_clock_runs():
         assert behaviour.update() == RUNNING
 
 
+def test_no_clock_yet_holds_the_wait_and_starts_it_from_the_first_reading():
+    # Sim time before the first /clock reads 0. A deadline taken from that is
+    # already in the past once /clock arrives at the simulator's real time, so
+    # the wait used to succeed on the first tick after it -- with no settling.
+    behaviour, clock = _wait(3.0)
+    clock.seconds = 0.0
+    behaviour.initialise()
+    for _ in range(3):
+        assert behaviour.update() == RUNNING
+
+    clock.seconds = 1234.0        # /clock arrives, far past zero
+    assert behaviour.update() == RUNNING
+    clock.seconds += 2.9
+    assert behaviour.update() == RUNNING
+    clock.seconds += 0.1
+    assert behaviour.update() == SUCCESS
+
+
+def test_a_zero_length_wait_still_waits_for_the_clock():
+    behaviour, clock = _wait(0.0)
+    clock.seconds = 0.0
+    behaviour.initialise()
+    assert behaviour.update() == RUNNING
+    clock.seconds = 5.0
+    assert behaviour.update() == SUCCESS
+
+
 def test_each_entry_waits_the_full_duration_again():
     behaviour, clock = _wait(1.0)
     behaviour.initialise()

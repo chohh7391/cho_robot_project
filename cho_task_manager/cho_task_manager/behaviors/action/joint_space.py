@@ -3,6 +3,7 @@ from sensor_msgs.msg import JointState
 from cho_interfaces.action import JointSpace
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, TargetKey
 from cho_task_manager.utils.controller_names import controller_action_name
+from cho_task_manager.utils.msg_utils import named_joint_state
 
 
 class JointSpaceActionBehavior(BaseActionBehavior):
@@ -15,6 +16,11 @@ class JointSpaceActionBehavior(BaseActionBehavior):
     ``controller_name`` is required unless ``action_name`` names the endpoint
     outright. There is no default controller: which one serves joint goals is
     the robot's, so a tree passes it from its robot config.
+
+    ``joint_names`` (``arm_joint_names(robot_config)``) names a target that
+    has none, so the server matches positions by name and rejects a target
+    meant for another arm instead of driving this one with it
+    (cho_interfaces/CONTRACT.md). A target that is already named goes as is.
     """
 
     def __init__(
@@ -27,6 +33,7 @@ class JointSpaceActionBehavior(BaseActionBehavior):
         blackboard_namespace: str = TASK_NAMESPACE,
         action_name: str = None,
         timeout_sec: float = 30.0,
+        joint_names: list = None,
     ):
         # `action_name` targets an endpoint that is not a controller's own. The
         # MoveIt bridge serves this SAME JointSpace action under its own node
@@ -49,7 +56,12 @@ class JointSpaceActionBehavior(BaseActionBehavior):
             name, JointSpace,
             action_name or controller_action_name(controller_name, 'joint_space'),
             timeout_sec=timeout_sec)
-        self.target_joints = target_joints
+        self.joint_names = list(joint_names) if joint_names else None
+        # A literal target is checked now: a count that does not match the
+        # arm is a tree bug, and build time is the cheapest place to say so.
+        self.target_joints = (
+            named_joint_state(target_joints, self.joint_names)
+            if target_joints is not None and self.joint_names else target_joints)
         self.target_key = (
             TargetKey(name, target_joints_key, JointState, blackboard_namespace)
             if target_joints_key else None
@@ -62,6 +74,14 @@ class JointSpaceActionBehavior(BaseActionBehavior):
             target_joints = self.target_key.read(self)
             if target_joints is None:
                 # See TaskSpaceActionBehavior.initialise().
+                return
+
+        if self.joint_names:
+            try:
+                target_joints = named_joint_state(target_joints, self.joint_names)
+            except ValueError as error:
+                # No goal is sent, so update() reports FAILURE next tick.
+                self.node.get_logger().error(f'[{self.name}] {error}')
                 return
 
         goal_msg = JointSpace.Goal()

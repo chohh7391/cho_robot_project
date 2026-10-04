@@ -48,6 +48,14 @@
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <!-- test_goal_frames expands every bringup's robot description to prove the
+       registry's TaskSpace goal frames are root frames the controllers accept.
+       Skipped where they are not installed. -->
+  <test_depend>xacro</test_depend>
+  <test_depend>cho_description_franka</test_depend>
+  <test_depend>cho_description_fr5</test_depend>
+  <test_depend>cho_description_ur</test_depend>
+  <test_depend>cho_description_openarm</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

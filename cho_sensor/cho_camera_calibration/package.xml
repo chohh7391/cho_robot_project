@@ -19,6 +19,7 @@
   <!-- scripts/: the target generator, the board-view recorder and the hand-eye solver. -->
   <exec_depend>apriltag_msgs</exec_depend>
   <exec_depend>cho_interfaces</exec_depend>
+  <exec_depend>cho_robot_config</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-reportlab</exec_depend>

@@ -16,6 +16,7 @@ from cho_task_manager.utils.controller_names import ControllerNames, controller_
 class FakeTime:
     def __init__(self, seconds):
         self.seconds = seconds
+        self.nanoseconds = int(round(seconds * 1e9))
 
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
@@ -25,7 +26,8 @@ class FakeTime:
 
 
 class FakeClock:
-    def __init__(self, start=0.0):
+    def __init__(self, start=100.0):
+        # Running: a clock at 0 is sim time before the first /clock.
         self.seconds = start
 
     def now(self):
@@ -262,12 +264,155 @@ def test_terminate_invalid_after_completion_does_nothing():
     # its state already cleared that must not reach for a goal.
     behavior = make_behavior()
     send_future = Future()
+    handle = MagicMock(accepted=True)
+    result_future = Future()
+    handle.get_result_async.return_value = result_future
     behavior.client.send_goal_async.return_value = send_future
     behavior.send_action_goal(MagicMock())
+    send_future.set_result(handle)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    result_future.set_result(MagicMock(status=GoalStatus.STATUS_SUCCEEDED))
+    assert behavior.update() == py_trees.common.Status.SUCCESS
     behavior.terminate(py_trees.common.Status.SUCCESS)
 
     behavior.terminate(py_trees.common.Status.INVALID)
 
-    handle = MagicMock(accepted=True)
-    send_future.set_result(handle)
     handle.cancel_goal_async.assert_not_called()
+    assert not behavior.cancels_outstanding()
+
+
+# ------------------------------------------- ending with the goal still out
+#
+# A subclass may end SUCCESS or FAILURE while its goal is still pending -- the
+# sweeps give up mid-motion on their own deadline. The base class has to cancel
+# that goal whatever the status, including one still awaiting acceptance.
+
+def test_terminate_failure_before_goal_accepted_cancels_on_acceptance():
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+
+    behavior.terminate(py_trees.common.Status.FAILURE)
+    assert behavior.cancels_outstanding()
+
+    late_handle = MagicMock(accepted=True)
+    send_future.set_result(late_handle)
+    late_handle.cancel_goal_async.assert_called_once()
+
+
+def test_terminate_success_with_the_goal_running_cancels_it():
+    behavior = make_behavior()
+    send_future = Future()
+    handle = MagicMock(accepted=True)
+    handle.get_result_async.return_value = Future()   # the result never arrives
+    send_future.set_result(handle)
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+    behavior.terminate(py_trees.common.Status.SUCCESS)
+
+    handle.cancel_goal_async.assert_called_once()
+
+
+def test_terminate_failure_after_a_rejection_cancels_nothing():
+    behavior = make_behavior()
+    send_future = Future()
+    rejected = MagicMock(accepted=False)
+    send_future.set_result(rejected)
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    assert behavior.update() == py_trees.common.Status.FAILURE
+
+    behavior.terminate(py_trees.common.Status.FAILURE)
+
+    rejected.cancel_goal_async.assert_not_called()
+    assert not behavior.cancels_outstanding()
+
+
+def _client_goal_handle(accepted=True):
+    """A real rclpy ClientGoalHandle, as the action client hands it to a done-callback."""
+    from action_msgs.srv import CancelGoal  # noqa: F401 - the client's cancel type
+    from rclpy.action.client import ClientGoalHandle
+    from unique_identifier_msgs.msg import UUID
+
+    action_client = MagicMock()
+    response = MagicMock(accepted=accepted)
+    return ClientGoalHandle(action_client, UUID(), response), action_client
+
+
+def test_a_late_acceptance_is_cancelled_whatever_the_handle_reports():
+    # A handle cannot say a goal has finished when its acceptance is processed:
+    # rclpy creates it then, with status UNKNOWN, and drops status updates for
+    # goals it has no handle for. Every late-accepted goal is cancelled.
+    handle, action_client = _client_goal_handle()
+    assert handle.status == GoalStatus.STATUS_UNKNOWN
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    behavior.terminate(py_trees.common.Status.FAILURE)
+
+    send_future.set_result(handle)
+
+    action_client._cancel_goal_async.assert_called_once_with(handle)
+
+
+def test_a_late_acceptance_reporting_a_finished_status_is_still_cancelled():
+    # Even a status that says SUCCEEDED is not trusted to skip the cancel: it
+    # can only be stale here, and an extra cancel costs one refused request.
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    behavior.terminate(py_trees.common.Status.FAILURE)
+
+    finished = MagicMock(accepted=True, status=GoalStatus.STATUS_SUCCEEDED)
+    send_future.set_result(finished)
+
+    finished.cancel_goal_async.assert_called_once()
+    assert not behavior.cancels_outstanding()
+
+
+# ------------------------------------------------ sim time before /clock
+
+def test_a_goal_sent_before_the_clock_starts_does_not_time_out_when_it_does():
+    # use_sim_time: the node clock reads 0 until the first /clock. A deadline
+    # of 0 + 30 s used to be missed on the first tick after /clock arrived.
+    behavior = make_behavior(timeout_sec=30.0)
+    behavior.clock.seconds = 0.0
+    send_future = Future()                       # acceptance still in flight
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    assert behavior.update() == py_trees.common.Status.RUNNING
+
+    behavior.clock.seconds = 5000.0              # /clock arrives
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.clock.advance(29.0)
+    assert behavior.update() == py_trees.common.Status.RUNNING
+    behavior.clock.advance(2.0)                  # 30 s after the clock started
+    assert behavior.update() == py_trees.common.Status.FAILURE
+
+
+def test_a_cancel_is_outstanding_until_the_server_answers_it():
+    # What task_manager_node spins on before it destroys the node: a cancel
+    # that never left the process, or whose answer never came back, is one the
+    # arm may not have seen.
+    behavior = make_behavior()
+    send_future = Future()
+    behavior.client.send_goal_async.return_value = send_future
+    behavior.send_action_goal(MagicMock())
+    assert not behavior.cancels_outstanding()
+
+    behavior.terminate(py_trees.common.Status.FAILURE)
+    assert behavior.cancels_outstanding()            # acceptance still in flight
+
+    handle = MagicMock(accepted=True)
+    cancel_response = Future()
+    handle.cancel_goal_async.return_value = cancel_response
+    send_future.set_result(handle)
+    assert behavior.cancels_outstanding()            # cancel sent, no answer yet
+
+    cancel_response.set_result(MagicMock())
+    assert not behavior.cancels_outstanding()

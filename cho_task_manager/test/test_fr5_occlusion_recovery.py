@@ -271,3 +271,18 @@ def test_a_table_with_a_raster_per_object_points_at_per_object(tmp_path):
     with pytest.raises(ValueError, match='sweep_mode:=per_object'):
         _tree(sweep_config=str(path))
     _tree(sweep_config=str(path), sweep_mode='per_object')
+
+
+@pytest.mark.parametrize('mode', MODES)
+def test_every_goal_names_the_fr5_joints(mode):
+    # The sweep waypoints and the returns go to the joint server named, so it
+    # matches the positions by name (cho_interfaces/CONTRACT.md).
+    from cho_task_manager.behaviors.action import JointSpaceActionBehavior
+    tree = _tree(sweep_mode=mode)
+    joints = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
+    for leaf in _sweep_leaves(tree):
+        assert leaf.joint_names == joints
+    returns = [leaf for leaf in _leaves(tree) if isinstance(leaf, JointSpaceActionBehavior)]
+    assert returns
+    for leaf in returns:
+        assert list(leaf.target_joints.name) == joints

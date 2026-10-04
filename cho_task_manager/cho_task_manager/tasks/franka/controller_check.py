@@ -38,13 +38,19 @@ from cho_task_manager.utils.msg_utils import (
     make_up_pose,
 )
 from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
-from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
+from cho_task_manager.utils.controller_names import (
+    ControllerNames,
+    arm_joint_names,
+    goal_frame,
+    load_robot_config,
+)
 
-# Two known-safe joint poses. Every joint-space check moves B -> A so the arm
-# demonstrably tracks. A is the robot's task home, the registry's
-# poses.task_home (the pose the pick_place trees home to), read per tree; B is
-# the MuJoCo startup pose (the forge trees' FORGE_FINISH_POSITION), so the very
-# first move is a benign no-op.
+# Two known-safe joint poses. Every joint-space check moves to B and then back
+# to A so the arm demonstrably tracks. A is the robot's task home, the
+# registry's poses.task_home (the pose the pick_place trees home to), read per
+# tree; B is the MuJoCo startup pose (the forge trees' FORGE_FINISH_POSITION),
+# so in MuJoCo the very first move is a benign no-op. Positions only: the
+# joint names come from the robot config when the tree is built.
 JOINT_POSE_B = make_joint_state([0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785])
 
 # EE-frame relative bump used for every task-space controller: 5 cm along the
@@ -65,12 +71,13 @@ def _switch(robot_config, controller, suffix=""):
     )
 
 
-def _joint_move(controller, target, label):
+def _joint_move(robot_config, controller, target, label):
     return JointSpaceActionBehavior(
         name=f"{controller}_{label}",
         target_joints=target,
         controller_name=controller,
         duration=MOVE_DURATION_SEC,
+        joint_names=arm_joint_names(robot_config),
     )
 
 
@@ -78,8 +85,8 @@ def _joint_check(robot_config, controller):
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
     seq.add_children([
         _switch(robot_config, controller),
-        _joint_move(controller, JOINT_POSE_B, "Move"),
-        _joint_move(controller, home_joint_state(robot_config), "Return"),
+        _joint_move(robot_config, controller, JOINT_POSE_B, "Move"),
+        _joint_move(robot_config, controller, home_joint_state(robot_config), "Return"),
     ])
     return seq
 
@@ -94,6 +101,7 @@ def _task_check(robot_config, controller):
             relative=True,
             controller_name=controller,
             duration=MOVE_DURATION_SEC,
+            frame_id=goal_frame(robot_config, relative=True),
         ),
         TaskSpaceActionBehavior(
             name=f"{controller}_Up",
@@ -101,6 +109,7 @@ def _task_check(robot_config, controller):
             relative=True,
             controller_name=controller,
             duration=MOVE_DURATION_SEC,
+            frame_id=goal_frame(robot_config, relative=True),
         ),
     ])
     return seq

@@ -60,11 +60,11 @@ import py_trees
 from cho_interfaces.action import JointSpace
 from cho_interfaces.msg import CameraVisibility, ObjectVisibilityArray
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from cho_task_manager.utils import occlusion
+from cho_task_manager.utils.clock import arm, deadline_after, restamp, seconds_since, stamp
 from cho_task_manager.utils.controller_names import controller_action_name
 from cho_task_manager.utils.msg_utils import make_joint_state
 
@@ -122,6 +122,7 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         skip_if_visible: bool = True,
         planning_target: bool = None,
         min_unseen_sec: float = None,
+        joint_names: list = None,
     ):
         # `action_name` targets an endpoint that is not a controller's own --
         # the MoveIt bridge serves the same JointSpace action, and a sweep over
@@ -141,6 +142,13 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         if not sweep.waypoints:
             raise ValueError(f'[{name}] a sweep with no waypoints looks nowhere')
         self.sweep = sweep
+        # The arm's joints (arm_joint_names(robot_config)): every waypoint goal
+        # names them, so the server matches positions by name. Checked against
+        # each waypoint now, rather than as a refusal mid-raster.
+        self.joint_names = list(joint_names) if joint_names else None
+        if self.joint_names:
+            for waypoint in sweep.waypoints:
+                make_joint_state(waypoint.joints, self.joint_names)
         self.visibility_topic = visibility_topic
         self.skip_if_visible = skip_if_visible
         # Whether the planner will ACT on this object rather than avoid it.
@@ -217,14 +225,18 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             if entry.publishing:
                 self._unpublished_since = None
             elif self._unpublished_since is None:
-                self._unpublished_since = self.node.get_clock().now()
+                # Not stamped 0 before /clock: that would read as the
+                # simulator's whole uptime of outage the moment it arrives.
+                self._unpublished_since = stamp(self.node.get_clock().now())
             return
 
     def _unseen_sec(self):
         """Return how long the pose has been missing, or None if it is arriving."""
         if self._unpublished_since is None:
             return None
-        return (self.node.get_clock().now() - self._unpublished_since).nanoseconds * 1e-9
+        now = self.node.get_clock().now()
+        self._unpublished_since = restamp(self._unpublished_since, now)
+        return seconds_since(self._unpublished_since, now)
 
     def initialise(self):
         # Dropped on purpose, unlike a cached pose: a snapshot taken before the
@@ -236,8 +248,8 @@ class OcclusionSweepBehavior(BaseActionBehavior):
         self._dwell_until = None
         self._best_margin = occlusion.NO_SCORE
         self._best_at = ''
-        self._sweep_deadline = (
-            self.node.get_clock().now() + Duration(seconds=self.sweep.timeout_sec))
+        # None until the node clock runs; _expired() takes it then.
+        self._sweep_deadline = deadline_after(self.node.get_clock(), self.sweep.timeout_sec)
 
     # ------------------------------------------------------------------ tick
 
@@ -306,12 +318,13 @@ class OcclusionSweepBehavior(BaseActionBehavior):
                 f"[{self.name}] could not reach sweep waypoint '{waypoint.name}'")
             return status
         self._phase = 'dwell'
-        self._dwell_until = (
-            self.node.get_clock().now() + Duration(seconds=self.sweep.dwell_sec))
+        self._dwell_until = deadline_after(self.node.get_clock(), self.sweep.dwell_sec)
         return py_trees.common.Status.RUNNING
 
     def _dwelling(self, view):
-        if self.node.get_clock().now() < self._dwell_until:
+        clock = self.node.get_clock()
+        self._dwell_until = arm(self._dwell_until, clock, self.sweep.dwell_sec)
+        if self._dwell_until is None or clock.now() < self._dwell_until:
             return py_trees.common.Status.RUNNING
 
         waypoint = self.sweep.waypoints[self._index]
@@ -407,14 +420,15 @@ class OcclusionSweepBehavior(BaseActionBehavior):
             f'over {waypoint.duration:.0f}s')
         goal = JointSpace.Goal()
         goal.duration_sec = float(waypoint.duration)
-        goal.target_joints = make_joint_state(waypoint.joints)
+        goal.target_joints = make_joint_state(waypoint.joints, self.joint_names)
         self.send_action_goal(goal)
         self._phase = 'moving'
         return py_trees.common.Status.RUNNING
 
     def _expired(self):
-        return (self._sweep_deadline is not None
-                and self.node.get_clock().now() > self._sweep_deadline)
+        clock = self.node.get_clock()
+        self._sweep_deadline = arm(self._sweep_deadline, clock, self.sweep.timeout_sec)
+        return self._sweep_deadline is not None and clock.now() > self._sweep_deadline
 
     def _view(self):
         for entry in self._latest.objects:
@@ -425,20 +439,16 @@ class OcclusionSweepBehavior(BaseActionBehavior):
     def terminate(self, new_status):
         """Cancel a sweep goal still in flight, however the leaf ended.
 
-        The base class cancels on INVALID only, which is enough for a leaf whose
-        single goal IS its whole job. This one can fail while a motion is
-        running -- the whole-sweep deadline, or a refusal computed from a
-        snapshot that arrived mid-move -- and an abandoned goal would keep
-        driving the arm while the tree moved on to the abort branch, which is
-        the one place the arm must be still.
+        This leaf can fail while a motion is running -- the whole-sweep
+        deadline, or a refusal computed from a snapshot that arrived mid-move
+        -- and an abandoned goal would keep driving the arm while the tree
+        moved on to the abort branch, which is the one place the arm must be
+        still. That includes a waypoint goal the server has not accepted yet:
+        it has no handle to cancel, and would start moving once accepted.
+        BaseActionBehavior.terminate() covers both cases for every status --
+        cancelling a running goal at once and one still awaiting acceptance
+        when it is accepted -- so this only resets the sweep's own state.
         """
-        if (new_status == py_trees.common.Status.FAILURE
-                and self.goal_handle is not None
-                and self.get_result_future is not None
-                and not self.get_result_future.done()):
-            self.node.get_logger().warn(
-                f'[{self.name}] abandoning the sweep; cancelling the goal in flight')
-            self.goal_handle.cancel_goal_async()
         self._phase = 'assess'
         self._dwell_until = None
         self._sweep_deadline = None

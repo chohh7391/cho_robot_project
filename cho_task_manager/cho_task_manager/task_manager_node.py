@@ -1,3 +1,4 @@
+import contextlib
 import signal
 import threading
 import time
@@ -7,13 +8,15 @@ import py_trees
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
+from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from cho_task_manager.tasks import build_task_tree
 from cho_task_manager.utils.controller_names import load_robot_config
 
-# How long shutdown keeps spinning after preempting a running tree, so the
-# cancels its action leaves just issued -- and the ones armed to go out when a
-# pending goal is accepted -- actually leave the process before the node is
-# destroyed. Wall time: sim time may have stopped along with the simulator.
+# The longest shutdown keeps spinning so the cancels the action leaves still
+# owe -- issued by a preemption, or armed to go out when a pending goal is
+# accepted, possibly on the tree's very last tick -- actually leave the process
+# and are answered before the node is destroyed. It stops as soon as none is
+# outstanding. Wall time: sim time may have stopped along with the simulator.
 CANCEL_FLUSH_SEC = 1.0
 
 # The task run when none is given. run_task_manager.launch.py declares the same
@@ -59,23 +62,119 @@ class StoppableBehaviourTree(py_trees_ros.trees.BehaviourTree):
             return True
 
 
-def shutdown_task_manager(tree, executor, node, flush_sec=CANCEL_FLUSH_SEC):
-    """Preempt whatever is still running, let its cancels go out, then tear down once."""
+def _outstanding_cancels(tree):
+    """The action leaves of *tree* that still owe a cancel or await its answer."""
+    return [behaviour for behaviour in tree.root.iterate()
+            if isinstance(behaviour, BaseActionBehavior) and behaviour.cancels_outstanding()]
+
+
+def _flush_cancels(tree, executor, node, flush_sec):
+    """Spin, for at most *flush_sec* of wall time, while any leaf owes a cancel.
+
+    Runs however the tree ended, not only after a preemption: a leaf that
+    ended SUCCESS or FAILURE on the last tick with a goal still awaiting
+    acceptance arms a cancel that only the executor can deliver, and
+    destroying the node without spinning drops it -- the goal would then be
+    accepted, and executed, after the task manager is gone.
+    """
+    pending = _outstanding_cancels(tree)
+    if not pending:
+        return
+    node.get_logger().warn(
+        f"Waiting up to {flush_sec:g}s for the cancels of "
+        f"{', '.join(leaf.name for leaf in pending)} to be sent and answered")
+    deadline = time.monotonic() + flush_sec
+    while pending and time.monotonic() < deadline:
+        executor.spin_once(timeout_sec=0.05)
+        pending = _outstanding_cancels(tree)
+    if pending:
+        node.get_logger().error(
+            f"No answer to the cancels of {', '.join(leaf.name for leaf in pending)} "
+            f"within {flush_sec:g}s: those goals may still be running")
+
+
+@contextlib.contextmanager
+def _signals_held():
+    """Hold Ctrl-C and SIGTERM for the block; yield the list of those received.
+
+    Only the main thread can install handlers, and a handler that was not
+    installed from Python cannot be put back, so in either case nothing is
+    held and the list stays empty. An interrupt that lands while the handlers
+    are being installed escapes as KeyboardInterrupt before the block runs;
+    shutdown_task_manager() runs the block again for that.
+    """
+    received = []
+    signals = (signal.SIGINT, signal.SIGTERM)
+    if threading.current_thread() is not threading.main_thread():
+        yield received
+        return
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+    if any(handler is None for handler in previous.values()):
+        yield received
+        return
+
+    def hold(signum, _frame):
+        received.append(signum)
+
     try:
-        if tree.stop():
-            node.get_logger().warn(
-                f"Stopped mid-task: cancelling the running goals ({flush_sec:g}s to send them)"
-            )
-            deadline = time.monotonic() + flush_sec
-            while time.monotonic() < deadline:
-                executor.spin_once(timeout_sec=0.05)
-    except KeyboardInterrupt:
-        # A second Ctrl-C cuts the wait short; it must not skip the teardown.
-        pass
+        for sig in signals:
+            signal.signal(sig, hold)
+        yield received
     finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+# How many times shutdown starts the stop-and-flush over when an interrupt
+# lands before the handlers holding it are installed. Each attempt is short
+# and idempotent; the bound only keeps a held-down Ctrl-C from looping forever.
+_SHUTDOWN_ATTEMPTS = 5
+
+
+def shutdown_task_manager(tree, executor, node, flush_sec=CANCEL_FLUSH_SEC):
+    """Preempt whatever is still running, let its cancels go out, then tear down once.
+
+    Ctrl-C and SIGTERM are held from before tree.stop() to the end of the
+    flush. An interrupt during stop() used to leave every leaf after the one
+    being terminated with its goal running, and one during (or held until)
+    the flush skipped it -- dropping a cancel armed for a goal still awaiting
+    acceptance, which the server then accepted and ran after the node was
+    gone. The flush is bounded by *flush_sec*, so holding them costs at most
+    that long; they take effect as the teardown.
+    """
+    try:
+        for _attempt in range(_SHUTDOWN_ATTEMPTS):
+            try:
+                with _signals_held() as received:
+                    preempted = tree.stop()
+                    if preempted:
+                        node.get_logger().warn("Stopped mid-task: cancelling the running goals")
+                    _flush_cancels(tree, executor, node, flush_sec)
+            except KeyboardInterrupt:
+                # It landed before the handlers were in place, so the block may
+                # not have run at all. Both steps are idempotent: run it again.
+                continue
+            if received:
+                node.get_logger().warn(
+                    'Interrupt held until the running goals were cancelled; shutting down')
+            break
+    finally:
+        # Let a callback already running finish before the node goes away
+        # under it, and stop the executor taking new ones.
+        executor.shutdown(timeout_sec=flush_sec)
         # The node is ours, not the tree's: keep shutdown() from destroying it
         # too, so it is destroyed exactly once.
         tree.shutdown(destroy_node=False)
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+def _abandon_setup(tree, node, message):
+    """Tear down a tree that never started ticking: nothing was sent, nothing to cancel."""
+    node.get_logger().error(message)
+    try:
+        tree.shutdown(destroy_node=False)
+    finally:
         node.destroy_node()
         rclpy.try_shutdown()
 
@@ -242,14 +341,15 @@ def main():
     try:
         tree.setup(node=node, timeout=15.0)
     except py_trees_ros.exceptions.TimedOutError as e:
-        node.get_logger().error(f"Setup timed out!: {e}")
-        node.destroy_node()
-        rclpy.try_shutdown()
+        _abandon_setup(tree, node, f"Setup timed out!: {e}")
+        return
+    except KeyboardInterrupt:
+        # Setup waits seconds per action server, so Ctrl-C lands here often.
+        # No goal has been sent yet: a clean exit, not a traceback.
+        _abandon_setup(tree, node, "Interrupted during setup; the task was not started")
         return
     except Exception as e:
-        node.get_logger().error(f"Setup failed: {e}")
-        node.destroy_node()
-        rclpy.try_shutdown()
+        _abandon_setup(tree, node, f"Setup failed: {e}")
         return
 
     executor = MultiThreadedExecutor()

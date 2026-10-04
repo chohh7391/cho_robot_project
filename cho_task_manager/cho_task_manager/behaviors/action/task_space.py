@@ -18,10 +18,13 @@ class TaskSpaceActionBehavior(BaseActionBehavior):
     other frame must be transformed before it reaches the blackboard; see
     PoseTargetBehavior's frame check.
 
-    The goal goes out stamped with ``frame_id`` -- empty by default, which the
-    controller reads as its base frame (absolute) or the EE frame (relative).
-    Name a frame only when it is known to be one of those: the controller does
-    not transform, and rejects any other (cho_interfaces/CONTRACT.md).
+    The goal goes out stamped with ``frame_id``. Trees pass
+    ``goal_frame(robot_config, relative)`` -- the registry's frame for the
+    robot profile, proven to be one the controller accepts -- or, for a pose
+    latched by PoseTargetBehavior, the ``required_frame`` it was checked in.
+    Empty, the controller reads it as its base frame (absolute) or the EE
+    frame (relative). The controller does not transform, and rejects any
+    other frame (cho_interfaces/CONTRACT.md).
 
     ``controller_name`` is required: which controller serves task-space goals
     is the robot's, so a tree passes it from its robot config

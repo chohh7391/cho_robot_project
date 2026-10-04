@@ -128,6 +128,9 @@ def test_bundled_metadata_tracks_the_registry_action_client_contract(robot_type,
     assert bundled['moveit'].get('controllers', [
         bundled['controllers']['moveit_trajectory']]) == canonical['moveit'].get(
             'controllers', [canonical['controllers']['moveit_trajectory']])
+    # What the goals are named and stamped with.
+    for key in ('joints', 'ee_link', 'absolute_goal_frame', 'relative_goal_frame'):
+        assert bundled['model'].get(key) == canonical['model'].get(key), key
 
 
 def test_console_scripts_point_to_robot_scoped_modules():

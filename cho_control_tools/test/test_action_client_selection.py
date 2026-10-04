@@ -180,8 +180,9 @@ def test_openarm_single_arm_reach_keeps_task_space_goal_format(arm):
             goal.target_pose.pose.orientation.z,
             goal.target_pose.pose.orientation.w] == motion['orientation']
     assert goal.duration_sec == 5.0
-    # Unstamped: the server's base frame (absolute) or EE frame (relative).
-    assert goal.target_pose.header.frame_id == ''
+    # Stamped with the registry's frame: 'world' for an absolute OpenArm goal,
+    # the root of every OpenArm controller's model, single arm or torso.
+    assert goal.target_pose.header.frame_id == 'world'
 
 
 def test_task_reach_honors_an_optional_motion_duration():
@@ -340,3 +341,202 @@ def test_failure_without_a_reason_keeps_the_plain_line(capsys):
     shell.do_reach('3')
 
     assert capsys.readouterr().out.strip().endswith('action failed')
+
+
+# ------------------------------------------ names and frames on the goals
+
+@pytest.mark.parametrize('robot_type,selector,relative,frame', [
+    ('franka', '0', False, 'fr3_link0'),
+    # Franka's controllers take ee_name at launch, so a relative goal is unstamped.
+    ('franka', '2', True, ''),
+    ('ur5e', '0', False, 'base_link'),
+    ('ur5e', '2', True, ''),
+    ('fr5', '0', False, 'base_link'),
+])
+def test_task_reach_is_stamped_with_the_registry_frame(robot_type, selector, relative, frame):
+    shell = bare_shell(robot_type)
+    shell.arm = 'single'
+    shell.robot_config = MODULE.load_robot_config(robot_type, 'single')
+    shell.task_space_action_client = object()
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append(goal) or True
+    shell.do_reach(selector)
+    assert sent[0].relative is relative
+    assert sent[0].target_pose.header.frame_id == frame
+
+
+@pytest.mark.parametrize('arm,prefix', [
+    ('single', 'openarm_joint'), ('left', 'openarm_left_joint'), ('right', 'openarm_right_joint')])
+def test_joint_goals_name_the_profiles_own_joints(arm, prefix):
+    # Unnamed, a home meant for the left arm would drive whichever arm the
+    # selected server is; named, the other arm's server rejects it.
+    shell = bare_shell('openarm')
+    shell.arm = arm
+    shell.robot_config = MODULE.load_robot_config('openarm', arm)
+    shell.joint_space_action_client = object()
+    shell.task_space_action_client = None
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append(goal) or True
+    shell.do_home('1')
+    shell.do_reach('1')
+    for goal in sent:
+        assert list(goal.target_joints.name) == [f'{prefix}{index}' for index in range(1, 8)]
+
+
+def test_the_bimanual_joint_goal_names_both_arms():
+    shell = bare_shell('openarm')
+    shell.arm = 'both'
+    shell.robot_config = MODULE.load_robot_config('openarm', 'both')
+    shell.joint_space_action_client = object()
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append(goal) or True
+    shell.do_home('0')
+    names = list(sent[0].target_joints.name)
+    assert names[:7] == [f'openarm_left_joint{index}' for index in range(1, 8)]
+    assert names[7:] == [f'openarm_right_joint{index}' for index in range(1, 8)]
+
+
+def test_metadata_without_joint_names_sends_an_unnamed_target():
+    shell = bare_shell('openarm')
+    shell.robot_config = {'poses': {'home': {'0': [0.0] * 7}}, 'actions': {'preferences': {}}}
+    shell.joint_space_action_client = object()
+    shell._home_pose_policy_loader = lambda _config, _selector: {'enabled': True, 'reason': ''}
+    sent = []
+    shell._send_goal_and_wait = lambda client, goal: sent.append(goal) or True
+    shell.do_home('0')
+    assert list(sent[0].target_joints.name) == []
+
+
+# ------------------------------------------------- the MoveIt scene gate
+
+class _GraphNode:
+    def __init__(self, services):
+        self.services = services
+        self.errors = []
+
+    def get_service_names_and_types(self):
+        return [(name, ['std_srvs/srv/Trigger']) for name in self.services]
+
+    def get_logger(self):
+        errors = self.errors
+        return type('Logger', (), {'error': staticmethod(errors.append)})()
+
+
+@pytest.mark.parametrize('arm', ['left', 'right', 'both'])
+def test_a_bimanual_profile_waits_for_its_own_scene_gate(monkeypatch, arm):
+    # The gate's name used to ignore the profile, so for left/right/both it was
+    # never found and discovery settled for the direct controllers at once,
+    # before the profile's MoveIt bridge was up.
+    shell = bare_shell('openarm')
+    shell.arm = arm
+    shell.robot_config = MODULE.load_robot_config('openarm', arm)
+    shell.node = _GraphNode([f'/cho_moveit/openarm/{arm}/static_scene_ready'])
+    direct = [name for name in shell.robot_config['actions']['preferences']['joint']
+              if 'moveit' not in name]
+    monkeypatch.setattr(MODULE, 'get_action_names_and_types', lambda _node: [
+        (name, ['cho_interfaces/action/JointSpace']) for name in direct])
+    clock = {'now': 0.0}
+    monkeypatch.setattr(MODULE.time, 'monotonic', lambda: clock['now'])
+    shell._spin_or_sleep = lambda seconds: clock.__setitem__('now', clock['now'] + 5.0)
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+
+    shell._discover_action_servers(timeout_sec=3.0)
+
+    # It waited out the gate's own window rather than the 3 s direct grace.
+    assert clock['now'] >= 210.0
+    assert shell.node.errors and 'MoveIt safety gate' in shell.node.errors[0]
+
+
+# ----------------------------------------------------- Ctrl-C and timeouts
+
+class _Future:
+    def __init__(self, result=None, done=True):
+        self._result = result
+        self._done = done
+        self.callbacks = []
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        return self._result
+
+    def add_done_callback(self, callback):
+        self.callbacks.append(callback)
+        if self._done:
+            callback(self)
+
+
+class _Handle:
+    def __init__(self):
+        self.accepted = True
+        self.cancels = 0
+
+    def get_result_async(self):
+        return _Future(done=False)          # the result never arrives
+
+    def cancel_goal_async(self):
+        self.cancels += 1
+        return _Future(object())
+
+
+class _GoalClient:
+    def __init__(self, handle, accepted_yet=True):
+        self.handle = handle
+        self.accepted_yet = accepted_yet
+
+    def send_goal_async(self, _goal):
+        return _Future(self.handle, done=self.accepted_yet)
+
+
+def _interrupt_on_first_sleep(monkeypatch):
+    calls = {'n': 0}
+
+    def sleep(_seconds):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(MODULE.time, 'sleep', sleep)
+
+
+def test_ctrl_c_while_a_goal_runs_cancels_it(monkeypatch, capsys):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    _interrupt_on_first_sleep(monkeypatch)
+    shell = bare_shell('fr5')
+    handle = _Handle()
+    assert shell._send_goal_and_wait(_GoalClient(handle), MODULE.JointSpace.Goal()) is False
+    assert handle.cancels == 1
+    assert 'interrupted' in shell._last_result_message
+    assert 'Goal cancelled' in capsys.readouterr().out
+
+
+def test_ctrl_c_before_the_goal_is_accepted_cancels_it_on_acceptance(monkeypatch):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    _interrupt_on_first_sleep(monkeypatch)
+    shell = bare_shell('fr5')
+    handle = _Handle()
+    client = _GoalClient(handle, accepted_yet=False)
+    send_future = []
+    original = client.send_goal_async
+    client.send_goal_async = lambda goal: send_future.append(original(goal)) or send_future[0]
+    assert shell._send_goal_and_wait(client, MODULE.JointSpace.Goal()) is False
+    assert handle.cancels == 0
+    send_future[0]._done = True
+    for callback in send_future[0].callbacks:
+        callback(send_future[0])
+    assert handle.cancels == 1
+
+
+def test_a_result_that_never_comes_is_given_up_on_and_cancelled(monkeypatch):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    clock = {'now': 0.0}
+    monkeypatch.setattr(MODULE.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(MODULE.time, 'sleep',
+                        lambda seconds: clock.__setitem__('now', clock['now'] + 10.0))
+    shell = bare_shell('fr5')
+    handle = _Handle()
+    goal = MODULE.JointSpace.Goal()
+    goal.duration_sec = 5.0
+    assert shell._send_goal_and_wait(_GoalClient(handle), goal) is False
+    assert handle.cancels == 1
+    assert 'no result within 65s' in shell._last_result_message

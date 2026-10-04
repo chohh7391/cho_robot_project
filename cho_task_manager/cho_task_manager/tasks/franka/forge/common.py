@@ -11,7 +11,7 @@ from cho_task_manager.behaviors.service import (
 )
 from cho_task_manager.subtrees import guarded_mission, home_subtree, tare_ft_children
 from cho_task_manager.utils.msg_utils import make_pose, make_joint_state
-from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
+from cho_task_manager.utils.controller_names import ControllerNames, goal_frame, load_robot_config
 
 # Every forge task drives joint/task impedance and QP controllers, all of which
 # are torque controllers, so these trees only run on a control_mode:=torque
@@ -120,7 +120,8 @@ def build_forge_tree(
             target_pose=approach_pose,
             relative=False,
             controller_name=ControllerNames.TASK_QP,
-            duration=approach_duration
+            duration=approach_duration,
+            frame_id=goal_frame(robot_config, relative=False),
         ),
         GripperActionBehavior(
             name="Close_Gripper", grasp=True, controller_name=gripper, **grasp_params),

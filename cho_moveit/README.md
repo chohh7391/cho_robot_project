@@ -34,11 +34,37 @@ own node, which every launch here names `<robot>[_<profile>]_moveit_action_bridg
 (`cho_robot_config.moveit_bridge_node()`), e.g. `/fr5_moveit_action_bridge/joint_space`
 or `/openarm_left_moveit_action_bridge/task_space`. It refuses to start under any
 other name, since the registry's action preferences -- what every client binds to --
-name it that way. Goals follow the contract: `duration_sec` (used here as the
-planning-time budget; MoveIt's own time parameterization sets the motion's length),
-optionally named joints, and a `PoseStamped` whose `frame_id` must be empty or the
-planning frame (absolute) or the EE link (relative). Any other frame is rejected,
-not transformed.
+name it that way.
+
+Goals follow the contract:
+
+- **`duration_sec` is the motion's minimum length**, as for a controller. The bridge
+  plans plan-only (`MoveGroup`), with a planning budget of its own
+  (`planning_time_sec`, default 5 s), then, if MoveIt's time parameterization made the
+  plan shorter than `duration_sec`, slows it uniformly -- times scaled up, velocities
+  and accelerations down -- and executes it through move_group's `ExecuteTrajectory`
+  (`execute_trajectory_action`, default `/execute_trajectory`). It never speeds a plan
+  up. Until this change `duration_sec` was spent as the planning budget (clamped to
+  1-10 s) and the motion took whatever MoveIt's scaling gave it.
+- Joints may be named; a target with the wrong number of positions, or a non-finite
+  one, is **rejected** when it arrives rather than accepted and then aborted, as is a
+  pose with a non-finite value or a zero quaternion, and a `duration_sec` over
+  `MAX_GOAL_DURATION_SEC` (3600 s).
+- A `PoseStamped`'s `frame_id`, absolute: empty, the planning frame (`world_frame`,
+  the registry's `model.base_frame`), or the registry's `model.arm_base_link` while TF
+  has it at the planning frame (checked when the goal arrives). Relative: empty or the
+  EE link. Any other frame is rejected, not transformed. Clients stamp
+  `cho_robot_config.task_goal_frame()`, which is one of these on every robot here.
+- A relative goal is composed against TF's `world_frame -> ee_link`, so `world_frame`
+  must be in TF. It is on every bringup in the table above: the FR5, UR5e and OpenArm
+  descriptions are rooted at `world`, and so is the Franka **Gazebo** description --
+  the real, MuJoCo and Isaac FR3 descriptions are rooted at `base` and have no
+  `world`, and none of them has a MoveIt entry point. One that is added needs a
+  `world` in TF first.
+
+Only the execution can move the arm, so only an execution whose outcome is unknown
+(transport failure, no result, a cancel that is not confirmed) latches the bridge's
+fault; a planning failure aborts the goal and leaves the bridge usable.
 
 ## Bimanual OpenArm
 

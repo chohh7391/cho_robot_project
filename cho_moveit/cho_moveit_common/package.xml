@@ -3,7 +3,7 @@
 <package format="3">
   <name>cho_moveit_common</name>
   <version>0.1.0</version>
-  <description>Robot-configurable Cho action bridge for MoveIt plan-and-execute.</description>
+  <description>Robot-configurable Cho action bridge for MoveIt: plan, slow to the goal's minimum duration, execute.</description>
   <maintainer email="chohh7391@gmail.com">cho_robot_project maintainers</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -18,5 +18,7 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>trajectory_msgs</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>
