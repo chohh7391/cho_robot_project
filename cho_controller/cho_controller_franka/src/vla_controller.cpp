@@ -123,11 +123,14 @@ controller_interface::return_type VLAController::update(
   }
 
   // The action space and the desired twist come from the running VLA goal.
-  const bool vla_running = action_server_ && action_server_->is_running();
+  // compute() is false when the goal ended this cycle -- canceled, aborted, or
+  // one that outlived a deactivation: then its trajectory is not sampled and
+  // the idle branch holds.
+  const bool vla_running = action_server_ && action_server_->is_running() &&
+    action_server_->compute(time, state_);
   cho_vla_core::ActionSpace space = cho_vla_core::ActionSpace::kTask;
   Vector6d twist_des = Vector6d::Zero();
   if (vla_running) {
-    action_server_->compute(time, state_);
     space = action_server_->action_space();
     twist_des = action_server_->twist_des();
     current_kp_task_ = kp_task_;

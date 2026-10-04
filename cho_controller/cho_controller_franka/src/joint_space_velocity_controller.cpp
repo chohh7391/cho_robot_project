@@ -144,7 +144,7 @@ controller_interface::return_type JointSpaceVelocityController::update(
   // Real hardware only: in simulation the P term already closes on the measured
   // state, so no gap can accumulate, and the idle command is the nonzero
   // gravity-hold velocity rather than zero.
-  const bool running = action_server_ && action_server_->is_running();
+  bool running = action_server_ && action_server_->is_running();
   if (bringup_type_ == "real" && running && !prev_running_ &&
       prev_cmd_speed_ < kRestSpeedEps) {
     q_ref_ = state_.q_arm;
@@ -153,9 +153,11 @@ controller_interface::return_type JointSpaceVelocityController::update(
 
   const Vector7d q_ref_prev = q_ref_;
 
+  // compute() is false when the goal ended this cycle -- canceled, aborted, or
+  // one that outlived a deactivation: then its trajectory is not sampled and
+  // q_ref_ holds, as when idle.
+  running = running && action_server_->compute(traj_time, state_);
   if (running) {
-    action_server_->compute(traj_time, state_);
-
     if (!prev_running_) {
       // Goal start: seed the trajectory from the frozen reference (not the
       // measured position) so the holding tracking error is not injected as a

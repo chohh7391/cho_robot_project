@@ -96,7 +96,6 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
 
     // Scratch data + cached limits for the open-loop IK helpers.
     kin_data_ = pinocchio::Data(model_);
-    kin_v_zero_ = Eigen::VectorXd::Zero(nv_);
     kin_J_.setZero(6, nv_);
     constexpr double kJointLimitMargin = 0.01;  // rad
     q_lower_limits_ = model_.lowerPositionLimit.head(num_dof_).array() + kJointLimitMargin;
@@ -270,11 +269,12 @@ void FR5BaseController::publish_controller_state(const rclcpp::Time & stamp)
 void FR5BaseController::compute_arm_kinematics(
     const Eigen::VectorXd & q_full, pinocchio::SE3 & H_ee, Eigen::MatrixXd & J_arm)
 {
-    // Same wrapper calls as compute_kinematics(), but evaluated at q_full on a private
-    // scratch Data (v = 0: kinematics only). Leaves state_ and data_ untouched.
-    if (kin_v_zero_.size() != nv_) kin_v_zero_ = Eigen::VectorXd::Zero(nv_);
+    // Kinematics at q_full on a private scratch Data; leaves state_ and data_
+    // untouched. Forward kinematics plus joint Jacobians is all the pose and the
+    // frame Jacobian need -- computeAllTerms() also ran CRBA and the non-linear
+    // effects here, every IK step, for nothing.
     if (kin_J_.cols() != nv_) kin_J_.setZero(6, nv_);
-    robot_->computeAllTerms(kin_data_, q_full, kin_v_zero_);
+    pinocchio::computeJointJacobians(model_, kin_data_, q_full);
     H_ee = robot_->framePosition(kin_data_, ee_id_);
     robot_->frameJacobianLocal(kin_data_, ee_id_, kin_J_);
     J_arm = kin_J_.leftCols(num_dof_);

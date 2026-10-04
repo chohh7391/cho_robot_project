@@ -525,13 +525,13 @@ void VLAActionServer::apply_hold(State & state)
     state.q_arm_des = hold_joints_;
 }
 
-void VLAActionServer::finish_goal_rt(GoalPhase terminal, State & state)
+void VLAActionServer::finish_goal_rt(GoalPhase terminal, State & state, const char * reason)
 {
     // Latch the idle-hold anchors at the terminal pose; the controller's idle
     // branch servos to *_init once is_running() turns false.
     state.H_ee_init = state.H_ee;
     state.q_arm_init = state.q_arm;
-    finish_from_rt(terminal);
+    finish_from_rt(terminal, reason);
 }
 
 void VLAActionServer::on_goal_finished(GoalPhase terminal)
@@ -571,7 +571,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     // Terminal conditions BEFORE any target processing, so cancel/success/timeout
     // also work while still waiting for the first chunk.
     if (cancel_requested_.load()) {
-        finish_goal_rt(GoalPhase::kFinishCanceled, state);
+        finish_goal_rt(GoalPhase::kFinishCanceled, state, cho_controller_base::kReasonCanceled);
         return false;
     }
     if (task_success_flag_.exchange(false)) {
@@ -583,7 +583,7 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     if (goal_timeout_sec_ > 0.0 &&
         (current_time - start_time_).seconds() > goal_timeout_sec_)
     {
-        finish_goal_rt(GoalPhase::kFinishAborted, state);
+        finish_goal_rt(GoalPhase::kFinishAborted, state, "the goal ran past goal_timeout_sec");
         return false;
     }
 
@@ -598,7 +598,8 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     rt_stream_state_.store(static_cast<int>(stream));
 
     if (stream == cho_vla_core::StreamState::kAborted) {
-        finish_goal_rt(GoalPhase::kFinishAborted, state);
+        finish_goal_rt(GoalPhase::kFinishAborted, state,
+            "chunk stream went quiet past hold_timeout_sec; the policy or its bridge stopped");
         return false;
     }
 

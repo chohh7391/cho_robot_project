@@ -151,7 +151,7 @@ controller_interface::return_type TaskSpaceVelocityController::update(
   // Re-anchoring q_ref_ also moves the FK below, so the Cartesian trajectory is
   // seeded at the pose the arm is actually at -- which is what the action server
   // scores the goal against.
-  const bool running = action_server_ && action_server_->is_running();
+  bool running = action_server_ && action_server_->is_running();
   if (bringup_type_ == "real" && running && !prev_running_ &&
       prev_cmd_speed_ < kRestSpeedEps) {
     q_ref_ = state_.q_arm;
@@ -163,15 +163,17 @@ controller_interface::return_type TaskSpaceVelocityController::update(
   // Advance the reference ONLY while a goal is active; frozen when idle
   // (same contract as TaskSpaceIKController -- see the rationale there).
   if (running) {
+    traj_clock_ += dt;
+    const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
+    // False when the goal ended this cycle (see TaskSpaceIKController): hold q_ref_.
+    running = action_server_->compute(traj_time, state_);
+  }
+  if (running) {
     Eigen::VectorXd q_full = state_.q;
     q_full.head(num_dof_) = q_ref_;
     pinocchio::SE3 H_ref;
     Eigen::Matrix<double, 6, 7> J;
     FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
-
-    traj_clock_ += dt;
-    const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
-    action_server_->compute(traj_time, state_);
 
     if (!prev_running_) {
       // Goal start: seed the trajectory at FK(q_ref_) so the holding droop is
@@ -185,17 +187,11 @@ controller_interface::return_type TaskSpaceVelocityController::update(
     H_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
     state_.H_ee_des = H_des;  // for logging
 
-    Vector6d error;
-    error.head<3>() = H_ref.rotation().transpose() * (H_des.translation() - H_ref.translation());
-    const pinocchio::SE3::Matrix3 R_err = H_ref.rotation().transpose() * H_des.rotation();
-    error.tail<3>() = pinocchio::log3(R_err);
-
-    Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-    JJt.diagonal().array() += lambda_ * lambda_;
-    Vector7d dq = J.transpose() * JJt.inverse() * error;
-    for (int i = 0; i < num_dof_; ++i) {
-      dq(i) = std::clamp(dq(i), -max_delta_q_, max_delta_q_);
-    }
+    // The shared DLS step, scaled as a whole to max_delta_q_ so a saturated step
+    // keeps its direction (clamping joint by joint bent the task-space path).
+    const Vector6d error = cho_controller_base::local_pose_error(H_ref, H_des);
+    Vector7d dq = cho_controller_base::dls_step(J, error, lambda_);
+    cho_controller_base::limit_step(dq, max_delta_q_);
     q_ref_ += dq;
     // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
     // stop at the model's position limits instead of integrating through them.

@@ -162,7 +162,7 @@ public:
 
     if (this->cancel_requested_.load()) {
       state.H_ee_init = state.H_ee;
-      this->finish_from_rt(GoalPhase::kFinishCanceled);
+      this->finish_from_rt(GoalPhase::kFinishCanceled, kReasonCanceled);
       return false;
     }
     if (!trajectory.planSucceeded()) {
@@ -289,7 +289,8 @@ protected:
   std::string ee_frame_;
 
 private:
-  char reason_[256]{};  // a composed abort reason; read by the finisher before the next goal
+  // FR5's TSIK floor-guard reasons run to ~400 characters.
+  char reason_[512]{};  // a composed abort reason; read by the finisher before the next goal
 };
 
 }  // namespace cho_controller_base

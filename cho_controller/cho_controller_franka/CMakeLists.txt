@@ -84,6 +84,17 @@ ament_target_dependencies(${PROJECT_NAME}
 pluginlib_export_plugin_description_file(
         controller_interface cho_controller_franka.xml)
 
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    find_package(controller_manager REQUIRED)
+    # Loads the controllers through pluginlib, so it needs the package
+    # installed (colcon test does) but does not link it.
+    ament_add_gtest(test_reactivation test/test_reactivation.cpp TIMEOUT 300)
+    ament_target_dependencies(test_reactivation
+        ament_index_cpp cho_controller_base cho_interfaces controller_manager
+        hardware_interface rclcpp rclcpp_action)
+endif()
+
 install(TARGETS ${PROJECT_NAME}
     RUNTIME DESTINATION bin
     ARCHIVE DESTINATION lib

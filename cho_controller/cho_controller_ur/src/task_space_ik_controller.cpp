@@ -59,8 +59,10 @@ controller_interface::return_type TaskSpaceIKController::update(
         return controller_interface::return_type::ERROR;
     }
 
-    if (action_server_ && action_server_->is_running()) {
-        action_server_->compute(time, state_);
+    // compute() is false when the goal ended this cycle -- canceled, aborted, or
+    // one that outlived a deactivation: then its trajectory is not sampled and
+    // the idle branch holds.
+    if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
         auto sample = action_server_->trajectory_->computeNext();
         state_.H_ee_des.translation() = sample.pos.head<3>();
         state_.H_ee_des.rotation() =
@@ -72,14 +74,15 @@ controller_interface::return_type TaskSpaceIKController::update(
     // Isaac Lab style differential IK:
     // delta_q = J^T (J J^T + lambda^2 I)^-1 delta_x
     // q_cmd = q_current + delta_q
-    const Eigen::MatrixXd J = state_.J_world.leftCols(num_dof_);
+    // A block of the 6 x nv Jacobian, not a copy: nothing here allocates per cycle.
+    const auto J = state_.J_world.leftCols(num_dof_);
 
     Eigen::Matrix<double, 6, 1> delta_pose;
     delta_pose.head<3>() = state_.H_ee_des.translation() - state_.H_ee.translation();
     delta_pose.tail<3>() = pinocchio::log3(
         state_.H_ee_des.rotation() * state_.H_ee.rotation().transpose());
 
-    Eigen::VectorXd delta_q = cho_controller_base::dls_step(J, delta_pose, lambda_);
+    cho_controller_base::JointStep delta_q = cho_controller_base::dls_step(J, delta_pose, lambda_);
 
     // Bound the per-cycle DLS step, exactly as cho_controller_franka's and
     // cho_controller_fr5's task_space_ik_controller do. max_delta_q was validated in
@@ -101,7 +104,7 @@ controller_interface::return_type TaskSpaceIKController::update(
     // this controller onto an open-loop reference is a separate, larger change.
     cho_controller_base::limit_step(delta_q, max_delta_q_);
 
-    Eigen::VectorXd q_cmd = state_.q.head(num_dof_) + delta_q;
+    const cho_controller_base::JointStep q_cmd = state_.q.head(num_dof_) + delta_q;
 
     for (int i = 0; i < num_dof_; ++i) {
         command_interfaces_[i].set_value(q_cmd(i));

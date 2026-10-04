@@ -1,4 +1,5 @@
 #include "cho_controller_ur/base_controller.hpp"
+#include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <cassert>
@@ -163,8 +164,11 @@ CallbackReturn URBaseController::on_activate(const rclcpp_lifecycle::State & /*p
     state_.H_ee_init = state_.H_ee;
     state_.H_ee_ref = state_.H_ee;
     state_.H_ee_des = state_.H_ee;
-    state_.q_des = state_.q.head(num_dof_);
-    state_.q_ref = state_.q.head(num_dof_);
+    // Continue from what the previous controller left commanded, not the measured
+    // position: seeding from the measurement stepped the position command by the
+    // tracking error on the first cycle of every switch (as on FR5).
+    state_.q_ref = held_command_position();
+    state_.q_des = state_.q_ref;
     activity_.activated();
     return CallbackReturn::SUCCESS;
 }
@@ -252,6 +256,11 @@ void URBaseController::publish_controller_state(const rclcpp::Time & stamp)
         Eigen::VectorXd::Map(cs.feedback.velocities.data(), num_dof_) = state_.v.head(num_dof_);
         ctrl_state_rt_pub_->unlockAndPublish();
     }
+}
+
+Eigen::VectorXd URBaseController::held_command_position() const
+{
+    return cho_controller_base::held_command(command_interfaces_, state_.q.head(num_dof_));
 }
 
 cho_controller::common::trajectory::JointMotionLimits URBaseController::joint_motion_limits()

@@ -255,8 +255,11 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State &)
   active_grasp_ = false;
   target_age_ = 0.0;
   goal_id_ = 0;
+  // A goal still staged from before this activation never starts; the timer
+  // aborts it once it sees it consumed.
   last_started_goal_id_ = goal_buffer_.readFromNonRT()->id;
   public_goal_id_.store(0);
+  consumed_goal_id_.store(last_started_goal_id_, std::memory_order_release);
   cancel_id_.store(0);
   grasped_ = false;
   goal_elapsed_ = 0.0;
@@ -270,14 +273,18 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State &)
 
 CallbackReturn GripperController::on_deactivate(const rclcpp_lifecycle::State &)
 {
-  ready_.store(false, std::memory_order_release);
   // Abandoning an in-flight goal without a terminal result would leave the
-  // caller's action client waiting forever.
+  // caller's action client waiting forever. Queued before ready_ drops, so a
+  // timer that sees the controller inactive also sees this result.
   if (goal_id_) {
     finish(goal_id_, Terminal::ABORTED, "the controller was deactivated during the goal");
     goal_id_ = 0;
-    public_goal_id_.store(0);
   }
+  public_goal_id_.store(0, std::memory_order_release);
+  // Staged and not yet started goals, and any accepted from here on, will not
+  // run either; the timer aborts them.
+  consumed_goal_id_.store(kAllConsumed, std::memory_order_release);
+  ready_.store(false, std::memory_order_release);
   return CallbackReturn::SUCCESS;
 }
 
@@ -383,19 +390,6 @@ controller_interface::return_type GripperController::update(
   const double width = measured_width();
   measured_speed_ = measure_width_rate(width, dt);
 
-  const auto canceled = cancel_id_.exchange(0, std::memory_order_acq_rel);
-  if (canceled && canceled == goal_id_) {
-    finish(goal_id_, Terminal::CANCELED, "canceled on request");
-    goal_id_ = 0;
-    public_goal_id_.store(0);
-    // Hold where the fingers are rather than snapping to the old target: a
-    // canceled grasp must not keep squeezing. In setpoint mode the commanded
-    // width IS the old target, so the fingers' own position is the only honest
-    // answer to "where are they".
-    active_target_width_ = command_is_setpoint_ ? width : commanded_width_;
-    target_age_ = 0.0;
-  }
-
   // A continuous width command outranks the action. It arrives from a stream
   // that cannot wait, and silently ignoring it while an action ran would make
   // teleoperation feel dead exactly when the operator is trying to correct.
@@ -423,7 +417,8 @@ controller_interface::return_type GripperController::update(
     }
     goal_id_ = incoming.id;
     last_started_goal_id_ = incoming.id;
-    public_goal_id_.store(goal_id_);
+    public_goal_id_.store(goal_id_, std::memory_order_release);
+    consumed_goal_id_.store(goal_id_, std::memory_order_release);
     active_grasp_ = incoming.grasp;
     active_target_width_ = incoming.target_width;
     active_speed_ = incoming.speed;
@@ -434,6 +429,23 @@ controller_interface::return_type GripperController::update(
     target_age_ = 0.0;
     grasped_ = false;
     stall_.reset();
+  }
+
+  // After the pickup above, so a cancel for a goal accepted in this same
+  // period applies to it instead of being consumed before it started. Cleared
+  // only when it matched: a cancel for a goal still staged has to wait for it.
+  auto canceled = cancel_id_.load(std::memory_order_acquire);
+  if (canceled && canceled == goal_id_) {
+    cancel_id_.compare_exchange_strong(canceled, 0, std::memory_order_acq_rel);
+    finish(goal_id_, Terminal::CANCELED, "canceled on request");
+    goal_id_ = 0;
+    public_goal_id_.store(0);
+    // Hold where the fingers are rather than snapping to the old target: a
+    // canceled grasp must not keep squeezing. In setpoint mode the commanded
+    // width IS the old target, so the fingers' own position is the only honest
+    // answer to "where are they".
+    active_target_width_ = command_is_setpoint_ ? width : commanded_width_;
+    target_age_ = 0.0;
   }
 
   // Advance the commanded width toward the target. Normally the step is what
@@ -553,6 +565,11 @@ void GripperController::non_rt_tick()
     }
     return;
   }
+  // Read before draining: every result the control thread queued ahead of
+  // these stores is then in the queue below, so the sweep after it only ever
+  // finds goals that were never going to get one.
+  const auto consumed = consumed_goal_id_.load(std::memory_order_acquire);
+  const auto running = public_goal_id_.load(std::memory_order_acquire);
   TerminalEvent event;
   while (terminal_queue_.pop(event)) {
     std::shared_ptr<GoalHandle> handle;
@@ -573,6 +590,26 @@ void GripperController::non_rt_tick()
     } else {
       handle->abort(result);
     }
+  }
+  std::vector<std::shared_ptr<GoalHandle>> dropped;
+  {
+    std::lock_guard<std::mutex> lock(handles_mutex_);
+    for (auto entry = handles_.begin(); entry != handles_.end(); ) {
+      if (entry->first <= consumed && entry->first != running) {
+        dropped.push_back(entry->second);
+        entry = handles_.erase(entry);
+      } else {
+        ++entry;
+      }
+    }
+  }
+  for (const auto & handle : dropped) {
+    auto result = std::make_shared<Action::Result>();
+    result->is_completed = false;
+    result->message = consumed == kAllConsumed
+      ? "the controller was deactivated before the goal started"
+      : "replaced by a newer goal before it started";
+    handle->abort(result);
   }
   const auto id = public_goal_id_.load(std::memory_order_acquire);
   if (!id) return;

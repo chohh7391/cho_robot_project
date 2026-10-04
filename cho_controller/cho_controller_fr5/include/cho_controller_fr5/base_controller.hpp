@@ -97,7 +97,6 @@ protected:
 
     // Scratch for compute_arm_kinematics (kinematics at an arbitrary config).
     pinocchio::Data kin_data_;
-    Eigen::VectorXd kin_v_zero_;
     pinocchio::Data::Matrix6x kin_J_;
     // Cached position limits (with margin) for clamp_to_joint_limits().
     Eigen::VectorXd q_lower_limits_;

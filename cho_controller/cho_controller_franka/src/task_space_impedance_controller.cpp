@@ -77,8 +77,10 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // v_des_world is the reference EE twist [linear; angular] in world-aligned axes,
   // matching J_arm_world below; zero when idle so the law reduces to pure damping.
   Vector6d v_des_world = Vector6d::Zero();
-  if (action_server_ && action_server_->is_running()) {
-    action_server_->compute(time, state_);
+  // compute() is false when the goal ended this cycle -- canceled, aborted, or
+  // one that outlived a deactivation: then its trajectory is not sampled and
+  // the idle branch holds.
+  if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());

@@ -99,9 +99,10 @@ controller_interface::return_type JointSpaceImpedanceController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  // compute in action server
-  action_server_->compute(time, state_);
-  if (action_server_->is_running()) {
+  // compute() is false when there is no goal, or when it ended this cycle --
+  // canceled, aborted, or one that outlived a deactivation. Only a tracking
+  // cycle samples the trajectory.
+  if (action_server_->compute(time, state_)) {
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos;
     state_.v_arm_des = trajectory_sample.vel;

@@ -12,6 +12,7 @@ find_package(pinocchio REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 # Header-only: the servers are templates over the controller's state and
 # trajectory types, instantiated in each controller package.
@@ -22,13 +23,17 @@ target_include_directories(${PROJECT_NAME} INTERFACE
 target_link_libraries(${PROJECT_NAME} INTERFACE
   rclcpp::rclcpp rclcpp_action::rclcpp_action rclcpp_lifecycle::rclcpp_lifecycle
   Eigen3::Eigen pinocchio::pinocchio)
-ament_target_dependencies(${PROJECT_NAME} INTERFACE cho_interfaces)
+ament_target_dependencies(${PROJECT_NAME} INTERFACE cho_interfaces sensor_msgs)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 install(TARGETS ${PROJECT_NAME} EXPORT export_${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake()
+  ament_xmllint()
   ament_add_gtest(test_goal_phase_action_server test/test_goal_phase_action_server.cpp TIMEOUT 120)
   target_link_libraries(test_goal_phase_action_server ${PROJECT_NAME})
   ament_add_gtest(test_motion_servers test/test_motion_servers.cpp TIMEOUT 120)
@@ -38,5 +43,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(cho_interfaces Eigen3 pinocchio rclcpp rclcpp_action rclcpp_lifecycle)
+ament_export_dependencies(cho_interfaces Eigen3 pinocchio rclcpp rclcpp_action rclcpp_lifecycle sensor_msgs)
 ament_package()

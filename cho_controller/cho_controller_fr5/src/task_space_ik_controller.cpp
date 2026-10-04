@@ -51,6 +51,12 @@ CallbackReturn TaskSpaceIKController::on_configure(
     if (!build_tool_envelope()) {
         return CallbackReturn::FAILURE;
     }
+    ik_q_full_.setZero(state_.q.size());
+    ik_q_candidate_full_.setZero(state_.q.size());
+    ik_dq_.setZero(num_dof_);
+    ik_q_candidate_.setZero(num_dof_);
+    ik_J_.setZero(6, num_dof_);
+    ik_J_candidate_.setZero(6, num_dof_);
     action_server_ = std::make_shared<FR5TaskSpaceActionServer>(
         get_node(), "~/task_space", num_dof_);
     action_server_->init();
@@ -105,7 +111,8 @@ controller_interface::return_type TaskSpaceIKController::update(
 
         // FK + local Jacobian at q_ref_ (NOT the measured position). Evaluated first
         // because it also seeds the trajectory at the reference pose below.
-        Eigen::VectorXd q_full = state_.q;
+        Eigen::VectorXd & q_full = ik_q_full_;
+        q_full = state_.q;
         q_full.head(num_dof_) = q_ref_;
         if (!q_ref_.allFinite()) {
             action_server_->abort_active_goal(
@@ -115,7 +122,7 @@ controller_interface::return_type TaskSpaceIKController::update(
             return controller_interface::return_type::ERROR;
         }
         pinocchio::SE3 H_ref;
-        Eigen::MatrixXd J;
+        Eigen::MatrixXd & J = ik_J_;
         FR5BaseController::compute_arm_kinematics(q_full, H_ref, J);
         if (!H_ref.translation().allFinite() ||
             !H_ref.rotation().allFinite() || !J.allFinite()) {
@@ -255,13 +262,15 @@ controller_interface::return_type TaskSpaceIKController::update(
             return controller_interface::return_type::OK;
         }
 
-        Eigen::VectorXd dq = cho_controller_base::dls_step(J, error, lambda_);
+        Eigen::VectorXd & dq = ik_dq_;
+        dq = cho_controller_base::dls_step(J, error, lambda_);
         if (!dq.allFinite()) {
             abort_and_hold("non-finite IK solve; holding the last finite command");
             return controller_interface::return_type::OK;
         }
         cho_controller_base::limit_step(dq, max_delta_q_);
-        Eigen::VectorXd q_candidate = q_ref_ + dq;
+        Eigen::VectorXd & q_candidate = ik_q_candidate_;
+        q_candidate = q_ref_ + dq;
         // Chasing an unreachable target must stop at the joint limits, not integrate
         // through them.
         FR5BaseController::clamp_to_joint_limits(q_candidate);
@@ -274,10 +283,11 @@ controller_interface::return_type TaskSpaceIKController::update(
         // Validate the candidate before committing it. On violation, abort and
         // retain q_ref_, which is the last command known to satisfy the guard.
         if (enforce_workspace_floor_) {
-            Eigen::VectorXd q_candidate_full = state_.q;
+            Eigen::VectorXd & q_candidate_full = ik_q_candidate_full_;
+            q_candidate_full = state_.q;
             q_candidate_full.head(num_dof_) = q_candidate;
             pinocchio::SE3 H_candidate;
-            Eigen::MatrixXd J_unused;
+            Eigen::MatrixXd & J_unused = ik_J_candidate_;
             FR5BaseController::compute_arm_kinematics(q_candidate_full, H_candidate, J_unused);
             if (!H_candidate.translation().allFinite() ||
                 !H_candidate.rotation().allFinite() || !J_unused.allFinite()) {

@@ -78,8 +78,6 @@ CallbackReturn GripperController::on_configure(const rclcpp_lifecycle::State&) {
 
   auto_home_ = get_node()->get_parameter("auto_home").as_bool();
 
-  assignMoveGoalOptionsCallbacks();
-  assignGraspGoalOptionsCallbacks();
   assignHomingGoalOptionsCallbacks();
 
   action_server_ = std::make_shared<GripperActionServer>(get_node(), "~/gripper");
@@ -104,7 +102,9 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State&) {
   state_.gripper_has_result = false;
   dispatch_pending_.store(false);
   result_ready_.store(false);
-  initial_command_sent_ = false;
+  // Whatever an earlier activation left in flight no longer answers anything.
+  command_seq_.fetch_add(1, std::memory_order_acq_rel);
+  initial_command_pending_.store(true, std::memory_order_release);
   if (!dispatch_timer_) {
     dispatch_timer_ = get_node()->create_wall_timer(
         std::chrono::milliseconds(10), [this]() { dispatch(); });
@@ -119,7 +119,7 @@ void GripperController::dispatch() {
   if (!activity_.active()) {
     return;
   }
-  if (!initial_command_sent_) {
+  if (initial_command_pending_.load(std::memory_order_acquire)) {
     // Home (calibrate) the gripper first so that width commands take effect
     // without a manual "initialize end effector" in Franka Desk. Homing itself
     // opens the fingers to their mechanical maximum, so it replaces the initial
@@ -127,12 +127,14 @@ void GripperController::dispatch() {
     const bool ready = auto_home_ ? gripper_homing_action_client_->action_server_is_ready()
                                   : gripper_move_action_client_->action_server_is_ready();
     if (ready) {
-      if (auto_home_) {
-        homeGripper();
-      } else {
-        openGripper();
+      // exchange, so a reactivation that re-arms it meanwhile is not lost.
+      if (initial_command_pending_.exchange(false, std::memory_order_acq_rel)) {
+        if (auto_home_) {
+          homeGripper();
+        } else {
+          openGripper(kNoCommand);
+        }
       }
-      initial_command_sent_ = true;
     } else {
       RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
                            "Waiting for the franka_gripper %s action server.",
@@ -147,12 +149,11 @@ void GripperController::dispatch() {
       RCLCPP_ERROR(get_node()->get_logger(),
                    RED "franka_gripper %s server not available; failing the goal." RESET,
                    command.grasp ? "grasp" : "move");
-      result_success_.store(false);
-      result_ready_.store(true, std::memory_order_release);
+      deliver(command.seq, false);
     } else if (command.grasp) {
       graspGripper(command);
     } else {
-      openGripper();
+      openGripper(command.seq);
     }
   }
 }
@@ -161,24 +162,21 @@ controller_interface::CallbackReturn GripperController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   activity_.deactivated();
   if (gripper_stop_client_->service_is_ready()) {
-    std_srvs::srv::Trigger::Request::SharedPtr request =
-        std::make_shared<std_srvs::srv::Trigger::Request>();
-
-    // Do NOT block indefinitely on result.get(): during shutdown the gripper
-    // server (e.g. mock_franka_gripper) receives SIGINT at the same time and may
-    // die before answering, which would hang the controller_manager shutdown
-    // thread until launch escalates to SIGKILL. Bound the wait instead.
-    auto result = gripper_stop_client_->async_send_request(request);
-    if (result.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready) {
-      if (result.get() && result.get()->success) {
-        RCLCPP_INFO(get_node()->get_logger(), "Gripper stopped successfully.");
-      } else {
-        RCLCPP_ERROR(get_node()->get_logger(), "Failed to stop gripper.");
-      }
-    } else {
-      RCLCPP_WARN(get_node()->get_logger(),
-                  "Gripper stop service did not respond within timeout; skipping.");
-    }
+    // Sent, not waited on. Humble deactivates controllers inside its control
+    // loop, so the 500 ms this used to wait stalled every arm controller with
+    // it, and at shutdown the gripper server may be gone before it answers.
+    // The callback holds a logger copy, not `this`.
+    auto logger = get_node()->get_logger();
+    gripper_stop_client_->async_send_request(
+        std::make_shared<std_srvs::srv::Trigger::Request>(),
+        [logger](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture response) {
+          const auto stop = response.get();
+          if (stop && stop->success) {
+            RCLCPP_INFO(logger, "Gripper stopped successfully.");
+          } else {
+            RCLCPP_ERROR(logger, "Failed to stop gripper.");
+          }
+        });
   } else {
     RCLCPP_ERROR(get_node()->get_logger(), "Gripper stop service is not available.");
   }
@@ -198,30 +196,43 @@ controller_interface::return_type GripperController::update(const rclcpp::Time& 
   action_server_->compute(time, state_);
   if (state_.gripper_has_goal) {
     state_.gripper_has_goal = false;
-    staged_ = Command{state_.is_grasp, state_.grasp_width, state_.grasp_speed, state_.grasp_force,
-                      state_.grasp_epsilon_inner, state_.grasp_epsilon_outer};
+    const auto seq = command_seq_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    staged_ = Command{seq, state_.is_grasp, state_.grasp_width, state_.grasp_speed,
+                      state_.grasp_force, state_.grasp_epsilon_inner, state_.grasp_epsilon_outer};
     dispatch_pending_.store(true, std::memory_order_release);
   }
   return controller_interface::return_type::OK;
 }
 
-void GripperController::assignMoveGoalOptionsCallbacks() {
-  move_goal_options_.goal_response_callback =
-      [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Move>>&
-                 goal_handle) {
+void GripperController::deliver(const std::uint64_t seq, const bool success) {
+  if (seq == kNoCommand || seq != command_seq_.load(std::memory_order_acquire)) {
+    RCLCPP_INFO(get_node()->get_logger(),
+                "Ignoring a franka_gripper outcome for an earlier command (%s).",
+                success ? "success" : "failure");
+    return;
+  }
+  result_success_.store(success);
+  result_ready_.store(true, std::memory_order_release);
+}
+
+rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions
+GripperController::moveGoalOptions(const std::uint64_t seq) {
+  rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions options;
+  options.goal_response_callback =
+      [this, seq](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Move>>&
+                      goal_handle) {
         if (!goal_handle) {
           RCLCPP_ERROR(get_node()->get_logger(),
                        RED "Move Goal (i.e. open gripper) NOT accepted." RESET);
           // A rejected goal never produces a result: fail it here, or the
           // action goal would stay active forever.
-          result_success_.store(false);
-          result_ready_.store(true, std::memory_order_release);
+          deliver(seq, false);
         } else {
           RCLCPP_INFO(get_node()->get_logger(), "Move Goal accepted");
         }
       };
 
-  move_goal_options_.feedback_callback =
+  options.feedback_callback =
       [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Move>>&,
              const std::shared_ptr<const franka_msgs::action::Move_Feedback>& feedback) {
         RCLCPP_INFO(get_node()->get_logger(), "Move Goal current_width [%f].",
@@ -229,31 +240,32 @@ void GripperController::assignMoveGoalOptionsCallbacks() {
         current_width_.store(feedback->current_width);
       };
 
-  move_goal_options_.result_callback =
-      [this](
+  options.result_callback =
+      [this, seq](
           const rclcpp_action::ClientGoalHandle<franka_msgs::action::Move>::WrappedResult& result) {
         RCLCPP_INFO(get_node()->get_logger(), "Move Goal result %s.",
                     (rclcpp_action::ResultCode::SUCCEEDED == result.code ? YELLOW "SUCCESS" RESET
                                                                          : RED "FAIL" RESET));
-        result_success_.store(result.code == rclcpp_action::ResultCode::SUCCEEDED);
-        result_ready_.store(true, std::memory_order_release);
+        deliver(seq, result.code == rclcpp_action::ResultCode::SUCCEEDED);
       };
+  return options;
 }
 
-void GripperController::assignGraspGoalOptionsCallbacks() {
-  grasp_goal_options_.goal_response_callback =
-      [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>>&
-                 goal_handle) {
+rclcpp_action::Client<franka_msgs::action::Grasp>::SendGoalOptions
+GripperController::graspGoalOptions(const std::uint64_t seq) {
+  rclcpp_action::Client<franka_msgs::action::Grasp>::SendGoalOptions options;
+  options.goal_response_callback =
+      [this, seq](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>>&
+                      goal_handle) {
         if (!goal_handle) {
           RCLCPP_ERROR(get_node()->get_logger(), RED "Grasp Goal NOT accepted." RESET);
-          result_success_.store(false);
-          result_ready_.store(true, std::memory_order_release);
+          deliver(seq, false);
         } else {
           RCLCPP_INFO(get_node()->get_logger(), "Grasp Goal accepted.");
         }
       };
 
-  grasp_goal_options_.feedback_callback =
+  options.feedback_callback =
       [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>>&,
              const std::shared_ptr<const franka_msgs::action::Grasp_Feedback>& feedback) {
         RCLCPP_INFO(get_node()->get_logger(), "Grasp Goal current_width: %f",
@@ -261,15 +273,15 @@ void GripperController::assignGraspGoalOptionsCallbacks() {
         current_width_.store(feedback->current_width);
       };
 
-  grasp_goal_options_.result_callback =
-      [this](const rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>::WrappedResult&
-                 result) {
+  options.result_callback =
+      [this, seq](const rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>::WrappedResult&
+                      result) {
         RCLCPP_INFO(get_node()->get_logger(), "Grasp Goal result %s.",
                     (rclcpp_action::ResultCode::SUCCEEDED == result.code ? GREEN "SUCCESS" RESET
                                                                          : RED "FAIL" RESET));
-        result_success_.store(result.code == rclcpp_action::ResultCode::SUCCEEDED);
-        result_ready_.store(true, std::memory_order_release);
+        deliver(seq, result.code == rclcpp_action::ResultCode::SUCCEEDED);
       };
+  return options;
 }
 
 void GripperController::assignHomingGoalOptionsCallbacks() {
@@ -306,7 +318,7 @@ void GripperController::homeGripper() {
   }
 }
 
-bool GripperController::openGripper() {
+bool GripperController::openGripper(const std::uint64_t seq) {
   RCLCPP_INFO(get_node()->get_logger(), "Opening the gripper - Submitting a Move Goal");
 
   // define open gripper goal
@@ -316,7 +328,7 @@ bool GripperController::openGripper() {
 
   std::shared_future<std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Move>>>
       move_goal_handle =
-          gripper_move_action_client_->async_send_goal(move_goal, move_goal_options_);
+          gripper_move_action_client_->async_send_goal(move_goal, moveGoalOptions(seq));
   bool ret = move_goal_handle.valid();
   if (ret) {
     RCLCPP_INFO(get_node()->get_logger(), "Submited a Move Goal");
@@ -356,7 +368,7 @@ void GripperController::graspGripper(const Command & command) {
 
   std::shared_future<std::shared_ptr<rclcpp_action::ClientGoalHandle<franka_msgs::action::Grasp>>>
       grasp_goal_handle =
-          gripper_grasp_action_client_->async_send_goal(grasp_goal, grasp_goal_options_);
+          gripper_grasp_action_client_->async_send_goal(grasp_goal, graspGoalOptions(command.seq));
 
   bool ret = grasp_goal_handle.valid();
   if (ret) {

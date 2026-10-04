@@ -46,6 +46,13 @@ private:
 
     std::shared_ptr<FR5TaskSpaceActionServer> action_server_;
     std::shared_ptr<fr5_task_space_ik_controller::ParamListener> param_listener_;
+    // Per-cycle IK scratch, sized in on_configure so update() never allocates.
+    Eigen::VectorXd ik_q_full_;
+    Eigen::VectorXd ik_q_candidate_full_;
+    Eigen::VectorXd ik_dq_;
+    Eigen::VectorXd ik_q_candidate_;
+    Eigen::MatrixXd ik_J_;
+    Eigen::MatrixXd ik_J_candidate_;
     double lambda_{0.01};
     double max_delta_q_{0.02};
     bool enforce_workspace_floor_{true};

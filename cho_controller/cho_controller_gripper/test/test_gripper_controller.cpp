@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -14,6 +15,7 @@
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <gtest/gtest.h>
 #include <hardware_interface/resource_manager.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 
 #include "cho_controller_gripper/gripper_controller.hpp"
 
@@ -216,7 +218,62 @@ protected:
     }
   }
 
+  // An action client on its own node, spun by the controller's executor, so a
+  // goal takes the real accept path and a test sees the result a caller would.
+  using GripperAction = cho_interfaces::action::Gripper;
+  using ClientHandle = rclcpp_action::ClientGoalHandle<GripperAction>;
+
+  void make_client()
+  {
+    client_node_ = std::make_shared<rclcpp::Node>("gripper_test_client", "/gripper_test");
+    executor_->add_node(client_node_);
+    client_ = rclcpp_action::create_client<GripperAction>(
+      client_node_, "/gripper_test/gripper_controller/gripper");
+    ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  }
+
+  // Callbacks only, no control period: an accepted goal stays staged.
+  template<typename FutureT>
+  bool spin_until(FutureT & future, const int budget_ms = 3000)
+  {
+    for (int i = 0; i < budget_ms; ++i) {
+      executor_->spin_some(std::chrono::milliseconds(0));
+      if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  }
+
+  // Null when rejected.
+  ClientHandle::SharedPtr send(const bool grasp, const double width = 0.0, const double speed = 0.0)
+  {
+    GripperAction::Goal goal;
+    goal.grasp = grasp;
+    goal.width = width;
+    goal.speed = speed;
+    auto future = client_->async_send_goal(goal);
+    if (!spin_until(future)) {
+      ADD_FAILURE() << "no goal response";
+      return nullptr;
+    }
+    return future.get();
+  }
+
+  ClientHandle::WrappedResult result_of(const ClientHandle::SharedPtr & handle)
+  {
+    auto future = client_->async_get_result(handle);
+    if (!spin_until(future)) {
+      ADD_FAILURE() << "no result";
+      return {};
+    }
+    return future.get();
+  }
+
   static constexpr double kPeriod = 0.001;
+  rclcpp::Node::SharedPtr client_node_;
+  rclcpp_action::Client<GripperAction>::SharedPtr client_;
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   std::shared_ptr<controller_manager::ControllerManager> manager_;
   std::shared_ptr<GripperController> controller_;
@@ -422,5 +479,104 @@ TEST_F(Fixture, StallGraceHoldsOffTheDetectorUntilTheHardwareHasHadTimeToMove)
   EXPECT_EQ(Access::active_goal(*controller_), id);
   cycle(120);  // past grace + dwell, so the stall is allowed to land
   EXPECT_EQ(Access::active_goal(*controller_), 0U);
+}
+TEST_F(Fixture, AGoalReplacedBeforeItStartedStillGetsAResult)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  make_client();
+  // Two goals inside one control period: the second overwrites the first in
+  // the staging buffer, so no cycle ever starts the first.
+  auto first = send(/*grasp=*/false);
+  auto second = send(/*grasp=*/true);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  cycle(1);
+  const auto replaced = result_of(first);
+  EXPECT_EQ(replaced.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(replaced.result->message, "replaced by a newer goal before it started");
+  cycle(800);
+  EXPECT_EQ(result_of(second).code, rclcpp_action::ResultCode::SUCCEEDED);
+  // Each replaced goal used to keep one of the two handle slots for good: one
+  // of them left no room for a replacement goal, two rejected every goal.
+  for (int round = 0; round < 3; ++round) {
+    auto a = send(false);
+    // 88 mm at 0.2 m/s is 0.44 s, inside the 1 s of periods below.
+    auto b = send(round % 2 == 0, 0.0, 0.2);
+    ASSERT_NE(a, nullptr) << "round " << round;
+    ASSERT_NE(b, nullptr) << "round " << round;
+    cycle(1000);
+    EXPECT_EQ(result_of(a).code, rclcpp_action::ResultCode::ABORTED);
+    EXPECT_EQ(result_of(b).code, rclcpp_action::ResultCode::SUCCEEDED);
+  }
+}
+
+TEST_F(Fixture, AGoalStagedAtDeactivationIsAbortedAndNeverRunsAfterReactivation)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  make_client();
+  cycle(5);
+  const double before = Access::measured_width(*controller_);
+  // Fully open: 88 mm of travel if it ever ran.
+  auto staged = send(/*grasp=*/false);
+  ASSERT_NE(staged, nullptr);
+  // The controller_manager switches inside update(), after the controllers
+  // ran, so a goal is pending at deactivation only by timing. Driving the
+  // lifecycle directly puts it there every time.
+  controller_->get_node()->deactivate();
+  ASSERT_FALSE(Access::ready(*controller_));
+  const auto result = result_of(staged);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(result.result->message, "the controller was deactivated before the goal started");
+
+  controller_->get_node()->activate();
+  ASSERT_TRUE(Access::ready(*controller_));
+  cycle(300);
+  EXPECT_EQ(Access::active_goal(*controller_), 0U);
+  EXPECT_NEAR(Access::measured_width(*controller_), before, 1e-9);
+  auto next = send(false);
+  ASSERT_NE(next, nullptr);
+  cycle(2000);
+  EXPECT_EQ(result_of(next).code, rclcpp_action::ResultCode::SUCCEEDED);
+}
+
+TEST_F(Fixture, ARunningGoalIsAbortedWithItsReasonOnDeactivation)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  make_client();
+  auto running = send(/*grasp=*/false);
+  ASSERT_NE(running, nullptr);
+  cycle(50);
+  ASSERT_NE(Access::active_goal(*controller_), 0U);
+  controller_->get_node()->deactivate();
+  const auto result = result_of(running);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(result.result->message, "the controller was deactivated during the goal");
+}
+
+TEST_F(Fixture, ACancelForAGoalAcceptedThisPeriodIsNotLost)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  make_client();
+  cycle(5);
+  const double before = Access::measured_width(*controller_);
+  auto handle = send(/*grasp=*/false);
+  ASSERT_NE(handle, nullptr);
+  auto cancel = client_->async_cancel_goal(handle);
+  ASSERT_TRUE(spin_until(cancel));
+  // Accepted and canceled before any period ran: the first period must start
+  // the goal and then cancel it, not drop the cancel and run the goal.
+  cycle(1);
+  const auto result = result_of(handle);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::CANCELED);
+  cycle(100);
+  EXPECT_NEAR(Access::measured_width(*controller_), before, 1e-9);
 }
 }  // namespace

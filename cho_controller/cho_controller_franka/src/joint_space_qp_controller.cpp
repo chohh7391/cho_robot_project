@@ -128,13 +128,15 @@ controller_interface::return_type JointSpaceQPController::update(
   // ----------------------------------------------------
   // Track the action-server trajectory
   // ----------------------------------------------------
-  action_server_->compute(time, state_);
-  
+  // compute() is false when there is no goal, or when it ended this cycle --
+  // canceled, aborted, or one that outlived a deactivation.
+  const bool tracking = action_server_->compute(time, state_);
+
   // Build the sample at the model's full actuated size (arm + gripper)
   int model_na = robot_->na();
   cho_controller::common::trajectory::TrajectorySample sample_posture(model_na);
 
-  if (action_server_->is_running()) {
+  if (tracking) {
     auto trajectory_sample = action_server_->trajectory_->computeNext();
     
     // Fill only the arm entries (head) from the trajectory

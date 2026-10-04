@@ -28,14 +28,28 @@
 namespace cho_controller_base
 {
 
+// Upper bounds on the sizes a dynamic-size Jacobian takes here: 6 task rows,
+// at most kMaxArmDof joints. With a bound Eigen keeps a dynamic-size result on
+// the stack, so a 6-DOF arm's per-cycle step allocates nothing.
+inline constexpr int kMaxTaskDim = 6;
+inline constexpr int kMaxArmDof = 12;
+
+// A joint-space vector of runtime size, stack-allocated (see kMaxArmDof).
+using JointStep = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, kMaxArmDof, 1>;
+
 // Damped least squares: dq = J^T (J J^T + lambda^2 I)^-1 e. J J^T + lambda^2 I
 // is symmetric positive definite, so it is solved by LDLT rather than inverted.
+// A dynamic-size J must have at most kMaxTaskDim rows and kMaxArmDof columns.
 template<typename JacobianT, typename ErrorT>
-Eigen::Matrix<double, JacobianT::ColsAtCompileTime, 1> dls_step(
+Eigen::Matrix<
+  double, JacobianT::ColsAtCompileTime, 1, 0,
+  (JacobianT::ColsAtCompileTime == Eigen::Dynamic ? kMaxArmDof : JacobianT::ColsAtCompileTime), 1>
+dls_step(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<ErrorT> & error, double lambda)
 {
-  Eigen::Matrix<double, JacobianT::RowsAtCompileTime, JacobianT::RowsAtCompileTime> damped =
-    jacobian * jacobian.transpose();
+  constexpr int kRows = JacobianT::RowsAtCompileTime;
+  constexpr int kMaxRows = kRows == Eigen::Dynamic ? kMaxTaskDim : kRows;
+  Eigen::Matrix<double, kRows, kRows, 0, kMaxRows, kMaxRows> damped = jacobian * jacobian.transpose();
   damped.diagonal().array() += lambda * lambda;
   return jacobian.transpose() * damped.ldlt().solve(error);
 }

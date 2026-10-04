@@ -162,6 +162,17 @@ TEST_F(GoalPhaseTest, RejectsGoalsWhileTheControllerIsInactive) {
   EXPECT_NE(send(), nullptr);
 }
 
+TEST_F(GoalPhaseTest, RejectsGoalsUntilAControllerIsAttached) {
+  // The action server exists from init(), before the controller attaches its
+  // activity; in that window it must refuse rather than accept a goal nothing
+  // will run.
+  server_->attach_activity(nullptr);
+  activity_.activated();
+  EXPECT_EQ(send(), nullptr);
+  server_->attach_activity(&activity_);
+  EXPECT_NE(send(), nullptr);
+}
+
 TEST_F(GoalPhaseTest, RejectsANanOrNonPositiveDuration) {
   activity_.activated();
   EXPECT_EQ(send(std::nanf("")), nullptr);
@@ -238,12 +249,19 @@ TEST_F(GoalPhaseTest, AGoalNeverResumesInALaterActivation) {
   ASSERT_NE(handle, nullptr);
   run_cycles(3);
   // Deactivated and reactivated faster than the finisher looks: the first cycle
-  // of the new activation must end the goal instead of resuming it.
+  // of the new activation must end the goal instead of resuming it. compute()
+  // returning false on that very cycle is what the controllers rely on to not
+  // sample the old trajectory.
   activity_.deactivated();
   activity_.activated();
+  DummyState state;
+  EXPECT_FALSE(server_->compute(rclcpp::Time(0, 0), state));
+  EXPECT_FALSE(server_->is_running());
   run_cycles(3);
   const auto result = result_of(handle);
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
+  // Which of the two ends it depends on whether the finisher ticked between the
+  // two calls above; either way the goal never resumed (asserted above).
   const std::string message = result.result->message;
   EXPECT_TRUE(
     message == cho_controller_base::kReasonReactivated ||

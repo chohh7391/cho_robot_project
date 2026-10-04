@@ -42,8 +42,10 @@ controller_interface::return_type JointSpacePositionController::update(
         return controller_interface::return_type::ERROR;
     }
 
-    if (action_server_ && action_server_->is_running()) {
-        action_server_->compute(time, state_);
+    // compute() is false when the goal ended this cycle -- canceled, aborted, or
+    // one that outlived a deactivation: then its trajectory is not sampled and
+    // the idle branch holds.
+    if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
         auto sample = action_server_->trajectory_->computeNext();
         state_.q_des = sample.pos.head(num_dof_);
     } else {

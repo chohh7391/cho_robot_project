@@ -30,7 +30,7 @@
   <xacro:arg name="gripper_softversion" default="0"/>
   <xacro:arg name="gripper_bus" default="1"/>
   <xacro:arg name="gripper_index" default="1"/>
-  <!-- Serialise the driver's SDK calls. See fr5.ros2_control.xacro. -->
+  <!-- Lock around every SDK call: OFF on measurement. See fr5.ros2_control.xacro. -->
   <xacro:arg name="sdk_serialise" default="false"/>
   <xacro:arg name="gripper_speed_percent" default="30"/>
   <xacro:arg name="gripper_force_percent" default="30"/>

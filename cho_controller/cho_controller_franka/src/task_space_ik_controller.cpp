@@ -111,21 +111,25 @@ controller_interface::return_type TaskSpaceIKController::update(
   // (hold the last reference). Re-solving toward a measured-derived hold pose would
   // (a) feed encoder noise into the command and (b) jump at the goal start/end
   // transitions (the action server resets H_ee_init to the measured pose).
-  const bool running = action_server_ && action_server_->is_running();
+  bool running = action_server_ && action_server_->is_running();
   if (running) {
-    // FK + Jacobian at q_ref_ (NOT measured) via the base-class helper. Computed
-    // first because it also seeds the trajectory at the reference pose (below).
+    // Sample the trajectory on the jitter-free clock (fixed nominal cadence -- 1 ms
+    // on the FCI), not the measured ROS time which jitters 0.9-2.2 ms.
+    traj_clock_ += dt;
+    const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
+    // False when the goal ended this cycle -- canceled, aborted, or one that
+    // outlived a deactivation. Its trajectory must not be sampled: hold q_ref_
+    // as when idle.
+    running = action_server_->compute(traj_time, state_);
+  }
+  if (running) {
+    // FK + Jacobian at q_ref_ (NOT measured) via the base-class helper; it also
+    // seeds the trajectory at the reference pose (below).
     Eigen::VectorXd q_full = state_.q;
     q_full.head(num_dof_) = q_ref_;
     pinocchio::SE3 H_ref;
     Eigen::Matrix<double, 6, 7> J;
     FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
-
-    // Sample the trajectory on the jitter-free clock (fixed nominal cadence -- 1 ms
-    // on the FCI), not the measured ROS time which jitters 0.9-2.2 ms.
-    traj_clock_ += dt;
-    const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
-    action_server_->compute(traj_time, state_);
 
     if (!prev_running_) {
       // Goal just started: seed the trajectory at the REFERENCE pose FK(q_ref_), not

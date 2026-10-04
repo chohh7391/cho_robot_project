@@ -158,7 +158,7 @@ public:
     trajectory.setCurrentTime(now.seconds());
 
     if (this->cancel_requested_.load()) {
-      this->finish_from_rt(GoalPhase::kFinishCanceled);
+      this->finish_from_rt(GoalPhase::kFinishCanceled, kReasonCanceled);
       return false;
     }
     if (!trajectory.planSucceeded()) {

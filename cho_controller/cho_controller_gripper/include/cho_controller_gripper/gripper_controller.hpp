@@ -204,6 +204,14 @@ private:
   std::atomic<std::uint64_t> next_goal_id_{1};
   std::atomic<std::uint64_t> cancel_id_{0};
   std::atomic<std::uint64_t> public_goal_id_{0};
+  // The newest goal id the control thread has started or discarded, and every
+  // id while the controller is inactive (kAllConsumed). A handle at or below it
+  // that is not the active goal will never run -- a newer goal replaced it in
+  // the buffer before a cycle saw it, or the controller was deactivated first --
+  // so the timer gives it its result. Without that it held one of the two
+  // handle slots forever, and two such goals made every later one rejected.
+  static constexpr std::uint64_t kAllConsumed = UINT64_MAX;
+  std::atomic<std::uint64_t> consumed_goal_id_{0};
   std::atomic<bool> ready_{false};
   std::atomic<double> feedback_width_{0.0};
 };

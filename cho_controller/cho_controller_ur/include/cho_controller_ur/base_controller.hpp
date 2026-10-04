@@ -64,6 +64,9 @@ protected:
     // pilz_cartesian_limits.yaml); see motion_limits_params.hpp. Call after
     // on_configure() has resolved the joint names.
     cho_controller::common::trajectory::JointMotionLimits joint_motion_limits();
+    // The position the previous controller left commanded, when it is consistent
+    // with the measurement; else the measurement (cho_controller_base::held_command).
+    Eigen::VectorXd held_command_position() const;
     cho_controller::common::trajectory::CartesianMotionLimits cartesian_motion_limits();
 
     std::string robot_description_;

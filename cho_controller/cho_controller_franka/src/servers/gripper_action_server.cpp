@@ -85,7 +85,7 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
 
   if (cancel_requested_.load()) {
     is_waiting_ = false;
-    finish_from_rt(GoalPhase::kFinishCanceled);
+    finish_from_rt(GoalPhase::kFinishCanceled, cho_controller_base::kReasonCanceled);
     return false;
   }
 
@@ -114,7 +114,7 @@ bool GripperActionServer::compute(const rclcpp::Time & current_time, State & sta
       finish_from_rt(GoalPhase::kFinishSucceeded);
     } else {
       // Real robot: a genuine grasp failure must surface to the caller.
-      finish_from_rt(GoalPhase::kFinishAborted);
+      finish_from_rt(GoalPhase::kFinishAborted, "franka_gripper reported that the command failed");
     }
     return true;
   }

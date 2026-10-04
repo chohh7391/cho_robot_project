@@ -292,7 +292,9 @@ TEST_F(TaskServerTest, CancelLeavesTheHoldAtTheArmNotAtTheGoalStart) {
   client_->async_cancel_goal(handle);
   std::this_thread::sleep_for(100ms);
   step(0.5);
-  EXPECT_EQ(result_of(handle).code, rclcpp_action::ResultCode::CANCELED);
+  const auto result = result_of(handle);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::CANCELED);
+  EXPECT_EQ(result.result->message, cho_controller_base::kReasonCanceled);
   EXPECT_TRUE(state_.H_ee_init.isApprox(moved));
 }
 
@@ -305,6 +307,16 @@ TEST_F(TaskServerTest, AControllerAbortCarriesItsReason) {
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
   EXPECT_EQ(result.result->message, "workspace floor guard: tool below the bench");
   EXPECT_FALSE(server_->abort_active_goal("no goal"));
+}
+
+TEST_F(TaskServerTest, ALongAbortReasonArrivesWhole) {
+  // FR5's floor-guard reasons run to ~400 characters.
+  auto handle = send(task_goal(0.1, false));
+  ASSERT_NE(handle, nullptr);
+  step(0.0);
+  const std::string reason(450, 'r');
+  EXPECT_TRUE(server_->abort_active_goal(reason));
+  EXPECT_EQ(result_of(handle).result->message, reason);
 }
 
 }  // namespace

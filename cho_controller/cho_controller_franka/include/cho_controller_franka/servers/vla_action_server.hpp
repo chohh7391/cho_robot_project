@@ -79,7 +79,8 @@ public:
     const Vector6d & twist_des() const { return twist_des_; }
 
 protected:
-    void finish_goal_rt(GoalPhase terminal, State & state);
+    // `reason` must be a string literal: this runs on the control thread.
+    void finish_goal_rt(GoalPhase terminal, State & state, const char * reason = "");
     void on_goal_finished(GoalPhase terminal) override;
 
 private:

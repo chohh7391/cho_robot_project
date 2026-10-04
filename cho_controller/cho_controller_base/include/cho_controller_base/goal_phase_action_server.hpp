@@ -62,10 +62,15 @@ struct NoTrajectory
 
 // Goal-lifecycle phases of the RT-safe action-server state machine:
 //   kIdle -> kActive          (executor: handle_accepted, via activate_goal())
-//   kActive -> kFinish*       (RT: compute() detects cancel/success/timeout and
+//   kActive -> kFinishing -> kFinish*
+//                             (RT: compute() detects cancel/success/timeout and
 //                              calls finish_from_rt() -- atomic stores only;
 //                              or the finisher, when the controller is
-//                              deactivated under an active goal)
+//                              deactivated under an active goal. Both claim the
+//                              goal with one compare-exchange into kFinishing,
+//                              write the reason, then publish the terminal
+//                              phase, so exactly one ending wins and its reason
+//                              is visible to whoever sees that phase)
 //   kFinish* -> kIdle         (non-RT finisher timer: performs the actual
 //                              succeed()/abort()/canceled() calls and releases
 //                              the goal handle)
@@ -82,6 +87,7 @@ enum class GoalPhase : std::uint8_t
 {
   kIdle = 0,
   kActive,
+  kFinishing,  // claimed by one ending; its reason is being written
   kFinishSucceeded,
   kFinishAborted,
   kFinishCanceled,
@@ -107,6 +113,7 @@ inline constexpr const char * kReasonDeactivated =
   "the controller was deactivated during the goal";
 inline constexpr const char * kReasonReactivated =
   "the controller was deactivated and reactivated during the goal";
+inline constexpr const char * kReasonCanceled = "canceled on request";
 
 // Template over the action, the controller's state struct (what compute() reads
 // and writes), and the trajectory type the server plays.
@@ -167,7 +174,10 @@ public:
   void attach_activity(const ControllerActivity * activity) {activity_ = activity;}
 
 protected:
-  bool controller_ready() const {return activity_ == nullptr || activity_->active();}
+  // Fail-closed: a server whose controller has not attached its activity yet
+  // (the action server exists from init(), before attach_activity()) admits
+  // nothing, rather than accepting a goal no controller is there to run.
+  bool controller_ready() const {return activity_ != nullptr && activity_->active();}
 
   // The checks every goal passes before its own: the controller is active and no
   // other goal is in flight (single-goal server). Logs the reason it refuses.
@@ -314,9 +324,7 @@ protected:
   // the result's message where the action has one.
   void finish_from_rt(GoalPhase terminal, const char * reason = "")
   {
-    finish_reason_.store(reason, std::memory_order_relaxed);
-    control_running_ = false;
-    phase_.store(static_cast<std::uint8_t>(terminal));
+    finish(terminal, reason);
   }
 
   // Progress in percent for the action's feedback, where it has percent_complete.
@@ -339,8 +347,8 @@ protected:
         return;
       }
     }
-    if (ph == GoalPhase::kIdle || ph == GoalPhase::kActive) {
-      return;
+    if (ph == GoalPhase::kIdle || ph == GoalPhase::kActive || ph == GoalPhase::kFinishing) {
+      return;  // kFinishing: an ending is still writing its reason; next tick
     }
     const char * reason = finish_reason_.load(std::memory_order_relaxed);
     if (pending_goal_handle_) {
@@ -375,17 +383,25 @@ protected:
   }
 
 private:
-  // Moves an ACTIVE goal to aborted at most once, whichever thread gets there.
-  // The reason is written only by the winner, so a goal that finished on its own
-  // in the same instant keeps its own message.
-  void abort_active(const char * reason)
+  // Ends an ACTIVE goal at most once, whichever thread gets there. The winner
+  // writes its reason BEFORE publishing the terminal phase (release), so a
+  // finisher that sees the phase (acquire) also sees the reason; a goal that
+  // finished on its own in the same instant keeps its own message.
+  bool finish(GoalPhase terminal, const char * reason)
   {
     auto expected = static_cast<std::uint8_t>(GoalPhase::kActive);
-    if (phase_.compare_exchange_strong(expected, static_cast<std::uint8_t>(GoalPhase::kFinishAborted))) {
-      finish_reason_.store(reason, std::memory_order_relaxed);
-      control_running_ = false;
+    if (!phase_.compare_exchange_strong(
+        expected, static_cast<std::uint8_t>(GoalPhase::kFinishing), std::memory_order_acq_rel))
+    {
+      return false;
     }
+    finish_reason_.store(reason, std::memory_order_relaxed);
+    control_running_ = false;
+    phase_.store(static_cast<std::uint8_t>(terminal), std::memory_order_release);
+    return true;
   }
+
+  void abort_active(const char * reason) {finish(GoalPhase::kFinishAborted, reason);}
 
   void publish_progress()
   {

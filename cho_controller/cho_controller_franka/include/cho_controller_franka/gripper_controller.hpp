@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include <string>
 
@@ -70,11 +71,15 @@ class GripperController : public FrankaBaseController {
  private:
   // Close Gripper if Open, Open Gripper if Closed
   void toggleGripperState();
-  // Issues the Move Goal to open the Gripper
-  bool openGripper();
+  // Issues the Move Goal to open the Gripper. `seq` is the command it answers
+  // (see command_seq_); kNoCommand for the initial open, whose result no goal
+  // waits on.
+  bool openGripper(std::uint64_t seq);
+  static constexpr std::uint64_t kNoCommand = 0;
   // What update() hands the dispatch timer when a gripper goal starts.
   struct Command
   {
+    std::uint64_t seq{kNoCommand};
     bool grasp{false};
     double width{0.0}, speed{0.0}, force{0.0}, epsilon_inner{0.0}, epsilon_outer{0.0};
   };
@@ -85,12 +90,13 @@ class GripperController : public FrankaBaseController {
   void dispatch();
   // Issues the Homing Goal to calibrate the gripper (recovers the width reference).
   void homeGripper();
-  // Populates the callbacks for the Move Goal
-  void assignMoveGoalOptionsCallbacks();
-  // Populates the callbacks for the Grasp Goal
-  void assignGraspGoalOptionsCallbacks();
+  // Callbacks for one Move / Grasp goal, answering command `seq`.
+  rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions moveGoalOptions(std::uint64_t seq);
+  rclcpp_action::Client<franka_msgs::action::Grasp>::SendGoalOptions graspGoalOptions(std::uint64_t seq);
   // Populates the callbacks for the Homing Goal
   void assignHomingGoalOptionsCallbacks();
+  // Hands a franka_gripper outcome to update(), if it answers the newest command.
+  void deliver(std::uint64_t seq, bool success);
 
   std::shared_ptr<rclcpp_action::Client<franka_msgs::action::Grasp>> gripper_grasp_action_client_;
   std::shared_ptr<rclcpp_action::Client<franka_msgs::action::Move>> gripper_move_action_client_;
@@ -101,14 +107,6 @@ class GripperController : public FrankaBaseController {
   // commands take effect without a manual "initialize end effector" in Desk.
   bool auto_home_{true};
 
-  /**
-   * The struct SendGoalOptions is used solely for setting goal callbacks.
-   * In this example, the callbacks are tied to the lifetime of the
-   * GripperController instance, so the SendGoalOptions objects
-   * are stored as members of the class.
-   */
-  rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions move_goal_options_;
-  rclcpp_action::Client<franka_msgs::action::Grasp>::SendGoalOptions grasp_goal_options_;
   rclcpp_action::Client<franka_msgs::action::Homing>::SendGoalOptions homing_goal_options_;
 
   std::shared_ptr<GripperActionServer> action_server_;
@@ -123,7 +121,15 @@ class GripperController : public FrankaBaseController {
   std::atomic<bool> result_ready_{false};
   std::atomic<bool> result_success_{false};
   std::atomic<double> current_width_{0.0};
-  bool initial_command_sent_{false};  // executor-only
+  // Numbers the commands update() stages, and is bumped on every activation.
+  // A franka_gripper outcome completes the running goal only if it answers the
+  // newest one: the initial open, a command left over from a canceled goal and
+  // one still in flight from an earlier activation used to complete whatever
+  // goal was running when their result came back.
+  std::atomic<std::uint64_t> command_seq_{kNoCommand};
+  // Set by on_activate (the control thread under Humble), cleared by dispatch()
+  // once the initial home/open has gone out.
+  std::atomic<bool> initial_command_pending_{false};
   rclcpp::TimerBase::SharedPtr dispatch_timer_;
 };
 
