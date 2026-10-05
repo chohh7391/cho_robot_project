@@ -16,8 +16,9 @@
 #include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
-#include <cassert>
+#include <chrono>
 #include <cmath>
+#include <future>
 #include <string>
 #include <Eigen/Eigen>
 
@@ -81,7 +82,15 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
             RCLCPP_ERROR(get_node()->get_logger(), "robot_state_publisher not available");
             return CallbackReturn::FAILURE;
         }
-        auto result = client->get_parameters({"robot_description"}).get();
+        // Bounded: the answer is delivered by the executor this callback may be
+        // running on, and an unbounded get() hung configure forever there.
+        auto future = client->get_parameters({"robot_description"});
+        if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                "robot_state_publisher did not answer for robot_description within 5 s");
+            return CallbackReturn::FAILURE;
+        }
+        auto result = future.get();
         if (result.empty() || result[0].value_to_string().empty()) {
             RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description");
             return CallbackReturn::FAILURE;
@@ -94,6 +103,11 @@ CallbackReturn FR5BaseController::on_configure(const rclcpp_lifecycle::State & /
     num_dof_ = static_cast<int>(joint_names_.size());
     if (num_dof_ == 0) {
         RCLCPP_ERROR(get_node()->get_logger(), "joints parameter is empty");
+        return CallbackReturn::FAILURE;
+    }
+    if (!cho_controller_base::dls_fits(6, num_dof_)) {
+        RCLCPP_ERROR(get_node()->get_logger(), "%d joints is more than the %d the IK helpers are sized for",
+            num_dof_, cho_controller_base::kMaxArmDof);
         return CallbackReturn::FAILURE;
     }
 
@@ -198,6 +212,13 @@ CallbackReturn FR5BaseController::on_activate(const rclcpp_lifecycle::State & /*
 CallbackReturn FR5BaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
     activity_.deactivated();
+    // What this controller leaves on the position interfaces, and where the arm
+    // is now, so the next one can tell a live hold from a stale command
+    // (cho_controller_base::live_held_command). Interfaces are still claimed here.
+    if (state_interfaces_.size() >= static_cast<size_t>(2 * num_dof_)) {
+        update_joint_states();
+        cho_controller_base::release_held_command(command_interfaces_, state_.q.head(num_dof_));
+    }
     return CallbackReturn::SUCCESS;
 }
 
@@ -320,7 +341,7 @@ void FR5BaseController::clamp_to_joint_limits(Eigen::VectorXd & q) const
 
 Eigen::VectorXd FR5BaseController::held_command_position() const
 {
-    return cho_controller_base::held_command(command_interfaces_, state_.q.head(num_dof_));
+    return cho_controller_base::live_held_command(command_interfaces_, state_.q.head(num_dof_));
 }
 
 cho_controller::common::trajectory::JointMotionLimits FR5BaseController::joint_motion_limits()

@@ -1,3 +1,4 @@
+// Copyright (c) 2023 Franka Robotics GmbH
 // Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,6 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include "cho_controller_franka/joint_space_qp_controller.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
@@ -151,7 +155,7 @@ controller_interface::return_type JointSpaceQPController::update(
   cho_controller::common::trajectory::TrajectorySample sample_posture(model_na);
 
   if (tracking) {
-    auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     
     // Fill only the arm entries (head) from the trajectory
     sample_posture.pos.head(num_dof_) = trajectory_sample.pos;

@@ -16,7 +16,8 @@
 #include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
-#include <cassert>
+#include <chrono>
+#include <future>
 #include <string>
 #include <Eigen/Eigen>
 
@@ -81,7 +82,15 @@ CallbackReturn URBaseController::on_configure(const rclcpp_lifecycle::State & /*
             RCLCPP_ERROR(get_node()->get_logger(), "robot_state_publisher not available");
             return CallbackReturn::FAILURE;
         }
-        auto result = client->get_parameters({"robot_description"}).get();
+        // Bounded: the answer is delivered by the executor this callback may be
+        // running on, and an unbounded get() hung configure forever there.
+        auto future = client->get_parameters({"robot_description"});
+        if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                "robot_state_publisher did not answer for robot_description within 5 s");
+            return CallbackReturn::FAILURE;
+        }
+        auto result = future.get();
         if (result.empty() || result[0].value_to_string().empty()) {
             RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description");
             return CallbackReturn::FAILURE;
@@ -96,6 +105,11 @@ CallbackReturn URBaseController::on_configure(const rclcpp_lifecycle::State & /*
         RCLCPP_ERROR(get_node()->get_logger(), "joints parameter is empty");
         return CallbackReturn::FAILURE;
     }
+    if (!cho_controller_base::dls_fits(6, num_dof_)) {
+        RCLCPP_ERROR(get_node()->get_logger(), "%d joints is more than the %d the IK helpers are sized for",
+            num_dof_, cho_controller_base::kMaxArmDof);
+        return CallbackReturn::FAILURE;
+    }
 
     // EE frame
     ee_name_ = get_node()->get_parameter("ee_name").as_string();
@@ -107,6 +121,15 @@ CallbackReturn URBaseController::on_configure(const rclcpp_lifecycle::State & /*
     nq_ = robot_->nq();
     nv_ = robot_->nv();
     na_ = robot_->na();
+    if (nq_ < num_dof_) {
+        RCLCPP_ERROR(get_node()->get_logger(), "the model has %d joints, fewer than the %d configured",
+            nq_, num_dof_);
+        return CallbackReturn::FAILURE;
+    }
+    kin_data_ = pinocchio::Data(model_);
+    q_scratch_.setZero(nq_);
+    q_lower_limits_ = model_.lowerPositionLimit.head(num_dof_);
+    q_upper_limits_ = model_.upperPositionLimit.head(num_dof_);
 
     ee_id_ = model_.getFrameId(ee_name_);
     if (ee_id_ == static_cast<pinocchio::FrameIndex>(model_.frames.size())) {
@@ -190,6 +213,13 @@ CallbackReturn URBaseController::on_activate(const rclcpp_lifecycle::State & /*p
 CallbackReturn URBaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
     activity_.deactivated();
+    // What this controller leaves on the position interfaces, and where the arm
+    // is now, so the next one can tell a live hold from a stale command
+    // (cho_controller_base::live_held_command). Interfaces are still claimed here.
+    if (state_interfaces_.size() >= static_cast<size_t>(2 * num_dof_)) {
+        update_joint_states();
+        cho_controller_base::release_held_command(command_interfaces_, state_.q.head(num_dof_));
+    }
     return CallbackReturn::SUCCESS;
 }
 
@@ -219,6 +249,24 @@ void URBaseController::compute_kinematics()
     state_.H_ee = robot_->framePosition(data_, ee_id_);
     robot_->frameJacobianLocal(data_, ee_id_, state_.J);
     robot_->frameJacobianWorldAligned(data_, ee_id_, state_.J_world);
+}
+
+void URBaseController::compute_arm_kinematics(
+    const Eigen::VectorXd & q_full, pinocchio::SE3 & H_ee, pinocchio::Data::Matrix6x & J)
+{
+    // Forward kinematics plus joint Jacobians is all the pose and the frame
+    // Jacobian need; computeAllTerms() would add CRBA and the non-linear effects.
+    pinocchio::computeJointJacobians(model_, kin_data_, q_full);
+    H_ee = robot_->framePosition(kin_data_, ee_id_);
+    robot_->frameJacobianLocal(kin_data_, ee_id_, J);
+}
+
+void URBaseController::clamp_to_joint_limits(Eigen::VectorXd & q) const
+{
+    if (q.size() != q_lower_limits_.size()) {
+        return;
+    }
+    q = q.cwiseMax(q_lower_limits_).cwiseMin(q_upper_limits_);
 }
 
 void URBaseController::clip_position(Eigen::VectorXd & q_cmd, double eps)
@@ -274,7 +322,7 @@ void URBaseController::publish_controller_state(const rclcpp::Time & stamp)
 
 Eigen::VectorXd URBaseController::held_command_position() const
 {
-    return cho_controller_base::held_command(command_interfaces_, state_.q.head(num_dof_));
+    return cho_controller_base::live_held_command(command_interfaces_, state_.q.head(num_dof_));
 }
 
 cho_controller::common::trajectory::JointMotionLimits URBaseController::joint_motion_limits()

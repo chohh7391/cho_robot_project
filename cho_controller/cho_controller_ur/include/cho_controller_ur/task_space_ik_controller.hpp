@@ -26,6 +26,7 @@ public:
     [[nodiscard]] controller_interface::InterfaceConfiguration command_interface_configuration() const override;
     CallbackReturn on_init() override;
     CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
+    CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
     controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
@@ -33,6 +34,11 @@ private:
     std::shared_ptr<URTaskSpaceActionServer> action_server_;
     double lambda_{0.01};
     double max_delta_q_{0.02};
+    // Jacobian at the reference configuration, 6 x nv, sized in on_configure.
+    pinocchio::Data::Matrix6x ik_J_;
+    // Whether a goal ran last cycle: the first cycle of a goal seeds its
+    // trajectory at FK(q_ref).
+    bool prev_running_{false};
 };
 
 } // namespace ur

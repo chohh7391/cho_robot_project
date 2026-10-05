@@ -1,4 +1,5 @@
 // Copyright (c) 2025 Franka Robotics GmbH
+// Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include <cassert>
 #include <chrono>
@@ -101,7 +105,7 @@ CallbackReturn GripperController::on_activate(const rclcpp_lifecycle::State&) {
   state_.gripper_success = false;
   state_.gripper_has_result = false;
   dispatch_pending_.store(false);
-  result_ready_.store(false);
+  outcome_.clear();
   // Whatever an earlier activation left in flight no longer answers anything.
   command_seq_.fetch_add(1, std::memory_order_acq_rel);
   initial_command_pending_.store(true, std::memory_order_release);
@@ -187,8 +191,12 @@ controller_interface::return_type GripperController::update(const rclcpp::Time& 
                                                             const rclcpp::Duration&)
 {
   // Results and width arrive on the executor; hand them to the server here.
-  if (result_ready_.exchange(false, std::memory_order_acquire)) {
-    state_.gripper_success = result_success_.load();
+  // Only an outcome for the command this goal is waiting on: command_seq_ is
+  // this thread's (update() and on_activate bump it), so the comparison cannot
+  // race a new command the way a check in deliver() did.
+  bool success = false;
+  if (outcome_.take(command_seq_.load(std::memory_order_acquire), success)) {
+    state_.gripper_success = success;
     state_.gripper_has_result = true;
   }
   state_.gripper_current_width = static_cast<float>(current_width_.load());
@@ -205,14 +213,15 @@ controller_interface::return_type GripperController::update(const rclcpp::Time& 
 }
 
 void GripperController::deliver(const std::uint64_t seq, const bool success) {
+  // An early filter for the log and so an old outcome cannot overwrite a
+  // current one waiting in the mailbox; update() makes the check that counts.
   if (seq == kNoCommand || seq != command_seq_.load(std::memory_order_acquire)) {
     RCLCPP_INFO(get_node()->get_logger(),
                 "Ignoring a franka_gripper outcome for an earlier command (%s).",
                 success ? "success" : "failure");
     return;
   }
-  result_success_.store(success);
-  result_ready_.store(true, std::memory_order_release);
+  outcome_.post(seq, success);
 }
 
 rclcpp_action::Client<franka_msgs::action::Move>::SendGoalOptions

@@ -113,6 +113,12 @@ void TrajectoryEuclidianRuckig::setGoalSample(ConstRefVector goal_M)
   if (!m_motion || m_motion->dofs() != m_goal.size()) {
     m_motion = std::make_unique<PointToPoint>(m_goal.size());
   }
+  // The servers set the goal on the executor and the start on the control
+  // thread (setInitSample() in compute()). Size the start here, so that
+  // assignment never allocates there -- it did, once, on the first goal.
+  if (m_init.size() != m_goal.size()) {
+    m_init.setZero(m_goal.size());
+  }
 }
 void TrajectoryEuclidianRuckig::setInitSample(ConstRefVector init_M)
 {

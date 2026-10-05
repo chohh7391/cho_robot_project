@@ -43,8 +43,13 @@ protected:
         return state.q.head(num_dof_);
     }
 
-    // q_ref is the per-cycle rate-limit reference: start it at the measured position.
-    void on_goal_start(URState & state) override { state.q_ref = state.q.head(num_dof_); }
+    // Start from the last command (q_ref: seeded from the held command at
+    // activation, then advanced by clip_position), not from the measurement. A
+    // position interface continues from its last command; starting from the
+    // measurement -- and resetting q_ref to it, as this did -- stepped the command
+    // by the tracking error at the first cycle of every goal, the step the
+    // activation seed had just removed. As FR5's.
+    Eigen::Ref<const Eigen::VectorXd> start(const URState & state) const override { return state.q_ref; }
 };
 
 } // namespace ur

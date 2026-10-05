@@ -138,12 +138,13 @@ controller_interface::return_type TaskSpaceIKController::update(
   }
   if (running) {
     // FK + Jacobian at q_ref_ (NOT measured) via the base-class helper; it also
-    // seeds the trajectory at the reference pose (below).
-    Eigen::VectorXd q_full = state_.q;
-    q_full.head(num_dof_) = q_ref_;
+    // seeds the trajectory at the reference pose (below). Into the base's
+    // preallocated q_scratch_, not a local VectorXd, which allocated every cycle.
+    q_scratch_ = state_.q;
+    q_scratch_.head(num_dof_) = q_ref_;
     pinocchio::SE3 H_ref;
     Eigen::Matrix<double, 6, 7> J;
-    FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
+    FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ref, J);
 
     if (!prev_running_) {
       // Goal just started: seed the trajectory at the REFERENCE pose FK(q_ref_), not
@@ -153,7 +154,7 @@ controller_interface::return_type TaskSpaceIKController::update(
       action_server_->trajectory_->setInitSample(H_ref);
     }
 
-    const auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     pinocchio::SE3 H_des;
     H_des.translation() = trajectory_sample.pos.head<3>();
     H_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());

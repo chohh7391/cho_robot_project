@@ -47,18 +47,22 @@
 #include <control_msgs/msg/joint_trajectory_controller_state.hpp>
 #include <realtime_tools/realtime_publisher.hpp>
 
-using namespace std;
-using namespace Eigen;
-using namespace pinocchio;
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
+namespace cho_controller {
+namespace franka {
+
+// Inside the package's namespace, not at global scope: these headers used to
+// put std, Eigen and pinocchio into the global namespace of every file that
+// included them.
+using namespace std;        // NOLINT(build/namespaces)
+using namespace Eigen;      // NOLINT(build/namespaces)
+using namespace pinocchio;  // NOLINT(build/namespaces)
 
 typedef Eigen::Matrix<double, 7, 1> Vector7d;
 typedef Eigen::Matrix<double, 6, 1> Vector6d;
 typedef Eigen::Matrix<double, 2, 1> Vector2d;
 typedef Eigen::Matrix<double, 7, 7> Matrix7d;
-
-namespace cho_controller {
-namespace franka {
 
 struct State {
     // state
@@ -124,6 +128,9 @@ public:
     State & state() { return state_; }
 
     void update_joint_states();
+    // Whether the claimed state interfaces are the position/velocity pairs
+    // update_joint_states() reads by index. Logs what is wrong.
+    bool state_interfaces_in_order() const;
     void compute_all_terms();
     Vector7d compute_hand_gravity();
 
@@ -151,8 +158,10 @@ public:
     // Position a fresh open-loop reference should seed from on controller activation.
     // Prefers whatever the PREVIOUS controller left on the shared position command
     // interface (this call assumes num_dof_ position-type command interfaces, indexed
-    // 0..num_dof_-1 in joint order); falls back to the measured position only when no
-    // controller has ever written to it yet (cold start). See base_controller.cpp for why.
+    // 0..num_dof_-1 in joint order) while it is still a live hold of this arm; falls
+    // back to the measured position on a cold start and on a stale command
+    // (cho_controller_base::live_held_command). Call it from on_activate, before
+    // the hardware's next read(). See base_controller.cpp for why.
     Vector7d held_command_position() const;
 
     void publish_ee_state();

@@ -37,6 +37,8 @@
 #include <hardware_interface/resource_manager.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "cho_controller_base/held_command.hpp"
+
 namespace cho_controller_base::testing
 {
 
@@ -47,13 +49,25 @@ namespace cho_controller_base::testing
 // position command therefore also moves the joint; effort and velocity do not,
 // which holds the arm still under a torque or velocity controller.
 // `passive` joints export position and velocity states only.
+//
+// `hardware` adds GenericSystem parameters. Two change what the arm does:
+//   {"position_state_following_offset", "0.01"} -- the position state reads the
+//     command plus the offset, a steady tracking error like a gravity droop, so
+//     a held command and the measurement differ;
+//   {"calculate_dynamics", "true"} -- a velocity command moves the joint (the
+//     position integrates it), so a velocity controller can move the arm.
 inline std::string mock_ros2_control(
   const std::vector<std::string> & arm, const std::vector<double> & initial,
-  const std::vector<std::string> & passive = {})
+  const std::vector<std::string> & passive = {},
+  const std::vector<std::pair<std::string, std::string>> & hardware = {})
 {
   std::ostringstream out;
   out << "<ros2_control name='mock_arm' type='system'><hardware>"
-      << "<plugin>mock_components/GenericSystem</plugin></hardware>";
+      << "<plugin>mock_components/GenericSystem</plugin>";
+  for (const auto & parameter : hardware) {
+    out << "<param name='" << parameter.first << "'>" << parameter.second << "</param>";
+  }
+  out << "</hardware>";
   for (std::size_t i = 0; i < arm.size(); ++i) {
     out << "<joint name='" << arm[i] << "'>";
     for (const char * name : {"position", "velocity", "effort"}) {
@@ -95,6 +109,10 @@ public:
 
   ControllerManagerHarness(const std::string & urdf, const std::string & ns)
   {
+    // The ledger is process-wide, and every test builds a fresh mock arm with
+    // the same joint names: a release recorded by an earlier test is not about
+    // this arm.
+    cho_controller_base::HeldCommandLedger::clear();
     if (!rclcpp::ok()) {
       int argc = 0;
       rclcpp::init(argc, nullptr);
@@ -200,6 +218,11 @@ public:
   }
 
   rclcpp::Node::SharedPtr client_node() const {return client_node_;}
+
+  // The time the next period will be stamped with, minus one period: the time
+  // the controllers saw on the last one. What a bridge echoing the controller's
+  // clock would stamp an observation with.
+  rclcpp::Time now() const {return rclcpp::Time(clock_ns_, RCL_ROS_TIME);}
 
 private:
   // One period on the harness's own clock, which advances exactly kPeriod per

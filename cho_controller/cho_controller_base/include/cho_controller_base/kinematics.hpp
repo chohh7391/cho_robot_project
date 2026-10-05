@@ -13,6 +13,8 @@
 // limitations under the License.
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -37,9 +39,23 @@ inline constexpr int kMaxArmDof = 12;
 // A joint-space vector of runtime size, stack-allocated (see kMaxArmDof).
 using JointStep = Eigen::Matrix<double, Eigen::Dynamic, 1, 0, kMaxArmDof, 1>;
 
+// Whether dls_step() can take a rows x cols Jacobian: the sizes its stack
+// storage is bounded by. Check it where the arm's size is decided (on_configure);
+// dls_step() checks it again on every call.
+inline constexpr bool dls_fits(Eigen::Index rows, Eigen::Index cols)
+{
+  return rows > 0 && rows <= kMaxTaskDim && cols > 0 && cols <= kMaxArmDof;
+}
+
 // Damped least squares: dq = J^T (J J^T + lambda^2 I)^-1 e. J J^T + lambda^2 I
 // is symmetric positive definite, so it is solved by LDLT rather than inverted.
-// A dynamic-size J must have at most kMaxTaskDim rows and kMaxArmDof columns.
+//
+// A dynamic-size J must have at most kMaxTaskDim rows and kMaxArmDof columns,
+// and the error as many entries as J has rows. Those bounds are what keep the
+// result on the stack, so they are checked on every call, Release included:
+// past them Eigen would write beyond the fixed storage. A call that breaks them
+// returns NaN (sized to the columns, capped at kMaxArmDof), which every caller's
+// allFinite() guard already turns into a hold, rather than a wrong step.
 template<typename JacobianT, typename ErrorT>
 Eigen::Matrix<
   double, JacobianT::ColsAtCompileTime, 1, 0,
@@ -48,7 +64,21 @@ dls_step(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<ErrorT> & error, double lambda)
 {
   constexpr int kRows = JacobianT::RowsAtCompileTime;
+  constexpr int kCols = JacobianT::ColsAtCompileTime;
   constexpr int kMaxRows = kRows == Eigen::Dynamic ? kMaxTaskDim : kRows;
+  constexpr int kMaxCols = kCols == Eigen::Dynamic ? kMaxArmDof : kCols;
+  using Step = Eigen::Matrix<double, kCols, 1, 0, kMaxCols, 1>;
+
+  const bool rows_fit = kRows != Eigen::Dynamic || (jacobian.rows() > 0 && jacobian.rows() <= kMaxRows);
+  const bool cols_fit = kCols != Eigen::Dynamic || (jacobian.cols() > 0 && jacobian.cols() <= kMaxCols);
+  if (!rows_fit || !cols_fit || error.size() != jacobian.rows()) {
+    Step refused;
+    if constexpr (kCols == Eigen::Dynamic) {
+      refused.resize(std::min<Eigen::Index>(std::max<Eigen::Index>(jacobian.cols(), 0), kMaxCols));
+    }
+    refused.setConstant(std::numeric_limits<double>::quiet_NaN());
+    return refused;
+  }
   Eigen::Matrix<double, kRows, kRows, 0, kMaxRows, kMaxRows> damped = jacobian * jacobian.transpose();
   damped.diagonal().array() += lambda * lambda;
   return jacobian.transpose() * damped.ldlt().solve(error);

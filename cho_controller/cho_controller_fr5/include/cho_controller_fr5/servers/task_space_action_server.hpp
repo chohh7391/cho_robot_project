@@ -31,17 +31,16 @@ using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 // The shared TaskSpace server (cho_controller_base) on FR5, with the 2 cm /
 // 0.05 rad tolerance FR5 always used. The TSIK controller ends a goal its floor
 // guard refuses through abort_active_goal(), and keeps commanding its last safe
-// reference after it returns.
+// reference after it returns. That controller integrates its own q_ref_ and
+// seeds each goal's trajectory at FK(q_ref_), so a goal resets nothing here:
+// the measured-position reset of state.q_ref this used to make was read by
+// nobody, and only suggested the IK started from the measurement.
 class FR5TaskSpaceActionServer : public cho_controller_base::TaskSpaceServer<FR5State, TaskTrajectory>
 {
 public:
     FR5TaskSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name, int num_dof)
     : TaskSpaceServer(std::move(node), std::move(action_name), num_dof,
           {{2e-2, 5e-2}, {2e-2, 5e-2}, {2e-2, 5e-2}}) {}
-
-protected:
-    // The IK integrates from q_ref: start it at the measured position.
-    void on_goal_start(FR5State & state) override { state.q_ref = state.q.head(num_dof_); }
 };
 
 } // namespace fr5

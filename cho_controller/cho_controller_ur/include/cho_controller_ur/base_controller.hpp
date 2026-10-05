@@ -72,14 +72,24 @@ public:
     void publish_ee_state(const rclcpp::Time & stamp);
     void publish_controller_state(const rclcpp::Time & stamp);
 
+    // EE pose and LOCAL frame Jacobian (6 x nv) at an arbitrary configuration,
+    // on private scratch data: state_ and data_ are left alone. For the
+    // open-loop task-space IK, which must evaluate at its reference, not at the
+    // measured position. J must already be 6 x nv; nothing is allocated.
+    void compute_arm_kinematics(const Eigen::VectorXd & q_full, pinocchio::SE3 & H_ee,
+                                pinocchio::Data::Matrix6x & J);
+    // Clamp an arm configuration (num_dof entries) to the model's position limits.
+    void clamp_to_joint_limits(Eigen::VectorXd & q) const;
+
 protected:
     // Bounds for the action-server trajectories, from the controller_manager's
     // joint_limits / cartesian_limits parameters (MoveIt's joint_limits.yaml and
     // pilz_cartesian_limits.yaml); see motion_limits_params.hpp. Call after
     // on_configure() has resolved the joint names.
     cho_controller::common::trajectory::JointMotionLimits joint_motion_limits();
-    // The position the previous controller left commanded, when it is consistent
-    // with the measurement; else the measurement (cho_controller_base::held_command).
+    // The position the previous controller left commanded, when it is still a
+    // live hold of this arm; else the measurement
+    // (cho_controller_base::live_held_command).
     Eigen::VectorXd held_command_position() const;
     cho_controller::common::trajectory::CartesianMotionLimits cartesian_motion_limits();
 
@@ -102,16 +112,25 @@ protected:
     Eigen::VectorXd kp_task_;
     Eigen::VectorXd kd_task_;
 
+    // Scratch for compute_arm_kinematics(), sized in on_configure.
+    pinocchio::Data kin_data_;
+    // A full configuration to evaluate the kinematics at (q_scratch_ = state_.q,
+    // then its arm head replaced): same-size assignment, no per-cycle allocation.
+    Eigen::VectorXd q_scratch_;
+    // Model position limits of the arm joints, for clamp_to_joint_limits().
+    Eigen::VectorXd q_lower_limits_;
+    Eigen::VectorXd q_upper_limits_;
+
     // Per-controller namespaced logs. Relative names ("~/...") resolve to this
-    // controller's own node. UR has no realtime_tools wrappers and no arm-log gate,
-    // so these use direct publish, unconditionally.
+    // controller's own node; there is no arm-log gate, every UR controller
+    // publishes them.
     //   ~/controller_state : control_msgs/JointTrajectoryControllerState
     //   ~/ee_state         : cho_interfaces/PoseLog
     rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
-    // update() publishes through these: trylock, fill the preallocated message,
-    // hand it to a non-RT thread. A plain publish() from the control loop locks
-    // and allocates every cycle.
+    // update() publishes only through these: trylock, fill the preallocated
+    // message, hand it to a non-RT thread. A plain publish() from the control
+    // loop locks and allocates every cycle.
     std::unique_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>
         ctrl_state_rt_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> ee_state_rt_pub_;

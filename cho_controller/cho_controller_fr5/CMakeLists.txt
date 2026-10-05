@@ -1,3 +1,17 @@
+# Copyright 2026 Hyunho Cho
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 cmake_minimum_required(VERSION 3.5)
 project(cho_controller_fr5)
 
@@ -90,6 +104,16 @@ ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
+    find_package(controller_manager REQUIRED)
+    # Both arm controllers through the real controller_manager lifecycle on a
+    # mock FR5 (cho_controller_base's harness). Loads them through pluginlib,
+    # so it needs the package installed (colcon test does) but does not link it;
+    # the model is expanded from cho_description_fr5's xacro at run time.
+    ament_add_gtest(test_reactivation test/test_reactivation.cpp TIMEOUT 120)
+    ament_target_dependencies(test_reactivation
+        ament_index_cpp cho_controller_base cho_interfaces controller_manager
+        hardware_interface rclcpp rclcpp_action)
+
     # The pour law only. These link src/pour/ directly and pull in no ROS at
     # all, which is the point of that subdirectory: a material's behaviour can
     # be pinned against a synthetic vessel without a controller_manager, a
@@ -131,11 +155,24 @@ if(BUILD_TESTING)
     target_include_directories(pour_ab PRIVATE include test)
 endif()
 
+# Everything the installed headers include, so a package that includes them
+# finds it through find_package(cho_controller_fr5) alone.
 ament_export_dependencies(
+    cho_controller_base
+    cho_controller_common
+    cho_interfaces
+    control_msgs
     controller_interface
+    Eigen3
+    generate_parameter_library
+    geometry_msgs
+    hardware_interface
+    pinocchio
     pluginlib
     rclcpp
+    rclcpp_action
     rclcpp_lifecycle
-    hardware_interface
+    realtime_tools
+    std_msgs
 )
 ament_package()

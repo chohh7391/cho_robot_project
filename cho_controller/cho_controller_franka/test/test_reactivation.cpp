@@ -19,10 +19,13 @@
 // again (re-audit A2). The base server's own test proves compute() returns false
 // on that period; this one proves each adapter honours it, through the real
 // controller_manager lifecycle on mock hardware.
+#include <chrono>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -33,8 +36,12 @@
 
 #include "cho_controller_base/goal_phase_action_server.hpp"
 #include "cho_controller_base/testing/controller_manager_harness.hpp"
+#include "cho_interfaces/action/gripper.hpp"
 #include "cho_interfaces/action/joint_space.hpp"
 #include "cho_interfaces/action/task_space.hpp"
+#include "cho_interfaces/action/vision_language_action.hpp"
+#include "cho_interfaces/msg/action_chunk.hpp"
+#include "cho_interfaces/msg/vla_telemetry.hpp"
 
 namespace
 {
@@ -42,6 +49,8 @@ using cho_controller_base::testing::ControllerManagerHarness;
 using cho_controller_base::testing::max_abs_difference;
 using JointSpace = cho_interfaces::action::JointSpace;
 using TaskSpace = cho_interfaces::action::TaskSpace;
+using Vla = cho_interfaces::action::VisionLanguageAction;
+using GripperAction = cho_interfaces::action::Gripper;
 using Doubles = std::vector<double>;
 
 const std::vector<std::string> kJoints = {
@@ -88,10 +97,14 @@ protected:
   {
     const auto & c = GetParam();
     harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_reactivation");
+    // control_mode as the bringups inject it: the servers pick their success
+    // thresholds from it, and without it a position controller ran with the
+    // torque ones.
     std::vector<rclcpp::Parameter> parameters = {
       rclcpp::Parameter("robot_description", fr3_description()),
       rclcpp::Parameter("robot_type", "fr3"),
       rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("control_mode", interface_of(c.mode)),
       rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
     parameters.insert(parameters.end(), c.gains.begin(), c.gains.end());
     ASSERT_NE(harness_->load(c.name, type_of(c.name), parameters), nullptr);
@@ -143,8 +156,12 @@ protected:
     return future.get();
   }
 
+  // `spin_between`: run the executor while the controller is inactive, so the
+  // action server's finisher sees the deactivation first. Without it nothing
+  // runs between the two switches, and the first period of the new activation
+  // is what ends the goal. Each path has its own reason, and each is asserted.
   template<typename Action>
-  void run()
+  void run(const bool spin_between = false)
   {
     const auto & c = GetParam();
     const auto interface = interface_of(c.mode);
@@ -165,11 +182,15 @@ protected:
     // Out and back in with no executor spin in between: the finisher cannot
     // run, so the goal is still active when the new activation's first period
     // calls compute().
+    auto result = client->async_get_result(handle);
     ASSERT_TRUE(harness_->switch_controllers({}, {c.name}));
     // Where holding should leave the command. Effort and velocity do not move
     // the mock joints, so it is the hold from before the goal; a position
     // controller moved them, up to the switch, so it is where they stopped.
     const Doubles expected = c.mode == Mode::kPosition ? harness_->states(kJoints, "position") : hold;
+    if (spin_between) {
+      ASSERT_TRUE(harness_->spin_until(result)) << "the finisher did not end the goal while inactive";
+    }
     ASSERT_TRUE(harness_->switch_controllers({c.name}, {}));
     harness_->cycle(1, /*spin=*/false);
     EXPECT_LT(max_abs_difference(harness_->states(kJoints, interface), expected), hold_tolerance(c.mode))
@@ -178,13 +199,12 @@ protected:
     EXPECT_LT(max_abs_difference(harness_->states(kJoints, interface), expected), hold_tolerance(c.mode))
       << "the old goal resumed";
 
-    auto result = client->async_get_result(handle);
     ASSERT_TRUE(harness_->spin_until(result));
     const auto wrapped = result.get();
     EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
-    EXPECT_TRUE(
-      wrapped.result->message == cho_controller_base::kReasonReactivated ||
-      wrapped.result->message == cho_controller_base::kReasonDeactivated) << wrapped.result->message;
+    EXPECT_EQ(
+      wrapped.result->message,
+      spin_between ? cho_controller_base::kReasonDeactivated : cho_controller_base::kReasonReactivated);
 
     // And the server is free for the next goal.
     auto next = send<Action>(client);
@@ -204,6 +224,15 @@ TEST_P(Reactivation, TheOldGoalNeverResumes)
     run<TaskSpace>();
   } else {
     run<JointSpace>();
+  }
+}
+
+TEST_P(Reactivation, AGoalEndedWhileInactiveSaysSo)
+{
+  if (GetParam().task_space) {
+    run<TaskSpace>(true);
+  } else {
+    run<JointSpace>(true);
   }
 }
 
@@ -247,6 +276,285 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("kp_joint", Doubles(7, 20.0)),
         rclcpp::Parameter("max_joint_vel", 1.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
+
+// A position command left behind by a position controller, then a velocity
+// controller moves the arm by less than held_command()'s 0.05 rad band: the
+// next position controller must start from where the arm IS, not step back to
+// the stale command (re-audit 3, held_command.hpp). GenericSystem integrates
+// velocity commands here (calculate_dynamics), so the velocity controller
+// really moves the joints.
+TEST(HeldCommand, AStaleCommandIsNotTakenUpAfterTheArmMoved)
+{
+  const auto description = cho_controller_base::testing::with_ros2_control(
+    [] {
+      std::ifstream file(
+        ament_index_cpp::get_package_share_directory("cho_description_franka") +
+        "/urdf/fr3/fr3_franka_hand.urdf");
+      std::stringstream text;
+      text << file.rdbuf();
+      return text.str();
+    }(),
+    cho_controller_base::testing::mock_ros2_control(
+      kJoints, kHome, {"fr3_finger_joint1"}, {{"calculate_dynamics", "true"}}));
+  ControllerManagerHarness harness(description, "/franka_stale");
+  const auto common = [&](const std::string & mode) {
+      return std::vector<rclcpp::Parameter>{
+        rclcpp::Parameter("robot_description", description),
+        rclcpp::Parameter("robot_type", "fr3"),
+        rclcpp::Parameter("bringup_type", "mujoco"),
+        rclcpp::Parameter("control_mode", mode),
+        rclcpp::Parameter("ee_name", "fr3_hand_tcp"),
+        rclcpp::Parameter("kp_joint", Doubles(7, 20.0)),
+        rclcpp::Parameter("max_joint_vel", 1.0)};
+    };
+  constexpr const char * kPosition = "joint_space_position_controller";
+  constexpr const char * kVelocity = "joint_space_velocity_controller";
+  ASSERT_NE(harness.load(kPosition, "cho_controller_franka/JointSpacePositionController", common("position")),
+    nullptr);
+  ASSERT_NE(harness.load(kVelocity, "cho_controller_franka/JointSpaceVelocityController", common("velocity")),
+    nullptr);
+  ASSERT_TRUE(harness.configure(kPosition));
+  ASSERT_TRUE(harness.configure(kVelocity));
+  ASSERT_TRUE(harness.switch_controllers({kPosition}, {}));
+  harness.cycle(50);
+  const Doubles left = harness.states(kJoints, "position");
+
+  // The velocity controller moves joint 1 by 0.03 rad and holds it there.
+  ASSERT_TRUE(harness.switch_controllers({kVelocity}, {kPosition}));
+  auto client = rclcpp_action::create_client<JointSpace>(
+    harness.client_node(), std::string("/franka_stale/") + kVelocity + "/joint_space");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+  JointSpace::Goal goal;
+  goal.duration_sec = 0.5f;
+  goal.target_joints.name = kJoints;
+  goal.target_joints.position = harness.states(kJoints, "position");
+  goal.target_joints.position[0] += 0.03;
+  auto sent = client->async_send_goal(goal);
+  ASSERT_TRUE(harness.spin_until(sent));
+  ASSERT_NE(sent.get(), nullptr);
+  harness.cycle(1500);
+  const Doubles moved = harness.states(kJoints, "position");
+  ASSERT_GT(max_abs_difference(moved, left), 0.02) << "the velocity controller did not move the arm";
+  ASSERT_LT(max_abs_difference(moved, left), 0.05) << "moved past the band: the old rule would refuse it too";
+
+  // Back to position control. GenericSystem applies whatever the position
+  // command interface holds on its next read -- here the stale command -- so
+  // the mock blips there whatever the controller does; what matters is where
+  // the controller then commands the arm to be.
+  ASSERT_TRUE(harness.switch_controllers({kPosition}, {kVelocity}));
+  harness.cycle(5);
+  EXPECT_LT(max_abs_difference(harness.states(kJoints, "position"), moved), 1e-3)
+    << "the position controller took up the command it left before the arm moved";
+}
+
+// A VLA controller in position mode, switched out and back in mid-goal: the
+// goal ends, with the reason of the path that ended it.
+class VlaGoal : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_vla");
+    // config/mujoco/controllers.yaml's VLA block, position mode, with every
+    // global name moved under this test's namespace.
+    ASSERT_NE(harness_->load(kName, "cho_controller_franka/VLAController", {
+        rclcpp::Parameter("robot_description", fr3_description()),
+        rclcpp::Parameter("robot_type", "fr3"),
+        rclcpp::Parameter("bringup_type", "mujoco"),
+        rclcpp::Parameter("control_mode", "position"),
+        rclcpp::Parameter("ee_name", "fr3_hand_tcp"),
+        rclcpp::Parameter("kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
+        rclcpp::Parameter("kd_task", Doubles{60, 60, 60, 5, 5, 5}),
+        rclcpp::Parameter("default_dof_pos", kHome),
+        rclcpp::Parameter("default_kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
+        rclcpp::Parameter("default_kd_task", Doubles{60, 60, 60, 5, 5, 5}),
+        rclcpp::Parameter("chunk_topic", "/franka_vla/chunks"),
+        rclcpp::Parameter("success_service", "/franka_vla/success"),
+        rclcpp::Parameter("gripper_action", "/franka_vla/gripper"),
+        rclcpp::Parameter("chunk_time_source", "observation"),
+        rclcpp::Parameter("telemetry_period_sec", 0.02)}), nullptr);
+    ASSERT_TRUE(harness_->configure(kName));
+    ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+    client_ = rclcpp_action::create_client<Vla>(harness_->client_node(), std::string("/franka_vla/") + kName + "/vla");
+    ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  }
+
+  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr send()
+  {
+    Vla::Goal goal;
+    goal.model_name = "test";
+    goal.inference_frequency = 10.0f;
+    auto future = client_->async_send_goal(goal);
+    return harness_->spin_until(future) ? future.get() : nullptr;
+  }
+
+  void reactivate(const bool spin_between)
+  {
+    harness_->cycle(50);
+    auto handle = send();
+    ASSERT_NE(handle, nullptr) << "goal rejected";
+    harness_->cycle(100);
+    auto result = client_->async_get_result(handle);
+    ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+    if (spin_between) {
+      ASSERT_TRUE(harness_->spin_until(result)) << "the finisher did not end the goal while inactive";
+    }
+    ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+    harness_->cycle(1, /*spin=*/false);
+    ASSERT_TRUE(harness_->spin_until(result));
+    const auto wrapped = result.get();
+    EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+    EXPECT_EQ(
+      wrapped.result->message,
+      spin_between ? cho_controller_base::kReasonDeactivated : cho_controller_base::kReasonReactivated);
+    ASSERT_NE(send(), nullptr) << "the next goal was rejected";
+  }
+
+  static constexpr const char * kName = "vla_controller";
+  std::unique_ptr<ControllerManagerHarness> harness_;
+  rclcpp_action::Client<Vla>::SharedPtr client_;
+};
+
+TEST_F(VlaGoal, TheOldGoalNeverResumes) {reactivate(false);}
+TEST_F(VlaGoal, AGoalEndedWhileInactiveSaysSo) {reactivate(true);}
+
+// A relative chunk is anchored to the reference at its observation time. The
+// controller must record that reference on every cycle, goal or not: a chunk
+// observed before its goal started -- the bridge's first inference runs while
+// the goal is being sent -- otherwise finds nothing at its time and is anchored
+// to the oldest entry instead, inexactly (re-audit 3, vla_action_server.cpp).
+TEST_F(VlaGoal, AChunkObservedBeforeTheGoalHasAnExactAnchor)
+{
+  harness_->cycle(200);
+  const rclcpp::Time observed = harness_->now();
+  harness_->cycle(100);
+  ASSERT_NE(send(), nullptr) << "goal rejected";
+  harness_->cycle(10);
+
+  std::vector<cho_interfaces::msg::VlaTelemetry> telemetry;
+  auto subscription = harness_->client_node()->create_subscription<cho_interfaces::msg::VlaTelemetry>(
+    std::string("/franka_vla/") + kName + "/vla_telemetry", 10,
+    [&telemetry](const cho_interfaces::msg::VlaTelemetry & message) {telemetry.push_back(message);});
+  auto publisher = harness_->client_node()->create_publisher<cho_interfaces::msg::ActionChunk>(
+    "/franka_vla/chunks", 10);
+  for (int i = 0; i < 300 && (publisher->get_subscription_count() == 0 || subscription->get_publisher_count() == 0);
+    ++i)
+  {
+    harness_->cycle(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(publisher->get_subscription_count(), 0u);
+
+  // Two joint waypoints, zero offsets from the anchor: the arm stays put.
+  cho_interfaces::msg::ActionChunk chunk;
+  chunk.header.stamp = observed;
+  chunk.seq = 1;
+  chunk.action_space = "joint";
+  chunk.relative_mode = "from_anchor";
+  chunk.chunk_size = 2;
+  chunk.control_dt = 0.05;
+  chunk.arm_actions.assign(14, 0.0);
+  publisher->publish(chunk);
+
+  bool accepted = false;
+  bool inexact = true;
+  for (int i = 0; i < 3000 && !accepted; ++i) {
+    harness_->cycle(1);
+    for (const auto & message : telemetry) {
+      if (message.chunks_accepted > 0) {
+        accepted = true;
+        inexact = message.anchor_inexact;
+      }
+    }
+    if (!accepted) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  ASSERT_TRUE(accepted) << "the chunk never reached the controller";
+  EXPECT_FALSE(inexact) << "the chunk was anchored to the oldest entry, not to its observation time";
+}
+
+// The Franka gripper relay with no franka_gripper servers up, which fails every
+// command it dispatches: each goal must end with the outcome of ITS command,
+// and a reactivation ends the goal in flight.
+class Gripper : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_gripper_test");
+    ASSERT_NE(harness_->load(kName, "cho_controller_franka/GripperController", {
+        rclcpp::Parameter("robot_type", "fr3"),
+        rclcpp::Parameter("auto_home", false),
+        rclcpp::Parameter("report_failure", true),
+        rclcpp::Parameter("result_timeout", 5.0)}), nullptr);
+    ASSERT_TRUE(harness_->configure(kName));
+    ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+    client_ = rclcpp_action::create_client<GripperAction>(
+      harness_->client_node(), std::string("/franka_gripper_test/") + kName + "/gripper");
+    ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  }
+
+  rclcpp_action::ClientGoalHandle<GripperAction>::SharedPtr send()
+  {
+    GripperAction::Goal goal;
+    goal.grasp = true;
+    auto future = client_->async_send_goal(goal);
+    return harness_->spin_until(future) ? future.get() : nullptr;
+  }
+
+  // Control periods with the executor spun, until `result` is in.
+  template<typename FutureT>
+  bool run_until(FutureT & result, const int periods = 4000)
+  {
+    for (int i = 0; i < periods; ++i) {
+      harness_->cycle(1);
+      if (result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static constexpr const char * kName = "gripper_controller";
+  std::unique_ptr<ControllerManagerHarness> harness_;
+  rclcpp_action::Client<GripperAction>::SharedPtr client_;
+};
+
+TEST_F(Gripper, AGoalEndsWithItsOwnCommandsOutcome)
+{
+  auto handle = send();
+  ASSERT_NE(handle, nullptr) << "goal rejected";
+  auto result = client_->async_get_result(handle);
+  ASSERT_TRUE(run_until(result)) << "the goal never ended";
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(wrapped.result->message, "franka_gripper reported that the command failed");
+}
+
+TEST_F(Gripper, AReactivationEndsTheGoalInFlight)
+{
+  auto handle = send();
+  ASSERT_NE(handle, nullptr) << "goal rejected";
+  // One period stages the command; the executor does not run, so it is never
+  // dispatched and no outcome can arrive for it.
+  harness_->cycle(1, /*spin=*/false);
+  auto result = client_->async_get_result(handle);
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+  harness_->cycle(1, /*spin=*/false);
+  ASSERT_TRUE(harness_->spin_until(result));
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(wrapped.result->message, cho_controller_base::kReasonReactivated);
+
+  // The next goal runs to its own command's outcome.
+  auto next = send();
+  ASSERT_NE(next, nullptr) << "the next goal was rejected";
+  auto next_result = client_->async_get_result(next);
+  ASSERT_TRUE(run_until(next_result)) << "the next goal never ended";
+  EXPECT_EQ(next_result.get().result->message, "franka_gripper reported that the command failed");
+}
 
 }  // namespace
 

@@ -29,17 +29,16 @@ using TaskSpaceGoalHandle = rclcpp_action::ServerGoalHandle<TaskSpaceAction>;
 using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 
 // The shared TaskSpace server (cho_controller_base) on a UR arm, with the
-// 2 cm / 0.05 rad tolerance UR always used, for every interface.
+// 2 cm / 0.05 rad tolerance UR always used, for every interface. The IK
+// integrates q_ref from where it already is; a goal does not reset it (that
+// reset was the step at every goal start), and the controller seeds the
+// trajectory at FK(q_ref) itself.
 class URTaskSpaceActionServer : public cho_controller_base::TaskSpaceServer<URState, TaskTrajectory>
 {
 public:
     URTaskSpaceActionServer(rclcpp_lifecycle::LifecycleNode::SharedPtr node, std::string action_name, int num_dof)
     : TaskSpaceServer(std::move(node), std::move(action_name), num_dof,
           {{2e-2, 5e-2}, {2e-2, 5e-2}, {2e-2, 5e-2}}) {}
-
-protected:
-    // The IK integrates from q_ref: start it at the measured position.
-    void on_goal_start(URState & state) override { state.q_ref = state.q.head(num_dof_); }
 };
 
 } // namespace ur

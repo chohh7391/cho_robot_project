@@ -94,7 +94,11 @@ void TrajectorySE3Ruckig::plan()
   m_motion->set_limits(Eigen::Vector2d(m_limits.max_trans_vel, m_limits.max_rot_vel),
                        Eigen::Vector2d(m_limits.max_trans_acc, m_limits.max_rot_acc),
                        Eigen::Vector2d(m_limits.max_trans_jerk, m_limits.max_rot_jerk));
-  m_motion->plan(Eigen::Vector2d::Zero(), Eigen::Vector2d(distance, angle), m_duration);
+  // A plain Vector2d, not Vector2d::Zero(): that is an expression, and binding
+  // it to the planner's Ref<const VectorXd> evaluates it into a heap-allocated
+  // temporary -- on the control thread, at every goal start.
+  const Eigen::Vector2d origin = Eigen::Vector2d::Zero();
+  m_motion->plan(origin, Eigen::Vector2d(distance, angle), m_duration);
 }
 
 const TrajectorySample & TrajectorySE3Ruckig::computeNext()

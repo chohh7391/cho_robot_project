@@ -149,6 +149,9 @@ public:
     }
     auto & trajectory = *this->trajectory_;
     if (!this->initialized_) {
+      // Planned here, on the control thread, as in JointSpaceServer::compute():
+      // allocation-free, a microsecond or two, once per goal (twice when the
+      // controller re-seeds the start at its reference pose).
       on_goal_start(state);
       state.H_ee_ref = relative_ ? state.H_ee * goal_ : goal_;
       this->start_time_ = now;

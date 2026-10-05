@@ -562,9 +562,11 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     const double now = current_time.seconds();
 
     // Feed the anchor ring every cycle, goal or no goal: a chunk arriving in the
-    // first cycles of a goal still needs history behind it. state.*_ref holds the
-    // previous cycle's commanded reference here (the controller writes it after
-    // this call), which is one cycle stale and far finer than any anchor needs.
+    // first cycles of a goal still needs history behind it. That holds only
+    // because VLAController calls compute() on every cycle, not just while a goal
+    // runs. state.*_ref holds the previous cycle's commanded reference here (the
+    // controller writes it after this call), which is one cycle stale and far
+    // finer than any anchor needs.
     history_.push(now, state.H_ee_ref, state.q_arm_ref);
 
     if (!rt_active()) {

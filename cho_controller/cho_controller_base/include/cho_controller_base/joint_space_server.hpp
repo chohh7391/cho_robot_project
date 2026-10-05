@@ -149,6 +149,12 @@ public:
     }
     auto & trajectory = *this->trajectory_;
     if (!this->initialized_) {
+      // The goal's motion is planned here, on the control thread, by the
+      // planSucceeded() below: only this thread knows where it starts. That is
+      // one Ruckig calculate() for a rest-to-rest move -- allocation-free
+      // (cho_controller_common's test_trajectory_no_alloc) and a few
+      // microseconds for 7 joints -- once per goal, plus once more when a
+      // controller re-seeds the start itself on the goal's first cycle.
       on_goal_start(state);
       this->start_time_ = now;
       trajectory.setStartTime(now.seconds());

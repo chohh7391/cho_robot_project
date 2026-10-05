@@ -22,8 +22,6 @@
   <depend>franka_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>hardware_interface</depend>
-  <depend>moveit_core</depend>
-  <depend>moveit_msgs</depend>
   <depend>pinocchio</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>

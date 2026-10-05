@@ -47,6 +47,7 @@ CallbackReturn JointSpacePositionController::on_configure(
     action_server_->attach_activity(&activity_);
     action_server_->set_joint_limits(
         model_.lowerPositionLimit.head(num_dof_), model_.upperPositionLimit.head(num_dof_));
+    q_cmd_.setZero(num_dof_);
     return CallbackReturn::SUCCESS;
 }
 
@@ -61,18 +62,19 @@ controller_interface::return_type JointSpacePositionController::update(
     // one that outlived a deactivation: then its trajectory is not sampled and
     // the idle branch holds.
     if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
-        auto sample = action_server_->trajectory_->computeNext();
+        const auto & sample = action_server_->trajectory_->computeNext();
         state_.q_des = sample.pos.head(num_dof_);
     } else {
         state_.q_des = state_.q_ref;
     }
 
     // Rate-limit the command without letting external motion drag the setpoint.
-    Eigen::VectorXd q_cmd = state_.q_des;
-    clip_position(q_cmd);
+    // Into the preallocated q_cmd_: same-size assignment, no allocation.
+    q_cmd_ = state_.q_des;
+    clip_position(q_cmd_);
 
     for (int i = 0; i < num_dof_; ++i) {
-        command_interfaces_[i].set_value(q_cmd(i));
+        command_interfaces_[i].set_value(q_cmd_(i));
     }
     return controller_interface::return_type::OK;
 }

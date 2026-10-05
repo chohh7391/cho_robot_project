@@ -95,7 +95,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // one that outlived a deactivation: then its trajectory is not sampled and
   // the idle branch holds.
   if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
-    auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
     v_des_world = trajectory_sample.vel;
@@ -180,7 +180,7 @@ bool TaskSpaceImpedanceController::assign_parameters() {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
-  if (default_dof_pos.size() != num_dof_) {
+  if (default_dof_pos.size() != static_cast<size_t>(num_dof_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }

@@ -1,3 +1,21 @@
+# Copyright (c) 2023 Franka Robotics GmbH
+# Copyright 2026 Hyunho Cho
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+# modified for cho_robot_project, see NOTICE.
+
 cmake_minimum_required(VERSION 3.5)
 project(cho_controller_franka)
 
@@ -19,8 +37,6 @@ find_package(ament_index_cpp REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(franka_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
-find_package(moveit_core REQUIRED)
-find_package(moveit_msgs REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -66,8 +82,6 @@ ament_target_dependencies(${PROJECT_NAME}
     joint_limits
     franka_msgs
     hardware_interface
-    moveit_core
-    moveit_msgs
     pinocchio
     pluginlib
     rclcpp
@@ -93,6 +107,9 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_reactivation
         ament_index_cpp cho_controller_base cho_interfaces controller_manager
         hardware_interface rclcpp rclcpp_action)
+    # The gripper's result handoff alone: header-only, no ROS.
+    ament_add_gtest(test_gripper_outcome test/test_gripper_outcome.cpp)
+    target_include_directories(test_gripper_outcome PRIVATE include)
 endif()
 
 install(TARGETS ${PROJECT_NAME}
@@ -118,6 +135,5 @@ ament_export_dependencies(
     rclcpp
     rclcpp_lifecycle
     hardware_interface
-    moveit_core
 )
 ament_package()

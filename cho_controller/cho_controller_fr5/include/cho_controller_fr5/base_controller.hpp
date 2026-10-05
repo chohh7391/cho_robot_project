@@ -81,8 +81,9 @@ public:
     double nominal_period(const rclcpp::Duration & period);
     // Clamp a joint config to the model's cached position limits.
     void clamp_to_joint_limits(Eigen::VectorXd & q) const;
-    // Position held on the command interface by the previous controller (falls back
-    // to the measured position when that value is not consistent with it).
+    // Position held on the command interface by the previous controller, when it
+    // is still a live hold of this arm; else the measured position
+    // (cho_controller_base::live_held_command).
     Eigen::VectorXd held_command_position() const;
 
 protected:
@@ -122,15 +123,15 @@ protected:
     double nominal_dt_{0.0};
 
     // Per-controller namespaced logs. Relative names ("~/...") resolve to this
-    // controller's own node. FR5 has no realtime_tools wrappers and no arm-log gate,
-    // so these use direct publish, unconditionally.
+    // controller's own node; there is no arm-log gate, every FR5 controller
+    // publishes them.
     //   ~/controller_state : control_msgs/JointTrajectoryControllerState
     //   ~/ee_state         : cho_interfaces/PoseLog
     rclcpp::Publisher<control_msgs::msg::JointTrajectoryControllerState>::SharedPtr ctrl_state_pub_;
     rclcpp::Publisher<cho_interfaces::msg::PoseLog>::SharedPtr ee_state_pub_;
-    // update() publishes through these: trylock, fill the preallocated message,
-    // hand it to a non-RT thread. A plain publish() from the control loop locks
-    // and allocates every cycle.
+    // update() publishes only through these: trylock, fill the preallocated
+    // message, hand it to a non-RT thread. A plain publish() from the control
+    // loop locks and allocates every cycle.
     std::unique_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::JointTrajectoryControllerState>>
         ctrl_state_rt_pub_;
     std::unique_ptr<realtime_tools::RealtimePublisher<cho_interfaces::msg::PoseLog>> ee_state_rt_pub_;

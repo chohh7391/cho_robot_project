@@ -183,11 +183,12 @@ controller_interface::return_type TaskSpaceVelocityController::update(
     running = action_server_->compute(traj_time, state_);
   }
   if (running) {
-    Eigen::VectorXd q_full = state_.q;
-    q_full.head(num_dof_) = q_ref_;
+    // Into the base's preallocated q_scratch_, not a local VectorXd, which allocated every cycle.
+    q_scratch_ = state_.q;
+    q_scratch_.head(num_dof_) = q_ref_;
     pinocchio::SE3 H_ref;
     Eigen::Matrix<double, 6, 7> J;
-    FrankaBaseController::compute_arm_kinematics(q_full, H_ref, J);
+    FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ref, J);
 
     if (!prev_running_) {
       // Goal start: seed the trajectory at FK(q_ref_) so the holding droop is
@@ -195,7 +196,7 @@ controller_interface::return_type TaskSpaceVelocityController::update(
       action_server_->trajectory_->setInitSample(H_ref);
     }
 
-    const auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     pinocchio::SE3 H_des;
     H_des.translation() = trajectory_sample.pos.head<3>();
     H_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());

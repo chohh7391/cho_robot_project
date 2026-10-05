@@ -96,6 +96,15 @@ CallbackReturn VLAController::on_activate(
   if (FrankaBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
+  // Position mode: prefer what the position command interface is still holding
+  // (a live hold of this arm) -- same helper/rationale as
+  // task_space_ik_controller.cpp, avoids a one-cycle step at the controller
+  // switch. Taken here, before the next hardware read, which is what tells a
+  // live hold from a stale one. The other modes' interfaces do not hold
+  // positions.
+  activation_seed_ = (control_mode_ == ControlMode::kPosition)
+      ? FrankaBaseController::held_command_position()
+      : state_.q_arm;
   // Everything else is seeded on the first update(), where state_ is fresh.
   activation_state_latched_ = false;
   return CallbackReturn::SUCCESS;
@@ -114,13 +123,9 @@ void VLAController::latch_activation_state()
   state_.q_arm_des = state_.q_arm;
   state_.H_ee_des = state_.H_ee;
   state_.v_arm_des.setZero();
-  // Position mode: prefer what the position command interface is still holding
-  // (if consistent with measured) -- same helper/rationale as
-  // task_space_ik_controller.cpp, avoids a one-cycle step at the controller
-  // switch. The other modes' interfaces do not hold positions.
-  q_ref_ = (control_mode_ == ControlMode::kPosition)
-      ? FrankaBaseController::held_command_position()
-      : state_.q_arm;
+  // Position mode starts from the held command taken in on_activate; the other
+  // modes from the measurement.
+  q_ref_ = (control_mode_ == ControlMode::kPosition) ? activation_seed_ : state_.q_arm;
   ref_fk_dirty_ = true;
   activation_state_latched_ = true;
 }
@@ -138,10 +143,15 @@ controller_interface::return_type VLAController::update(
 
   // The action space and the desired twist come from the running VLA goal.
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
-  // one that outlived a deactivation: then its trajectory is not sampled and
-  // the idle branch holds.
-  const bool vla_running = action_server_ && action_server_->is_running() &&
-    action_server_->compute(time, state_);
+  // one that outlived a deactivation -- and when there is no goal at all: then
+  // its trajectory is not sampled and the idle branch holds.
+  //
+  // Called every cycle, goal or not, because compute() also feeds the server's
+  // anchor history (the reference at each instant, for relative chunks). Gated
+  // on is_running(), as it was, the history stopped between goals, and a chunk
+  // observed before its goal started was anchored to the end of the PREVIOUS
+  // goal -- reported as exact, since an entry at or before its time existed.
+  const bool vla_running = action_server_ && action_server_->compute(time, state_);
   cho_vla_core::ActionSpace space = cho_vla_core::ActionSpace::kTask;
   Vector6d twist_des = Vector6d::Zero();
   if (vla_running) {

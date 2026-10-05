@@ -1,3 +1,4 @@
+// Copyright (c) 2023 Franka Robotics GmbH
 // Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,6 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include "cho_controller_franka/joint_space_impedance_controller.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
@@ -117,7 +121,7 @@ controller_interface::return_type JointSpaceImpedanceController::update(
   // canceled, aborted, or one that outlived a deactivation. Only a tracking
   // cycle samples the trajectory.
   if (action_server_->compute(time, state_)) {
-    auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos;
     state_.v_arm_des = trajectory_sample.vel;
   } else {

@@ -30,6 +30,8 @@ public:
 
 private:
     std::shared_ptr<FR5JointSpaceActionServer> action_server_;
+    // The rate-limited command, sized in on_configure: no per-cycle allocation.
+    Eigen::VectorXd q_cmd_;
 };
 
 } // namespace fr5

@@ -55,6 +55,7 @@ CallbackReturn TaskSpaceIKController::on_configure(
     if (URBaseController::on_configure(previous_state) != CallbackReturn::SUCCESS) {
         return CallbackReturn::FAILURE;
     }
+    ik_J_.setZero(6, nv_);
     action_server_ = std::make_shared<URTaskSpaceActionServer>(
         get_node(), "~/task_space", num_dof_);
     action_server_->init();
@@ -64,64 +65,76 @@ CallbackReturn TaskSpaceIKController::on_configure(
     return CallbackReturn::SUCCESS;
 }
 
+CallbackReturn TaskSpaceIKController::on_activate(const rclcpp_lifecycle::State & previous_state)
+{
+    // The base seeds state_.q_ref from the held command (held_command_position()):
+    // that is where this controller's reference starts, so the first command
+    // continues the previous controller's instead of stepping to the measurement.
+    if (URBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
+        return CallbackReturn::FAILURE;
+    }
+    prev_running_ = false;
+    return CallbackReturn::SUCCESS;
+}
+
 controller_interface::return_type TaskSpaceIKController::update(
     const rclcpp::Time & time, const rclcpp::Duration & period)
 {
-    (void)period;
-
     if (URBaseController::update(time, period) != controller_interface::return_type::OK) {
         return controller_interface::return_type::ERROR;
     }
 
+    // Open-loop differential IK, as cho_controller_franka's and
+    // cho_controller_fr5's task_space_ik_controller: the joint reference
+    // state_.q_ref is integrated from where it is, evaluated at FK(q_ref), and
+    // commanded as it is. It used to command the MEASURED position plus the DLS
+    // step, which put the holding tracking error into the command as a step at
+    // activation (undoing the held-command seed) and fed encoder noise into
+    // every cycle. Idle, q_ref is frozen and the arm holds the last command.
+    //
     // compute() is false when the goal ended this cycle -- canceled, aborted, or
-    // one that outlived a deactivation: then its trajectory is not sampled and
-    // the idle branch holds.
-    if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
-        auto sample = action_server_->trajectory_->computeNext();
+    // one that outlived a deactivation: then its trajectory is not sampled.
+    bool running = action_server_ && action_server_->is_running() && action_server_->compute(time, state_);
+    if (running) {
+        q_scratch_ = state_.q;
+        q_scratch_.head(num_dof_) = state_.q_ref;
+        pinocchio::SE3 H_ref;
+        compute_arm_kinematics(q_scratch_, H_ref, ik_J_);
+
+        if (!prev_running_) {
+            // Goal start: the server seeded the trajectory at the measured pose;
+            // start it at the reference pose instead, where the command already is.
+            action_server_->trajectory_->setInitSample(H_ref);
+        }
+        const auto & sample = action_server_->trajectory_->computeNext();
         state_.H_ee_des.translation() = sample.pos.head<3>();
         state_.H_ee_des.rotation() =
             Eigen::Map<const Eigen::Matrix3d>(sample.pos.segment<9>(3).data());
+
+        // Local-frame error against the reference pose and the LOCAL Jacobian
+        // at the reference; a block of the 6 x nv Jacobian, not a copy.
+        const Eigen::Matrix<double, 6, 1> error = cho_controller_base::local_pose_error(H_ref, state_.H_ee_des);
+        cho_controller_base::JointStep delta_q =
+            cho_controller_base::dls_step(ik_J_.leftCols(num_dof_), error, lambda_);
+        if (!error.allFinite() || !delta_q.allFinite()) {
+            action_server_->abort_active_goal("non-finite IK step; holding the last command");
+            running = false;
+        } else {
+            // Bound the per-cycle step as a whole, so a saturated step keeps its
+            // direction; then stop at the joint limits rather than integrate
+            // through them.
+            cho_controller_base::limit_step(delta_q, max_delta_q_);
+            state_.q_ref += delta_q;
+            clamp_to_joint_limits(state_.q_ref);
+        }
     } else {
         state_.H_ee_des = state_.H_ee_init;
     }
+    prev_running_ = running;
 
-    // Isaac Lab style differential IK:
-    // delta_q = J^T (J J^T + lambda^2 I)^-1 delta_x
-    // q_cmd = q_current + delta_q
-    // A block of the 6 x nv Jacobian, not a copy: nothing here allocates per cycle.
-    const auto J = state_.J_world.leftCols(num_dof_);
-
-    Eigen::Matrix<double, 6, 1> delta_pose;
-    delta_pose.head<3>() = state_.H_ee_des.translation() - state_.H_ee.translation();
-    delta_pose.tail<3>() = pinocchio::log3(
-        state_.H_ee_des.rotation() * state_.H_ee.rotation().transpose());
-
-    cho_controller_base::JointStep delta_q = cho_controller_base::dls_step(J, delta_pose, lambda_);
-
-    // Bound the per-cycle DLS step, exactly as cho_controller_franka's and
-    // cho_controller_fr5's task_space_ik_controller do. max_delta_q was validated in
-    // assign_parameters() and then never applied: the only use was a commented-out
-    // clip_position() call, so this controller had NO per-cycle bound at all, and
-    // near a singularity the DLS solve turns a small task error into an arbitrarily
-    // large joint step that is handed straight to the position interface.
-    //
-    // The bound is applied to delta_q BEFORE adding it to the configuration rather
-    // than by re-enabling clip_position(): clip_position() rate-limits against
-    // state_.q_ref and then advances that baseline, but this controller commands
-    // state_.q.head(num_dof_) + delta_q -- it closes on the MEASURED position, not on
-    // a held reference. The two baselines would therefore fight, with the command
-    // pulled between the measurement and a reference that never converges to it.
-    //
-    // That measured-position closure is left as it is, and it remains the difference
-    // from the Franka/FR5 versions, which integrate an open-loop q_ref_ (no encoder
-    // noise, no servo-lag creep). Only the per-cycle step is bounded here; moving
-    // this controller onto an open-loop reference is a separate, larger change.
-    cho_controller_base::limit_step(delta_q, max_delta_q_);
-
-    const cho_controller_base::JointStep q_cmd = state_.q.head(num_dof_) + delta_q;
-
+    state_.q_des = state_.q_ref;  // for the controller_state log
     for (int i = 0; i < num_dof_; ++i) {
-        command_interfaces_[i].set_value(q_cmd(i));
+        command_interfaces_[i].set_value(state_.q_ref(i));
     }
     return controller_interface::return_type::OK;
 }

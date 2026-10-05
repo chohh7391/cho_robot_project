@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -93,6 +94,90 @@ TEST(HeldCommand, FallsBackToTheMeasurementOnZerosNanOrTooFewInterfaces) {
   EXPECT_TRUE(held_command(std::vector<FakeInterface>{{0.0}, {0.0}}, measured).isApprox(measured));
   EXPECT_TRUE(held_command(std::vector<FakeInterface>{{0.5}, {std::nan("")}}, measured).isApprox(measured));
   EXPECT_TRUE(held_command(std::vector<FakeInterface>{{0.5}}, measured).isApprox(measured));
+}
+
+// A command interface as live_held_command() sees one.
+struct NamedInterface
+{
+  std::string joint;
+  std::string kind;
+  double value;
+  std::string get_name() const {return joint + "/" + kind;}
+  const std::string & get_interface_name() const {return kind;}
+  double get_value() const {return value;}
+};
+
+class LiveHeldCommand : public ::testing::Test
+{
+protected:
+  void SetUp() override {HeldCommandLedger::clear();}
+  void TearDown() override {HeldCommandLedger::clear();}
+};
+
+TEST_F(LiveHeldCommand, AHoldReleasedInTheSameSwitchIsTaken) {
+  // What the previous position controller left, and the arm it left it at.
+  const std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  const Eigen::Vector2d measured(0.50, -1.00);
+  release_held_command(commands, measured);
+  EXPECT_TRUE(live_held_command(commands, measured).isApprox(Eigen::Vector2d(0.51, -1.02)));
+}
+
+TEST_F(LiveHeldCommand, ACommandLeftBeforeTheArmMovedIsStale) {
+  // Released at 0.50, then a velocity controller moved joint 1 by 0.02 rad --
+  // within held_command()'s band, which would have stepped the arm back.
+  const std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  release_held_command(commands, Eigen::Vector2d(0.50, -1.00));
+  const Eigen::Vector2d moved(0.52, -1.00);
+  ASSERT_TRUE(held_command(commands, moved).isApprox(Eigen::Vector2d(0.51, -1.02)));
+  EXPECT_TRUE(live_held_command(commands, moved).isApprox(moved));
+}
+
+TEST_F(LiveHeldCommand, ACommandWrittenAfterTheReleaseFallsBackToTheBand) {
+  // A controller from outside the repository (a joint_trajectory_controller)
+  // held the arm after ours let go: its value is not ours, and the band decides.
+  release_held_command(
+    std::vector<NamedInterface>{{"j1", "position", 0.51}}, Eigen::Matrix<double, 1, 1>(0.50));
+  const std::vector<NamedInterface> commands{{"j1", "position", 0.71}};
+  const Eigen::Matrix<double, 1, 1> measured(0.70);
+  EXPECT_DOUBLE_EQ(live_held_command(commands, measured)(0), 0.71);
+  // Without any record the band decides too.
+  HeldCommandLedger::clear();
+  EXPECT_DOUBLE_EQ(live_held_command(commands, measured)(0), 0.71);
+  EXPECT_DOUBLE_EQ(
+    live_held_command(std::vector<NamedInterface>{{"j1", "position", 0.0}}, measured)(0), 0.70);
+}
+
+TEST_F(LiveHeldCommand, OnlyPositionInterfacesAreRecorded) {
+  release_held_command(
+    std::vector<NamedInterface>{{"j1", "velocity", 0.3}, {"j2", "effort", 4.0}}, Eigen::Vector2d(0.5, 1.0));
+  HeldCommandLedger::Release release{};
+  EXPECT_FALSE(HeldCommandLedger::find("j1/velocity", release));
+  EXPECT_FALSE(HeldCommandLedger::find("j2/effort", release));
+  release_held_command(std::vector<NamedInterface>{{"j1", "position", 0.3}}, Eigen::Matrix<double, 1, 1>(0.29));
+  ASSERT_TRUE(HeldCommandLedger::find("j1/position", release));
+  EXPECT_DOUBLE_EQ(release.command, 0.3);
+  EXPECT_DOUBLE_EQ(release.measured, 0.29);
+}
+
+TEST(Kinematics, DlsStepRefusesAJacobianPastItsBounds) {
+  // 13 columns (more than kMaxArmDof) and 7 rows (more than kMaxTaskDim) would
+  // overrun the fixed storage; a short error does not match the rows.
+  const Eigen::MatrixXd wide = Eigen::MatrixXd::Ones(6, kMaxArmDof + 1);
+  const Eigen::MatrixXd tall = Eigen::MatrixXd::Ones(kMaxTaskDim + 1, 6);
+  const Eigen::VectorXd e6 = Eigen::VectorXd::Ones(6);
+  const Eigen::VectorXd e7 = Eigen::VectorXd::Ones(7);
+  const auto wide_step = dls_step(wide, e6, 0.01);
+  EXPECT_EQ(wide_step.size(), kMaxArmDof);
+  EXPECT_FALSE(wide_step.allFinite());
+  const auto tall_step = dls_step(tall, e7, 0.01);
+  EXPECT_EQ(tall_step.size(), 6);
+  EXPECT_FALSE(tall_step.allFinite());
+  const Eigen::MatrixXd fits = Eigen::MatrixXd::Identity(6, 6);
+  EXPECT_FALSE(dls_step(fits, Eigen::VectorXd::Ones(5), 0.01).allFinite());
+  EXPECT_TRUE(dls_step(fits, e6, 0.01).allFinite());
+  EXPECT_TRUE(dls_fits(6, kMaxArmDof));
+  EXPECT_FALSE(dls_fits(6, kMaxArmDof + 1));
+  EXPECT_FALSE(dls_fits(kMaxTaskDim + 1, 6));
 }
 
 }  // namespace

@@ -27,6 +27,7 @@
 #include "cho_controller_common/tasks/task_joint_posture.hpp"
 #include "cho_controller_common/trajectory/trajectory_euclidian.hpp"
 #include "cho_controller_common/formulation/inverse_dynamics_formulation_acc.hpp"
+#include <atomic>
 #include <memory>
 
 #include "cho_controller_common/solver/solver_HQP_eiquadprog.hpp"
@@ -80,6 +81,13 @@ private:
     ACTION,
   };
   QPControlMode control_mode_;
+
+  // Mode switches happen in update(); their log line is written by
+  // mode_log_timer_ on the executor, never from the control loop.
+  // 0 nothing pending, else 1 + the QPControlMode switched to.
+  std::atomic<int> pending_mode_log_{0};
+  rclcpp::TimerBase::SharedPtr mode_log_timer_;
+  void log_mode_switch();
 };
 
 } // namespace franka

@@ -1,3 +1,4 @@
+// Copyright (c) 2023 Franka Robotics GmbH
 // Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,6 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include "cho_controller_franka/operational_space_controller.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
@@ -107,7 +111,7 @@ controller_interface::return_type OperationalSpaceController::update(
   // one that outlived a deactivation: then its trajectory is not sampled and
   // the idle branch holds.
   if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
-    auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
     twist_des_world = trajectory_sample.vel;
@@ -198,7 +202,7 @@ bool OperationalSpaceController::assign_parameters() {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
-  if (default_dof_pos.size() != num_dof_) {
+  if (default_dof_pos.size() != static_cast<size_t>(num_dof_)) {
     RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }

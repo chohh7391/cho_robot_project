@@ -102,6 +102,11 @@ private:
     // vla_controller support table), but kept as a harmless safeguard.
     bool activation_state_latched_ {false};
 
+    // Position mode's seed for q_ref_: the held command, taken in on_activate.
+    // Not at the first update() with the rest: live_held_command() can only tell
+    // a live hold from a stale command before the hardware's next read().
+    Vector7d activation_seed_ {Vector7d::Zero()};
+
     Vector6d default_kp_task_;
     Vector6d default_kd_task_;
     Vector6d current_kp_task_;

@@ -256,7 +256,7 @@ controller_interface::return_type TaskSpaceIKController::update(
             action_server_->trajectory_->setInitSample(H_ref);
         }
 
-        const auto sample = action_server_->trajectory_->computeNext();
+        const auto & sample = action_server_->trajectory_->computeNext();
         if (!sample.pos.allFinite()) {
             abort_and_hold("non-finite task trajectory sample; "
                            "holding the last finite command");

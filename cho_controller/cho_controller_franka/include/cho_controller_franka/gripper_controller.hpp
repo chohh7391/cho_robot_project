@@ -28,6 +28,7 @@
 #include "franka_msgs/action/grasp.hpp"
 #include "franka_msgs/action/move.hpp"
 #include "franka_msgs/action/homing.hpp"
+#include "cho_controller_franka/gripper_outcome.hpp"
 #include "cho_controller_franka/servers/gripper_action_server.hpp"
 
 namespace cho_controller {
@@ -132,8 +133,9 @@ class GripperController : public FrankaBaseController {
   // its acquire exchange.
   Command staged_;
   std::atomic<bool> dispatch_pending_{false};
-  std::atomic<bool> result_ready_{false};
-  std::atomic<bool> result_success_{false};
+  // The outcome and the command it answers, in one word; update() takes it
+  // only for the command it is waiting on (see GripperOutcome).
+  GripperOutcome outcome_;
   std::atomic<double> current_width_{0.0};
   // Numbers the commands update() stages, and is bumped on every activation.
   // A franka_gripper outcome completes the running goal only if it answers the

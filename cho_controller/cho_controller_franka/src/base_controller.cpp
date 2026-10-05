@@ -1,3 +1,4 @@
+// Copyright (c) 2023 Franka Robotics GmbH
 // Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,15 +12,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include "cho_controller_franka/robot_utils.hpp"
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
-#include <cassert>
+#include <chrono>
 #include <cmath>
 #include <exception>
+#include <future>
 #include <string>
 
 #include <Eigen/Eigen>
@@ -129,8 +134,16 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
             return CallbackReturn::FAILURE;
         }
 
+        // Bounded: the answer is delivered by the executor this callback may be
+        // running on (it does not deadlock under Gazebo's, but an unbounded get()
+        // hung configure forever wherever it did).
         auto future = parameters_client->get_parameters({"robot_description"});
-        auto result = future.get(); // does not deadlock in the Gazebo environment
+        if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                "robot_state_publisher did not answer for robot_description within 5 s");
+            return CallbackReturn::FAILURE;
+        }
+        auto result = future.get();
         
         if (result.empty() || result[0].value_to_string().empty()) {
             RCLCPP_ERROR(get_node()->get_logger(), "Failed to get robot_description from robot_state_publisher");
@@ -256,8 +269,35 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     return CallbackReturn::SUCCESS;
 }
 
+bool FrankaBaseController::state_interfaces_in_order() const
+{
+  // update_joint_states() reads position/velocity pairs by index: num_dof_ arm
+  // joints, plus the finger joint outside the real bringup when the model has
+  // one. Checked once at activation; the assert this replaces vanished from
+  // Release builds.
+  const std::size_t joints = (bringup_type_ != "real" && nq_ > num_dof_) ? num_dof_ + 1 : num_dof_;
+  if (state_interfaces_.size() < 2 * joints) {
+    RCLCPP_ERROR(get_node()->get_logger(), "expected %zu state interfaces, got %zu",
+        2 * joints, state_interfaces_.size());
+    return false;
+  }
+  for (std::size_t i = 0; i < joints; ++i) {
+    if (state_interfaces_[2 * i].get_interface_name() != "position" ||
+        state_interfaces_[2 * i + 1].get_interface_name() != "velocity")
+    {
+      RCLCPP_ERROR(get_node()->get_logger(),
+          "state interfaces out of order at joint %zu: expected position then velocity", i);
+      return false;
+    }
+  }
+  return true;
+}
+
 CallbackReturn FrankaBaseController::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
+  if (!state_interfaces_in_order()) {
+    return CallbackReturn::ERROR;
+  }
   update_joint_states();
   compute_all_terms();
   state_.q_init = state_.q;
@@ -286,6 +326,14 @@ CallbackReturn FrankaBaseController::on_activate(
 CallbackReturn FrankaBaseController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   activity_.deactivated();
+  // What a position controller leaves on its interfaces, and where the arm is
+  // now, so the next one can tell a live hold from a stale command
+  // (cho_controller_base::live_held_command). Interfaces are still claimed
+  // here; command interfaces of any other kind are skipped.
+  if (state_interfaces_in_order()) {
+    update_joint_states();
+    cho_controller_base::release_held_command(command_interfaces_, state_.q_arm);
+  }
   return CallbackReturn::SUCCESS;
 }
 
@@ -316,13 +364,10 @@ void FrankaBaseController::update_joint_states()
             num_interface = num_dof_;
         }
     }
-    // arm
+    // arm. The order is checked once, in on_activate (state_interfaces_in_order()).
     for (auto i = 0; i < num_interface; ++i) {
         const auto& position_interface = state_interfaces_.at(2 * i);
         const auto& velocity_interface = state_interfaces_.at(2 * i + 1);
-
-        assert(position_interface.get_interface_name() == "position");
-        assert(velocity_interface.get_interface_name() == "velocity");
 
         state_.q(i) = position_interface.get_value();
         state_.v(i) = velocity_interface.get_value();
@@ -424,7 +469,14 @@ Vector7d FrankaBaseController::held_command_position() const
     // from an older position session survives the same way. The FCI motion generator
     // then restarts from the measured position, which held_command() falls back to:
     // fr3 joint4's range [-3.07, -0.07] never comes within its 0.05 rad of zero.
-    return cho_controller_base::held_command(command_interfaces_, state_.q_arm_init);
+    //
+    // The stale value is the dangerous one: a command left by a position
+    // controller before an effort or velocity controller moved the arm, still
+    // within the band. live_held_command() refuses any value a cho controller
+    // left before the arm moved, which covers the switches this package makes
+    // (effort/velocity <-> position). A value left by a controller from
+    // elsewhere is judged by the band alone.
+    return cho_controller_base::live_held_command(command_interfaces_, state_.q_arm_init);
 }
 
 double FrankaBaseController::nominal_period(const rclcpp::Duration & period)

@@ -108,7 +108,7 @@ controller_interface::return_type JointSpacePositionController::update(
       state_.q_arm_ref = last_cmd_;
     }
 
-    const auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos.head(num_dof_);
   }
   prev_running_ = running;

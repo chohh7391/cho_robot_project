@@ -1,3 +1,4 @@
+// Copyright (c) 2023 Franka Robotics GmbH
 // Copyright 2026 Hyunho Cho
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,8 +12,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Derived from franka_example_controllers (https://github.com/frankaemika/franka_ros2);
+// modified for cho_robot_project, see NOTICE.
 
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <string>
@@ -109,7 +114,23 @@ CallbackReturn TaskSpaceQPController::on_configure(
   action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
   action_server_->attach_activity(&activity_);
 
+  if (!mode_log_timer_) {
+    mode_log_timer_ = get_node()->create_wall_timer(
+      std::chrono::milliseconds(100), [this]() {log_mode_switch();});
+  }
+
   return CallbackReturn::SUCCESS;
+}
+
+void TaskSpaceQPController::log_mode_switch()
+{
+  const int pending = pending_mode_log_.exchange(0, std::memory_order_acq_rel);
+  if (pending == 1 + static_cast<int>(QPControlMode::ACTION)) {
+    RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control%s.",
+                use_nullspace_posture_ ? " (with null-space posture)" : "");
+  } else if (pending == 1 + static_cast<int>(QPControlMode::DEFAULT)) {
+    RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP default posture hold.");
+  }
 }
 
 CallbackReturn TaskSpaceQPController::on_activate(
@@ -240,8 +261,8 @@ void TaskSpaceQPController::switch_to_action_control(const rclcpp::Time & time)
     traj_posture_->setGoalSample(state_.q_arm);
   }
   control_mode_ = QPControlMode::ACTION;
-  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP action control%s.",
-              use_nullspace_posture_ ? " (with null-space posture)" : "");
+  // Logged off the control loop (log_mode_switch()).
+  pending_mode_log_.store(1 + static_cast<int>(QPControlMode::ACTION), std::memory_order_release);
 }
 
 void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
@@ -256,7 +277,8 @@ void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
   traj_posture_->setGoalSample(state_.q_arm);
 
   control_mode_ = QPControlMode::DEFAULT;
-  RCLCPP_INFO(get_node()->get_logger(), "Switched to Task Space QP default posture hold.");
+  // Logged off the control loop (log_mode_switch()).
+  pending_mode_log_.store(1 + static_cast<int>(QPControlMode::DEFAULT), std::memory_order_release);
 }
 
 void TaskSpaceQPController::update_default_control_reference(const rclcpp::Time & time)

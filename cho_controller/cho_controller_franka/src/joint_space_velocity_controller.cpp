@@ -180,7 +180,7 @@ controller_interface::return_type JointSpaceVelocityController::update(
       state_.q_arm_ref = q_ref_;
     }
 
-    const auto trajectory_sample = action_server_->trajectory_->computeNext();
+    const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos.head(num_dof_);
     q_ref_ = state_.q_arm_des;
     FrankaBaseController::clip_position(q_ref_);
