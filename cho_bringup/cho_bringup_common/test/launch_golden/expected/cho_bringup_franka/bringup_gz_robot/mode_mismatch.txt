@@ -10,7 +10,7 @@ LAUNCH cho_bringup_franka/bringup_gz_robot.launch.py ['control_mode:=position']
   ARG controller_name default='task_space_impedance_controller' choices=None
   ARG bringup_type default='gazebo' choices=None
   ARG world default='empty.sdf' choices=None
-  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+  ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   ARG launch_rviz default='true' choices=None
   ARG load_moveit_controller default='false' choices=None
   ARG load_ft_sensor default='true' choices=None

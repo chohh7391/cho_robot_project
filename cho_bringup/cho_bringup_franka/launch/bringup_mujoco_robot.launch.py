@@ -81,9 +81,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ee_name',
-            default_value='fr3_hand_tcp',
-            description='Name of End-Effector',
-            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+            default_value='',
+            description="Controllers' end-effector frame; empty means fr3_hand_tcp with "
+                        'the hand and fr3_link8 without it',
+            choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
         )
     ]
 
@@ -127,7 +128,9 @@ def generate_launch_description():
         load_gripper = LaunchConfiguration('load_gripper').perform(context)
         use_vla = LaunchConfiguration('vla').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
-        ee_name = LaunchConfiguration('ee_name').perform(context)
+        # The MuJoCo/Isaac descriptions carry the hand even without a gripper.
+        ee_name = launch_utils.resolve_ee_name(
+            LaunchConfiguration('ee_name').perform(context), True)
         launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
         always_active_controllers = launch_utils.always_active_controllers(load_gripper)
 

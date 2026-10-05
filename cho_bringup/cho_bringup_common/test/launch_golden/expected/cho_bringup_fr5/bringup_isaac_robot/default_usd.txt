@@ -13,25 +13,9 @@ LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py []
   ARG device default='cpu' choices=['cpu', 'cuda']
   ARG shutdown_on_gate_failure default='false' choices=None
   OPAQUE setup_control_environment
+    XACRO '<share:cho_description_fr5>/urdf/fr5.urdf.xacro' mappings={hardware: 'isaac'}
     ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<share:cho_description_fr5>/usd/fr5/fr5.usda'
       convert_args=['--urdf', '<share:cho_description_fr5>/urdf/fr5.urdf.xacro', '--usd-path', '<share:cho_description_fr5>/usd', '--ros-package', 'cho_description_fr5:<share:cho_description_fr5>', '--require-link', 'wrist3_link']
     ERROR RuntimeError: Isaac robot USD not found at '<share:cho_description_fr5>/usd/fr5/fr5.usda'.
     | Build it once with:
     |   <FAKE>/isaacsim/python.sh <share:cho_simulation_isaac>/isaac/convert_urdf_to_usd.py --urdf <share:cho_description_fr5>/urdf/fr5.urdf.xacro --usd-path <share:cho_description_fr5>/usd --ros-package cho_description_fr5:<share:cho_description_fr5> --require-link wrist3_link
-RUNTIME_FILE <RT:cho_fr5_isaac_runtime_params_#0> aliases=False
-  /**:
-    joint_space_position_controller:
-      ros__parameters: {}
-    task_space_ik_controller:
-      ros__parameters: {ee_name: wrist3_link}
-  /** (every controller):
-    bringup_type: isaac
-    cartesian_limits: {max_rot_vel: 0.5, max_trans_acc: 0.5, max_trans_dec: -0.5, max_trans_vel: 0.25}
-    control_mode: position
-    joint_limits:
-      j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
-      j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
-      j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
-      j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
-      j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
-      j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}

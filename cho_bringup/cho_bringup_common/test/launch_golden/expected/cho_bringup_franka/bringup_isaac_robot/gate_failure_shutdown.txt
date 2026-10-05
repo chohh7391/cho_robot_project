@@ -7,7 +7,7 @@ LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/
   ARG bringup_type default='isaac' choices=None
   ARG xacro_file default='<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf' choices=None
   ARG controllers_file default='<share:cho_bringup_franka>/config/isaac/controllers.yaml' choices=None
-  ARG ee_name default='fr3_hand_tcp' choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+  ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   ARG robot_usd default='<share:cho_description_franka>/usd/fr3_with_ft_sensor/fr3_franka_hand/fr3_franka_hand.usda' choices=None
   ARG isaac_sim_path default='<HOME>/isaacsim' choices=None
   ARG physics_rate default='250' choices=None
@@ -22,13 +22,13 @@ LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/
     param {command_mode: 'position'}
     output='log' on_exit=NoneType
   NODE robot_state_publisher/robot_state_publisher
+    COMMAND ['xacro', '<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf', 'control_mode:=torque', 'hardware:=isaac']
     name=None namespace=None
     args=[]
     param {use_sim_time: True}
     param {robot_description: <description #1 fr3>}
     output='screen' on_exit=NoneType
   OPAQUE setup_control_environment
-    COMMAND ['xacro', '<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf', 'control_mode:=torque', 'hardware:=isaac']
     ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
       convert_args=['--urdf', '<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf', '--usd-path', '<FAKE>/usd/robot', '--ros-package', 'cho_description_franka:<share:cho_description_franka>']
     PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_franka>/config/isaac/robot_profile.json', '--control-mode', 'torque', '--physics-rate', '250', '--device', 'cpu']
@@ -78,45 +78,45 @@ LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/
       OPAQUE cleanup (not run) closure=['<RT:cho_runtime_params_#0>']
 DESCRIPTION #1
   robot name='fr3'
-  joint fr3_base_joint fixed base -> fr3_link0
-  joint fr3_link0_sc_joint fixed fr3_link0 -> fr3_link0_sc
-  joint fr3_link0_accelerometer_top_joint fixed fr3_link0 -> fr3_link0_accelerometer_top
-  joint fr3_link0_accelerometer_bottom_joint fixed fr3_link0 -> fr3_link0_accelerometer_bottom
-  joint fr3_link1_sc_joint fixed fr3_link1 -> fr3_link1_sc
-  joint fr3_link1_accelerometer_top_joint fixed fr3_link1 -> fr3_link1_accelerometer_top
-  joint fr3_link1_accelerometer_bottom_joint fixed fr3_link1 -> fr3_link1_accelerometer_bottom
-  joint fr3_joint1 revolute fr3_link0 -> fr3_link1
-  joint fr3_link2_sc_joint fixed fr3_link2 -> fr3_link2_sc
-  joint fr3_link2_accelerometer_top_joint fixed fr3_link2 -> fr3_link2_accelerometer_top
-  joint fr3_link2_accelerometer_bottom_joint fixed fr3_link2 -> fr3_link2_accelerometer_bottom
-  joint fr3_joint2 revolute fr3_link1 -> fr3_link2
-  joint fr3_link3_sc_joint fixed fr3_link3 -> fr3_link3_sc
-  joint fr3_link3_accelerometer_top_joint fixed fr3_link3 -> fr3_link3_accelerometer_top
-  joint fr3_link3_accelerometer_bottom_joint fixed fr3_link3 -> fr3_link3_accelerometer_bottom
-  joint fr3_joint3 revolute fr3_link2 -> fr3_link3
-  joint fr3_link4_sc_joint fixed fr3_link4 -> fr3_link4_sc
-  joint fr3_link4_accelerometer_top_joint fixed fr3_link4 -> fr3_link4_accelerometer_top
-  joint fr3_link4_accelerometer_bottom_joint fixed fr3_link4 -> fr3_link4_accelerometer_bottom
-  joint fr3_joint4 revolute fr3_link3 -> fr3_link4
-  joint fr3_link5_sc_joint fixed fr3_link5 -> fr3_link5_sc
-  joint fr3_link5_accelerometer_top_joint fixed fr3_link5 -> fr3_link5_accelerometer_top
-  joint fr3_link5_accelerometer_bottom_joint fixed fr3_link5 -> fr3_link5_accelerometer_bottom
-  joint fr3_joint5 revolute fr3_link4 -> fr3_link5
-  joint fr3_link6_sc_joint fixed fr3_link6 -> fr3_link6_sc
-  joint fr3_joint6 revolute fr3_link5 -> fr3_link6
-  joint fr3_link7_sc_joint fixed fr3_link7 -> fr3_link7_sc
-  joint fr3_joint7 revolute fr3_link6 -> fr3_link7
-  joint fr3_joint8 fixed fr3_link7 -> fr3_link8
-  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting
-  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench
-  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1
-  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2
-  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3
-  joint fr3_hand_joint fixed bota_ft_sensor_wrench -> fr3_hand
-  joint fr3_hand_sc_joint fixed fr3_hand -> fr3_hand_sc
-  joint fr3_hand_tcp_joint fixed fr3_hand -> fr3_hand_tcp
-  joint fr3_finger_joint1 prismatic fr3_hand -> fr3_leftfinger
-  joint fr3_finger_joint2 prismatic fr3_hand -> fr3_rightfinger
+  joint fr3_base_joint fixed base -> fr3_link0 [origin rpy='0 0 0' xyz='0 0 0']
+  joint fr3_link0_sc_joint fixed fr3_link0 -> fr3_link0_sc [origin rpy='0 0 0']
+  joint fr3_link0_accelerometer_top_joint fixed fr3_link0 -> fr3_link0_accelerometer_top [origin rpy='3.14159 0 0' xyz='0 0 0.05']
+  joint fr3_link0_accelerometer_bottom_joint fixed fr3_link0 -> fr3_link0_accelerometer_bottom [origin rpy='0 0 0' xyz='0 0 0.06']
+  joint fr3_link1_sc_joint fixed fr3_link1 -> fr3_link1_sc [origin rpy='0 0 0']
+  joint fr3_link1_accelerometer_top_joint fixed fr3_link1 -> fr3_link1_accelerometer_top [origin rpy='1.5708 0 0' xyz='0 -0.1 0.0']
+  joint fr3_link1_accelerometer_bottom_joint fixed fr3_link1 -> fr3_link1_accelerometer_bottom [origin rpy='-1.5708 0 0' xyz='0 -0.09 0.0']
+  joint fr3_joint1 revolute fr3_link0 -> fr3_link1 [origin rpy='0 0 0' xyz='0 0 0.333', axis xyz='0 0 1', limit effort='87.0' lower='-2.9007' upper='2.9007' velocity='2.62', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-2.9007' soft_upper_limit='2.9007', position_based_velocity_limits deceleration_limit='6.0' velocity_offset='0.652', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link2_sc_joint fixed fr3_link2 -> fr3_link2_sc [origin rpy='0 0 0']
+  joint fr3_link2_accelerometer_top_joint fixed fr3_link2 -> fr3_link2_accelerometer_top [origin rpy='-1.5708 0 0' xyz='0 -0.13 0']
+  joint fr3_link2_accelerometer_bottom_joint fixed fr3_link2 -> fr3_link2_accelerometer_bottom [origin rpy='1.5708 0 0' xyz='0 -0.14 0']
+  joint fr3_joint2 revolute fr3_link1 -> fr3_link2 [origin rpy='-1.570796326794897 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='87.0' lower='-1.8361' upper='1.8361' velocity='2.62', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-1.8361' soft_upper_limit='1.8361', position_based_velocity_limits deceleration_limit='2.585' velocity_offset='0.25', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link3_sc_joint fixed fr3_link3 -> fr3_link3_sc [origin rpy='0 0 0']
+  joint fr3_link3_accelerometer_top_joint fixed fr3_link3 -> fr3_link3_accelerometer_top [origin rpy='-1.5708 0 0' xyz='0.0825 0.05 0']
+  joint fr3_link3_accelerometer_bottom_joint fixed fr3_link3 -> fr3_link3_accelerometer_bottom [origin rpy='1.5708 0 0' xyz='0.0825 0.04 0']
+  joint fr3_joint3 revolute fr3_link2 -> fr3_link3 [origin rpy='1.570796326794897 0 0' xyz='0 -0.316 0', axis xyz='0 0 1', limit effort='87.0' lower='-2.9007' upper='2.9007' velocity='2.62', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-2.9007' soft_upper_limit='2.9007', position_based_velocity_limits deceleration_limit='3.5' velocity_offset='0.2005', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link4_sc_joint fixed fr3_link4 -> fr3_link4_sc [origin rpy='0 0 0']
+  joint fr3_link4_accelerometer_top_joint fixed fr3_link4 -> fr3_link4_accelerometer_top [origin rpy='1.5708 0 0' xyz='-0.0825 0.05 0']
+  joint fr3_link4_accelerometer_bottom_joint fixed fr3_link4 -> fr3_link4_accelerometer_bottom [origin rpy='-1.5708 0 0' xyz='-0.0825 0.06 0']
+  joint fr3_joint4 revolute fr3_link3 -> fr3_link4 [origin rpy='1.570796326794897 0 0' xyz='0.0825 0 0', axis xyz='0 0 1', limit effort='87.0' lower='-3.077' upper='-0.1169' velocity='2.62', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-3.077' soft_upper_limit='-0.1169', position_based_velocity_limits deceleration_limit='4.0' velocity_offset='0.3542', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link5_sc_joint fixed fr3_link5 -> fr3_link5_sc [origin rpy='0 0 0']
+  joint fr3_link5_accelerometer_top_joint fixed fr3_link5 -> fr3_link5_accelerometer_top [origin rpy='-1.5708 0 0' xyz='0 0.11 0']
+  joint fr3_link5_accelerometer_bottom_joint fixed fr3_link5 -> fr3_link5_accelerometer_bottom [origin rpy='1.5708 0 0' xyz='0 0.1 0']
+  joint fr3_joint5 revolute fr3_link4 -> fr3_link5 [origin rpy='-1.570796326794897 0 0' xyz='-0.0825 0.384 0', axis xyz='0 0 1', limit effort='12.0' lower='-2.8763' upper='2.8763' velocity='5.26', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-2.8763' soft_upper_limit='2.8763', position_based_velocity_limits deceleration_limit='17.0' velocity_offset='0.5738', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link6_sc_joint fixed fr3_link6 -> fr3_link6_sc [origin rpy='0 0 0']
+  joint fr3_joint6 revolute fr3_link5 -> fr3_link6 [origin rpy='1.570796326794897 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='12.0' lower='0.4398' upper='4.6216' velocity='4.18', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='0.4398' soft_upper_limit='4.6216', position_based_velocity_limits deceleration_limit='5.5' velocity_offset='0.4885', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
+  joint fr3_link7_sc_joint fixed fr3_link7 -> fr3_link7_sc [origin rpy='0 0 0.7853981633974483']
+  joint fr3_joint7 revolute fr3_link6 -> fr3_link7 [origin rpy='1.570796326794897 0 0' xyz='0.088 0 0', axis xyz='0 0 1', limit effort='12.0' lower='-3.0508' upper='3.0508' velocity='5.26']
+  joint fr3_joint8 fixed fr3_link7 -> fr3_link8 [origin rpy='0 0 0' xyz='0 0 0.107']
+  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting [origin rpy='0 0 0' xyz='0 0 0']
+  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench [origin rpy='0 0 0' xyz='0 0 0.035']
+  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1 [origin rpy='1.5625 0 -1.5708' xyz='-0.032879 0 0.0105']
+  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2 [origin rpy='1.5708 0 0' xyz='0 -0.032879 0.0105']
+  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3 [origin rpy='1.5708 0 1.5708' xyz='0.032879 0 0.0105']
+  joint fr3_hand_joint fixed bota_ft_sensor_wrench -> fr3_hand [origin rpy='0 0 -0.7853981633974483' xyz='0 0 0']
+  joint fr3_hand_sc_joint fixed fr3_hand -> fr3_hand_sc [origin rpy='0 0 0']
+  joint fr3_hand_tcp_joint fixed fr3_hand -> fr3_hand_tcp [origin rpy='0 0 0' xyz='0 0 0.1034']
+  joint fr3_finger_joint1 prismatic fr3_hand -> fr3_leftfinger [origin rpy='0 0 0' xyz='0 0 0.0584', axis xyz='0 1 0', limit effort='100' lower='0.0' upper='0.04' velocity='0.2', dynamics damping='0.3']
+  joint fr3_finger_joint2 prismatic fr3_hand -> fr3_rightfinger [origin rpy='0 0 3.141592653589793' xyz='0 0 0.0584', axis xyz='0 1 0', limit effort='100' lower='0.0' upper='0.04' velocity='0.2', mimic joint='fr3_finger_joint1', dynamics damping='0.3']
   ros2_control name='IsaacArmSystem' type='system'
     hardware
       plugin: topic_based_ros2_control/TopicBasedSystem

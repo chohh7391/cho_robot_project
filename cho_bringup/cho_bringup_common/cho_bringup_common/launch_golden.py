@@ -25,7 +25,9 @@ What it does:
   * loads the installed launch file and walks generate_launch_description()
     with a real LaunchContext, the given arguments set as launch
     configurations. OpaqueFunctions are executed, includes of cho_bringup_*
-    launch files are followed, other includes are only listed;
+    and cho_moveit_* launch files are followed (so the MoveIt scene gate and
+    its RViz condition are part of a bringup's output), other includes are
+    only listed;
   * prints every Node / ExecuteProcess / include / environment action with its
     evaluated parameters, and what launch logs while doing so;
   * feeds every registered event handler the events it waits for - process
@@ -35,17 +37,21 @@ What it does:
     ROS_HOME that is deleted afterwards), with what every controller shares
     printed once. A static parameter file (a controllers.yaml) is printed by
     path only: its values are configuration, not launch behaviour;
-  * replaces robot_description strings with a summary - the joints and every
-    element but links and materials (<ros2_control>, <gazebo>, ...) - printed
-    once per description, so a change to a mesh or an inertia does not show
-    up here but a change to the hardware, its interfaces or the kinematic
-    tree does.
+  * replaces robot_description (and SRDF) strings with a summary - the joints
+    with their origin, axis and limits, and every element but links and
+    materials (<ros2_control>, <gazebo>, SRDF groups, ...) - printed once per
+    description, so a change to a mesh or an inertia does not show up here
+    but a change to the hardware, its interfaces, the kinematic tree or a
+    joint limit does;
+  * prints a node's parameter dictionary on one line when it is short and as
+    YAML under the node otherwise (a MoveIt configuration), dotted names
+    nested back into the tree they came from.
 
 Nothing is ever started. The only subprocesses are the xacro calls the launch
 files' own Command substitutions make while evaluating robot_description; each
-is printed as a COMMAND line with its full argument list. The description
-summary leaves out joint geometry and limits, so those arguments (ur_type,
-safety margins, ...) are what shows a launch passing xacro the wrong thing.
+is printed as a COMMAND line, under the node it belongs to, with its full
+argument list. In-process xacro.process_file() calls (a launch file's own, and
+MoveItConfigsBuilder's) are printed as XACRO lines with their mappings.
 
 Output is made machine-independent: every <prefix>/share/<package> becomes
 <share:package> (likewise lib/), the private ROS_HOME and its files become
@@ -82,8 +88,22 @@ _INLINE_WIDTH = 200
 _MKSTEMP_SUFFIX_LEN = 8 + len('.yaml')
 
 
-# A cho_bringup_* package's own launch file: the includes the walk follows.
-_BRINGUP_LAUNCH = re.compile(r'[/\\]share[/\\]cho_bringup_[^/\\]+[/\\]launch[/\\]')
+# A cho_bringup_* or cho_moveit_* package's own launch file: the includes the
+# walk follows.
+_FOLLOWED_LAUNCH = re.compile(r'[/\\]share[/\\]cho_(?:bringup|moveit)_[^/\\]+[/\\]launch[/\\]')
+
+# Humble's spawner options that are one option under two spellings; their
+# relative order is kept (see Walker.canonical_args).
+_SPAWNER_ALIASES = {
+    '-c': '--controller-manager',
+    '-p': '--param-file',
+    '-n': '--namespace',
+    '-t': '--controller-type',
+    '-u': '--unload-on-kill',
+}
+
+# Humble's spawner flags that take no value.
+_SPAWNER_VALUELESS = ('--inactive', '--stopped', '--load-only', '--activate-as-group', '-u', '--unload-on-kill')
 
 
 class SkipCase(Exception):
@@ -251,9 +271,13 @@ class Walker:
         for joint in root.findall('joint'):
             parent = joint.find('parent')
             child = joint.find('child')
-            yield 1, (f'joint {joint.get("name")} {joint.get("type")} '
-                      f'{parent.get("link") if parent is not None else None} -> '
-                      f'{child.get("link") if child is not None else None}')
+            line = (f'joint {joint.get("name")} {joint.get("type")} '
+                    f'{parent.get("link") if parent is not None else None} -> '
+                    f'{child.get("link") if child is not None else None}')
+            # origin, axis, limit, mimic, ...: what a xacro argument such as
+            # ur_type or a safety margin changes.
+            details = [self.inline_element(e) for e in joint if e.tag not in ('parent', 'child')]
+            yield 1, line + (f' [{", ".join(details)}]' if details else '')
         for element in root:
             if element.tag not in ('link', 'joint', 'material'):
                 yield from self.summarize_element(element, 1)
@@ -287,6 +311,72 @@ class Walker:
             ref = self.description_ref(val)
             return ref if ref else repr(self.norm(val))
         return repr(val)
+
+    def yaml_value(self, val):
+        """A parameter value made dumpable: normalized strings, descriptions by reference."""
+        if isinstance(val, (list, tuple)):
+            return [self.yaml_value(v) for v in val]
+        if isinstance(val, dict):
+            return {str(k): self.yaml_value(v) for k, v in val.items()}
+        if isinstance(val, str):
+            return self.description_ref(val) or self.norm(val)
+        return val
+
+    @staticmethod
+    def nest(flat):
+        """Dotted parameter names back into the tree launch_ros flattened them from.
+
+        A name that is both a value and a prefix of another (never seen in
+        practice) keeps its dotted form rather than losing either.
+        """
+        tree = {}
+        for name in sorted(flat):
+            node, parts = tree, name.split('.')
+            for part in parts[:-1]:
+                child = node.setdefault(part, {})
+                if not isinstance(child, dict):
+                    node = None
+                    break
+                node = child
+            if node is None or parts[-1] in node:
+                tree[name] = flat[name]
+            else:
+                node[parts[-1]] = flat[name]
+        return tree
+
+    def emit_parameters(self, depth, params):
+        """A parameter dictionary on one line if it fits, else as YAML under a `param` line."""
+        line = self.value(params)
+        if len(line) <= _INLINE_WIDTH:
+            self.emit(depth, f'param {line}')
+            return
+        self.emit(depth, f'param ({len(params)} values)')
+        tree = self.nest({name: self.yaml_value(v) for name, v in params.items()})
+        for relative_depth, text in self.yaml_lines(tree):
+            self.emit(depth + 1 + relative_depth, text)
+
+    @staticmethod
+    def flow_yaml(value):
+        """`value` as one line of flow-style YAML, never wrapped."""
+        return yaml.safe_dump([value], default_flow_style=True, width=float('inf'))[1:-2]
+
+    def yaml_lines(self, tree, depth=0):
+        """(depth, line) pairs of block YAML whose innermost mappings are one flow line each.
+
+        A mapping that holds another mapping, or that does not fit on one line,
+        opens a block; everything else is `key: <flow YAML>`. Nothing wraps, so
+        the lines are the same whatever the width of a value.
+        """
+        for key in sorted(tree):
+            value = tree[key]
+            inline = f'{self.flow_yaml(key)}: {self.flow_yaml(value)}'
+            nested = isinstance(value, dict) and value and (
+                any(isinstance(v, dict) for v in value.values()) or len(inline) > _INLINE_WIDTH)
+            if nested:
+                yield depth, f'{self.flow_yaml(key)}:'
+                yield from self.yaml_lines(value, depth + 1)
+            else:
+                yield depth, inline
 
     def subst(self, value):
         from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
@@ -333,7 +423,7 @@ class Walker:
         params = []
         for item in evaluate_parameters(self.ctx, node._Node__parameters or []):
             if isinstance(item, dict):
-                params.append(self.value(dict(item)))
+                params.append(dict(item))
             elif isinstance(item, ParameterFile):
                 params.append('FILE ' + self.static_file(item.evaluate(self.ctx)))
             else:
@@ -342,27 +432,37 @@ class Walker:
 
     @staticmethod
     def canonical_args(executable, arguments):
-        """Spawner arguments are argparse options: their order is irrelevant."""
+        """Spawner arguments are argparse options: sorted by option, except where order counts.
+
+        Different options are independent, so they are sorted. The values of
+        one repeated option are not: Humble appends every -p/--param-file and
+        loads them in order, a later file overriding an earlier one, so they
+        keep the order the launch gave them (a stable sort by option name,
+        with the two spellings of an option counted as one).
+        """
         if executable != 'spawner':
             return arguments
         names, options, i = [], [], 0
         while i < len(arguments):
             arg = arguments[i]
             if arg.startswith('-'):
-                # Humble's spawner flags that take no value; any other option
-                # takes the next argument, unless there is none to take.
-                valueless = arg in ('--inactive', '--stopped', '--load-only', '--activate-as-group',
-                                    '-u', '--unload-on-kill')
-                if valueless or i + 1 >= len(arguments) or arguments[i + 1].startswith('-'):
-                    options.append(arg)
+                # Any option but a valueless flag takes the next argument,
+                # unless there is none to take.
+                key = _SPAWNER_ALIASES.get(arg, arg)
+                if arg in _SPAWNER_VALUELESS or i + 1 >= len(arguments) or arguments[i + 1].startswith('-'):
+                    options.append((key, arg))
                     i += 1
                 else:
-                    options.append(f'{arg} {arguments[i + 1]}')
+                    options.append((key, f'{arg} {arguments[i + 1]}'))
                     i += 2
             else:
                 names.append(arg)
                 i += 1
-        return names + ['|'] + sorted(options)
+        return names + ['|'] + [text for _, text in sorted(options, key=lambda option: option[0])]
+
+    def node_label(self, package, executable, name, arguments):
+        args = self.canonical_args(executable, arguments)
+        return f'{package}/{executable}' + (f' name={name}' if name else '') + f' args={self.value(args[:6])}'
 
     def label(self, action):
         from launch.actions import ExecuteProcess
@@ -371,9 +471,7 @@ class Walker:
             return self.labels[id(action)]
         if isinstance(action, Node):
             package, executable, name, _, arguments, *_ = self.node_fields(action)
-            args = self.canonical_args(executable, arguments)
-            text = f'{package}/{executable}' + (f' name={name}' if name else '') + \
-                f' args={self.value(args[:6])}'
+            text = self.node_label(package, executable, name, arguments)
         elif isinstance(action, ExecuteProcess):
             cmd = [self.norm(self.subst(c)) for c in action.process_description.cmd]
             text = 'process ' + ' '.join(os.path.basename(c) for c in cmd[:2])
@@ -406,6 +504,8 @@ class Walker:
         elif isinstance(e, Node):
             package, executable, name, namespace, arguments, remaps, ros_args, params = self.node_fields(e)
             self.emit(depth, f'NODE {package}/{executable}{self.condition(e)}')
+            # The COMMAND lines its substitutions produced go under the node.
+            self.flush(depth + 1)
             self.emit(depth + 1, f'name={name!r} namespace={namespace!r}')
             self.emit(depth + 1, f'args={self.value(self.canonical_args(executable, arguments))}')
             if remaps:
@@ -413,15 +513,21 @@ class Walker:
             if ros_args:
                 self.emit(depth + 1, f'ros_args={ros_args}')
             for p in params:
-                self.emit(depth + 1, f'param {p}')
+                if isinstance(p, dict):
+                    self.emit_parameters(depth + 1, p)
+                else:
+                    self.emit(depth + 1, f'param {p}')
             self.emit(depth + 1, f'output={self.subst(e._ExecuteLocal__output)!r} '
                                  f'on_exit={type(e._ExecuteLocal__on_exit).__name__}')
-            self.label(e)
+            # Labelled from the fields above: evaluating them again would run
+            # the node's xacro commands a second time.
+            self.labels.setdefault(id(e), self.node_label(package, executable, name, arguments))
         elif isinstance(e, ExecuteProcess):
             cmd = [self.norm(self.subst(c)) for c in e.process_description.cmd]
             env = e.process_description.additional_env
             env = {self.subst(k): self.norm(self.subst(v)) for k, v in (env or [])} if env else None
             self.emit(depth, f'PROCESS{self.condition(e)} cmd={cmd}')
+            self.flush(depth + 1)
             self.emit(depth + 1, f'additional_env={env} output={self.subst(e._ExecuteLocal__output)!r} '
                                  f'on_exit={type(e._ExecuteLocal__on_exit).__name__}')
             self.label(e)
@@ -481,10 +587,11 @@ class Walker:
         location = self.subst(source._LaunchDescriptionSource__location)
         args = [(self.subst(k), self.subst(v)) for k, v in e.launch_arguments]
         self.emit(depth, f'INCLUDE{self.condition(e)} {self.norm(location)}')
+        self.flush(depth + 1)
         for k, v in args:
             self.emit(depth + 1, f'arg {k}={self.norm(v)!r}')
         cond = getattr(e, 'condition', None)
-        if not _BRINGUP_LAUNCH.search(location) or not (cond is None or cond.evaluate(self.ctx)):
+        if not _FOLLOWED_LAUNCH.search(location) or not (cond is None or cond.evaluate(self.ctx)):
             return
         try:
             included = source.get_launch_description(self.ctx)
@@ -534,6 +641,7 @@ class Walker:
         tlabel = self.label(target) if target is not None else None
         static = h._OnActionEventBase__actions_on_event
         self.emit(depth, f'ON {type(h).__name__} target=<{tlabel}>')
+        self.flush(depth + 1)
         if static:
             self.walk(static, depth + 1)
             return
@@ -578,8 +686,21 @@ class Walker:
                 raw = stream.read()
             aliases = bool(re.search(r'[&*]id\d+', raw))
             self.emit(0, f'RUNTIME_FILE {self.rt_label(full)} aliases={aliases}')
-            for line in self.factored_yaml(yaml.safe_load(raw)).splitlines():
-                self.emit(1, self.norm(line))
+            # Paths become tokens BEFORE the dump: the dump wraps long lines,
+            # and wrapping a machine path would make where a line breaks
+            # depend on how long this machine's install prefix is.
+            for line in self.factored_yaml(self.norm_data(yaml.safe_load(raw))).splitlines():
+                self.emit(1, line)
+
+    def norm_data(self, data):
+        """`data` with every string (keys too) normalized, for a dump that is the same anywhere."""
+        if isinstance(data, dict):
+            return {self.norm_data(k): self.norm_data(v) for k, v in data.items()}
+        if isinstance(data, (list, tuple)):
+            return [self.norm_data(v) for v in data]
+        if isinstance(data, str):
+            return self.norm(data)
+        return data
 
     @staticmethod
     def factored_yaml(data):
@@ -673,6 +794,30 @@ def _wrap_command(walker):
     return restore
 
 
+def _wrap_xacro(walker):
+    """Print every in-process xacro.process_file() call with its mappings.
+
+    Launch files that expand a xacro themselves, and MoveItConfigsBuilder,
+    call it rather than a Command substitution, so COMMAND lines miss them.
+    """
+    import xacro
+
+    real_process_file = xacro.process_file
+
+    def recording_process_file(input_file_name, **kwargs):
+        mappings = kwargs.get('mappings') or {}
+        walker.note(0, f'XACRO {walker.norm(str(input_file_name))!r} '
+                       f'mappings={walker.value({str(k): v for k, v in mappings.items()})}')
+        return real_process_file(input_file_name, **kwargs)
+
+    xacro.process_file = recording_process_file
+
+    def restore():
+        xacro.process_file = real_process_file
+
+    return restore
+
+
 def _wrap_isaac_check(walker, fake_dir):
     """Print every check_isaac_install() call; refuse a USD that only exists here."""
     import cho_bringup_common
@@ -718,6 +863,7 @@ def evaluate(package, launch_file, arguments, fake_dir=None, hidden_arguments=()
     environ_reference = dict(os.environ)
     restore_isaac_check = None
     restore_command = None
+    restore_xacro = None
     restore_logging = None
     try:
         ctx = LaunchContext()
@@ -727,6 +873,7 @@ def evaluate(package, launch_file, arguments, fake_dir=None, hidden_arguments=()
         walker = Walker(ctx, runtime_dir, PathNormalizer(fake_dir=fake_dir, runtime_dir=runtime_dir))
         restore_isaac_check = _wrap_isaac_check(walker, fake_dir)
         restore_command = _wrap_command(walker)
+        restore_xacro = _wrap_xacro(walker)
         restore_logging = _capture_launch_logging(walker)
         walker.emit(0, f'LAUNCH {package}/{launch_file} {[walker.norm(a) for a in arguments]}')
         path = os.path.join(get_package_share_directory(package), 'launch', launch_file)
@@ -756,6 +903,8 @@ def evaluate(package, launch_file, arguments, fake_dir=None, hidden_arguments=()
             restore_isaac_check()
         if restore_command:
             restore_command()
+        if restore_xacro:
+            restore_xacro()
         os.environ.clear()
         os.environ.update(environ_before)
         shutil.rmtree(runtime_dir, ignore_errors=True)

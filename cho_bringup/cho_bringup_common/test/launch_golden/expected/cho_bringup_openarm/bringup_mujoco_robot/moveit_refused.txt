@@ -16,6 +16,7 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['controller_name:=mov
   ARG hand default='true' choices=['true', 'false']
   ARG use_rviz default='false' choices=None
   NODE robot_state_publisher/robot_state_publisher
+    COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=mujoco', 'control_mode:=torque', 'mujoco_position_profile:=standard', 'mujoco_mit_prototype:=false', 'mujoco_mit_headless:=false', 'bimanual:=false', 'hand:=true']
     name=None namespace=None
     args=[]
     param {use_sim_time: True}
@@ -27,22 +28,21 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['controller_name:=mov
     param {use_sim_time: True}
     output='log' on_exit=NoneType
   OPAQUE setup_control_environment
-    COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=mujoco', 'control_mode:=torque', 'mujoco_position_profile:=standard', 'mujoco_mit_prototype:=false', 'mujoco_mit_headless:=false', 'bimanual:=false', 'hand:=true']
     ERROR RuntimeError: 'moveit' is not a ros2_control controller. Launch bringup_mujoco_moveit.launch.py instead.
 DESCRIPTION #1
   robot name='openarm'
-  joint openarm_joint1 revolute openarm_link0 -> openarm_link1
-  joint openarm_joint2 revolute openarm_link1 -> openarm_link2
-  joint openarm_joint3 revolute openarm_link2 -> openarm_link3
-  joint openarm_joint4 revolute openarm_link3 -> openarm_link4
-  joint openarm_joint5 revolute openarm_link4 -> openarm_link5
-  joint openarm_joint6 revolute openarm_link5 -> openarm_link6
-  joint openarm_joint7 revolute openarm_link6 -> openarm_link7
-  joint openarm_hand_joint fixed openarm_link7 -> openarm_hand
-  joint openarm_hand_tcp_joint fixed openarm_hand -> openarm_hand_tcp
-  joint openarm_finger_joint1 prismatic openarm_link7 -> openarm_right_finger
-  joint openarm_finger_joint2 prismatic openarm_link7 -> openarm_left_finger
-  joint openarm_base_joint fixed world -> openarm_link0
+  joint openarm_joint1 revolute openarm_link0 -> openarm_link1 [origin rpy='0 0 0' xyz='0.0 0.0 0.0625', axis xyz='0 0 1', limit effort='40' lower='-1.396263' upper='3.490659' velocity='16.754666']
+  joint openarm_joint2 revolute openarm_link1 -> openarm_link2 [origin rpy='0 0 0' xyz='-0.0301 0.0 0.06', axis xyz='-1 0 0', limit effort='40' lower='-1.745329' upper='1.745329' velocity='16.754666']
+  joint openarm_joint3 revolute openarm_link2 -> openarm_link3 [origin rpy='0 0 0' xyz='0.0301 0.0 0.06625', axis xyz='0 0 1', limit effort='27' lower='-1.570796' upper='1.570796' velocity='5.445426']
+  joint openarm_joint4 revolute openarm_link3 -> openarm_link4 [origin rpy='0 0 0' xyz='-0.0 0.0315 0.15375', axis xyz='0 1 0', limit effort='27' lower='0.0' upper='2.443461' velocity='5.445426']
+  joint openarm_joint5 revolute openarm_link4 -> openarm_link5 [origin rpy='0 0 0' xyz='0.0 -0.0315 0.0955', axis xyz='0 0 1', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_joint6 revolute openarm_link5 -> openarm_link6 [origin rpy='0 0 0' xyz='0.0375 0.0 0.1205', axis xyz='1 0 0', limit effort='7' lower='-0.785398' upper='0.785398' velocity='20.943946']
+  joint openarm_joint7 revolute openarm_link6 -> openarm_link7 [origin rpy='0 0 0' xyz='-0.0375 0.0 0.0', axis xyz='0 -1 0', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_hand_joint fixed openarm_link7 -> openarm_hand [origin rpy='0 0 0' xyz='0.0 0.0 0.1025']
+  joint openarm_hand_tcp_joint fixed openarm_hand -> openarm_hand_tcp [origin rpy='0 0 0' xyz='0 0 0.0835']
+  joint openarm_finger_joint1 prismatic openarm_link7 -> openarm_right_finger [origin rpy='0 0 0' xyz='0.0 -0.005 0.1025', axis xyz='0 -1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0']
+  joint openarm_finger_joint2 prismatic openarm_link7 -> openarm_left_finger [origin rpy='0 0 0' xyz='0.0 0.005 0.1025', axis xyz='0 1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0', mimic joint='openarm_finger_joint1']
+  joint openarm_base_joint fixed world -> openarm_link0 [origin rpy='0 0 0' xyz='0 0 0']
   ros2_control name='OpenArmHardwareInterface' type='system'
     hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_openarm>/xml/openarm_v10/scene_torque.xml]
     joint name='openarm_joint1' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']

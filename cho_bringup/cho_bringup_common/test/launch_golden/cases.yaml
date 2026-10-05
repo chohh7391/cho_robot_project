@@ -22,17 +22,17 @@
 defaults:
   - isaac_sim_path:=$FAKE/isaacsim
 
-# Why a bringup package may be absent. CI builds only what installs from
-# binary dependencies; see .github/workflows/ci.yml.
+# Why a bringup package may be absent. CI builds all four and requires them
+# (CHO_LAUNCH_GOLDEN_REQUIRE): their hardware and Franka source-only exec_depends
+# are skipped there and franka_gripper / franka_ign_ros2_control are empty
+# stand-ins, since a launch only looks them up; see .github/workflows/ci.yml.
 not_installed:
   cho_bringup_franka: >-
-    not built in CI - its exec_depends franka_gripper, franka_hardware,
-    franka_ign_ros2_control and franka_robot_state_broadcaster come from the
-    extern/franka_ros2 source build, which has no Humble debs
+    not built in this workspace - build it (its franka_ros2 exec_depends are not
+    needed to evaluate its launch files)
   cho_bringup_openarm: >-
-    not built in CI - its exec_depends cho_hardware_openarm_mit_mujoco and
-    cho_hardware_openarm_mit_real need extern/mujoco_ros2_control and
-    extern/openarm_can built from source
+    not built in this workspace - build it (its hardware exec_depends are not
+    needed to evaluate its launch files)
 
 cases:
   cho_bringup_franka:
@@ -42,6 +42,7 @@ cases:
       vla: [vla:=true]
       vla_velocity: [vla:=true, control_mode:=velocity]
       bare_no_rviz: [load_gripper:=false, load_ft_sensor:=false, launch_rviz:=false]
+      no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
                           controller_name:=joint_space_position_controller]
       mode_mismatch: [control_mode:=position]
@@ -63,6 +64,8 @@ cases:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
       no_gripper: [load_gripper:=false]
+      no_gripper_link8: [load_gripper:=false, ee_name:=fr3_link8]
+      no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       vla: [vla:=true]
       mode_mismatch: [control_mode:=position]
     bringup_isaac_robot.launch.py:
@@ -102,6 +105,8 @@ cases:
       unknown_controller: [robot_usd:=$FAKE/usd/robot/robot.usda, controller_name:=bogus]
       no_isaac: [robot_usd:=$FAKE/usd/robot/robot.usda, isaac_sim_path:=$FAKE/no_isaacsim]
       gate_failure_shutdown: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=true]
+      # Refused before the runtime parameter file is written, so none is left.
+      bad_gate_bool: [robot_usd:=$FAKE/usd/robot/robot.usda, shutdown_on_gate_failure:=maybe]
 
   cho_bringup_fr5:
     bringup_gz_robot.launch.py:

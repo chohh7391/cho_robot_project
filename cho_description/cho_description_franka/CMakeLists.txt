@@ -1,4 +1,5 @@
 #  Copyright (c) 2023 Franka Robotics GmbH
+#  Copyright 2026 Hyunho Cho
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -11,6 +12,9 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+#
+#  Derived from franka_description (https://github.com/frankaemika/franka_description);
+#  see NOTICE.
 
 cmake_minimum_required(VERSION 3.5)
 project(cho_description_franka)
@@ -19,6 +23,9 @@ find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  # flake8 with its plugins' rules pinned, so a machine with the ROS flake8
+  # plugins installed and one without agree; see .flake8.
+  set(ament_cmake_flake8_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/.flake8")
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_pytest REQUIRED)

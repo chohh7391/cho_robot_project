@@ -1,0 +1,10 @@
+LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['load_gripper:=false', 'ee_name:=fr3_hand_tcp']
+  ARG robot_config_file default='<share:cho_bringup_franka>/config/real/franka.config.yaml' choices=None
+  ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
+  ARG controller_name default='operational_space_controller' choices=None
+  ARG load_gripper default='config' choices=['true', 'false', 'config']
+  ARG vla default='false' choices=None
+  ARG bringup_type default='real' choices=None
+  ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+  OPAQUE generate_robot_nodes
+    ERROR RuntimeError: ee_name:=fr3_hand_tcp needs the Franka hand, but this launch loads no hand (load_gripper is false), so the description has no 'fr3_hand_tcp'. Use ee_name:=fr3_link8, or leave ee_name empty to get it automatically.

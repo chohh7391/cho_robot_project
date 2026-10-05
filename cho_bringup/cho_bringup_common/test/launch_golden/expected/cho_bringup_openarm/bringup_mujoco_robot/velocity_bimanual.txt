@@ -16,6 +16,7 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['control_mode:=veloci
   ARG hand default='true' choices=['true', 'false']
   ARG use_rviz default='false' choices=None
   NODE robot_state_publisher/robot_state_publisher
+    COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=mujoco', 'control_mode:=velocity', 'mujoco_position_profile:=standard', 'mujoco_mit_prototype:=false', 'mujoco_mit_headless:=false', 'bimanual:=true', 'hand:=true']
     name=None namespace=None
     args=[]
     param {use_sim_time: True}
@@ -27,7 +28,6 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['control_mode:=veloci
     param {use_sim_time: True}
     output='log' on_exit=NoneType
   OPAQUE setup_control_environment
-    COMMAND ['xacro', '<share:cho_description_openarm>/robots/openarm_v10/openarm_v10.urdf.xacro', 'hardware:=mujoco', 'control_mode:=velocity', 'mujoco_position_profile:=standard', 'mujoco_mit_prototype:=false', 'mujoco_mit_headless:=false', 'bimanual:=true', 'hand:=true']
     NODE mujoco_ros2_control/ros2_control_node
       name=None namespace=None
       args=[]
@@ -57,31 +57,31 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['control_mode:=veloci
       OPAQUE cleanup (not run) closure=['<RT:cho_openarm_runtime_params_#0>']
 DESCRIPTION #1
   robot name='openarm'
-  joint openarm_body_world_joint fixed world -> openarm_body_link0
-  joint openarm_left_openarm_body_link0_joint fixed openarm_body_link0 -> openarm_left_link0
-  joint openarm_left_joint1 revolute openarm_left_link0 -> openarm_left_link1
-  joint openarm_left_joint2 revolute openarm_left_link1 -> openarm_left_link2
-  joint openarm_left_joint3 revolute openarm_left_link2 -> openarm_left_link3
-  joint openarm_left_joint4 revolute openarm_left_link3 -> openarm_left_link4
-  joint openarm_left_joint5 revolute openarm_left_link4 -> openarm_left_link5
-  joint openarm_left_joint6 revolute openarm_left_link5 -> openarm_left_link6
-  joint openarm_left_joint7 revolute openarm_left_link6 -> openarm_left_link7
-  joint openarm_right_openarm_body_link0_joint fixed openarm_body_link0 -> openarm_right_link0
-  joint openarm_right_joint1 revolute openarm_right_link0 -> openarm_right_link1
-  joint openarm_right_joint2 revolute openarm_right_link1 -> openarm_right_link2
-  joint openarm_right_joint3 revolute openarm_right_link2 -> openarm_right_link3
-  joint openarm_right_joint4 revolute openarm_right_link3 -> openarm_right_link4
-  joint openarm_right_joint5 revolute openarm_right_link4 -> openarm_right_link5
-  joint openarm_right_joint6 revolute openarm_right_link5 -> openarm_right_link6
-  joint openarm_right_joint7 revolute openarm_right_link6 -> openarm_right_link7
-  joint openarm_left_hand_joint fixed openarm_left_link7 -> openarm_left_hand
-  joint openarm_left_hand_tcp_joint fixed openarm_left_hand -> openarm_left_hand_tcp
-  joint openarm_left_finger_joint1 prismatic openarm_left_link7 -> openarm_left_right_finger
-  joint openarm_left_finger_joint2 prismatic openarm_left_link7 -> openarm_left_left_finger
-  joint openarm_right_hand_joint fixed openarm_right_link7 -> openarm_right_hand
-  joint openarm_right_hand_tcp_joint fixed openarm_right_hand -> openarm_right_hand_tcp
-  joint openarm_right_finger_joint1 prismatic openarm_right_link7 -> openarm_right_right_finger
-  joint openarm_right_finger_joint2 prismatic openarm_right_link7 -> openarm_right_left_finger
+  joint openarm_body_world_joint fixed world -> openarm_body_link0 [origin rpy='0 0 0' xyz='0 0 0']
+  joint openarm_left_openarm_body_link0_joint fixed openarm_body_link0 -> openarm_left_link0 [origin rpy='-1.5708 0 0' xyz='0.0 0.031 0.698']
+  joint openarm_left_joint1 revolute openarm_left_link0 -> openarm_left_link1 [origin rpy='0 0 0' xyz='0.0 0.0 0.0625', axis xyz='0 0 1', limit effort='40' lower='-3.490659' upper='1.3962629999999998' velocity='16.754666']
+  joint openarm_left_joint2 revolute openarm_left_link1 -> openarm_left_link2 [origin rpy='-1.57079632679 0 0' xyz='-0.0301 0.0 0.06', axis xyz='-1 0 0', limit effort='40' lower='-3.3161253267948965' upper='0.17453267320510335' velocity='16.754666']
+  joint openarm_left_joint3 revolute openarm_left_link2 -> openarm_left_link3 [origin rpy='0 0 0' xyz='0.0301 0.0 0.06625', axis xyz='0 0 1', limit effort='27' lower='-1.570796' upper='1.570796' velocity='5.445426']
+  joint openarm_left_joint4 revolute openarm_left_link3 -> openarm_left_link4 [origin rpy='0 0 0' xyz='-0.0 0.0315 0.15375', axis xyz='0 1 0', limit effort='27' lower='0.0' upper='2.443461' velocity='5.445426']
+  joint openarm_left_joint5 revolute openarm_left_link4 -> openarm_left_link5 [origin rpy='0 0 0' xyz='0.0 -0.0315 0.0955', axis xyz='0 0 1', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_left_joint6 revolute openarm_left_link5 -> openarm_left_link6 [origin rpy='0 0 0' xyz='0.0375 0.0 0.1205', axis xyz='1 0 0', limit effort='7' lower='-0.785398' upper='0.785398' velocity='20.943946']
+  joint openarm_left_joint7 revolute openarm_left_link6 -> openarm_left_link7 [origin rpy='0 0 0' xyz='-0.0375 0.0 0.0', axis xyz='0 -1 0', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_right_openarm_body_link0_joint fixed openarm_body_link0 -> openarm_right_link0 [origin rpy='1.5708 0 0' xyz='0.0 -0.031 0.698']
+  joint openarm_right_joint1 revolute openarm_right_link0 -> openarm_right_link1 [origin rpy='0 0 0' xyz='0.0 0.0 0.0625', axis xyz='0 0 1', limit effort='40' lower='-1.396263' upper='3.490659' velocity='16.754666']
+  joint openarm_right_joint2 revolute openarm_right_link1 -> openarm_right_link2 [origin rpy='1.57079632679 0 0' xyz='-0.0301 0.0 0.06', axis xyz='-1 0 0', limit effort='40' lower='-0.17453267320510335' upper='3.3161253267948965' velocity='16.754666']
+  joint openarm_right_joint3 revolute openarm_right_link2 -> openarm_right_link3 [origin rpy='0 0 0' xyz='0.0301 0.0 0.06625', axis xyz='0 0 1', limit effort='27' lower='-1.570796' upper='1.570796' velocity='5.445426']
+  joint openarm_right_joint4 revolute openarm_right_link3 -> openarm_right_link4 [origin rpy='0 0 0' xyz='-0.0 0.0315 0.15375', axis xyz='0 1 0', limit effort='27' lower='0.0' upper='2.443461' velocity='5.445426']
+  joint openarm_right_joint5 revolute openarm_right_link4 -> openarm_right_link5 [origin rpy='0 0 0' xyz='0.0 -0.0315 0.0955', axis xyz='0 0 1', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_right_joint6 revolute openarm_right_link5 -> openarm_right_link6 [origin rpy='0 0 0' xyz='0.0375 0.0 0.1205', axis xyz='1 0 0', limit effort='7' lower='-0.785398' upper='0.785398' velocity='20.943946']
+  joint openarm_right_joint7 revolute openarm_right_link6 -> openarm_right_link7 [origin rpy='0 0 0' xyz='-0.0375 0.0 0.0', axis xyz='0 1 0', limit effort='7' lower='-1.570796' upper='1.570796' velocity='20.943946']
+  joint openarm_left_hand_joint fixed openarm_left_link7 -> openarm_left_hand [origin rpy='0 0 0' xyz='0.0 0.0 0.1025']
+  joint openarm_left_hand_tcp_joint fixed openarm_left_hand -> openarm_left_hand_tcp [origin rpy='0 0 0' xyz='0 0 0.0835']
+  joint openarm_left_finger_joint1 prismatic openarm_left_link7 -> openarm_left_right_finger [origin rpy='0 0 0' xyz='0.0 -0.005 0.1025', axis xyz='0 -1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0']
+  joint openarm_left_finger_joint2 prismatic openarm_left_link7 -> openarm_left_left_finger [origin rpy='0 0 0' xyz='0.0 0.005 0.1025', axis xyz='0 1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0', mimic joint='openarm_left_finger_joint1']
+  joint openarm_right_hand_joint fixed openarm_right_link7 -> openarm_right_hand [origin rpy='0 0 0' xyz='0.0 0.0 0.1025']
+  joint openarm_right_hand_tcp_joint fixed openarm_right_hand -> openarm_right_hand_tcp [origin rpy='0 0 0' xyz='0 0 0.0835']
+  joint openarm_right_finger_joint1 prismatic openarm_right_link7 -> openarm_right_right_finger [origin rpy='0 0 0' xyz='0.0 -0.005 0.1025', axis xyz='0 -1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0']
+  joint openarm_right_finger_joint2 prismatic openarm_right_link7 -> openarm_right_left_finger [origin rpy='0 0 0' xyz='0.0 0.005 0.1025', axis xyz='0 1 0', limit effort='333' lower='0.0' upper='0.044' velocity='10.0', mimic joint='openarm_right_finger_joint1']
   ros2_control name='OpenArmHardwareInterface' type='system'
     hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_openarm>/xml/openarm_v10_bimanual/scene_velocity.xml]
     joint name='openarm_left_joint1' [command_interface name='velocity', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']

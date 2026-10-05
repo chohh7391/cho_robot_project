@@ -28,6 +28,7 @@ LAUNCH cho_bringup_fr5/bringup_isaac_moveit.launch.py ['robot_usd:=<FAKE>/usd/ro
       ARG device default='cpu' choices=['cpu', 'cuda']
       ARG shutdown_on_gate_failure default='false' choices=None
       OPAQUE setup_control_environment
+        XACRO '<share:cho_description_fr5>/urdf/fr5.urdf.xacro' mappings={hardware: 'isaac'}
         ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
           convert_args=['--urdf', '<share:cho_description_fr5>/urdf/fr5.urdf.xacro', '--usd-path', '<FAKE>/usd', '--ros-package', 'cho_description_fr5:<share:cho_description_fr5>', '--require-link', 'wrist3_link']
         PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_fr5>/config/isaac/robot_profile.json', '--control-mode', 'position', '--physics-rate', '250', '--device', 'cpu']
@@ -84,16 +85,167 @@ LAUNCH cho_bringup_fr5/bringup_isaac_moveit.launch.py ['robot_usd:=<FAKE>/usd/ro
     arg controller_ready_timeout='180.0'
     arg activate_controller_after_scene='joint_trajectory_controller'
     arg deactivate_controller_after_scene='joint_space_position_controller'
+      ARG use_sim_time default='false' choices=None
+      ARG launch_rviz default='true' choices=None
+      ARG publish_static_scene default='true' choices=None
+      ARG gripper default='none' choices=None
+      ARG floor_frame default='world' choices=None
+      ARG floor_size default='4.0,4.0,0.10' choices=None
+      ARG floor_position default='0.0,0.0,-0.05' choices=None
+      ARG scene_max_attempts default='10' choices=None
+      ARG scene_ready_timeout default='210.0' choices=None
+      ARG controller_ready_timeout default='90.0' choices=None
+      ARG switch_response_timeout default='15.0' choices=None
+      ARG max_velocity_scaling_factor default='0.25' choices=None
+      ARG max_acceleration_scaling_factor default='0.25' choices=None
+      ARG activate_controller_after_scene default='joint_trajectory_controller' choices=None
+      ARG deactivate_controller_after_scene default='joint_space_position_controller' choices=None
+      OPAQUE validate_timeouts
+      INCLUDE <share:cho_moveit_fr5>/launch/move_group.launch.py
+        arg use_sim_time='true'
+        arg gripper='none'
+          ARG use_sim_time default='false' choices=None
+          ARG gripper default='none' choices=None
+          OPAQUE move_group_node
+            XACRO '<share:cho_description_fr5>/urdf/fr5.urdf.xacro' mappings={gripper: 'none', hardware: 'mock'}
+            XACRO '<share:cho_moveit_fr5>/config/fr5.srdf' mappings={gripper: 'none'}
+            NODE moveit_ros_move_group/move_group
+              name=None namespace=None
+              args=[]
+              param (64 values)
+                default_planning_pipeline: ompl
+                moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+                moveit_manage_controllers: true
+                moveit_simple_controller_manager:
+                  controller_names: [joint_trajectory_controller]
+                  joint_trajectory_controller: {action_ns: follow_joint_trajectory, default: true, joints: [j1, j2, j3, j4, j5, j6], type: FollowJointTrajectory}
+                ompl:
+                  fr5_arm: {default_planner_config: RRTConnectkConfigDefault, longest_valid_segment_fraction: 0.001, planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault, PRMkConfigDefault]}
+                  planner_configs:
+                    PRMkConfigDefault: {max_nearest_neighbors: 10, type: 'geometric::PRM'}
+                    RRTConnectkConfigDefault: {range: 0.0, type: 'geometric::RRTConnect'}
+                    RRTstarkConfigDefault: {delay_collision_checking: 1, goal_bias: 0.05, range: 0.0, type: 'geometric::RRTstar'}
+                  planning_plugin: ompl_interface/OMPLPlanner
+                  request_adapters: default_planner_request_adapters/AddTimeOptimalParameterization default_planner_request_adapters/ResolveConstraintFrames default_planner_request_adapters/FixWorkspaceBounds default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision default_planner_request_adapters/FixStartStatePathConstraints
+                  start_state_max_bounds_error: 0.1
+                planning_pipelines: [ompl]
+                publish_geometry_updates: true
+                publish_planning_scene: true
+                publish_robot_description: false
+                publish_robot_description_semantic: false
+                publish_state_updates: true
+                publish_transforms_updates: true
+                robot_description: '<description #2 fr5>'
+                robot_description_kinematics:
+                  fr5_arm: {kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin, kinematics_solver_attempts: 3, kinematics_solver_search_resolution: 0.005, kinematics_solver_timeout: 0.05}
+                robot_description_planning:
+                  default_acceleration_scaling_factor: 0.1
+                  default_velocity_scaling_factor: 0.1
+                  joint_limits:
+                    j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                    j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                    j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                    j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                    j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                    j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                robot_description_semantic: '<description #3 fr5>'
+                trajectory_execution: {allowed_execution_duration_scaling: 1.2, allowed_goal_duration_margin: 0.5, allowed_start_tolerance: 0.01}
+              param {allow_trajectory_execution: True, moveit_manage_controllers: False, publish_robot_description: True, publish_robot_description_semantic: True, use_sim_time: True}
+              output='screen' on_exit=NoneType
+      NODE cho_moveit_common/moveit_action_bridge.py
+        name='fr5_moveit_action_bridge' namespace=None
+        args=[]
+        param (11 values)
+          ee_link: wrist3_link
+          joint_names: [j1, j2, j3, j4, j5, j6]
+          max_acceleration_scaling_factor: 0.25
+          max_velocity_scaling_factor: 0.25
+          planning_group: fr5_arm
+          planning_pipeline: ompl
+          ready_service: /cho_moveit/fr5/static_scene_ready
+          robot_type: fr5
+          trajectory_controller: joint_trajectory_controller
+          use_sim_time: true
+          world_frame: world
+        output='screen' on_exit=NoneType
+      NODE cho_moveit_common/publish_static_scene.py [cond=True]
+        name='fr5_static_planning_scene' namespace=None
+        args=[]
+        param (10 values)
+          activate_controller: joint_trajectory_controller
+          controller_ready_timeout: 180.0
+          deactivate_controller: joint_space_position_controller
+          frame_id: world
+          max_attempts: 10
+          position_csv: '0.0,0.0,-0.05'
+          ready_service: /cho_moveit/fr5/static_scene_ready
+          size_csv: '4.0,4.0,0.10'
+          switch_response_timeout: 15.0
+          use_sim_time: true
+        output='screen' on_exit=NoneType
+      NODE cho_moveit_common/wait_for_static_scene.py [cond=True]
+        name='wait_for_fr5_static_planning_scene' namespace=None
+        args=[]
+        param {ready_service: '/cho_moveit/fr5/static_scene_ready', timeout: 300.0}
+        output='screen' on_exit=NoneType
+      ON OnProcessExit target=<cho_moveit_common/wait_for_static_scene.py name=wait_for_fr5_static_planning_scene args=[]>
+        [rc=0] ->
+          INCLUDE <share:cho_moveit_fr5>/launch/moveit_rviz.launch.py
+            arg use_sim_time='true'
+            arg gripper='none'
+              ARG use_sim_time default='false' choices=None
+              ARG gripper default='none' choices=None
+              OPAQUE rviz_node
+                XACRO '<share:cho_description_fr5>/urdf/fr5.urdf.xacro' mappings={gripper: 'none', hardware: 'mock'}
+                XACRO '<share:cho_moveit_fr5>/config/fr5.srdf' mappings={gripper: 'none'}
+                NODE rviz2/rviz2
+                  name='moveit_rviz' namespace=None
+                  args=['-d', '<share:cho_moveit_fr5>/rviz/moveit.rviz']
+                  param {robot_description: <description #2 fr5>}
+                  param {robot_description_semantic: <description #3 fr5>}
+                  param (4 values)
+                    robot_description_kinematics:
+                      fr5_arm: {kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin, kinematics_solver_attempts: 3, kinematics_solver_search_resolution: 0.005, kinematics_solver_timeout: 0.05}
+                  param (16 values)
+                    default_planning_pipeline: ompl
+                    ompl:
+                      fr5_arm: {default_planner_config: RRTConnectkConfigDefault, longest_valid_segment_fraction: 0.001, planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault, PRMkConfigDefault]}
+                      planner_configs:
+                        PRMkConfigDefault: {max_nearest_neighbors: 10, type: 'geometric::PRM'}
+                        RRTConnectkConfigDefault: {range: 0.0, type: 'geometric::RRTConnect'}
+                        RRTstarkConfigDefault: {delay_collision_checking: 1, goal_bias: 0.05, range: 0.0, type: 'geometric::RRTstar'}
+                      planning_plugin: ompl_interface/OMPLPlanner
+                      request_adapters: default_planner_request_adapters/AddTimeOptimalParameterization default_planner_request_adapters/ResolveConstraintFrames default_planner_request_adapters/FixWorkspaceBounds default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision default_planner_request_adapters/FixStartStatePathConstraints
+                      start_state_max_bounds_error: 0.1
+                    planning_pipelines: [ompl]
+                  param (26 values)
+                    robot_description_planning:
+                      default_acceleration_scaling_factor: 0.1
+                      default_velocity_scaling_factor: 0.1
+                      joint_limits:
+                        j1: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                        j2: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                        j3: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.575}
+                        j4: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                        j5: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                        j6: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 0.7, max_velocity: 1.6}
+                  param {use_sim_time: True}
+                  output='screen' on_exit=NoneType
+        [rc=1] ->
+          EMIT Shutdown
+      INCLUDE [cond=False] <share:cho_moveit_fr5>/launch/moveit_rviz.launch.py
+        arg use_sim_time='true'
+        arg gripper='none'
 DESCRIPTION #1
   robot name='fr5'
-  joint base_joint fixed world -> base_link
-  joint j1 revolute base_link -> shoulder_link
-  joint j2 revolute shoulder_link -> upperarm_link
-  joint j3 revolute upperarm_link -> forearm_link
-  joint j4 revolute forearm_link -> wrist1_link
-  joint j5 revolute wrist1_link -> wrist2_link
-  joint j6 revolute wrist2_link -> wrist3_link
-  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint j1 revolute base_link -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150' lower='-3.0543' upper='3.0543' velocity='3.15', dynamics damping='0' friction='0']
+  joint j2 revolute shoulder_link -> upperarm_link [origin rpy='1.5708 0 0' xyz='0 0 0.152', axis xyz='0 0 1', limit effort='150' lower='-4.6251' upper='1.4835' velocity='3.15', dynamics damping='0' friction='0']
+  joint j3 revolute upperarm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150' lower='-2.8274' upper='2.8274' velocity='3.15', dynamics damping='0' friction='0']
+  joint j4 revolute forearm_link -> wrist1_link [origin rpy='0 0 0' xyz='-0.39501 0 0', axis xyz='0 0 1', limit effort='28' lower='-4.6251' upper='1.4835' velocity='3.2', dynamics damping='0' friction='0']
+  joint j5 revolute wrist1_link -> wrist2_link [origin rpy='1.5708 0 0' xyz='0 0 0.1021', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint j6 revolute wrist2_link -> wrist3_link [origin rpy='-1.5708 0 0' xyz='0 0 0.102', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp [origin rpy='0 0 0' xyz='0 0 0.100']
   ros2_control name='fr5_system' type='system'
     hardware
       plugin: topic_based_ros2_control/TopicBasedSystem
@@ -106,6 +258,52 @@ DESCRIPTION #1
     joint name='j4' [command_interface name='position', state_interface name='position' [param name='initial_value': -1.7125], state_interface name='velocity', state_interface name='effort']
     joint name='j5' [command_interface name='position', state_interface name='position' [param name='initial_value': 1.6049], state_interface name='velocity', state_interface name='effort']
     joint name='j6' [command_interface name='position', state_interface name='position' [param name='initial_value': 0.0798], state_interface name='velocity', state_interface name='effort']
+DESCRIPTION #2
+  robot name='fr5'
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint j1 revolute base_link -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150' lower='-3.0543' upper='3.0543' velocity='3.15', dynamics damping='0' friction='0']
+  joint j2 revolute shoulder_link -> upperarm_link [origin rpy='1.5708 0 0' xyz='0 0 0.152', axis xyz='0 0 1', limit effort='150' lower='-4.6251' upper='1.4835' velocity='3.15', dynamics damping='0' friction='0']
+  joint j3 revolute upperarm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150' lower='-2.8274' upper='2.8274' velocity='3.15', dynamics damping='0' friction='0']
+  joint j4 revolute forearm_link -> wrist1_link [origin rpy='0 0 0' xyz='-0.39501 0 0', axis xyz='0 0 1', limit effort='28' lower='-4.6251' upper='1.4835' velocity='3.2', dynamics damping='0' friction='0']
+  joint j5 revolute wrist1_link -> wrist2_link [origin rpy='1.5708 0 0' xyz='0 0 0.1021', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint j6 revolute wrist2_link -> wrist3_link [origin rpy='-1.5708 0 0' xyz='0 0 0.102', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp [origin rpy='0 0 0' xyz='0 0 0.100']
+  ros2_control name='fr5_system' type='system'
+    hardware [plugin: mock_components/GenericSystem, param name='state_following_offset': 0.0, param name='calculate_dynamics': true]
+    joint name='j1' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -0.0836], state_interface name='velocity']
+    joint name='j2' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -1.1209], state_interface name='velocity']
+    joint name='j3' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -2.0723], state_interface name='velocity']
+    joint name='j4' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': -1.7125], state_interface name='velocity']
+    joint name='j5' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': 1.6049], state_interface name='velocity']
+    joint name='j6' [command_interface name='position', command_interface name='velocity', state_interface name='position' [param name='initial_value': 0.0798], state_interface name='velocity']
+DESCRIPTION #3
+  robot name='fr5'
+  group name='fr5_arm' [chain base_link='base_link' tip_link='wrist3_link']
+  group_state group='fr5_arm' name='zero'
+    joint name='j1' value='0.0'
+    joint name='j2' value='0.0'
+    joint name='j3' value='0.0'
+    joint name='j4' value='0.0'
+    joint name='j5' value='0.0'
+    joint name='j6' value='0.0'
+  group_state group='fr5_arm' name='home1'
+    joint name='j1' value='-0.0836'
+    joint name='j2' value='-1.1209'
+    joint name='j3' value='-2.0723'
+    joint name='j4' value='-1.7125'
+    joint name='j5' value='1.6049'
+    joint name='j6' value='0.0798'
+  disable_collisions link1='base_link' link2='shoulder_link' reason='Adjacent'
+  disable_collisions link1='base_link' link2='upperarm_link' reason='Never'
+  disable_collisions link1='forearm_link' link2='shoulder_link' reason='Never'
+  disable_collisions link1='forearm_link' link2='upperarm_link' reason='Adjacent'
+  disable_collisions link1='forearm_link' link2='wrist1_link' reason='Adjacent'
+  disable_collisions link1='shoulder_link' link2='upperarm_link' reason='Adjacent'
+  disable_collisions link1='shoulder_link' link2='wrist1_link' reason='Never'
+  disable_collisions link1='upperarm_link' link2='wrist1_link' reason='Never'
+  disable_collisions link1='wrist1_link' link2='wrist2_link' reason='Adjacent'
+  disable_collisions link1='wrist1_link' link2='wrist3_link' reason='Never'
+  disable_collisions link1='wrist2_link' link2='wrist3_link' reason='Adjacent'
 RUNTIME_FILE <RT:cho_fr5_isaac_runtime_params_#0> aliases=False
   /**:
     joint_space_position_controller:

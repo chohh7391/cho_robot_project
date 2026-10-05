@@ -101,9 +101,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ee_name',
-            default_value='fr3_hand_tcp',
-            description='Name of End-Effector',
-            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+            default_value='',
+            description="Controllers' end-effector frame; empty means fr3_hand_tcp with "
+                        'the hand and fr3_link8 without it',
+            choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
         ),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('load_moveit_controller', default_value='false'),
@@ -165,7 +166,8 @@ def generate_launch_description():
 
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
-        ee_name = LaunchConfiguration('ee_name').perform(context)
+        ee_name = launch_utils.resolve_ee_name(
+            LaunchConfiguration('ee_name').perform(context), as_bool(load_gripper_str))
         if ctrl_name == 'moveit':
             raise RuntimeError(
                 "'moveit' is not a ros2_control controller. Launch "

@@ -29,12 +29,20 @@ jobs:
         run: |
           set -eo pipefail
           apt-get update
+          # The flake8 plugins come with them: a ROS 2 development machine has
+          # them (the Humble source-install instructions list them), and each
+          # package pins which of their rules it follows, so this step and a
+          # local `colcon test` give the same verdict.
           apt-get install -y --no-install-recommends \
             python3-pytest \
             ros-humble-ament-flake8 \
             ros-humble-ament-pep257 \
             ros-humble-ament-copyright \
-            ros-humble-ament-xmllint
+            ros-humble-ament-xmllint \
+            python3-flake8-blind-except python3-flake8-builtins \
+            python3-flake8-class-newline python3-flake8-comprehensions \
+            python3-flake8-deprecated python3-flake8-docstrings \
+            python3-flake8-import-order python3-flake8-quotes
 
       # Covers every package, including the ones ci.yml cannot build yet.
       - name: package.xml is well-formed
@@ -68,7 +76,9 @@ jobs:
 
       # Every C++, Python and CMake source outside extern/ carries a copyright
       # and license header ament_copyright recognises; NOTICE ("File headers")
-      # says which.
+      # says which. setup.py is named explicitly (walking a directory,
+      # ament_copyright skips the one beside a package.xml), and CMakeLists.txt,
+      # which it never selects, is checked with its parser by the tools/ script.
       - name: Copyright headers
         shell: bash
         run: |
@@ -77,5 +87,6 @@ jobs:
           find . -type f \( -name '*.py' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \
                              -o -name '*.c' -o -name '*.cc' -o -name '*.cxx' -o -name '*.hh' \
                              -o -name '*.hxx' -o -name '*.cmake' \) \
-            -not -path './extern/*' -not -path './.git/*' -not -name setup.py -print0 \
+            -not -path './extern/*' -not -path './.git/*' -print0 \
             | xargs -0 ament_copyright
+          python3 tools/ci/check_copyright_headers.py

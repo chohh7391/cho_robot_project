@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Franka Robotics GmbH
+# Copyright 2026 Hyunho Cho
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Derived from franka_bringup's utils/launch_utils.py
+# (https://github.com/frankaemika/franka_ros2); see NOTICE.
 
 """
 Franka-specific launch helpers: controller names and the payload-based params.
@@ -67,6 +71,30 @@ CONTROLLERS_BY_MODE = {
 }
 
 VLA_CONTROLLER = 'vla_controller'
+
+
+# What the controllers' ee_name may be. '' picks the TCP when the hand is in the
+# description and fr3_link8 otherwise.
+EE_NAME_CHOICES = ['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+_HAND_FRAMES = ('fr3_hand', 'fr3_hand_tcp')
+
+
+def resolve_ee_name(requested, hand_in_description):
+    """
+    Return the controllers' ee_name for this launch.
+
+    Without the hand the description ends at fr3_link8, and a controller handed
+    a hand frame fails to configure ("End-effector frame ... does not exist")
+    long after the launch looked fine, so that combination is refused here.
+    """
+    if requested == '':
+        return 'fr3_hand_tcp' if hand_in_description else 'fr3_link8'
+    if requested in _HAND_FRAMES and not hand_in_description:
+        raise RuntimeError(
+            f"ee_name:={requested} needs the Franka hand, but this launch loads no hand "
+            f"(load_gripper is false), so the description has no '{requested}'. Use "
+            "ee_name:=fr3_link8, or leave ee_name empty to get it automatically.")
+    return requested
 
 
 def always_active_controllers(load_gripper):

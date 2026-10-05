@@ -38,12 +38,14 @@ LAUNCH cho_bringup_ur/bringup_gz_moveit.launch.py []
         ARG controller_manager_timeout default='30' choices=None
         OPAQUE launch_setup
           NODE robot_state_publisher/robot_state_publisher
+            COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
             name=None namespace=None
             args=[]
             param {use_sim_time: True}
             param {robot_description: <description #1 ur>}
             output='both' on_exit=NoneType
           NODE ros_gz_sim/create
+            COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
             name=None namespace=None
             args=['-string', <description #1 ur>, '-name', 'ur', '-allow_renaming', 'true']
             output='screen' on_exit=NoneType
@@ -86,25 +88,160 @@ LAUNCH cho_bringup_ur/bringup_gz_moveit.launch.py []
     arg floor_position='0.0,0.0,-0.05'
     arg scene_ready_timeout='210.0'
     arg controller_ready_timeout='90.0'
-  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
-  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
-  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
-  COMMAND ['/opt/ros/humble/bin/xacro', '<share:cho_description_ur>/urdf/ur.urdf.xacro', 'safety_limits:=true', 'safety_pos_margin:=0.15', 'safety_k_position:=20', 'name:=ur', 'ur_type:=ur5e', 'tf_prefix:=', 'sim_ignition:=true', 'simulation_controllers:=<share:cho_bringup_ur>/config/gz/controllers.yaml', 'load_gripper:=false']
+      XACRO '<share:cho_moveit_ur>/config/ur5e.urdf.xacro' mappings={load_gripper: 'false', ur_type: 'ur5e'}
+      XACRO '<share:cho_moveit_ur>/config/ur5e.srdf' mappings={}
+      ARG use_sim_time default='false' choices=None
+      ARG launch_rviz default='false' choices=None
+      ARG floor_frame default='world' choices=None
+      ARG floor_size default='4.0,4.0,0.10' choices=None
+      ARG floor_position default='0.0,0.0,-0.05' choices=None
+      ARG scene_max_attempts default='10' choices=None
+      ARG scene_ready_timeout default='210.0' choices=None
+      ARG controller_ready_timeout default='90.0' choices=None
+      ARG switch_response_timeout default='15.0' choices=None
+      OPAQUE validate_timeouts
+      INCLUDE <share:cho_moveit_ur>/launch/move_group.launch.py
+        arg use_sim_time='true'
+          XACRO '<share:cho_moveit_ur>/config/ur5e.urdf.xacro' mappings={load_gripper: 'false', ur_type: 'ur5e'}
+          XACRO '<share:cho_moveit_ur>/config/ur5e.srdf' mappings={}
+          ARG use_sim_time default='false' choices=None
+          NODE moveit_ros_move_group/move_group
+            name=None namespace=None
+            args=[]
+            param (64 values)
+              default_planning_pipeline: ompl
+              moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+              moveit_manage_controllers: true
+              moveit_simple_controller_manager:
+                controller_names: [joint_trajectory_controller]
+                joint_trajectory_controller:
+                  action_ns: follow_joint_trajectory
+                  default: true
+                  joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+                  type: FollowJointTrajectory
+              ompl:
+                planner_configs:
+                  PRMkConfigDefault: {max_nearest_neighbors: 10, type: 'geometric::PRM'}
+                  RRTConnectkConfigDefault: {range: 0.0, type: 'geometric::RRTConnect'}
+                  RRTstarkConfigDefault: {delay_collision_checking: 1, goal_bias: 0.05, range: 0.0, type: 'geometric::RRTstar'}
+                planning_plugin: ompl_interface/OMPLPlanner
+                request_adapters: default_planner_request_adapters/AddTimeOptimalParameterization default_planner_request_adapters/ResolveConstraintFrames default_planner_request_adapters/FixWorkspaceBounds default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision default_planner_request_adapters/FixStartStatePathConstraints
+                start_state_max_bounds_error: 0.1
+                ur_manipulator: {default_planner_config: RRTConnectkConfigDefault, longest_valid_segment_fraction: 0.005, planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault, PRMkConfigDefault]}
+              planning_pipelines: [ompl]
+              publish_geometry_updates: true
+              publish_planning_scene: true
+              publish_robot_description: false
+              publish_robot_description_semantic: false
+              publish_state_updates: true
+              publish_transforms_updates: true
+              robot_description: '<description #2 ur>'
+              robot_description_kinematics:
+                ur_manipulator: {kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin, kinematics_solver_attempts: 3, kinematics_solver_search_resolution: 0.005, kinematics_solver_timeout: 0.05}
+              robot_description_planning:
+                default_acceleration_scaling_factor: 0.1
+                default_velocity_scaling_factor: 0.1
+                joint_limits:
+                  elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                  shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                  shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                  wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                  wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                  wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+              robot_description_semantic: '<description #3 ur>'
+              trajectory_execution: {allowed_execution_duration_scaling: 1.2, allowed_goal_duration_margin: 0.5, allowed_start_tolerance: 0.01}
+            param {allow_trajectory_execution: True, moveit_manage_controllers: False, publish_robot_description: True, publish_robot_description_semantic: True, use_sim_time: True}
+            output='screen' on_exit=NoneType
+      NODE cho_moveit_common/moveit_action_bridge.py
+        name='ur5e_moveit_action_bridge' namespace=None
+        args=[]
+        param (8 values)
+          ee_link: tool0
+          joint_names: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint, wrist_3_joint]
+          planning_group: ur_manipulator
+          ready_service: /cho_moveit/ur5e/static_scene_ready
+          robot_type: ur5e
+          trajectory_controller: joint_trajectory_controller
+          use_sim_time: true
+          world_frame: world
+        output='screen' on_exit=NoneType
+      NODE cho_moveit_common/publish_static_scene.py
+        name='ur_static_planning_scene' namespace=None
+        args=[]
+        param (10 values)
+          activate_controller: joint_trajectory_controller
+          controller_ready_timeout: 90.0
+          deactivate_controller: joint_space_position_controller
+          frame_id: world
+          max_attempts: 10
+          position_csv: '0.0,0.0,-0.05'
+          ready_service: /cho_moveit/ur5e/static_scene_ready
+          size_csv: '4.0,4.0,0.10'
+          switch_response_timeout: 15.0
+          use_sim_time: true
+        output='screen' on_exit=NoneType
+      NODE cho_moveit_common/wait_for_static_scene.py
+        name='wait_for_ur_static_planning_scene' namespace=None
+        args=[]
+        param {ready_service: '/cho_moveit/ur5e/static_scene_ready', timeout: 210.0}
+        output='screen' on_exit=NoneType
+      ON OnProcessExit target=<cho_moveit_common/wait_for_static_scene.py name=wait_for_ur_static_planning_scene args=[]>
+        [rc=0] ->
+          INCLUDE <share:cho_moveit_ur>/launch/moveit_rviz.launch.py
+            arg use_sim_time='true'
+              XACRO '<share:cho_moveit_ur>/config/ur5e.urdf.xacro' mappings={load_gripper: 'false', ur_type: 'ur5e'}
+              XACRO '<share:cho_moveit_ur>/config/ur5e.srdf' mappings={}
+              ARG use_sim_time default='false' choices=None
+              NODE rviz2/rviz2
+                name='moveit_rviz' namespace=None
+                args=['-d', '<share:ur_moveit_config>/rviz/view_robot.rviz']
+                param {robot_description: <description #2 ur>}
+                param {robot_description_semantic: <description #3 ur>}
+                param (4 values)
+                  robot_description_kinematics:
+                    ur_manipulator: {kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin, kinematics_solver_attempts: 3, kinematics_solver_search_resolution: 0.005, kinematics_solver_timeout: 0.05}
+                param (16 values)
+                  default_planning_pipeline: ompl
+                  ompl:
+                    planner_configs:
+                      PRMkConfigDefault: {max_nearest_neighbors: 10, type: 'geometric::PRM'}
+                      RRTConnectkConfigDefault: {range: 0.0, type: 'geometric::RRTConnect'}
+                      RRTstarkConfigDefault: {delay_collision_checking: 1, goal_bias: 0.05, range: 0.0, type: 'geometric::RRTstar'}
+                    planning_plugin: ompl_interface/OMPLPlanner
+                    request_adapters: default_planner_request_adapters/AddTimeOptimalParameterization default_planner_request_adapters/ResolveConstraintFrames default_planner_request_adapters/FixWorkspaceBounds default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision default_planner_request_adapters/FixStartStatePathConstraints
+                    start_state_max_bounds_error: 0.1
+                    ur_manipulator: {default_planner_config: RRTConnectkConfigDefault, longest_valid_segment_fraction: 0.005, planner_configs: [RRTConnectkConfigDefault, RRTstarkConfigDefault, PRMkConfigDefault]}
+                  planning_pipelines: [ompl]
+                param (26 values)
+                  robot_description_planning:
+                    default_acceleration_scaling_factor: 0.1
+                    default_velocity_scaling_factor: 0.1
+                    joint_limits:
+                      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
+                param {use_sim_time: True}
+                output='screen' on_exit=NoneType
+        [rc=1] ->
+          EMIT Shutdown
 DESCRIPTION #1
   robot name='ur'
-  joint ground_plane_joint fixed world -> ground_plane
-  joint base_joint fixed world -> base_link
-  joint base_link-base_link_inertia fixed base_link -> base_link_inertia
-  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link
-  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link
-  joint elbow_joint revolute upper_arm_link -> forearm_link
-  joint wrist_1_joint revolute forearm_link -> wrist_1_link
-  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link
-  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link
-  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame
-  joint base_link-base_fixed_joint fixed base_link -> base
-  joint wrist_3-flange fixed wrist_3_link -> flange
-  joint flange-tool0 fixed flange -> tool0
+  joint ground_plane_joint fixed world -> ground_plane [origin rpy='0 0 0' xyz='0 0 -0.01']
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint base_link-base_link_inertia fixed base_link -> base_link_inertia [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0.1625', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link [origin rpy='1.570796327 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint elbow_joint revolute upper_arm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-3.141592653589793' upper='3.141592653589793' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-2.991592653589793' soft_upper_limit='2.991592653589793', dynamics damping='0' friction='0']
+  joint wrist_1_joint revolute forearm_link -> wrist_1_link [origin rpy='0 0 0' xyz='-0.3922 0 0.1333', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link [origin rpy='1.570796327 0 0' xyz='0 -0.0997 -2.044881182297852e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link [origin rpy='1.570796326589793 3.141592653589793 3.141592653589793' xyz='0 0.0996 -2.042830148012698e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame [origin rpy='3.141592653589793 0 0' xyz='0 0 0']
+  joint base_link-base_fixed_joint fixed base_link -> base [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint wrist_3-flange fixed wrist_3_link -> flange [origin rpy='0 -1.5707963267948966 -1.5707963267948966' xyz='0 0 0']
+  joint flange-tool0 fixed flange -> tool0 [origin rpy='1.5707963267948966 0 1.5707963267948966' xyz='0 0 0']
   ros2_control name='ur' type='system'
     hardware [plugin: ign_ros2_control/IgnitionSystem]
     joint name='shoulder_pan_joint'
@@ -148,6 +285,319 @@ DESCRIPTION #1
     plugin filename='libign_ros2_control-system.so' name='ign_ros2_control::IgnitionROS2ControlPlugin'
       parameters: <share:cho_bringup_ur>/config/gz/controllers.yaml
       controller_manager_node_name: controller_manager
+DESCRIPTION #2
+  robot name='ur'
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint base_link-base_link_inertia fixed base_link -> base_link_inertia [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0.1625', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link [origin rpy='1.570796327 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint elbow_joint revolute upper_arm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-3.141592653589793' upper='3.141592653589793' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-2.991592653589793' soft_upper_limit='2.991592653589793', dynamics damping='0' friction='0']
+  joint wrist_1_joint revolute forearm_link -> wrist_1_link [origin rpy='0 0 0' xyz='-0.3922 0 0.1333', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link [origin rpy='1.570796327 0 0' xyz='0 -0.0997 -2.044881182297852e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link [origin rpy='1.570796326589793 3.141592653589793 3.141592653589793' xyz='0 0.0996 -2.042830148012698e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', safety_controller k_position='20' k_velocity='0.0' soft_lower_limit='-6.133185307179586' soft_upper_limit='6.133185307179586', dynamics damping='0' friction='0']
+  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame [origin rpy='3.141592653589793 0 0' xyz='0 0 0']
+  joint base_link-base_fixed_joint fixed base_link -> base [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint wrist_3-flange fixed wrist_3_link -> flange [origin rpy='0 -1.5707963267948966 -1.5707963267948966' xyz='0 0 0']
+  joint flange-tool0 fixed flange -> tool0 [origin rpy='1.5707963267948966 0 1.5707963267948966' xyz='0 0 0']
+  ros2_control name='ur' type='system'
+    hardware
+      plugin: ur_robot_driver/URPositionHardwareInterface
+      param name='robot_ip': 0.0.0.0
+      param name='script_filename'
+      param name='output_recipe_filename'
+      param name='input_recipe_filename'
+      param name='headless_mode': False
+      param name='reverse_port': 50001
+      param name='script_sender_port': 50002
+      param name='reverse_ip': 0.0.0.0
+      param name='script_command_port': 50004
+      param name='trajectory_port': 50003
+      param name='tf_prefix'
+      param name='non_blocking_read': True
+      param name='servoj_gain': 2000
+      param name='servoj_lookahead_time': 0.03
+      param name='use_tool_communication': False
+      param name='kinematics/hash': calib_12788084448423163542
+      param name='tool_voltage': 0
+      param name='tool_parity': 0
+      param name='tool_baud_rate': 115200
+      param name='tool_stop_bits': 1
+      param name='tool_rx_idle_chars': 1.5
+      param name='tool_tx_idle_chars': 3.5
+      param name='tool_device_name': /tmp/ttyUR
+      param name='tool_tcp_port': 54321
+      param name='keep_alive_count': 2
+    joint name='shoulder_pan_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='shoulder_lift_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='elbow_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_1_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_2_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': -1.57]
+      state_interface name='velocity'
+      state_interface name='effort'
+    joint name='wrist_3_joint'
+      command_interface name='position'
+      command_interface name='velocity'
+      command_interface name='effort'
+      state_interface name='position' [param name='initial_value': 0.0]
+      state_interface name='velocity'
+      state_interface name='effort'
+    sensor name='tcp_fts_sensor'
+      state_interface name='force.x'
+      state_interface name='force.y'
+      state_interface name='force.z'
+      state_interface name='torque.x'
+      state_interface name='torque.y'
+      state_interface name='torque.z'
+    sensor name='tcp_pose'
+      state_interface name='position.x'
+      state_interface name='position.y'
+      state_interface name='position.z'
+      state_interface name='orientation.x'
+      state_interface name='orientation.y'
+      state_interface name='orientation.z'
+      state_interface name='orientation.w'
+    gpio name='speed_scaling'
+      state_interface name='speed_scaling_factor'
+      param name='initial_speed_scaling_factor': 1
+      command_interface name='target_speed_fraction_cmd'
+      command_interface name='target_speed_fraction_async_success'
+    gpio name='gpio'
+      command_interface name='standard_digital_output_cmd_0'
+      command_interface name='standard_digital_output_cmd_1'
+      command_interface name='standard_digital_output_cmd_2'
+      command_interface name='standard_digital_output_cmd_3'
+      command_interface name='standard_digital_output_cmd_4'
+      command_interface name='standard_digital_output_cmd_5'
+      command_interface name='standard_digital_output_cmd_6'
+      command_interface name='standard_digital_output_cmd_7'
+      command_interface name='standard_digital_output_cmd_8'
+      command_interface name='standard_digital_output_cmd_9'
+      command_interface name='standard_digital_output_cmd_10'
+      command_interface name='standard_digital_output_cmd_11'
+      command_interface name='standard_digital_output_cmd_12'
+      command_interface name='standard_digital_output_cmd_13'
+      command_interface name='standard_digital_output_cmd_14'
+      command_interface name='standard_digital_output_cmd_15'
+      command_interface name='standard_digital_output_cmd_16'
+      command_interface name='standard_digital_output_cmd_17'
+      command_interface name='standard_analog_output_cmd_0'
+      command_interface name='standard_analog_output_cmd_1'
+      command_interface name='analog_output_domain_cmd'
+      command_interface name='tool_voltage_cmd'
+      command_interface name='io_async_success'
+      state_interface name='digital_output_0'
+      state_interface name='digital_output_1'
+      state_interface name='digital_output_2'
+      state_interface name='digital_output_3'
+      state_interface name='digital_output_4'
+      state_interface name='digital_output_5'
+      state_interface name='digital_output_6'
+      state_interface name='digital_output_7'
+      state_interface name='digital_output_8'
+      state_interface name='digital_output_9'
+      state_interface name='digital_output_10'
+      state_interface name='digital_output_11'
+      state_interface name='digital_output_12'
+      state_interface name='digital_output_13'
+      state_interface name='digital_output_14'
+      state_interface name='digital_output_15'
+      state_interface name='digital_output_16'
+      state_interface name='digital_output_17'
+      state_interface name='digital_input_0'
+      state_interface name='digital_input_1'
+      state_interface name='digital_input_2'
+      state_interface name='digital_input_3'
+      state_interface name='digital_input_4'
+      state_interface name='digital_input_5'
+      state_interface name='digital_input_6'
+      state_interface name='digital_input_7'
+      state_interface name='digital_input_8'
+      state_interface name='digital_input_9'
+      state_interface name='digital_input_10'
+      state_interface name='digital_input_11'
+      state_interface name='digital_input_12'
+      state_interface name='digital_input_13'
+      state_interface name='digital_input_14'
+      state_interface name='digital_input_15'
+      state_interface name='digital_input_16'
+      state_interface name='digital_input_17'
+      state_interface name='standard_analog_output_0'
+      state_interface name='standard_analog_output_1'
+      state_interface name='standard_analog_input_0'
+      state_interface name='standard_analog_input_1'
+      state_interface name='analog_io_type_0'
+      state_interface name='analog_io_type_1'
+      state_interface name='analog_io_type_2'
+      state_interface name='analog_io_type_3'
+      state_interface name='tool_mode'
+      state_interface name='tool_output_voltage'
+      state_interface name='tool_output_current'
+      state_interface name='tool_temperature'
+      state_interface name='tool_analog_input_0'
+      state_interface name='tool_analog_input_1'
+      state_interface name='tool_analog_input_type_0'
+      state_interface name='tool_analog_input_type_1'
+      state_interface name='robot_mode'
+      state_interface name='robot_status_bit_0'
+      state_interface name='robot_status_bit_1'
+      state_interface name='robot_status_bit_2'
+      state_interface name='robot_status_bit_3'
+      state_interface name='safety_mode'
+      state_interface name='safety_status_bit_0'
+      state_interface name='safety_status_bit_1'
+      state_interface name='safety_status_bit_2'
+      state_interface name='safety_status_bit_3'
+      state_interface name='safety_status_bit_4'
+      state_interface name='safety_status_bit_5'
+      state_interface name='safety_status_bit_6'
+      state_interface name='safety_status_bit_7'
+      state_interface name='safety_status_bit_8'
+      state_interface name='safety_status_bit_9'
+      state_interface name='safety_status_bit_10'
+      state_interface name='program_running'
+    gpio name='payload'
+      command_interface name='mass'
+      command_interface name='cog.x'
+      command_interface name='cog.y'
+      command_interface name='cog.z'
+      command_interface name='payload_async_success'
+      state_interface name='mass'
+      state_interface name='cog.x'
+      state_interface name='cog.y'
+      state_interface name='cog.z'
+    gpio name='friction_model'
+      command_interface name='viscous_0'
+      command_interface name='viscous_1'
+      command_interface name='viscous_2'
+      command_interface name='viscous_3'
+      command_interface name='viscous_4'
+      command_interface name='viscous_5'
+      command_interface name='coulomb_0'
+      command_interface name='coulomb_1'
+      command_interface name='coulomb_2'
+      command_interface name='coulomb_3'
+      command_interface name='coulomb_4'
+      command_interface name='coulomb_5'
+      command_interface name='async_success'
+    gpio name='resend_robot_program' [command_interface name='resend_robot_program_cmd', command_interface name='resend_robot_program_async_success']
+    gpio name='hand_back_control' [command_interface name='hand_back_control_cmd', command_interface name='hand_back_control_async_success']
+    gpio name='zero_ftsensor' [command_interface name='zero_ftsensor_cmd', command_interface name='zero_ftsensor_async_success']
+    gpio name='freedrive_mode' [command_interface name='async_success', command_interface name='enable', command_interface name='abort']
+    gpio name='tool_contact' [command_interface name='tool_contact_set_state', state_interface name='tool_contact_result', state_interface name='tool_contact_state']
+    gpio name='system_interface' [state_interface name='initialized']
+    gpio name='force_mode'
+      command_interface name='task_frame_x'
+      command_interface name='task_frame_y'
+      command_interface name='task_frame_z'
+      command_interface name='task_frame_rx'
+      command_interface name='task_frame_ry'
+      command_interface name='task_frame_rz'
+      command_interface name='selection_vector_x'
+      command_interface name='selection_vector_y'
+      command_interface name='selection_vector_z'
+      command_interface name='selection_vector_rx'
+      command_interface name='selection_vector_ry'
+      command_interface name='selection_vector_rz'
+      command_interface name='wrench_x'
+      command_interface name='wrench_y'
+      command_interface name='wrench_z'
+      command_interface name='wrench_rx'
+      command_interface name='wrench_ry'
+      command_interface name='wrench_rz'
+      command_interface name='limits_x'
+      command_interface name='limits_y'
+      command_interface name='limits_z'
+      command_interface name='limits_rx'
+      command_interface name='limits_ry'
+      command_interface name='limits_rz'
+      command_interface name='type'
+      command_interface name='damping'
+      command_interface name='gain_scaling'
+      command_interface name='disable_cmd'
+      command_interface name='force_mode_async_success'
+    gpio name='trajectory_passthrough'
+      command_interface name='setpoint_positions_0'
+      command_interface name='setpoint_positions_1'
+      command_interface name='setpoint_positions_2'
+      command_interface name='setpoint_positions_3'
+      command_interface name='setpoint_positions_4'
+      command_interface name='setpoint_positions_5'
+      command_interface name='setpoint_velocities_0'
+      command_interface name='setpoint_velocities_1'
+      command_interface name='setpoint_velocities_2'
+      command_interface name='setpoint_velocities_3'
+      command_interface name='setpoint_velocities_4'
+      command_interface name='setpoint_velocities_5'
+      command_interface name='setpoint_accelerations_0'
+      command_interface name='setpoint_accelerations_1'
+      command_interface name='setpoint_accelerations_2'
+      command_interface name='setpoint_accelerations_3'
+      command_interface name='setpoint_accelerations_4'
+      command_interface name='setpoint_accelerations_5'
+      command_interface name='transfer_state'
+      command_interface name='time_from_start'
+      command_interface name='abort'
+    gpio name='get_robot_software_version'
+      state_interface name='get_version_major' [param name='initial_value': 1]
+      state_interface name='get_version_minor'
+      state_interface name='get_version_build'
+      state_interface name='get_version_bugfix'
+DESCRIPTION #3
+  robot name='ur'
+  group name='ur_manipulator' [chain base_link='base_link' tip_link='tool0']
+  group_state group='ur_manipulator' name='home0'
+    joint name='shoulder_pan_joint' value='0'
+    joint name='shoulder_lift_joint' value='-1.57'
+    joint name='elbow_joint' value='0'
+    joint name='wrist_1_joint' value='-1.57'
+    joint name='wrist_2_joint' value='0'
+    joint name='wrist_3_joint' value='0'
+  group_state group='ur_manipulator' name='home1'
+    joint name='shoulder_pan_joint' value='0'
+    joint name='shoulder_lift_joint' value='-1.5708'
+    joint name='elbow_joint' value='1.5708'
+    joint name='wrist_1_joint' value='-1.5708'
+    joint name='wrist_2_joint' value='-1.5708'
+    joint name='wrist_3_joint' value='0'
+  disable_collisions link1='base_link' link2='base_link_inertia' reason='Adjacent'
+  disable_collisions link1='base_link_inertia' link2='shoulder_link' reason='Adjacent'
+  disable_collisions link1='tool0' link2='wrist_1_link' reason='Never'
+  disable_collisions link1='tool0' link2='wrist_2_link' reason='Never'
+  disable_collisions link1='tool0' link2='wrist_3_link' reason='Adjacent'
+  disable_collisions link1='forearm_link' link2='upper_arm_link' reason='Adjacent'
+  disable_collisions link1='forearm_link' link2='wrist_1_link' reason='Adjacent'
+  disable_collisions link1='shoulder_link' link2='upper_arm_link' reason='Adjacent'
+  disable_collisions link1='wrist_1_link' link2='wrist_2_link' reason='Adjacent'
+  disable_collisions link1='wrist_1_link' link2='wrist_3_link' reason='Never'
+  disable_collisions link1='wrist_2_link' link2='wrist_3_link' reason='Adjacent'
 RUNTIME_FILE <RT:cho_ur_gz_runtime_params_#0> aliases=False
   /**:
     joint_space_position_controller:

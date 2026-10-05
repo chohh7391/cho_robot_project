@@ -13,6 +13,7 @@ LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/rob
   ARG device default='cpu' choices=['cpu', 'cuda']
   ARG shutdown_on_gate_failure default='false' choices=None
   OPAQUE setup_control_environment
+    XACRO '<share:cho_description_fr5>/urdf/fr5.urdf.xacro' mappings={hardware: 'isaac'}
     ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
       convert_args=['--urdf', '<share:cho_description_fr5>/urdf/fr5.urdf.xacro', '--usd-path', '<FAKE>/usd', '--ros-package', 'cho_description_fr5:<share:cho_description_fr5>', '--require-link', 'wrist3_link']
     PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_fr5>/config/isaac/robot_profile.json', '--control-mode', 'position', '--physics-rate', '250', '--device', 'cpu']
@@ -62,14 +63,14 @@ LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/rob
       OPAQUE cleanup (not run) closure=['<RT:cho_fr5_isaac_runtime_params_#0>']
 DESCRIPTION #1
   robot name='fr5'
-  joint base_joint fixed world -> base_link
-  joint j1 revolute base_link -> shoulder_link
-  joint j2 revolute shoulder_link -> upperarm_link
-  joint j3 revolute upperarm_link -> forearm_link
-  joint j4 revolute forearm_link -> wrist1_link
-  joint j5 revolute wrist1_link -> wrist2_link
-  joint j6 revolute wrist2_link -> wrist3_link
-  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint j1 revolute base_link -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150' lower='-3.0543' upper='3.0543' velocity='3.15', dynamics damping='0' friction='0']
+  joint j2 revolute shoulder_link -> upperarm_link [origin rpy='1.5708 0 0' xyz='0 0 0.152', axis xyz='0 0 1', limit effort='150' lower='-4.6251' upper='1.4835' velocity='3.15', dynamics damping='0' friction='0']
+  joint j3 revolute upperarm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150' lower='-2.8274' upper='2.8274' velocity='3.15', dynamics damping='0' friction='0']
+  joint j4 revolute forearm_link -> wrist1_link [origin rpy='0 0 0' xyz='-0.39501 0 0', axis xyz='0 0 1', limit effort='28' lower='-4.6251' upper='1.4835' velocity='3.2', dynamics damping='0' friction='0']
+  joint j5 revolute wrist1_link -> wrist2_link [origin rpy='1.5708 0 0' xyz='0 0 0.1021', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint j6 revolute wrist2_link -> wrist3_link [origin rpy='-1.5708 0 0' xyz='0 0 0.102', axis xyz='0 0 1', limit effort='28' lower='-3.0543' upper='3.0543' velocity='3.2', dynamics damping='0' friction='0']
+  joint wrist3_to_tool_tcp fixed wrist3_link -> tool_tcp [origin rpy='0 0 0' xyz='0 0 0.100']
   ros2_control name='fr5_system' type='system'
     hardware
       plugin: topic_based_ros2_control/TopicBasedSystem

@@ -10,6 +10,9 @@
 
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
+  <!-- The AG-95 meshes; see NOTICE. The FR5 meshes come from FAIRINO, whose package
+       declares no license (NOTICE records it). -->
+  <license file="meshes/ag95/LICENSE">MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

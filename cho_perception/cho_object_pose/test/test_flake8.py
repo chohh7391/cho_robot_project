@@ -29,6 +29,7 @@ TARGETS = [os.path.join(PACKAGE_ROOT, name)
 @pytest.mark.flake8
 @pytest.mark.linter
 def test_flake8():
-    rc, errors = main_with_errors(argv=TARGETS)
+    rc, errors = main_with_errors(
+        argv=['--config', os.path.join(PACKAGE_ROOT, '.flake8')] + TARGETS)
     assert rc == 0, \
         'Found %d code style errors / warnings:\n' % len(errors) + '\n'.join(errors)

@@ -124,9 +124,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ee_name',
-            default_value='fr3_hand_tcp',
-            description='Name of End-Effector',
-            choices=['fr3_link7', 'fr3_hand', 'fr3_hand_tcp']
+            default_value='',
+            description="Controllers' end-effector frame; empty means fr3_hand_tcp with "
+                        'the hand and fr3_link8 without it',
+            choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
         ),
         DeclareLaunchArgument(
             'robot_usd',
@@ -218,7 +219,9 @@ def generate_launch_description():
         load_gripper = LaunchConfiguration('load_gripper').perform(context)
         use_vla = LaunchConfiguration('vla').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
-        ee_name = LaunchConfiguration('ee_name').perform(context)
+        # The MuJoCo/Isaac descriptions carry the hand even without a gripper.
+        ee_name = launch_utils.resolve_ee_name(
+            LaunchConfiguration('ee_name').perform(context), True)
         isaac_sim_path = LaunchConfiguration('isaac_sim_path').perform(context)
         robot_usd = LaunchConfiguration('robot_usd').perform(context)
         physics_rate = LaunchConfiguration('physics_rate').perform(context)
@@ -238,13 +241,10 @@ def generate_launch_description():
         all_runtime_param_controllers = (
             always_active_controllers + switchable_controllers
         )
-        runtime_param_file = launch_utils.create_runtime_param_file(
-            payload_config_path=payload_config_file,
-            controller_names=all_runtime_param_controllers,
-            bringup_type=b_type,
-            control_mode=mode,
-            ee_name=ee_name,
-        )
+        # Everything that can refuse the launch runs before the runtime
+        # parameter file is written: a refusal raises out of here, and the
+        # cleanup handler that would delete the file is never registered.
+        shutdown_on_failure = shutdown_on_gate_failure(context)
         controller_spawners = create_controller_spawners(
             always_active=always_active_controllers,
             switchable_controllers=switchable_controllers,
@@ -270,6 +270,14 @@ def generate_launch_description():
         if publish_ft.lower() == 'true':
             isaac_cmd.append('--publish-ft')
         isaac_sim = isaac_sim_process(isaac_cmd)
+
+        runtime_param_file = launch_utils.create_runtime_param_file(
+            payload_config_path=payload_config_file,
+            controller_names=all_runtime_param_controllers,
+            bringup_type=b_type,
+            control_mode=mode,
+            ee_name=ee_name,
+        )
 
         node_ros2_control = Node(
             package='mujoco_ros2_control',
@@ -299,7 +307,7 @@ def generate_launch_description():
         # controller is active (see isaac_controller_startup for both reasons).
         event_handlers = isaac_controller_startup(
             isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time),
-            shutdown_on_failure=shutdown_on_gate_failure(context))
+            shutdown_on_failure=shutdown_on_failure)
         event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
         return [isaac_sim, node_ros2_control, isaac_ft_sensor] + event_handlers

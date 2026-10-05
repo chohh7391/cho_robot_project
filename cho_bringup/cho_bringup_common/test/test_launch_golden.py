@@ -20,9 +20,10 @@ printed and how it is made machine-independent - and must match
 launch_golden/expected/<package>/<launch stem>/<case>.txt exactly.
 
 A bringup package that is not installed is skipped, with the reason from
-cases.yaml (CI builds neither cho_bringup_franka nor cho_bringup_openarm),
-unless CHO_LAUNCH_GOLDEN_REQUIRE lists it - CI sets that to the bringups it
-does build. Locally, with the whole workspace built, every case runs.
+cases.yaml, unless CHO_LAUNCH_GOLDEN_REQUIRE lists it. CI builds all four
+bringups (their hardware and Franka source-only dependencies skipped, see
+.github/workflows/ci.yml) and requires them, so every case runs there as it
+does locally with the whole workspace built.
 
 When a launch change is intended, regenerate and review:
 
@@ -187,8 +188,69 @@ def test_an_include_missing_a_required_argument_is_an_error_as_in_humble():
 def test_spawner_flags_without_a_value_do_not_swallow_the_next_argument():
     from cho_bringup_common.launch_golden import Walker
 
+    # Sorted by option, -c counted as --controller-manager.
     assert Walker.canonical_args(
         'spawner', ['arm', '--load-only', '-c', '/controller_manager', 'extra', '--inactive']) == [
-        'arm', 'extra', '|', '--inactive', '--load-only', '-c /controller_manager']
+        'arm', 'extra', '|', '-c /controller_manager', '--inactive', '--load-only']
     # An option left without its value at the end is kept, not an IndexError.
     assert Walker.canonical_args('spawner', ['arm', '-p']) == ['arm', '|', '-p']
+
+
+def test_spawner_param_files_keep_their_order_because_the_last_one_wins():
+    from cho_bringup_common.launch_golden import Walker
+
+    # Humble appends every -p/--param-file and loads them in order, so swapping
+    # two of them changes which value a controller gets: that must show.
+    first = Walker.canonical_args('spawner', ['arm', '-p', '/z.yaml', '--inactive', '--param-file', '/a.yaml'])
+    second = Walker.canonical_args('spawner', ['arm', '--param-file', '/a.yaml', '--inactive', '-p', '/z.yaml'])
+    assert first == ['arm', '|', '--inactive', '-p /z.yaml', '--param-file /a.yaml']
+    assert second == ['arm', '|', '--inactive', '--param-file /a.yaml', '-p /z.yaml']
+
+
+def test_a_runtime_file_dump_does_not_depend_on_how_long_the_install_prefix_is(tmp_path):
+    from cho_bringup_common.launch_golden import Walker
+
+    def dump(prefix):
+        runtime_dir = tmp_path / str(len(prefix))
+        runtime_dir.mkdir()
+        # Per-controller values, so each is dumped as a flow mapping - the
+        # form the dump wraps between entries.
+        data = {'/**': {name: {'ros__parameters': {'profile': f'{prefix}/config/{name}_{"x" * 90}.yaml',
+                                                   'profile_name': f'{name}_commissioning'}}
+                        for name in ('left', 'right')}}
+        (runtime_dir / 'cho_runtime_params_abcdefgh.yaml').write_text(yaml.safe_dump(data))
+        walker = Walker(None, str(runtime_dir), lambda text: str(text).replace(prefix, '<share:pkg>'))
+        walker.dump_runtime_files()
+        return walker.lines
+
+    # Long enough that the un-normalized path would have wrapped the line.
+    assert dump('/opt/p') == dump('/' + 'a_very_long_install_prefix/' * 8 + 'share/pkg')
+
+
+def test_dotted_parameter_names_are_nested_back_and_a_clash_keeps_its_dotted_name():
+    from cho_bringup_common.launch_golden import Walker
+
+    assert Walker.nest({'a.b.c': 1, 'a.b.d': 2, 'e': 3}) == {'a': {'b': {'c': 1, 'd': 2}}, 'e': 3}
+    assert Walker.nest({'a': 1, 'a.b': 2}) == {'a': 1, 'a.b': 2}
+
+
+def test_no_expected_output_holds_a_runtime_file_nothing_was_given():
+    """A launch that refuses must do so before it writes its runtime parameter file.
+
+    Every RUNTIME_FILE must be referenced by a node or a cleanup handler. One
+    that is not was written by a launch that then raised, and was left behind
+    in ~/.ros: the refusal has to move ahead of the write.
+    """
+    left_behind = []
+    for root, _, names in os.walk(EXPECTED):
+        for name in names:
+            with open(os.path.join(root, name)) as stream:
+                text = stream.read()
+            lines = text.splitlines()
+            for line in lines:
+                if not line.startswith('RUNTIME_FILE '):
+                    continue
+                label = line.split()[1]
+                if not any(label in other for other in lines if not other.startswith('RUNTIME_FILE ')):
+                    left_behind.append(f'{os.path.relpath(os.path.join(root, name), EXPECTED)}: {label}')
+    assert not left_behind, f'runtime files written but never handed to anything: {left_behind}'

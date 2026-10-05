@@ -13,6 +13,7 @@ LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robo
   ARG device default='cpu' choices=['cpu', 'cuda']
   ARG shutdown_on_gate_failure default='false' choices=None
   OPAQUE setup_control_environment
+    XACRO '<share:cho_description_ur>/urdf/ur5e.urdf' mappings={hardware: 'isaac'}
     ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
       convert_args=['--urdf', '<share:cho_description_ur>/urdf/ur5e.urdf', '--usd-path', '<FAKE>/usd/robot', '--ros-package', 'cho_description_ur:<share:cho_description_ur>']
     PROCESS cmd=['<FAKE>/isaacsim/python.sh', '<share:cho_simulation_isaac>/isaac/run_isaac_sim.py', '--robot-usd', '<FAKE>/usd/robot/robot.usda', '--robot-profile', '<share:cho_bringup_ur>/config/isaac/robot_profile.json', '--control-mode', 'position', '--physics-rate', '250', '--device', 'cpu']
@@ -62,18 +63,18 @@ LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robo
       OPAQUE cleanup (not run) closure=['<RT:cho_ur_isaac_runtime_params_#0>']
 DESCRIPTION #1
   robot name='ur'
-  joint base_joint fixed world -> base_link
-  joint base_link-base_link_inertia fixed base_link -> base_link_inertia
-  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link
-  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link
-  joint elbow_joint revolute upper_arm_link -> forearm_link
-  joint wrist_1_joint revolute forearm_link -> wrist_1_link
-  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link
-  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link
-  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame
-  joint base_link-base_fixed_joint fixed base_link -> base
-  joint wrist_3-flange fixed wrist_3_link -> flange
-  joint flange-tool0 fixed flange -> tool0
+  joint base_joint fixed world -> base_link [origin rpy='0 0 0' xyz='0 0 0']
+  joint base_link-base_link_inertia fixed base_link -> base_link_inertia [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint shoulder_pan_joint revolute base_link_inertia -> shoulder_link [origin rpy='0 0 0' xyz='0 0 0.1625', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint shoulder_lift_joint revolute shoulder_link -> upper_arm_link [origin rpy='1.570796327 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint elbow_joint revolute upper_arm_link -> forearm_link [origin rpy='0 0 0' xyz='-0.425 0 0', axis xyz='0 0 1', limit effort='150.0' lower='-3.141592653589793' upper='3.141592653589793' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint wrist_1_joint revolute forearm_link -> wrist_1_link [origin rpy='0 0 0' xyz='-0.3922 0 0.1333', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint wrist_2_joint revolute wrist_1_link -> wrist_2_link [origin rpy='1.570796327 0 0' xyz='0 -0.0997 -2.044881182297852e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint wrist_3_joint revolute wrist_2_link -> wrist_3_link [origin rpy='1.570796326589793 3.141592653589793 3.141592653589793' xyz='0 0.0996 -2.042830148012698e-11', axis xyz='0 0 1', limit effort='28.0' lower='-6.283185307179586' upper='6.283185307179586' velocity='3.141592653589793', dynamics damping='0' friction='0']
+  joint wrist_3_link-ft_frame fixed wrist_3_link -> ft_frame [origin rpy='3.141592653589793 0 0' xyz='0 0 0']
+  joint base_link-base_fixed_joint fixed base_link -> base [origin rpy='0 0 3.141592653589793' xyz='0 0 0']
+  joint wrist_3-flange fixed wrist_3_link -> flange [origin rpy='0 -1.5707963267948966 -1.5707963267948966' xyz='0 0 0']
+  joint flange-tool0 fixed flange -> tool0 [origin rpy='1.5707963267948966 0 1.5707963267948966' xyz='0 0 0']
   ros2_control name='IsaacArmSystem' type='system'
     hardware
       plugin: topic_based_ros2_control/TopicBasedSystem

@@ -93,10 +93,10 @@ def setup_control_environment(context):
     bringup_path = get_package_share_directory('cho_bringup_ur')
     urdf_path = LaunchConfiguration('urdf_file').perform(context)
     controller_config = LaunchConfiguration('controllers_file').perform(context)
-    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
-    runtime_param_file = write_position_arm_param_file(
-        bringup_type, ee_name, motion_limit_parameters('ur5e'),
-        prefix='cho_ur_isaac_runtime_params_')
+    # Everything that can refuse the launch runs before the runtime parameter
+    # file is written: a refusal raises out of here, and the cleanup handler
+    # that would delete the file is never registered.
+    shutdown_on_failure = shutdown_on_gate_failure(context)
 
     robot_description = {
         'robot_description': xacro.process_file(
@@ -113,6 +113,11 @@ def setup_control_environment(context):
         isaac_python, robot_usd,
         os.path.join(bringup_path, 'config', 'isaac', 'robot_profile.json'),
         'position', physics_rate, device, headless=headless.lower() == 'true'))
+
+    # The robot's MoveIt joint/Cartesian limits bound the point-to-point goals.
+    runtime_param_file = write_position_arm_param_file(
+        bringup_type, ee_name, motion_limit_parameters('ur5e'),
+        prefix='cho_ur_isaac_runtime_params_')
 
     node_robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -153,7 +158,7 @@ def setup_control_environment(context):
     event_handlers = isaac_controller_startup(
         isaac_sim, chain_spawners(active_spawner, [inactive_spawner]), active_spawner,
         isaac_command_gate({'use_sim_time': use_sim_time}),
-        shutdown_on_failure=shutdown_on_gate_failure(context))
+        shutdown_on_failure=shutdown_on_failure)
     event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
     return [isaac_sim, node_robot_state_publisher, node_ros2_control] + event_handlers

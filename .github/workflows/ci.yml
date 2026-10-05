@@ -16,21 +16,26 @@ defaults:
 # Only the packages that build from binary (apt) dependencies alone are covered.
 # hansung_scale_msgs / hansung_scale_driver qualify: rosidl, rclpy and
 # python3-serial are all rosdep keys, so the scale stack builds and tests here.
-# cho_controller_franka, bota_ft_sensor, cho_bringup_franka and cho_bringup_openarm
-# need extern/ sources (franka_ros2 + libfranka, mujoco_ros2_control, openarm_can,
-# bota_driver_ros2) built from source; there are no Humble debs for franka_msgs /
-# franka_gripper / franka_hardware. Adding them means a source build of libfranka
-# in CI - deferred, tracked separately.
+# cho_controller_franka, bota_ft_sensor and the OpenArm hardware packages are not
+# built: they need extern/ sources built from source (franka_ros2 + libfranka,
+# bota_driver_ros2, openarm_can + mujoco_ros2_control). franka_gripper,
+# franka_hardware, franka_ign_ros2_control and franka_robot_state_broadcaster
+# have rosdep rules, but the Humble debs they name are not published (only
+# franka_msgs and franka_description are). Adding them means a source build of
+# libfranka in CI - deferred, tracked separately.
 #
 # Every workspace package a listed package depends on (any dependency type) must
-# be listed too: `rosdep install --ignore-src` treats only the packages under
-# --from-paths as source and fails on any other workspace name as an unknown key.
-# That is why cho_moveit_fr5 is here (cho_task_manager exec_depends on it).
+# be listed too, or named in ROSDEP_SKIP_KEYS: `rosdep install --ignore-src`
+# treats only the packages under --from-paths as source and fails on any other
+# workspace name as an unknown key. That is why cho_moveit_fr5 is here
+# (cho_task_manager exec_depends on it).
 #
-# cho_bringup_ur and cho_bringup_fr5 are here for cho_bringup_common's launch
-# golden test (test/test_launch_golden.py), which evaluates their launch files;
-# cho_controller_fr5, cho_simulation_isaac and cho_moveit_ur are their workspace
-# dependencies. The test skips cho_bringup_franka and cho_bringup_openarm here.
+# All four bringups and their MoveIt packages are here for cho_bringup_common's
+# launch golden test (test/test_launch_golden.py), which evaluates every launch
+# file and follows its cho_moveit_* includes; nothing is started, so the
+# bringups' exec_depends on the packages above are skipped (ROSDEP_SKIP_KEYS)
+# rather than built, and the two Franka packages the launch files look up by
+# path are registered as empty stand-ins (tools/ci/stub_ament_packages.sh).
 env:
   BUILD_PACKAGES: >-
     cho_interfaces
@@ -51,10 +56,14 @@ env:
     cho_bringup_common
     cho_bringup_ur
     cho_bringup_fr5
+    cho_bringup_franka
+    cho_bringup_openarm
     cho_simulation_isaac
     cho_moveit_common
     cho_moveit_ur
     cho_moveit_fr5
+    cho_moveit_franka
+    cho_moveit_openarm
     cho_control_tools
     cho_task_manager
     cho_object_pose
@@ -62,17 +71,27 @@ env:
     cho_oak
     hansung_scale_msgs
     hansung_scale_driver
-  # cho_description_franka / cho_description_fr5 / cho_description_ur are forks
-  # of upstream descriptions and carry their upstream lint debt, so they are
-  # built (the xacro/URDF must still parse) but not linted.
-  # cho_description_openarm is also a fork but its tests are ours, so it is
-  # tested too - they catch a xacro branch that has stopped parsing for one
-  # environment.
-  # Built but not tested here: cho_bringup_ur (three launch files carry no
-  # copyright notice, so its ament_lint_auto copyright test fails),
-  # cho_simulation_isaac (ament_lint_auto at ROS's default style, which its
-  # scripts do not follow) and cho_controller_fr5 (its tests are the pour cell's).
-  # cho_bringup_common's launch golden test still covers the UR launch files.
+  # Dependencies of BUILD_PACKAGES that are not installed here; see above.
+  # Workspace packages left out of BUILD_PACKAGES, then Franka keys whose debs
+  # do not exist.
+  ROSDEP_SKIP_KEYS: >-
+    cho_controller_franka
+    cho_hardware_openarm_mit_mujoco
+    cho_hardware_openarm_mit_real
+    franka_gripper
+    franka_hardware
+    franka_ign_ros2_control
+    franka_robot_state_broadcaster
+  # Looked up by path by the Franka bringups (franka_ign_ros2_control's lib/ for
+  # the Gazebo plugin path, franka_gripper's gripper.launch.py); stand-ins let
+  # the golden test evaluate them. Never started.
+  STUB_PACKAGES: >-
+    franka_gripper
+    franka_ign_ros2_control
+  # Built but not tested here: cho_controller_fr5 (its tests are the pour
+  # cell's). The cho_description_* forks other than franka and openarm, and the
+  # MoveIt configuration packages, have no tests of their own; their launch
+  # files are covered by the golden test.
   TEST_PACKAGES: >-
     cho_interfaces
     cho_controller_common
@@ -83,10 +102,15 @@ env:
     cho_openarm_mit_core
     cho_hardware_openarm_mit_test
     cho_controller_openarm_mit
+    cho_description_franka
     cho_description_openarm
     cho_robot_config
     cho_bringup_common
+    cho_bringup_ur
     cho_bringup_fr5
+    cho_bringup_franka
+    cho_bringup_openarm
+    cho_simulation_isaac
     cho_moveit_common
     cho_control_tools
     cho_task_manager
@@ -131,7 +155,18 @@ jobs:
           # hand-kept copy here still named cho_controller_openarm after that
           # package was merged away, and rosdep failed every run on it.
           rosdep install -y --rosdistro humble --ignore-src --from-paths \
-            $(colcon list --paths-only --packages-select ${{ env.BUILD_PACKAGES }})
+            $(colcon list --paths-only --packages-select ${{ env.BUILD_PACKAGES }}) \
+            --skip-keys "${{ env.ROSDEP_SKIP_KEYS }}"
+          # The flake8 plugins a ROS 2 development machine has (the Humble
+          # source-install instructions list them). Each package pins which of
+          # their rules it follows, so the lint tests below give the verdict
+          # they give locally; without the plugins here, a package that had not
+          # pinned them would pass in CI and fail on every developer's machine.
+          apt-get install -y --no-install-recommends \
+            python3-flake8-blind-except python3-flake8-builtins \
+            python3-flake8-class-newline python3-flake8-comprehensions \
+            python3-flake8-deprecated python3-flake8-docstrings \
+            python3-flake8-import-order python3-flake8-quotes
 
       - name: Build
         shell: bash
@@ -144,13 +179,17 @@ jobs:
 
       - name: Test
         shell: bash
-        # The bringups the launch golden test must find here; see BUILD_PACKAGES.
+        # The bringups the launch golden test must find here (a missing one
+        # fails rather than skips); see BUILD_PACKAGES.
         env:
-          CHO_LAUNCH_GOLDEN_REQUIRE: cho_bringup_ur cho_bringup_fr5
+          CHO_LAUNCH_GOLDEN_REQUIRE: cho_bringup_ur cho_bringup_fr5 cho_bringup_franka cho_bringup_openarm
         run: |
           set -eo pipefail
           source /opt/ros/humble/setup.bash
           source install/setup.bash
+          stubs=$(src/cho_robot_project/tools/ci/stub_ament_packages.sh \
+            "${RUNNER_TEMP:-/tmp}/stub_packages" ${{ env.STUB_PACKAGES }})
+          export AMENT_PREFIX_PATH="${stubs}:${AMENT_PREFIX_PATH}"
           colcon test \
             --packages-select ${{ env.TEST_PACKAGES }} \
             --return-code-on-test-failure

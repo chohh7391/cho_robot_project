@@ -37,6 +37,23 @@ The script also excludes a checked-out `extern/mujoco_vendor` source package, if
 present, so rosdep can install `ros-humble-mujoco-vendor` for the vendored
 `mujoco_ros2_control` packages.
 
+It first checks out any `extern/` submodule that is not checked out yet, and
+only those (an initialized submodule is never moved). `git pull` does not do
+that for a submodule added since your clone - `extern/bota_driver_ros2_example`
+was added that way - and a package that is not checked out is an unknown key to
+`rosdep --ignore-src`: `bota_driver`, `bota_driver_example`, `openarm_can` and
+the `openarm_ros2` packages have no rosdep rule at all. To do it by hand after
+a pull:
+
+```bash
+git submodule update --init --recursive
+```
+
+`SKIP_SUBMODULE_UPDATE=1 bash install_dependencies.bash` leaves the submodules
+alone; the rosdep keys of every one still missing are then skipped (the list is
+`SUBMODULE_PACKAGES` in the script), and the packages that need them will not
+build. `--simulate` never touches the checkout and reports what is missing.
+
 ## MuJoCo
 
 ```bash

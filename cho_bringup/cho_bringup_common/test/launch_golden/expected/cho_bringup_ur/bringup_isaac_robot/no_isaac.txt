@@ -13,22 +13,7 @@ LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robo
   ARG device default='cpu' choices=['cpu', 'cuda']
   ARG shutdown_on_gate_failure default='false' choices=None
   OPAQUE setup_control_environment
+    XACRO '<share:cho_description_ur>/urdf/ur5e.urdf' mappings={hardware: 'isaac'}
     ISAAC-CHECK isaac_sim_path='<FAKE>/no_isaacsim' robot_usd='<FAKE>/usd/robot/robot.usda'
       convert_args=['--urdf', '<share:cho_description_ur>/urdf/ur5e.urdf', '--usd-path', '<FAKE>/usd/robot', '--ros-package', 'cho_description_ur:<share:cho_description_ur>']
     ERROR RuntimeError: Isaac Sim interpreter not found at '<FAKE>/no_isaacsim/python.sh'. Pass isaac_sim_path:=<isaac sim install dir>.
-RUNTIME_FILE <RT:cho_ur_isaac_runtime_params_#0> aliases=False
-  /**:
-    joint_space_position_controller:
-      ros__parameters: {}
-    task_space_ik_controller:
-      ros__parameters: {ee_name: tool0}
-  /** (every controller):
-    bringup_type: isaac
-    control_mode: position
-    joint_limits:
-      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

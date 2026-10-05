@@ -19,6 +19,12 @@ colcon test-result --verbose
 ```
 
 Python linting enforces max line length 120 (flake8), relaxed pep257. Test files must be named `test_*.py`.
+The rules are pycodestyle + pyflakes only: every package pins the optional flake8
+plugins' rules off (`extend-ignore = A,B90,C4,C81,CNL,D,I,Q` in its `setup.cfg`, or
+in a `.flake8` that its CMakeLists.txt hands to `ament_cmake_flake8`), because a ROS 2
+machine has `python3-flake8-{docstrings,quotes,import-order,...}` installed and the
+code was never written to them. CI installs those plugins too, so a package without
+the pin fails there exactly as it does locally. A new Python package copies the pin.
 
 Every bringup launch file is covered by a golden test: cho_bringup_common's
 `test/test_launch_golden.py` evaluates each one for the argument sets in
@@ -36,16 +42,29 @@ git diff test/launch_golden/
 # One case by hand: python3 -m cho_bringup_common.launch_golden <pkg> <file> [name:=value ...]
 ```
 
-A new launch file or bringup package needs cases there, or the test fails. CI
-evaluates the UR and FR5 bringups; Franka and OpenArm are skipped there (their
-source-only dependencies are not built) and run locally.
+A new launch file or bringup package needs cases there, or the test fails. The
+walk follows `cho_bringup_*` and `cho_moveit_*` includes (MoveIt's scene gate and
+RViz condition are part of a bringup's output), prints each node's parameters,
+the joints' origins and limits, every xacro run (Command and `xacro.process_file`)
+and spawner `-p` files in the order given (Humble: the last one wins). CI evaluates
+all four bringups: their hardware and Franka source-only dependencies are skipped
+(`ROSDEP_SKIP_KEYS` in ci.yml) and the two Franka packages a launch looks up by path
+are empty stand-ins (`tools/ci/stub_ament_packages.sh`). Expected output never
+depends on where the workspace is installed: paths become tokens before anything is
+formatted.
 
 CI (`.github/workflows/ci.yml`) derives its rosdep paths from BUILD_PACKAGES, so
 every workspace package a listed package depends on, of any dependency type, must
-be listed too - `rosdep --ignore-src` reports any other workspace name as an
-unknown key. Check with `rosdep install --simulate --rosdistro humble --ignore-src
---from-paths $(colcon list --paths-only --packages-select <BUILD_PACKAGES>)` in a
-shell that has sourced only /opt/ros/humble.
+be listed too or named in ROSDEP_SKIP_KEYS - `rosdep --ignore-src` reports any other
+workspace name as an unknown key. Check with `rosdep install --simulate --rosdistro
+humble --ignore-src --from-paths $(colcon list --paths-only --packages-select
+<BUILD_PACKAGES>) --skip-keys "<ROSDEP_SKIP_KEYS>"` in a shell that has sourced only
+/opt/ros/humble.
+
+Submodules: `git pull` does not check out a submodule added since the clone
+(`extern/bota_driver_ros2_example` was). `install_dependencies.bash` checks out the
+missing ones (only those) before running rosdep; by hand, `git submodule update
+--init --recursive`.
 
 ## Launch
 
@@ -93,10 +112,20 @@ export IGN_IP=127.0.0.1
 ```
 cho_controller/
   cho_controller_common/     # Shared C++ math: Pinocchio FK/IK/dynamics, Eigen utilities
-  cho_controller_base/       # Robot-independent, header-only: the RT-safe action
-                             # server (GoalPhase), the JointSpace/TaskSpace servers
-                             # every arm serves, DLS IK and held-command helpers.
-                             # Robots keep only thin adapters (state fields, defaults).
+  cho_controller_base/       # Robot-independent, header-only except one small
+                             # library: the RT-safe action server (GoalPhase), the
+                             # JointSpace/TaskSpace servers every arm serves, DLS IK
+                             # and held-command helpers. Robots keep only thin
+                             # adapters (state fields, defaults).
+                             # libcho_controller_base_ledger.so is the process-wide
+                             # record behind live_held_command(): every base records
+                             # what it leaves in on_deactivate (release_held_command),
+                             # and a position controller seeds from the command
+                             # interface only while that is still a live hold (the
+                             # joint has not moved more than 1 urad since); a value
+                             # from a controller outside this repo is judged by the
+                             # 0.05 rad band. ur_robot_driver resets position commands
+                             # to the measurement on every position-mode start.
                              # testing/controller_manager_harness.hpp is test support:
                              # a controller_manager on mock hardware that a test steps
                              # one period at a time (each arm's test_reactivation).
@@ -202,6 +231,11 @@ cho_task_manager/
                              # recovered pose expires with the aggregation window.
     task_manager_node.py     # ROS2 node that runs the selected tree
     utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
+
+tools/                       # Not a package. build_openarm_vendor.sh; ci/: the
+                             # Franka stand-ins for the launch golden test
+                             # (stub_ament_packages.sh) and the CMakeLists.txt
+                             # header check (check_copyright_headers.py).
 
 cho_robot_config/
   config/*.yaml              # Per-robot registry: controller/action roles,
@@ -336,7 +370,13 @@ and TaskSpace goals `cho_robot_config.task_goal_frame(config, relative)` --
 its xacro mappings and proves each absolute goal frame is a `root_frames()` member. The
 MoveIt bridge keeps `duration_sec` a minimum: plan-only, then the plan is slowed
 uniformly to `duration_sec` (never sped up) and executed via `ExecuteTrajectory`; its
-planning budget is its own `planning_time_sec`.
+planning budget is its own `planning_time_sec`. Humble's move_group (2.5.x) accepts an
+`ExecuteTrajectory` cancel and ignores it, and answers it only after the trajectory has
+ended, so the bridge cancels by publishing `"stop"` on move_group's
+`trajectory_execution_event` (repeated until terminal; CANCELED or ABORTED/PREEMPTED
+count as a cancel). It refuses goals while nothing subscribes to that topic, and
+publishes stop on SIGINT/SIGTERM with an execution in flight. Verified in FR5 MuJoCo:
+the arm stops within 0.25 s.
 
 The JointSpace and TaskSpace servers themselves are shared: `cho_controller_base`'s
 `JointSpaceServer` / `TaskSpaceServer` over `GoalPhaseActionServer`, with each robot
@@ -457,7 +497,8 @@ guards are FT wrench magnitude, joint-limit proximity, and two Jacobian indices 
 `sqrt(det(J Jᵀ))` (Yoshikawa; **not** `det(J)`, which does not exist for the 7-DOF
 arms) and `sigma_min(J)`, both from the `LOCAL_WORLD_ALIGNED` Jacobian, never
 `WORLD`. Every guard is off unless its threshold is given, staleness counts as a
-trip, and thresholds are commissioning values: `report_period_sec` logs the
+trip (the arming window waits only for a first sample of each input and for the
+description; an input seen and then quiet trips at once), and thresholds are commissioning values: `report_period_sec` logs the
 measured numbers to set them from. These are supervisory at the 100 ms tick rate,
 not a replacement for the 1 kHz `clip_torque()` / `clip_position()` guards.
 
@@ -505,10 +546,13 @@ Use FastDDS discovery server on PC2 and set `ROS_DISCOVERY_SERVER=<PC2_IP>:11811
 ## File Headers
 
 Every C++, Python and CMake source outside `extern/` starts with a copyright and
-license header that `ament_copyright` recognises; the Lint workflow checks the whole
-tree. NOTICE ("File headers") is the rule:
+license header that `ament_copyright` recognises, `setup.py` and `CMakeLists.txt`
+included; the Lint workflow checks the whole tree. `ament_copyright` never selects a
+`CMakeLists.txt` (and would comment one with `//`), so `tools/ci/check_copyright_headers.py`
+checks those with its parser. NOTICE ("File headers") is the rule:
 
-- Written here: `ament_copyright --add-missing "Hyunho Cho" apache2 <files>` adds it.
+- Written here: `ament_copyright --add-missing "Hyunho Cho" apache2 <files>` adds it;
+  for a CMakeLists.txt, `tools/ci/check_copyright_headers.py --add-missing "Hyunho Cho" apache2 <path>`.
 - Adapted from upstream: the upstream copyright line(s), then `Copyright <year> Hyunho Cho`,
   the upstream license in full, and a `Derived from ... see NOTICE` line (the TSID
   files in `cho_controller_common` are the pattern). Add a NOTICE entry.

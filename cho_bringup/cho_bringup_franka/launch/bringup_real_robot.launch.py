@@ -72,6 +72,13 @@ def generate_robot_nodes(context):
         use_vla=use_vla,
         requested_controller=ctrl_name,
     )
+    # One runtime parameter file serves every arm, so a hand frame needs every
+    # arm to carry the hand.
+    hands = [
+        (str(config['load_gripper']) if load_gripper_arg == 'config' else load_gripper_arg)
+        .lower() == 'true'
+        for config in configs.values()]
+    ee_name = launch_utils.resolve_ee_name(ee_name, all(hands))
 
     pkg_bringup = get_package_share_directory('cho_bringup_franka')
     payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
@@ -277,9 +284,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'ee_name',
-            default_value='fr3_hand_tcp',
-            description='Name of End-Effector',
-            choices=['fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+            default_value='',
+            description="Controllers' end-effector frame; empty means fr3_hand_tcp with "
+                        'the hand and fr3_link8 without it',
+            choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
         ),
         OpaqueFunction(function=generate_robot_nodes),
     ])

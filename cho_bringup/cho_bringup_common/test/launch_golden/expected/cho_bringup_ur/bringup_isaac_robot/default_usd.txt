@@ -13,24 +13,9 @@ LAUNCH cho_bringup_ur/bringup_isaac_robot.launch.py []
   ARG device default='cpu' choices=['cpu', 'cuda']
   ARG shutdown_on_gate_failure default='false' choices=None
   OPAQUE setup_control_environment
+    XACRO '<share:cho_description_ur>/urdf/ur5e.urdf' mappings={hardware: 'isaac'}
     ISAAC-CHECK isaac_sim_path='<FAKE>/isaacsim' robot_usd='<share:cho_description_ur>/usd/ur5e/ur5e.usda'
       convert_args=['--urdf', '<share:cho_description_ur>/urdf/ur5e.urdf', '--usd-path', '<share:cho_description_ur>/usd/ur5e', '--ros-package', 'cho_description_ur:<share:cho_description_ur>']
     ERROR RuntimeError: Isaac robot USD not found at '<share:cho_description_ur>/usd/ur5e/ur5e.usda'.
     | Build it once with:
     |   <FAKE>/isaacsim/python.sh <share:cho_simulation_isaac>/isaac/convert_urdf_to_usd.py --urdf <share:cho_description_ur>/urdf/ur5e.urdf --usd-path <share:cho_description_ur>/usd/ur5e --ros-package cho_description_ur:<share:cho_description_ur>
-RUNTIME_FILE <RT:cho_ur_isaac_runtime_params_#0> aliases=False
-  /**:
-    joint_space_position_controller:
-      ros__parameters: {}
-    task_space_ik_controller:
-      ros__parameters: {ee_name: tool0}
-  /** (every controller):
-    bringup_type: isaac
-    control_mode: position
-    joint_limits:
-      elbow_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      shoulder_lift_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      shoulder_pan_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_1_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_2_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}
-      wrist_3_joint: {has_acceleration_limits: true, has_velocity_limits: true, max_acceleration: 5.0, max_velocity: 3.1416}

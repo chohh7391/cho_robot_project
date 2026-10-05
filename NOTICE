@@ -9,7 +9,8 @@ record the upstream origin and license of each third-party component.
 Full license texts for vendored sources are in LICENSES/ or in the package.
 
 File headers. Every C++, Python and CMake source outside extern/ carries one,
-checked by ament_copyright in CI (.github/workflows/lint.yml):
+setup.py and CMakeLists.txt included, checked in CI (.github/workflows/lint.yml)
+by ament_copyright and, for CMakeLists.txt, tools/ci/check_copyright_headers.py:
   - written here: "Copyright <year> Hyunho Cho" and the Apache-2.0 notice;
   - adapted from upstream: the upstream copyright line(s), then
     "Copyright <year> Hyunho Cho", the upstream license in full, and a
@@ -19,7 +20,7 @@ A package whose files carry more than one license lists each in package.xml.
 
 
 ================================================================================
-Vendored third-party sources (copied into this repository and modified)
+Vendored third-party sources (copied into this repository; modified unless noted)
 ================================================================================
 
 cho_controller/cho_controller_common/
@@ -38,6 +39,37 @@ cho_controller/cho_controller_common/
     The trajectory sources (point_to_point, motion_limits*) were written here
     and are Apache-2.0.
 
+cho_description/cho_description_fr5/meshes/ag95/
+    DH-Robotics AG-95 gripper meshes (base_link, gripper_body; visual and
+    collision), unmodified, from dh_ag95_gripper_ros2 (humble branch)
+    https://github.com/ian-chuang/dh_ag95_gripper_ros2
+    Copyright (c) 2024 Ian Chuang
+    License: MIT  ->  cho_description/cho_description_fr5/meshes/ag95/LICENSE
+
+cho_description/cho_description_franka/meshes/accessories/ft_sensor/mounting.stl
+cho_description/cho_description_franka/xml/fr3_with_ft_sensor/assets/mounting.stl
+    Bota Systems SensONE mounting mesh, unmodified, from bota_driver_ros2
+    (meshes/BFT_SENS_M8/mounting.STL; extern/bota_driver_ros2 v1.1.14)
+    https://gitlab.com/botasys/drivers/bota_driver_ros2
+    Copyright (c) 2025, Bota Systems AG
+    License: BSD-3-Clause with Attribution Requirement
+      ->  cho_description/cho_description_franka/meshes/accessories/ft_sensor/LICENSE
+    Attribution: Bota Systems AG, https://www.botasys.com
+
+cho_description/cho_description_franka/xml/
+    MuJoCo models adapted from MuJoCo Menagerie franka_fr3 (itself derived
+    from franka_description, Franka Robotics GmbH); README, LICENSE and
+    CHANGELOG kept as shipped, the MJCF and some meshes modified.
+    https://github.com/google-deepmind/mujoco_menagerie
+    License: Apache-2.0  ->  cho_description/cho_description_franka/xml/fr3/LICENSE
+
+cho_description/cho_description_ur/xml/
+    MuJoCo model adapted from MuJoCo Menagerie universal_robots_ur5e; README,
+    LICENSE, CHANGELOG and assets kept as shipped.
+    https://github.com/google-deepmind/mujoco_menagerie
+    Copyright 2018 ROS Industrial Consortium
+    License: BSD-3-Clause  ->  cho_description/cho_description_ur/xml/LICENSE
+
 ================================================================================
 Forked upstream packages (retain their original license and authorship)
 ================================================================================
@@ -49,6 +81,36 @@ cho_description/cho_description_franka/
     https://github.com/frankaemika/franka_ros2
     Copyright (c) 2023-2025 Franka Robotics GmbH
     License: Apache-2.0
+
+    cho_controller_franka's controllers include code adapted from
+    franka_example_controllers (the joint impedance example's interface
+    configuration, velocity filter and torque law; the base controller's
+    state-interface handling and robot_description fetch).
+
+cho_description/cho_description_openarm/
+    Derived from openarm_description (URDF/xacro, meshes and configuration
+    under assets/)
+    https://github.com/enactic/openarm_description
+    and openarm_mujoco v1 (the MJCF scenes and OBJ meshes under xml/)
+    https://github.com/enactic/openarm_mujoco
+    Copyright 2025-2026 Enactic, Inc.
+    License: Apache-2.0  ->  cho_description/cho_description_openarm/LICENSE
+    robots/openarm_v10/ is adapted from both (Enactic and Cho headers);
+    scripts/, test/, config/mit_*.yaml and xml/*_moveit.xml were written here.
+
+cho_description/cho_description_fr5/
+    Meshes (meshes/fr5/ and xml/assets/*.STL, unmodified) and the inertial
+    and kinematic values of fr5_macro.xacro and the MJCF, from FAIRINO's
+    fairino_description (urdf/fairino5_v6.urdf), frcobot_ros2 tag
+    V3.0.0_RobotV3.8.0
+    https://github.com/FAIR-INNOVATION/frcobot_ros2
+    Copyright FAIR-INNOVATION (FAIRINO)
+    License: none declared upstream (package.xml "TODO: License declaration",
+    no LICENSE file in the repository) - the same open question as
+    extern/fairino_* below. The MJCF reached this repository through a local
+    "fr5_position_control_bundle" whose own origin was not recorded. The xacro,
+    ros2_control and MJCF structure were written here and are Apache-2.0;
+    meshes/ag95/ is listed above.
 
 cho_description/cho_description_ur/
     Derived from ur_description (Universal_Robots_ROS2_Description)
