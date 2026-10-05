@@ -19,14 +19,20 @@
 A goal is planned (MoveGroup, plan only), slowed down uniformly when the plan
 is shorter than the goal's ``duration_sec`` -- which the action contract makes
 a minimum, never a planning budget -- and then executed (ExecuteTrajectory).
+
+Cancelling a goal stops the arm through TrajectoryExecutionManager's event
+topic, not through the ExecuteTrajectory cancel alone: Humble's move_group
+(2.5.x) accepts that cancel and then ignores it -- its cancel callback only
+returns ACCEPT and nothing calls ``stopExecution()`` -- so the trajectory ran
+to its end. See :meth:`MoveItActionBridge._cancel_downstream`.
 """
 
 import math
+import signal
 import threading
 import time
 
 from action_msgs.msg import GoalStatus
-from action_msgs.srv import CancelGoal
 from cho_interfaces.action import JointSpace, TaskSpace
 from cho_robot_config import (blocked_home_joint_goals, controller_action_name,
                               load_robot_config, moveit_bridge_node)
@@ -48,8 +54,11 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.signals import SignalHandlerOptions
 from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -70,6 +79,33 @@ COINCIDENT_TOLERANCE = 1e-6
 # written (int32 seconds), which used to surface as an AssertionError from the
 # message setter mid-goal instead of a rejection.
 MAX_GOAL_DURATION_SEC = 3600.0
+
+# TrajectoryExecutionManager subscribes, on move_group's node, to this
+# std_msgs/String topic and calls stopExecution() on "stop": it cancels the
+# controllers' FollowJointTrajectory goals (a JTC then holds where the arm is)
+# and ends the ExecuteTrajectory goal ABORTED with MoveIt error PREEMPTED.
+EXECUTION_EVENT_TOPIC = 'trajectory_execution_event'
+STOP_EVENT = 'stop'
+# The stop is repeated until the execution goal is terminal: one that reaches
+# move_group after the goal was accepted but before execute() started is a
+# no-op there, and the trajectory would then run.
+STOP_REPEAT_SEC = 0.25
+# How long a stopped execution may take to report a terminal state before the
+# bridge calls its motion state unknown and latches a fault.
+STOP_CONFIRM_TIMEOUT_SEC = 10.0
+
+
+def execution_event_topic(execute_action):
+    """The TrajectoryExecutionManager event topic of the move_group serving *execute_action*.
+
+    Both are created on the move_group node, so they share its namespace:
+    ``/execute_trajectory`` -> ``/trajectory_execution_event``,
+    ``/ns/execute_trajectory`` -> ``/ns/trajectory_execution_event``.
+    """
+    if '/' not in execute_action:
+        return EXECUTION_EVENT_TOPIC
+    namespace = execute_action.rsplit('/', 1)[0]
+    return f'{namespace}/{EXECUTION_EVENT_TOPIC}'
 
 
 def _seconds(duration):
@@ -175,6 +211,9 @@ class MoveItActionBridge(Node):
         # The plan is executed separately, after it has been slowed to the
         # goal's duration; move_group serves this by default.
         self.declare_parameter('execute_trajectory_action', '/execute_trajectory')
+        # Where "stop" is published to stop an execution (EXECUTION_EVENT_TOPIC);
+        # '' derives it from execute_trajectory_action's namespace.
+        self.declare_parameter('trajectory_execution_event_topic', '')
         self.declare_parameter('ready_service', '/static_scene_ready')
         self.declare_parameter('controller_manager', '/controller_manager')
         self.declare_parameter('planning_scene_service', '/get_planning_scene')
@@ -204,6 +243,8 @@ class MoveItActionBridge(Node):
             raise ValueError('planning_time_sec must be finite and positive')
         self._move_group_action = self.get_parameter('move_group_action').value
         self._execute_action = self.get_parameter('execute_trajectory_action').value
+        self._event_topic = (self.get_parameter('trajectory_execution_event_topic').value
+                             or execution_event_topic(self._execute_action))
         self._ready_service = self.get_parameter('ready_service').value
         controller_manager = self.get_parameter('controller_manager').value.rstrip('/')
         self._planning_scene_service = self.get_parameter('planning_scene_service').value
@@ -240,12 +281,16 @@ class MoveItActionBridge(Node):
         self._goal_reserved = False
         self._faulted = False
         self._fault_reason = ''
+        self._executing = False
         self._joint_server = None
         self._task_server = None
         self._move_client = ActionClient(
             self, MoveGroup, self._move_group_action, callback_group=self._callbacks)
         self._execute_client = ActionClient(
             self, ExecuteTrajectory, self._execute_action, callback_group=self._callbacks)
+        # Reliable, keep-last 10: what the TrajectoryExecutionManager's
+        # subscription asks for (rclcpp::ServicesQoS).
+        self._stop_publisher = self.create_publisher(String, self._event_topic, 10)
         self._ready_client = self.create_client(
             Trigger, self._ready_service, callback_group=self._callbacks)
         self._controllers_client = self.create_client(
@@ -348,14 +393,19 @@ class MoveItActionBridge(Node):
         # a bad goal is rejected rather than accepted and then aborted
         # (cho_interfaces/CONTRACT.md).
         try:
-            self._checked_joint_positions(request.target_joints)
+            positions = self._checked_joint_positions(request.target_joints)
         except ValueError as error:
             self.get_logger().error(f'Goal rejected: {error}')
+            return GoalResponse.REJECT
+        reason = self._blocked_reason(positions)
+        if reason:
+            self.get_logger().error(f'Goal rejected: {reason}')
             return GoalResponse.REJECT
         return self._goal_callback(request)
 
     def _task_goal_callback(self, request):
-        reason = self._unhonoured_frame(request) or self._unusable_pose(request)
+        reason = (self._unhonoured_frame(request) or self._unusable_pose(request)
+                  or self._unavailable_ee_transform(request))
         if reason:
             self.get_logger().error(f'Goal rejected: {reason}')
             return GoalResponse.REJECT
@@ -445,6 +495,22 @@ class MoveItActionBridge(Node):
                 f"in the planning frame, so frame_id must be '', '{self._world_frame}' or, "
                 f"where it coincides with that, '{self._arm_base_link}'")
 
+    def _unavailable_ee_transform(self, request):
+        """Why a relative goal cannot be composed now, or '' when it can (or is absolute).
+
+        A relative goal is composed against TF's world_frame -> ee_link. That
+        is checked when the goal arrives, so a missing transform is a
+        rejection rather than an accepted goal that then aborts.
+        """
+        if not request.relative:
+            return ''
+        try:
+            self._tf_buffer.lookup_transform(self._world_frame, self._ee_link, rclpy.time.Time())
+        except TransformException as error:
+            return (f"a relative goal is composed against TF's '{self._world_frame}' -> "
+                    f"'{self._ee_link}', which is unavailable: {error}")
+        return ''
+
     def _apart_from_planning_frame(self, frame):
         """'' when TF has *frame* at the planning frame, else what keeps them apart."""
         try:
@@ -482,6 +548,13 @@ class MoveItActionBridge(Node):
         if not self._execute_client.server_is_ready():
             self.get_logger().error(
                 f'Goal rejected: ExecuteTrajectory {self._execute_action} is unavailable')
+            return GoalResponse.REJECT
+        if self._stop_publisher.get_subscription_count() == 0:
+            # Without it a cancel could not stop the motion: Humble's
+            # move_group ignores a cancel of ExecuteTrajectory.
+            self.get_logger().error(
+                f'Goal rejected: nothing subscribes to {self._event_topic}, so a cancel '
+                'could not stop the motion')
             return GoalResponse.REJECT
         with self._goal_lock:
             if self._faulted:
@@ -535,17 +608,13 @@ class MoveItActionBridge(Node):
                 return blocked
         return None
 
-    @staticmethod
-    def _rotate(q, vector):
-        x, y, z = vector
-        return (
-            (1 - 2*(q.y*q.y + q.z*q.z))*x
-            + 2*(q.x*q.y - q.z*q.w)*y + 2*(q.x*q.z + q.y*q.w)*z,
-            2*(q.x*q.y + q.z*q.w)*x
-            + (1 - 2*(q.x*q.x + q.z*q.z))*y + 2*(q.y*q.z - q.x*q.w)*z,
-            2*(q.x*q.z - q.y*q.w)*x
-            + 2*(q.y*q.z + q.x*q.w)*y + (1 - 2*(q.x*q.x + q.y*q.y))*z,
-        )
+    def _blocked_reason(self, positions):
+        """Why *positions* is a disabled home of this robot, or '' when it is not."""
+        blocked = self._blocked_joint_goal(positions)
+        if blocked is None:
+            return ''
+        return (f"home {blocked['selector']} is disabled for {self._robot_type}: "
+                f"{blocked['reason']}")
 
     @staticmethod
     def _normalize_quaternion(q):
@@ -563,19 +632,6 @@ class MoveItActionBridge(Node):
                 return f'{name}({code})'
         return str(code)
 
-    @staticmethod
-    def _compose_quaternion(left, right):
-        lx, ly, lz, lw = MoveItActionBridge._normalize_quaternion(left)
-        rx, ry, rz, rw = MoveItActionBridge._normalize_quaternion(right)
-        values = (
-            lw*rx + lx*rw + ly*rz - lz*ry,
-            lw*ry - lx*rz + ly*rw + lz*rx,
-            lw*rz + lx*ry - ly*rx + lz*rw,
-            lw*rw - lx*rx - ly*ry - lz*rz,
-        )
-        norm = math.sqrt(sum(value*value for value in values))
-        return tuple(value / norm for value in values)
-
     def _task_constraints(self, request):
         # The frame was checked when the goal was accepted: '', world_frame or
         # an arm_base_link that coincides with it for an absolute goal, '' or
@@ -583,26 +639,20 @@ class MoveItActionBridge(Node):
         # TF's world_frame -> EE, so world_frame has to be in TF; it is on
         # every bringup that starts this bridge (cho_moveit/README.md).
         target = request.target_pose.pose
+        pose = Pose()
+        pose.position.x, pose.position.y, pose.position.z = (
+            target.position.x, target.position.y, target.position.z)
+        (pose.orientation.x, pose.orientation.y,
+         pose.orientation.z, pose.orientation.w) = self._normalize_quaternion(target.orientation)
         if request.relative:
+            # The displacement is in the EE frame: world_T_target =
+            # world_T_ee * ee_T_target, which is what tf2 composes.
             transform = self._tf_buffer.lookup_transform(
                 self._world_frame, self._ee_link, rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=2.0))
-            delta = self._rotate(
-                transform.transform.rotation,
-                (target.position.x, target.position.y, target.position.z))
-            pose = Pose()
-            pose.position.x = transform.transform.translation.x + delta[0]
-            pose.position.y = transform.transform.translation.y + delta[1]
-            pose.position.z = transform.transform.translation.z + delta[2]
-            composed = self._compose_quaternion(
-                transform.transform.rotation, target.orientation)
-            pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = composed
-        else:
-            pose = Pose()
-            pose.position = target.position
-            normalized = self._normalize_quaternion(target.orientation)
+            pose = do_transform_pose(pose, transform)
             (pose.orientation.x, pose.orientation.y,
-             pose.orientation.z, pose.orientation.w) = normalized
+             pose.orientation.z, pose.orientation.w) = self._normalize_quaternion(pose.orientation)
 
         values = [pose.position.x, pose.position.y, pose.position.z,
                   pose.orientation.x, pose.orientation.y,
@@ -740,23 +790,39 @@ class MoveItActionBridge(Node):
         if cho_handle.is_cancel_requested:
             cho_handle.canceled()
             return False, 'canceled before execution; nothing moved'
-        return self._execute(cho_handle, trajectory, feedback)
+        self._executing = True
+        try:
+            return self._execute(cho_handle, trajectory, feedback)
+        finally:
+            self._executing = False
+
+    def stop_active_execution(self):
+        """Ask move_group to stop if this bridge has an execution in flight (shutdown path)."""
+        if not self._executing:
+            return
+        self.get_logger().warn('Shutting down with an execution in flight; asking MoveIt to stop')
+        if self._request_stop():
+            # Reliable delivery is asynchronous: wait for move_group to take
+            # it before the context (and the participant) go away.
+            try:
+                self._stop_publisher.wait_for_all_acked(rclpy.duration.Duration(seconds=1.0))
+            except Exception as error:  # noqa: BLE001 - best effort on the way out
+                self.get_logger().error(f'Stop not acknowledged: {error}')
 
     def _execute(self, cho_handle, trajectory, feedback):
         """Execute *trajectory*; return (succeeded, reason) and end *cho_handle*.
 
         From here the arm can move, so any outcome whose motion state is
-        unknown latches the bridge's fault and keeps its reservation.
+        unknown asks move_group to stop and latches the bridge's fault,
+        keeping its reservation (:meth:`_fail_unknown`).
         """
         goal = ExecuteTrajectory.Goal()
         goal.trajectory = trajectory
         try:
             send_future = self._execute_client.send_goal_async(goal)
         except Exception as error:  # noqa: BLE001 - transport state is unknown
-            reason = f'ExecuteTrajectory send_goal transport failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, f'ExecuteTrajectory send_goal transport failed: {error}')
         cancel_requested_before_accept = False
         send_wait_warning_at = time.monotonic() + 10.0
         while rclpy.ok() and not send_future.done():
@@ -769,17 +835,13 @@ class MoveItActionBridge(Node):
                 send_wait_warning_at = time.monotonic() + 10.0
             time.sleep(0.02)
         if not send_future.done():
-            reason = 'ROS shutdown while ExecuteTrajectory goal acceptance was pending'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, 'ROS shutdown while ExecuteTrajectory goal acceptance was pending')
         try:
             move_handle = send_future.result()
         except Exception as error:  # noqa: BLE001 - late acceptance is possible
-            reason = f'ExecuteTrajectory send_goal result failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, f'ExecuteTrajectory send_goal result failed: {error}')
         if move_handle is None or not move_handle.accepted:
             if cancel_requested_before_accept:
                 cho_handle.canceled()
@@ -791,10 +853,8 @@ class MoveItActionBridge(Node):
         try:
             result_future = move_handle.get_result_async()
         except Exception as error:  # noqa: BLE001 - accepted goal may be moving
-            reason = f'ExecuteTrajectory get_result transport failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, f'ExecuteTrajectory get_result transport failed: {error}')
         if cancel_requested_before_accept:
             return self._cancel_downstream(cho_handle, move_handle, result_future)
         while rclpy.ok() and not result_future.done():
@@ -802,22 +862,16 @@ class MoveItActionBridge(Node):
                 return self._cancel_downstream(cho_handle, move_handle, result_future)
             time.sleep(0.02)
         if not result_future.done():
-            reason = 'ROS shutdown while accepted ExecuteTrajectory goal was active'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, 'ROS shutdown while accepted ExecuteTrajectory goal was active')
         try:
             wrapped = result_future.result()
         except Exception as error:  # noqa: BLE001 - terminal state is unknown
-            reason = f'ExecuteTrajectory result future failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, f'ExecuteTrajectory result future failed: {error}')
         if wrapped is None or wrapped.result is None:
-            reason = 'ExecuteTrajectory returned no result; motion state is unknown'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle, 'ExecuteTrajectory returned no result; motion state is unknown')
         error = wrapped.result.error_code.val
         if (wrapped.status != GoalStatus.STATUS_SUCCEEDED
                 or error != MoveItErrorCodes.SUCCESS):
@@ -831,61 +885,93 @@ class MoveItActionBridge(Node):
         cho_handle.succeed()
         return True, ''
 
+    def _request_stop(self):
+        """Publish "stop" to move_group's TrajectoryExecutionManager; False if it was not sent."""
+        try:
+            self._stop_publisher.publish(String(data=STOP_EVENT))
+        except Exception as error:  # noqa: BLE001 - e.g. the context is already shut down
+            self.get_logger().error(
+                f'Could not publish {STOP_EVENT!r} on {self._event_topic}: {error}')
+            return False
+        return True
+
+    def _fail_unknown(self, cho_handle, reason):
+        """An execution whose motion state is unknown: ask for a stop, latch, abort."""
+        self._request_stop()
+        self._latch_fault(reason)
+        cho_handle.abort()
+        return False, reason
+
     def _cancel_downstream(self, cho_handle, move_handle, result_future):
+        """Stop the running execution and end *cho_handle* by what MoveIt reports.
+
+        Humble's move_group accepts a cancel of ExecuteTrajectory and never
+        acts on it, so the cancel alone left the arm running to the end of the
+        trajectory (up to duration_sec); its answer does not even arrive until
+        then, because the cancel callback shares a mutually exclusive callback
+        group with the execution it would cancel. What stops it is "stop" on the
+        TrajectoryExecutionManager's event topic: stopExecution() cancels the
+        controllers' FollowJointTrajectory goals -- the JTC holds where the
+        arm is -- and the ExecuteTrajectory goal ends ABORTED with MoveIt
+        error PREEMPTED. The cancel is still sent, because a MoveIt that
+        honours it ends the goal CANCELED instead.
+
+        Whether the motion is over is judged by the execution goal's terminal
+        state, never by the cancel response, and "stop" is repeated every
+        STOP_REPEAT_SEC until it arrives. CANCELED, or ABORTED with PREEMPTED,
+        is the cancel taking effect; SUCCEEDED means the trajectory finished
+        before the stop did; any other ABORTED is an execution failure that
+        ended the motion anyway. Only no terminal state within
+        STOP_CONFIRM_TIMEOUT_SEC leaves the motion state unknown and latches
+        the fault.
+        """
+        self._request_stop()
         try:
-            cancel_future = move_handle.cancel_goal_async()
-        except Exception as error:  # noqa: BLE001 - motion state is unknown
-            reason = f'ExecuteTrajectory cancel transport failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
-        deadline = time.monotonic() + 5.0
-        while rclpy.ok() and not cancel_future.done() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        if not cancel_future.done():
-            reason = 'ExecuteTrajectory cancel response timed out; motion state is unknown'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
-        try:
-            response = cancel_future.result()
-        except Exception as error:  # noqa: BLE001 - motion state is unknown
-            reason = f'ExecuteTrajectory cancel result failed: {error}'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
-        if (response is None or response.return_code != CancelGoal.Response.ERROR_NONE
-                or not response.goals_canceling):
-            code = response.return_code if response is not None else 'no response'
-            reason = (f'ExecuteTrajectory cancel rejected (return_code={code}); '
-                      'motion state is unknown')
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
-        deadline = time.monotonic() + 10.0
+            move_handle.cancel_goal_async()
+        except Exception as error:  # noqa: BLE001 - the stop event still applies
+            self.get_logger().warn(
+                f'ExecuteTrajectory cancel transport failed ({error}); relying on the stop event')
+        deadline = time.monotonic() + STOP_CONFIRM_TIMEOUT_SEC
+        next_stop = time.monotonic() + STOP_REPEAT_SEC
         while rclpy.ok() and not result_future.done() and time.monotonic() < deadline:
+            if time.monotonic() >= next_stop:
+                self._request_stop()
+                next_stop = time.monotonic() + STOP_REPEAT_SEC
             time.sleep(0.02)
         if not result_future.done():
-            reason = ('ExecuteTrajectory did not reach a terminal state after cancel; '
-                      'motion state is unknown')
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
+            return self._fail_unknown(
+                cho_handle,
+                f'ExecuteTrajectory did not reach a terminal state within '
+                f'{STOP_CONFIRM_TIMEOUT_SEC:g} s of the stop; motion state is unknown')
         try:
             wrapped = result_future.result()
         except Exception as error:  # noqa: BLE001 - terminal state is unknown
-            reason = f'ExecuteTrajectory post-cancel result failed: {error}'
-            self._latch_fault(reason)
+            return self._fail_unknown(
+                cho_handle, f'ExecuteTrajectory post-cancel result failed: {error}')
+        if wrapped is None:
+            return self._fail_unknown(
+                cho_handle, 'ExecuteTrajectory returned no result after the stop; '
+                'motion state is unknown')
+        result = getattr(wrapped, 'result', None)
+        error = result.error_code.val if result is not None else None
+        if (wrapped.status == GoalStatus.STATUS_CANCELED
+                or (wrapped.status == GoalStatus.STATUS_ABORTED
+                    and error == MoveItErrorCodes.PREEMPTED)):
+            cho_handle.canceled()
+            return False, 'goal canceled; the arm was stopped where it was'
+        if wrapped.status == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info('The trajectory finished before the stop took effect')
+            cho_handle.succeed()
+            return True, ''
+        if wrapped.status == GoalStatus.STATUS_ABORTED:
+            reason = ('MoveIt execution ended while being stopped: '
+                      f'error_code={self._error_name(error)}')
+            self.get_logger().error(reason)
             cho_handle.abort()
             return False, reason
-        if wrapped is None or wrapped.status != GoalStatus.STATUS_CANCELED:
-            status = wrapped.status if wrapped is not None else 'no result'
-            reason = f'ExecuteTrajectory terminal status after cancel was not CANCELED ({status})'
-            self._latch_fault(reason)
-            cho_handle.abort()
-            return False, reason
-        cho_handle.canceled()
-        return False, 'goal canceled'
+        return self._fail_unknown(
+            cho_handle, f'ExecuteTrajectory ended in status {wrapped.status} after the stop; '
+            'motion state is unknown')
 
     @staticmethod
     def _target_summary(constraints):
@@ -904,19 +990,17 @@ class MoveItActionBridge(Node):
         result = JointSpace.Result()
         try:
             try:
-                # Already checked when the goal was accepted; repeated so this
-                # path never plans a goal it would have rejected.
                 positions = self._checked_joint_positions(goal_handle.request.target_joints)
             except ValueError as error:
                 result.message = f'Joint goal rejected: {error}'
                 self.get_logger().error(result.message)
                 goal_handle.abort()
                 return result
-            blocked = self._blocked_joint_goal(positions)
-            if blocked is not None:
-                result.message = (
-                    f"Joint goal rejected: home {blocked['selector']} is disabled for "
-                    f"{self._robot_type}: {blocked['reason']}")
+            # Both rejected when the goal arrived; repeated so this path
+            # never plans a goal it would have rejected.
+            blocked = self._blocked_reason(positions)
+            if blocked:
+                result.message = f'Joint goal rejected: {blocked}'
                 self.get_logger().error(result.message)
                 goal_handle.abort()
                 return result
@@ -948,20 +1032,40 @@ class MoveItActionBridge(Node):
             self._release_goal()
 
 
+def _interrupt(_signum, _frame):
+    raise KeyboardInterrupt
+
+
 def main(args=None):
-    rclpy.init(args=args)
-    node = MoveItActionBridge()
-    executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(node)
+    # rclpy's own SIGINT handler shuts the context down before any Python code
+    # runs, after which nothing can be published. These handlers leave it
+    # valid, so an execution still in flight can be stopped first: a goal of
+    # move_group outlives the client that sent it. Installed explicitly, as
+    # rclpy's are, so that a SIGINT ignored by the parent (a background job of
+    # a script) is still honoured; SIGTERM is launch's second request.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _interrupt)
+    signal.signal(signal.SIGTERM, _interrupt)
+    node = None
+    executor = None
     try:
+        node = MoveItActionBridge()
+        executor = MultiThreadedExecutor(num_threads=4)
+        executor.add_node(node)
         executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        executor.shutdown()
-        node.destroy_node()
+        if node is not None:
+            node.stop_active_execution()
+        # Shut the context down first: an in-flight goal callback waits while
+        # rclpy.ok(), and executor.shutdown() waits for it.
         if rclpy.ok():
             rclpy.shutdown()
+        if executor is not None:
+            executor.shutdown()
+        if node is not None:
+            node.destroy_node()
 
 
 if __name__ == '__main__':

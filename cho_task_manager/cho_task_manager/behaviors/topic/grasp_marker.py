@@ -34,11 +34,11 @@ import math
 import py_trees
 from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, write_client
+from cho_task_manager.utils.clock import arm, deadline_after
 
 #: Blackboard keys (TASK_NAMESPACE) the pour goal reads the grasp from.
 GRASP_JOINTS_KEY = 'pour_grasp_joints'
@@ -100,7 +100,8 @@ class GraspMarkerSampleBehavior(py_trees.behaviour.Behaviour):
     def initialise(self):
         self._marker = None
         self._joints = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def _joint_positions(self):
         """The latest joint state in registry order, or None if it is not all there."""
@@ -116,7 +117,9 @@ class GraspMarkerSampleBehavior(py_trees.behaviour.Behaviour):
     def update(self):
         marker, joints = self._marker, self._joint_positions()
         if marker is None or joints is None:
-            if self.node.get_clock().now() > self._deadline:
+            clock = self.node.get_clock()
+            self._deadline = arm(self._deadline, clock, self.timeout_sec)
+            if self._deadline is not None and clock.now() > self._deadline:
                 missing = []
                 if marker is None:
                     missing.append(

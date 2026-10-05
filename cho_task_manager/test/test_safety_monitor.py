@@ -28,6 +28,7 @@ from geometry_msgs.msg import WrenchStamped
 import numpy as np
 import py_trees
 import pytest
+from rclpy.qos import DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
@@ -97,12 +98,16 @@ class FakeTime:
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
 
+    def __sub__(self, other):
+        return FakeTime(self.seconds - other.seconds)
+
     def __gt__(self, other):
         return self.seconds > other.seconds
 
 
 class FakeClock:
     def __init__(self):
+        # Running: a clock at 0 is sim time before the first /clock.
         self.seconds = 100.0
 
     def now(self):
@@ -154,7 +159,7 @@ def _arm(monitor, positions=_POSE, force=None, torque=None):
         monitor._on_joints(_joint_state(positions))
     if monitor.needs_wrench:
         monitor._on_wrench(_wrench(force or (0.0, 0.0, 0.0), torque or (0.0, 0.0, 0.0)))
-    unarmed = monitor._unarmed_reason(monitor._now())
+    unarmed = monitor._unarmed_reason(monitor.clock.now())
     assert unarmed is None, unarmed
     return monitor
 
@@ -235,9 +240,95 @@ def test_it_waits_for_its_first_sample_then_gives_up():
     monitor.initialise()
 
     assert monitor.update() == RUNNING
-    monitor.clock.advance(11.0)
+    monitor.clock.advance(9.9)
+    assert monitor.update() == RUNNING
+    monitor.clock.advance(0.2)
     assert monitor.update() == FAILURE
     assert '/bota_ft_sensor/wrench' in _last_error(monitor)
+
+
+# ---------------------------------------------------------------------------
+# Arming: the window waits only for what has never arrived
+# ---------------------------------------------------------------------------
+
+def test_a_sensor_that_goes_quiet_inside_the_arming_window_trips_at_once():
+    # It used to read RUNNING for the rest of the 10 s window: a sensor dead
+    # in the first seconds of a mission went unwatched for those seconds.
+    monitor = _arm(_monitor(max_force_n=50.0, max_age_sec=0.5, arming_timeout_sec=10.0),
+                   force=(10.0, 0.0, 0.0))
+    assert monitor.update() == RUNNING
+
+    monitor.clock.advance(0.6)
+
+    assert monitor.update() == FAILURE
+    assert 'stale' in _last_error(monitor)
+
+
+def test_joint_states_that_go_quiet_inside_the_arming_window_trip_at_once():
+    monitor = _arm(_monitor(joint_limit_margin_rad=0.1, max_age_sec=0.5))
+    assert monitor.update() == RUNNING
+
+    monitor.clock.advance(0.6)
+
+    assert monitor.update() == FAILURE
+    assert '/joint_states is' in _last_error(monitor)
+
+
+def test_a_description_the_guards_cannot_use_trips_at_once():
+    # Not something more waiting can fix, so it does not wait the window out.
+    monitor = _monitor(joint_limit_margin_rad=0.1, arming_timeout_sec=10.0)
+    monitor.initialise()
+    monitor._on_description(String(data=_urdf(_JOINTS[:5])))
+    monitor._on_joints(_joint_state(_POSE))
+
+    assert monitor.update() == FAILURE
+    assert 'cannot use the robot description' in _last_error(monitor)
+
+
+def test_the_arming_window_starts_with_the_clock():
+    # Under sim time the node clock reads 0 until /clock. A window taken from
+    # that ended the moment /clock arrived, before any first sample could.
+    monitor = _monitor(max_force_n=50.0, arming_timeout_sec=10.0)
+    monitor.clock.seconds = 0.0
+    monitor.initialise()
+    assert monitor.update() == RUNNING
+
+    monitor.clock.seconds = 5000.0
+    assert monitor.update() == RUNNING
+    monitor.clock.advance(9.9)
+    assert monitor.update() == RUNNING
+    monitor.clock.advance(0.2)
+    assert monitor.update() == FAILURE
+
+
+def test_a_sample_from_before_the_clock_is_aged_from_its_first_reading():
+    monitor = _monitor(max_force_n=50.0, max_age_sec=0.5)
+    monitor.clock.seconds = 0.0
+    monitor.initialise()
+    monitor._on_wrench(_wrench((10.0, 0.0, 0.0)))
+
+    monitor.clock.seconds = 5000.0   # not 5000 s stale: it arrived "just now"
+    assert monitor.update() == RUNNING
+    monitor.clock.advance(0.6)
+    assert monitor.update() == FAILURE
+    assert 'stale' in _last_error(monitor)
+
+
+def test_the_description_is_subscribed_reliable_and_latched():
+    # robot_state_publisher publishes it RELIABLE + TRANSIENT_LOCAL. A
+    # best-effort reader is not guaranteed the latched sample, and the
+    # monitor would then wait out its arming window and fail every mission.
+    monitor = SafetyMonitorBehavior(
+        name='Monitor', robot_config=_config(), joint_limit_margin_rad=0.1)
+    node = MagicMock()
+    monitor.setup(node=node)
+    calls = {call.args[1]: call.args[3] for call in node.create_subscription.call_args_list}
+    qos = calls[monitor.robot_description_topic]
+    assert qos.reliability == ReliabilityPolicy.RELIABLE
+    assert qos.durability == DurabilityPolicy.TRANSIENT_LOCAL
+    assert qos.depth == 1
+    # The sensor inputs stay best effort, which matches either kind of publisher.
+    assert calls[monitor.joint_states_topic].reliability == ReliabilityPolicy.BEST_EFFORT
 
 
 # ---------------------------------------------------------------------------

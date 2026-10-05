@@ -18,7 +18,8 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
-from geometry_msgs.msg import PoseStamped, Quaternion, TransformStamped
+from action_msgs.srv import CancelGoal
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from moveit_msgs.msg import RobotTrajectory
 import pytest
 from sensor_msgs.msg import JointState
@@ -106,6 +107,51 @@ class ChoHandle:
         self.terminal = 'aborted'
 
 
+class StopPublisher:
+    """The bridge's "stop" publisher: records what it sent, as move_group would see it."""
+
+    def __init__(self, subscribers=1):
+        self.published = []
+        self.subscribers = subscribers
+
+    def publish(self, message):
+        self.published.append(message.data)
+
+    def get_subscription_count(self):
+        return self.subscribers
+
+    def wait_for_all_acked(self, _timeout):
+        self.acked = list(self.published)
+        return True
+
+
+class FakeClock:
+    """time.monotonic/time.sleep for the bridge's wait loops, without waiting."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class PendingFuture(Future):
+    """A future that is done only after *polls* calls to done()."""
+
+    def __init__(self, result, polls):
+        super().__init__(result)
+        self.polls = polls
+
+    def done(self):
+        if self.polls > 0:
+            self.polls -= 1
+            return False
+        return True
+
+
 class Tf:
     """A TF buffer holding one transform from the planning frame, or none."""
 
@@ -120,9 +166,11 @@ class Tf:
             raise MODULE.TransformException(f'{source} does not exist') from None
 
 
-def transform(x=0.0, yaw_quaternion_z=0.0):
+def transform(x=0.0, yaw_quaternion_z=0.0, y=0.0, z=0.0):
     stamped = TransformStamped()
     stamped.transform.translation.x = x
+    stamped.transform.translation.y = y
+    stamped.transform.translation.z = z
     stamped.transform.rotation.z = yaw_quaternion_z
     stamped.transform.rotation.w = (1.0 - yaw_quaternion_z ** 2) ** 0.5
     return stamped
@@ -171,6 +219,10 @@ def bare_bridge():
     bridge._goal_reserved = True
     bridge._faulted = False
     bridge._fault_reason = ''
+    bridge._executing = False
+    bridge._robot_type = 'fr5'
+    bridge._event_topic = '/trajectory_execution_event'
+    bridge._stop_publisher = StopPublisher()
     bridge._joint_names = ['j1', 'j2', 'j3', 'j4', 'j5', 'j6']
     bridge._group = 'fr5_arm'
     bridge._velocity_scaling = 0.25
@@ -324,13 +376,25 @@ def test_a_task_goal_it_cannot_plan_is_rejected_not_accepted_and_aborted(field, 
     assert bridge._task_goal_callback(request) == MODULE.GoalResponse.REJECT
 
 
-def test_relative_quaternion_composition_and_normalization():
-    half = 2**-0.5
-    current = Quaternion(z=half, w=half)
-    relative = Quaternion(x=half, w=half)
-    actual = MODULE.MoveItActionBridge._compose_quaternion(current, relative)
-    expected = (0.5, 0.5, 0.5, 0.5)
-    assert all(abs(a - e) < 1e-9 for a, e in zip(actual, expected))
+def test_a_relative_goal_is_composed_in_the_ee_frame():
+    # EE at (0.3, 0.1, 0.5) turned 90 deg about world z; the goal moves it
+    # 0.1 m along its own x and turns it 90 deg about its own x. In the world
+    # that is +0.1 m along y, and the orientation (z90 * x90) = (0.5, 0.5, 0.5, 0.5).
+    half = 2 ** -0.5
+    bridge = bare_bridge()
+    bridge._tf_buffer = Tf({('world', 'wrist3_link'): transform(
+        x=0.3, y=0.1, z=0.5, yaw_quaternion_z=half)})
+    request = SimpleNamespace(relative=True, target_pose=PoseStamped(), duration_sec=5.0)
+    request.target_pose.pose.position.x = 0.1
+    # Not unit length: it is normalized before it is composed.
+    request.target_pose.pose.orientation.x = 2.0
+    request.target_pose.pose.orientation.w = 2.0
+    constraints = bridge._task_constraints(request)
+    pose = constraints.position_constraints[0].constraint_region.primitive_poses[0]
+    assert (pose.position.x, pose.position.y, pose.position.z) == pytest.approx((0.3, 0.2, 0.5))
+    orientation = constraints.orientation_constraints[0].orientation
+    assert (orientation.x, orientation.y, orientation.z, orientation.w) == pytest.approx(
+        (0.5, 0.5, 0.5, 0.5))
 
 
 def test_concurrent_goal_is_rejected():
@@ -367,6 +431,49 @@ def _ready_bridge():
 def test_a_plausible_duration_is_accepted():
     assert _ready_bridge()._goal_callback(
         SimpleNamespace(duration_sec=5.0)) == MODULE.GoalResponse.ACCEPT
+
+
+def test_a_goal_is_rejected_while_nothing_could_stop_it():
+    # Humble's move_group ignores a cancel of ExecuteTrajectory; the stop
+    # event is what stops the arm, so with no one listening a goal could not
+    # be cancelled once it moved.
+    bridge = _ready_bridge()
+    bridge._stop_publisher = StopPublisher(subscribers=0)
+    assert bridge._goal_callback(SimpleNamespace(duration_sec=5.0)) == MODULE.GoalResponse.REJECT
+    assert not bridge._goal_reserved
+
+
+def test_a_disabled_home_is_rejected_when_the_goal_arrives():
+    # It used to be accepted, reserved, and then aborted by the execute path.
+    bridge = _ready_bridge()
+    bridge._blocked_joint_goals = [{
+        'selector': '0', 'positions': [0.0] * 6, 'reason': 'floor contact',
+        'max_joint_distance': 0.01}]
+    request = SimpleNamespace(target_joints=JointState(position=[0.0] * 6), duration_sec=5.0)
+    assert bridge._joint_goal_callback(request) == MODULE.GoalResponse.REJECT
+    assert not bridge._goal_reserved
+    request.target_joints.position = [0.5] * 6
+    assert bridge._joint_goal_callback(request) == MODULE.GoalResponse.ACCEPT
+
+
+def test_a_relative_goal_without_the_ee_transform_is_rejected_when_it_arrives():
+    bridge = _ready_bridge()
+    bridge._tf_buffer = Tf()
+    request = SimpleNamespace(relative=True, target_pose=PoseStamped(), duration_sec=5.0)
+    request.target_pose.pose.orientation.w = 1.0
+    assert bridge._task_goal_callback(request) == MODULE.GoalResponse.REJECT
+    assert not bridge._goal_reserved
+    bridge._tf_buffer = Tf({('world', 'wrist3_link'): transform()})
+    assert bridge._task_goal_callback(request) == MODULE.GoalResponse.ACCEPT
+
+
+@pytest.mark.parametrize('execute_action,topic', [
+    ('/execute_trajectory', '/trajectory_execution_event'),
+    ('/ns/execute_trajectory', '/ns/trajectory_execution_event'),
+    ('execute_trajectory', 'trajectory_execution_event'),
+])
+def test_the_stop_goes_to_the_event_topic_of_the_move_group_that_executes(execute_action, topic):
+    assert MODULE.execution_event_topic(execute_action) == topic
 
 
 @pytest.mark.parametrize('duration', [2.0 ** 31, 1e12, MODULE.MAX_GOAL_DURATION_SEC + 1.0])
@@ -493,72 +600,154 @@ def test_a_planning_failure_aborts_without_latching_a_fault(monkeypatch):
     assert bridge._execute_client.sent == []
 
 
-def cancel_fixture(cancel_response, terminal_status):
-    result = SimpleNamespace(status=terminal_status)
-    result_future = Future(result)
-    move_handle = SimpleNamespace(
-        cancel_goal_async=lambda: Future(cancel_response))
-    return move_handle, result_future
+ACCEPTED = SimpleNamespace(return_code=CancelGoal.Response.ERROR_NONE, goals_canceling=[object()])
+
+
+class MoveHandle:
+    """An accepted ExecuteTrajectory goal: records cancels, answers with *cancel_response*."""
+
+    def __init__(self, cancel_response=ACCEPTED, cancel_raises=False):
+        self.cancel_response = cancel_response
+        self.cancel_raises = cancel_raises
+        self.cancels = 0
+
+    def cancel_goal_async(self):
+        self.cancels += 1
+        if self.cancel_raises:
+            raise RuntimeError('transport lost')
+        return Future(self.cancel_response)
+
+
+def terminal(status, error_code=None):
+    """An ExecuteTrajectory result as the action client returns it."""
+    result = None if error_code is None else SimpleNamespace(
+        error_code=SimpleNamespace(val=error_code))
+    return SimpleNamespace(status=status, result=result)
+
+
+def cancel(monkeypatch, result_future, move_handle=None):
+    """Cancel a running execution through the bridge; returns (bridge, cho handle, outcome)."""
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    clock = FakeClock()
+    monkeypatch.setattr(MODULE.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(MODULE.time, 'sleep', clock.sleep)
+    bridge = bare_bridge()
+    handle = ChoHandle()
+    outcome = bridge._cancel_downstream(handle, move_handle or MoveHandle(), result_future)
+    bridge._release_goal()
+    return bridge, handle, outcome
+
+
+PREEMPTED = MODULE.MoveItErrorCodes.PREEMPTED
+
+
+def test_a_cancel_publishes_stop_because_humble_ignores_the_cancel(monkeypatch):
+    # move_group 2.5.x accepts the cancel and runs the trajectory to its end;
+    # TrajectoryExecutionManager's "stop" event is what calls stopExecution().
+    move_handle = MoveHandle()
+    bridge, _handle, _outcome = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_ABORTED, PREEMPTED)), move_handle)
+    assert bridge._stop_publisher.published[:1] == ['stop']
+    # Still sent: a MoveIt that honours it stops on it.
+    assert move_handle.cancels == 1
+
+
+def test_the_stopped_execution_humble_reports_is_a_cancel_not_a_fault(monkeypatch):
+    # stopExecution() ends the goal ABORTED with PREEMPTED; that is the cancel
+    # taking effect, and the arm holds where it was.
+    bridge, handle, (succeeded, reason) = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_ABORTED, PREEMPTED)))
+    assert not succeeded and 'stopped' in reason
+    assert handle.terminal == 'canceled'
+    assert not bridge._faulted and not bridge._goal_reserved
 
 
 def test_confirmed_cancel_allows_reservation_release(monkeypatch):
-    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
-    response = SimpleNamespace(
-        return_code=MODULE.CancelGoal.Response.ERROR_NONE,
-        goals_canceling=[object()])
-    move_handle, result_future = cancel_fixture(
-        response, MODULE.GoalStatus.STATUS_CANCELED)
-    bridge = bare_bridge()
-    handle = ChoHandle()
-    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
+    bridge, handle, (succeeded, reason) = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_CANCELED)))
     assert not succeeded and reason
-    bridge._release_goal()
     assert handle.terminal == 'canceled'
+    assert not bridge._faulted and not bridge._goal_reserved
+
+
+def test_the_stop_is_repeated_until_the_execution_is_over(monkeypatch):
+    # A stop that reaches move_group before execute() started is a no-op
+    # there, so one stop is not enough.
+    result = PendingFuture(terminal(MODULE.GoalStatus.STATUS_ABORTED, PREEMPTED), polls=60)
+    bridge, handle, _outcome = cancel(monkeypatch, result)
+    assert bridge._stop_publisher.published.count('stop') >= 4
+    assert handle.terminal == 'canceled' and not bridge._faulted
+
+
+def test_a_trajectory_that_finished_before_the_stop_succeeded(monkeypatch):
+    bridge, handle, outcome = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_SUCCEEDED, SUCCESS)))
+    assert outcome == (True, '')
+    assert handle.terminal == 'succeeded'
     assert not bridge._faulted
-    assert not bridge._goal_reserved
 
 
-def test_cancel_reject_latches_fault_and_retains_reservation(monkeypatch):
-    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
-    response = SimpleNamespace(return_code=1, goals_canceling=[])
-    move_handle, result_future = cancel_fixture(
-        response, MODULE.GoalStatus.STATUS_ABORTED)
-    bridge = bare_bridge()
-    handle = ChoHandle()
-    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
-    assert not succeeded and reason
-    bridge._release_goal()
+def test_an_execution_failure_while_stopping_aborts_without_a_fault(monkeypatch):
+    # MoveIt reports the execution over; the motion state is known.
+    bridge, handle, (succeeded, reason) = cancel(monkeypatch, Future(terminal(
+        MODULE.GoalStatus.STATUS_ABORTED, MODULE.MoveItErrorCodes.CONTROL_FAILED)))
+    assert not succeeded and 'CONTROL_FAILED' in reason
+    assert handle.terminal == 'aborted'
+    assert not bridge._faulted and not bridge._goal_reserved
+
+
+def test_a_rejected_cancel_is_decided_by_the_execution_not_the_response(monkeypatch):
+    rejected = SimpleNamespace(return_code=CancelGoal.Response.ERROR_REJECTED, goals_canceling=[])
+    bridge, handle, _outcome = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_ABORTED, PREEMPTED)),
+        MoveHandle(cancel_response=rejected))
+    assert handle.terminal == 'canceled' and not bridge._faulted
+    bridge, handle, _outcome = cancel(
+        monkeypatch, Future(terminal(MODULE.GoalStatus.STATUS_ABORTED, PREEMPTED)),
+        MoveHandle(cancel_raises=True))
+    assert handle.terminal == 'canceled' and not bridge._faulted
+
+
+def test_an_execution_that_never_ends_after_the_stop_latches_fault(monkeypatch):
+    result = SimpleNamespace(done=lambda: False)
+    bridge, handle, (succeeded, reason) = cancel(monkeypatch, result)
+    assert not succeeded and 'motion state is unknown' in reason
     assert handle.terminal == 'aborted'
     assert bridge._faulted and bridge._goal_reserved
 
 
-def test_cancel_timeout_latches_fault_and_retains_reservation(monkeypatch):
-    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
-    ticks = iter([0.0, 0.0, 10.0])
-    monkeypatch.setattr(MODULE.time, 'monotonic', lambda: next(ticks, 10.0))
-    pending = SimpleNamespace(done=lambda: False)
-    move_handle = SimpleNamespace(cancel_goal_async=lambda: pending)
-    bridge = bare_bridge()
-    handle = ChoHandle()
-    succeeded, reason = bridge._cancel_downstream(handle, move_handle, Future(None))
-    assert not succeeded and reason
-    bridge._release_goal()
+@pytest.mark.parametrize('result', [
+    Future(None),
+    ExceptionalFuture(None),
+    Future(terminal(MODULE.GoalStatus.STATUS_UNKNOWN)),
+])
+def test_an_unknown_outcome_after_the_stop_latches_fault(monkeypatch, result):
+    bridge, handle, (succeeded, _reason) = cancel(monkeypatch, result)
+    assert not succeeded and handle.terminal == 'aborted'
     assert bridge._faulted and bridge._goal_reserved
 
 
-def test_non_canceled_terminal_latches_fault_and_retains_reservation(monkeypatch):
+def test_a_fault_while_executing_also_asks_move_group_to_stop(monkeypatch):
     monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
-    response = SimpleNamespace(
-        return_code=MODULE.CancelGoal.Response.ERROR_NONE,
-        goals_canceling=[object()])
-    move_handle, result_future = cancel_fixture(
-        response, MODULE.GoalStatus.STATUS_ABORTED)
     bridge = bare_bridge()
-    handle = ChoHandle()
-    succeeded, reason = bridge._cancel_downstream(handle, move_handle, result_future)
-    assert not succeeded and reason
-    bridge._release_goal()
-    assert bridge._faulted and bridge._goal_reserved
+    bridge._move_client = planner(wrapped(SUCCESS, trajectory()))
+    bridge._execute_client = executor(None)
+    handle = ChoHandle(cancel_requested=False)
+    bridge._run_move_group(handle, _constraints(bridge), 5.0, SimpleNamespace, 'ompl')
+    assert bridge._faulted
+    assert bridge._stop_publisher.published == ['stop']
+    assert not bridge._executing
+
+
+def test_shutting_down_mid_execution_asks_move_group_to_stop():
+    bridge = bare_bridge()
+    bridge.stop_active_execution()
+    assert bridge._stop_publisher.published == []
+    bridge._executing = True
+    bridge.stop_active_execution()
+    assert bridge._stop_publisher.published == ['stop']
+    # Delivered before the context goes away, not just queued.
+    assert bridge._stop_publisher.acked == ['stop']
 
 
 def test_moveit_failure_reason_names_the_error_code(monkeypatch):

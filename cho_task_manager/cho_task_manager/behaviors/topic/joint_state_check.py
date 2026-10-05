@@ -24,9 +24,10 @@ import math
 
 import py_trees
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
+
+from cho_task_manager.utils.clock import arm, deadline_after
 
 
 class JointStateCheckBehavior(py_trees.behaviour.Behaviour):
@@ -62,7 +63,8 @@ class JointStateCheckBehavior(py_trees.behaviour.Behaviour):
     def initialise(self):
         self._latest = None
         self._worst = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def update(self):
         msg = self._latest
@@ -74,7 +76,9 @@ class JointStateCheckBehavior(py_trees.behaviour.Behaviour):
                 self._worst = max(errors)
                 if math.isfinite(self._worst[0]) and self._worst[0] <= self.tolerance:
                     return py_trees.common.Status.SUCCESS
-        if self.node.get_clock().now() > self._deadline:
+        clock = self.node.get_clock()
+        self._deadline = arm(self._deadline, clock, self.timeout_sec)
+        if self._deadline is not None and clock.now() > self._deadline:
             if self._worst is None:
                 why = f'no complete {self.topic} for {self.joint_names}'
             else:

@@ -31,11 +31,11 @@ import math
 
 import py_trees
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data
 
 from cho_interfaces.msg import ScaleReading
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, write_client
+from cho_task_manager.utils.clock import arm, deadline_after, restamp, seconds_since, stamp
 
 DEFAULT_SCALE_TOPIC = '/scale/reading'
 
@@ -90,27 +90,34 @@ class ScaleLatchBehavior(py_trees.behaviour.Behaviour):
         self._latest = None
         self._last_grams = None
         self._stable_since = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def update(self):
-        now = self.node.get_clock().now()
+        clock = self.node.get_clock()
+        now = clock.now()
+        self._deadline = arm(self._deadline, clock, self.timeout_sec)
         msg, self._latest = self._latest, None
         if msg is not None and math.isfinite(msg.grams):
             unchanged = self._last_grams is not None and abs(msg.grams - self._last_grams) < 1e-9
             if unchanged and msg.stable:
+                # Not stamped 0 before /clock: a hold that began at 0 would
+                # read as the simulator's whole uptime once /clock arrives.
                 if self._stable_since is None:
-                    self._stable_since = now
-                elif (now - self._stable_since).nanoseconds * 1e-9 >= self.settle_sec:
-                    self.node.get_logger().info(
-                        f'[{self.name}] {self.namespace}/{self.record_as} = {msg.grams:.2f} g '
-                        f'(held {self.settle_sec:.1f} s, flagged stable)')
-                    setattr(self.board, self.record_as, float(msg.grams))
-                    return py_trees.common.Status.SUCCESS
+                    self._stable_since = stamp(now)
+                else:
+                    self._stable_since = restamp(self._stable_since, now)
+                    if seconds_since(self._stable_since, now) >= self.settle_sec:
+                        self.node.get_logger().info(
+                            f'[{self.name}] {self.namespace}/{self.record_as} = {msg.grams:.2f} g '
+                            f'(held {self.settle_sec:.1f} s, flagged stable)')
+                        setattr(self.board, self.record_as, float(msg.grams))
+                        return py_trees.common.Status.SUCCESS
             else:
                 self._stable_since = None
             self._last_grams = msg.grams
 
-        if now > self._deadline:
+        if self._deadline is not None and now > self._deadline:
             if self._last_grams is None:
                 self.node.get_logger().error(
                     f'[{self.name}] no reading on {self.topic} within {self.timeout_sec:.0f} s. '

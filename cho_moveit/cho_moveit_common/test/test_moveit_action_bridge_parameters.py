@@ -15,7 +15,13 @@
 """Real-node construction guards: optional array parameters and the node name."""
 
 import importlib.util
+import os
 from pathlib import Path
+import select
+import signal
+import subprocess
+import sys
+import time
 
 import pytest
 import rclpy
@@ -76,3 +82,58 @@ def test_a_planning_budget_that_cannot_plan_is_refused(value):
             MODULE.MoveItActionBridge()
     finally:
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize('extra,topic', [
+    ([], '/trajectory_execution_event'),
+    (['-p', 'execute_trajectory_action:=/arm/execute_trajectory'],
+     '/arm/trajectory_execution_event'),
+    (['-p', 'trajectory_execution_event_topic:=/other/event'], '/other/event'),
+])
+def test_the_stop_is_published_where_move_group_listens_for_it(extra, topic):
+    # TrajectoryExecutionManager subscribes on move_group's node, beside its
+    # execute_trajectory action; Humble ignores a cancel of that action.
+    rclpy.init(args=['--ros-args', '-r', '__node:=fr5_moveit_action_bridge',
+                     '-p', 'robot_type:=fr5', *extra])
+    node = None
+    try:
+        node = MODULE.MoveItActionBridge()
+        assert node._stop_publisher.topic_name == topic
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
+
+
+def _ignore_sigint():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+@pytest.mark.parametrize('signum', [signal.SIGINT, signal.SIGTERM])
+def test_the_bridge_shuts_down_cleanly_on_sigint_and_sigterm(signum):
+    # It handles both itself, so that it can still publish "stop" for an
+    # execution in flight before its context goes away (rclpy's own SIGINT
+    # handler invalidates the context first). Started with SIGINT ignored, as
+    # a background job of a script is, which rclpy's handler used to override
+    # and this bridge must too.
+    process = subprocess.Popen(
+        [sys.executable, str(SCRIPT), '--ros-args', '-r', '__node:=fr5_moveit_action_bridge',
+         '-p', 'robot_type:=fr5'],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        env={**os.environ, 'RCUTILS_LOGGING_BUFFERED_STREAM': '0', 'PYTHONUNBUFFERED': '1'},
+        preexec_fn=_ignore_sigint)
+    try:
+        deadline = time.monotonic() + 20.0
+        started = False
+        while not started and time.monotonic() < deadline:
+            if select.select([process.stdout], [], [], 0.5)[0]:
+                line = process.stdout.readline()
+                started = 'waiting for its floor/JTC identity gate' in line
+            assert process.poll() is None, 'the bridge exited before it started'
+        assert started
+        process.send_signal(signum)
+        assert process.wait(timeout=10.0) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()

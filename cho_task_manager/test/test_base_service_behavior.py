@@ -23,6 +23,7 @@ from cho_task_manager.behaviors.service.base_service_behavior import BaseService
 class FakeTime:
     def __init__(self, seconds):
         self.seconds = seconds
+        self.nanoseconds = int(round(seconds * 1e9))
 
     def __add__(self, duration):
         return FakeTime(self.seconds + duration.nanoseconds / 1e9)
@@ -32,7 +33,9 @@ class FakeTime:
 
 
 class FakeClock:
-    def __init__(self, start=0.0):
+    def __init__(self, start=100.0):
+        # Running: a clock at 0 is sim time before the first /clock, when no
+        # deadline is armed (utils/clock.py).
         self.seconds = start
 
     def now(self):

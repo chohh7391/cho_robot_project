@@ -349,7 +349,9 @@ class _Time:
 
 class _Clock:
     def __init__(self):
-        self.seconds = 0.0
+        # Running: a clock at 0 is sim time before the first /clock, when no
+        # deadline is armed (utils/clock.py).
+        self.seconds = 100.0
 
     def now(self):
         return _Time(self.seconds)
@@ -466,7 +468,7 @@ def test_a_marker_in_another_frame_is_refused(sampler):
 
 def test_no_marker_fails_and_names_the_topic(sampler):
     sampler._on_joints(_joint_state(['j1', 'j2', 'j3', 'j4', 'j5', 'j6'], [0.0] * 6))
-    sampler.clock.seconds = 6.0
+    sampler.clock.seconds += 6.0
     assert sampler.update() == py_trees.common.Status.FAILURE
     assert DEFAULT_MARKER_TOPIC in sampler.node.get_logger().error.call_args[0][0]
 
@@ -525,6 +527,6 @@ def test_an_arm_left_elsewhere_stops_the_resume_and_names_the_joint():
     check._on_joints(_joint_state(['j1', 'j2', 'j3', 'j4', 'j5', 'j6'],
                                   [0.1, 0.2, 0.3, 0.4, 0.5, 1.6]))
     assert check.update() == py_trees.common.Status.RUNNING
-    check.clock.seconds = 4.0
+    check.clock.seconds += 4.0
     assert check.update() == py_trees.common.Status.FAILURE
     assert 'j6 is 1.0000 rad' in check.node.get_logger().error.call_args[0][0]

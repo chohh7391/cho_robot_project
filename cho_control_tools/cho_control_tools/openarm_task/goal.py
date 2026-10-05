@@ -17,10 +17,12 @@
     ros2 run cho_control_tools openarm_task_goal --arm right --abs 0.402 -0.1535 0.478 --quat 0.7071 0 0.7071 0
     ros2 run cho_control_tools openarm_task_goal --arm right --rel 0.05 0 0 --duration 5
 
-Absolute goals are in the controller's model-root frame (openarm_body_link0 on
-the bimanual torso). Relative goals are TCP-local: the controller applies them
-as reference * delta. The report prints the TCP pose before and after, the
-action status, the displacement and the controller's task_diagnostics.
+Absolute goals are in ``world``, the root of every OpenArm description, single
+or bimanual, and are stamped with it. Relative goals are TCP-local -- the
+controller applies them as reference * delta -- and are stamped with the arm's
+TCP frame on the bimanual torso, '' on the single arm. The report prints the
+TCP pose before and after, the action status, the displacement and the
+controller's task_diagnostics.
 """
 
 import argparse
@@ -90,8 +92,12 @@ class TaskGoalClient(Node):
         goal = TaskSpace.Goal()
         goal.duration_sec = float(duration)
         goal.relative = bool(relative)
-        # frame_id stays '': the controller's model root for an absolute goal,
-        # its EE frame for a relative one -- which is what these poses are in.
+        # Named, not left '' (cho_interfaces/CONTRACT.md): world, the root of
+        # every OpenArm description, for an absolute goal; the arm's TCP for a
+        # relative one ('' on the single arm, whose EE frame is a launch
+        # argument). The poses this tool sends are in exactly those frames.
+        goal.target_pose.header.frame_id = self.names[
+            'relative_goal_frame' if relative else 'absolute_goal_frame']
         pose = goal.target_pose.pose
         (pose.position.x, pose.position.y, pose.position.z) = [float(v) for v in position]
         (pose.orientation.x, pose.orientation.y,
@@ -133,7 +139,7 @@ def build_parser():
     parser.add_argument('--arm', choices=('single', 'left', 'right'), default='right')
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--abs', nargs=3, type=float, metavar=('X', 'Y', 'Z'),
-                      help='absolute TCP position in the model-root frame (m)')
+                      help='absolute TCP position in world (m)')
     mode.add_argument('--rel', nargs=3, type=float, metavar=('X', 'Y', 'Z'),
                       help='TCP-local displacement (m)')
     parser.add_argument('--quat', nargs=4, type=float, metavar=('QX', 'QY', 'QZ', 'QW'),

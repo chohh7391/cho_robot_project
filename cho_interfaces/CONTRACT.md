@@ -103,6 +103,21 @@ A **relative** goal's `frame_id` must be empty or the EE frame: the
 controller's `ee_name` (`ee_frame` on the OpenArm MIT controllers), the
 bridge's `ee_link`.
 
+An empty relative frame means *each server's own* EE frame, and those are
+not one setting: the bridge composes in its `ee_link`, which its launch takes
+from the registry's `model.ee_link`, while a controller uses the `ee_name` its
+bringup was launched with. Every bringup defaults `ee_name` to the registry's
+`ee_link`, so by default they agree. Overriding `ee_name:=` makes the same
+relative goal a different motion on the two: on the FR3, `ee_name:=fr3_link8`
+(real bringup; the simulated ones offer `fr3_link7`) puts the controllers' EE
+frame 45 deg about z from `fr3_hand_tcp` and 0.138 m behind it along the
+hand's z (0.035 m FT sensor + 0.1034 m hand), so a "+x by 5 cm" goal moves
+the TCP along a different line and a rotation pivots about a different point.
+FR5 and UR accept any `ee_name`. `cho_task_manager/test/test_goal_frames.py`
+checks the defaults agree. A client that needs one meaning on both stamps the
+EE frame explicitly, which a server whose EE frame is something else then
+rejects.
+
 **What clients stamp.** `cho_robot_config.task_goal_frame(config, relative)`:
 `model.absolute_goal_frame` for an absolute goal, `model.relative_goal_frame`
 for a relative one, `''` where the registry declares none. The absolute frame
@@ -114,10 +129,10 @@ declared only where it is the task-space controllers' fixed EE.
 
 | Robot / profile | Absolute | Relative | Why |
 |---|---|---|---|
-| `franka` | `fr3_link0` | `''` | The real, MuJoCo and Isaac descriptions are rooted at `base` and have no `world`; `fr3_link0` is a root frame of all four. `ee_name` is a launch argument (`fr3_link8`/`fr3_hand`/`fr3_hand_tcp`), so a client cannot know it. |
-| `fr5` | `base_link` | `wrist3_link` | `world` -> `base_link` at identity on every bringup. |
-| `ur5e` | `base_link` | `tool0` | Likewise. |
-| `openarm` single | `world` | `openarm_hand_tcp` | The real bringup's `base_rpy` can turn `openarm_link0` off the root. |
+| `franka` | `fr3_link0` | `''` | The real, MuJoCo and Isaac descriptions are rooted at `base` and have no `world`; `fr3_link0` is a root frame of all four. `ee_name` is a launch argument (`fr3_link7`, `fr3_link8`, `fr3_hand`, `fr3_hand_tcp`; by default `fr3_hand_tcp` with the hand and `fr3_link8` without it), so a client cannot know it. |
+| `fr5` | `base_link` | `''` | `world` -> `base_link` at identity on every bringup. `ee_name` is a launch argument (default `wrist3_link`). |
+| `ur5e` | `base_link` | `''` | Likewise; `ee_name` defaults to `tool0`. |
+| `openarm` single | `world` | `''` | The real bringup's `base_rpy` can turn `openarm_link0` off the root. `ee_name` is a launch argument (default `openarm_hand_tcp`). |
 | `openarm` left / right | `world` | `openarm_<side>_hand_tcp` | Each arm's `link0` hangs off `openarm_body_link0` at an offset, so `model.arm_base_link` is NOT a root frame of the torso model the per-arm controllers use. |
 | `openarm` both | -- | -- | No task space. |
 
@@ -138,12 +153,36 @@ executing it (`ExecuteTrajectory`). It never speeds a plan up. A plan with no
 duration starts at its goal and is executed as is.
 
 It rejects at goal time, never accepting and then aborting: a joint target
-with the wrong number of positions or a non-finite one, a pose with a
-non-finite value or a zero quaternion, a frame it does not accept (above), a
-non-positive duration or one over an hour, and any goal while another is active or before its
-scene/controller readiness gate is open. A relative TaskSpace goal is composed
-against TF's `world_frame -> ee_link`, so `world_frame` has to be in TF; it is
-on every bringup that starts the bridge (`cho_moveit/README.md`).
+with the wrong number of positions or a non-finite one, a joint target at a
+home the registry disables for the robot (`blocked_home_joint_goals`), a pose
+with a non-finite value or a zero quaternion, a frame it does not accept
+(above), a relative goal while TF has no `world_frame -> ee_link` to compose
+it against, a non-positive duration or one over an hour, any goal while
+another is active or before its scene/controller readiness gate is open, and
+any goal while nothing subscribes to move_group's
+`trajectory_execution_event` topic (below), because then a cancel could not
+stop it. `world_frame` is in TF on every bringup that starts the bridge
+(`cho_moveit/README.md`).
+
+**Cancel.** Humble's move_group (MoveIt 2.5.x) accepts a cancel of
+`ExecuteTrajectory` and then ignores it: the trajectory runs to its end. The
+bridge therefore stops an execution by publishing `"stop"` (`std_msgs/String`)
+on the TrajectoryExecutionManager's `trajectory_execution_event` topic, in
+the namespace of the `execute_trajectory` action (parameter
+`trajectory_execution_event_topic` overrides it). That cancels the trajectory
+controller's goal, which holds the arm where it is, and ends the execution
+ABORTED with MoveIt error PREEMPTED. It also sends the cancel, which is what a
+MoveIt that honours it acts on (CANCELED), and it repeats the stop every
+0.25 s until the execution is terminal, since a stop that lands between the
+goal's acceptance and the start of execution is a no-op there. The bridge's
+goal then ends **Canceled** on CANCELED or ABORTED/PREEMPTED, **Succeeded**
+if the trajectory finished before the stop took effect, and **Aborted** on any
+other execution failure. Only when the execution reports nothing within
+10 s does the bridge latch its fault (restart required). It also publishes the
+stop on any other outcome that leaves an execution's state unknown, and when it
+is shut down (SIGINT/SIGTERM) with an execution in flight: a move_group goal outlives
+the client that sent it. The stop is move_group-wide: it also stops an
+execution someone else started on the same move_group, e.g. from RViz.
 
 ## Outcomes
 
@@ -158,7 +197,8 @@ otherwise.
   controller's deactivation: it is aborted at once, with the reason in
   `message`.
 - **Canceled**: on request. The arm holds where it is when the cancel takes
-  effect, not where the goal started.
+  effect, not where the goal started. (The MoveIt bridge: see
+  [The MoveIt bridge](#the-moveit-bridge) for how it stops an execution.)
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
 

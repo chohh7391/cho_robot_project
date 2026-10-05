@@ -34,9 +34,22 @@ server), and task-space `reach` is stamped with the profile's registry goal fram
 Franka). The clients carry that metadata themselves (`clients/<robot>/metadata.py`)
 and `test_robot_scoped_entrypoints` keeps it equal to `cho_robot_config`.
 
-Ctrl-C while a goal is running cancels it and returns to the prompt; Ctrl-C at the
-prompt exits. A goal whose result has not come within its duration plus 60 s is
-cancelled the same way. With a MoveIt bridge for the profile, the client waits for
+The commissioning tools stamp the same frames: `openarm_task_goal` and
+`openarm_task_tour` send absolute goals in `world` and relative ones in the arm's
+TCP frame (`''` on the single arm), and `task_space_probe` sends the FR5's legs in
+`base_link`.
+
+Ctrl-C while a goal is running asks the server to cancel it and returns to the
+prompt; Ctrl-C at the prompt exits. A goal whose result has not come within its
+duration plus 60 s is cancelled the same way. The client then prints what the
+server answered, not what it hoped for: `Cancel accepted` only when the server
+lists the goal as cancelling; `Cancel REJECTED ... the arm may still be moving`
+when it refuses; `nothing was cancelled` when the goal had already finished or is
+unknown to it; and `No answer to the cancel; the arm may still be moving` when no
+answer comes within 3 s. A Ctrl-C before the server has answered the goal itself
+cancels it on acceptance and prints that cancel's answer when it arrives.
+`fr5_pour_client` reports the cancel's answer the same way, then the goal's final
+status. With a MoveIt bridge for the profile, the client waits for
 that profile's own static-scene gate (`/cho_moveit/<robot>[/<profile>]/static_scene_ready`)
 before it settles on the direct controllers.
 

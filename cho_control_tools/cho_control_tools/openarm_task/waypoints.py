@@ -35,7 +35,8 @@ import os
 
 import yaml
 
-from cho_control_tools.action_names import controller_action_name
+from cho_control_tools.action_names import controller_action_name, task_goal_frame
+from cho_control_tools.clients.openarm import metadata as openarm_metadata
 
 # Fallback for a caller with no installed description (unit tests). These are
 # the SINGLE-arm mount's limits; the bimanual torso's two arms do not share
@@ -70,12 +71,21 @@ def profile_joint_limits(arm, profile=DEFAULT_SAFETY_PROFILE, path=None):
 
 
 def arm_names(arm):
-    """Topic, service, action and model names for one arm profile."""
+    """Topic, service, action, model and goal-frame names for one arm profile.
+
+    The goal frames are what a TaskSpace goal for this profile is stamped with
+    (cho_interfaces/CONTRACT.md, Frames), read from the OpenArm operator
+    client's bundled copy of the registry so this stays registry-free:
+    ``world`` for an absolute goal, the arm's TCP for a relative one on
+    either arm of the torso, and ``''`` for a relative goal on the single arm,
+    whose EE frame is a launch argument.
+    """
     if arm not in ('single', 'left', 'right'):
         raise ValueError(f"arm must be single, left or right (got '{arm}')")
     prefix = '' if arm == 'single' else f'{arm}_'
     joint_prefix = 'openarm_' if arm == 'single' else f'openarm_{arm}_'
     controller = f'{prefix}task_space_impedance_mit_controller'
+    profile = openarm_metadata.load(arm)
     return {
         'controller': controller,
         'action': controller_action_name(controller, 'task'),
@@ -84,6 +94,8 @@ def arm_names(arm):
         'pose_topic': '/ee_state/pose' if arm == 'single' else f'/ee_state/{arm}/pose',
         'joints': [f'{joint_prefix}joint{i}' for i in range(1, 8)],
         'ee_frame': f'{joint_prefix}hand_tcp',
+        'absolute_goal_frame': task_goal_frame(profile, relative=False),
+        'relative_goal_frame': task_goal_frame(profile, relative=True),
     }
 
 

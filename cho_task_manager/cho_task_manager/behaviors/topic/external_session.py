@@ -48,9 +48,10 @@ what routes the arm to the hold controller through the abort branch.
 
 import py_trees
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
+
+from cho_task_manager.utils.clock import arm, deadline_after
 
 #: Status topic sdl_project's tamp_server already publishes the running
 #: operator name on. Not a command channel -- see the module docstring.
@@ -115,16 +116,20 @@ class ExternalSessionBehavior(py_trees.behaviour.Behaviour):
     def initialise(self):
         self._latest = None
         self._seen_activity = False
-        now = self.node.get_clock().now()
-        self._start_deadline = now + Duration(seconds=self.start_timeout_sec)
-        self._session_deadline = now + Duration(seconds=self.session_timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes them then.
+        clock = self.node.get_clock()
+        self._start_deadline = deadline_after(clock, self.start_timeout_sec)
+        self._session_deadline = deadline_after(clock, self.session_timeout_sec)
         self.node.get_logger().info(
             f'[{self.name}] arm handed over; watching {self.topic} for the '
             f'session to finish (start within {self.start_timeout_sec:.0f}s, '
             f'session under {self.session_timeout_sec:.0f}s)')
 
     def update(self):
-        now = self.node.get_clock().now()
+        clock = self.node.get_clock()
+        self._start_deadline = arm(self._start_deadline, clock, self.start_timeout_sec)
+        self._session_deadline = arm(self._session_deadline, clock, self.session_timeout_sec)
+        now = clock.now()
 
         if self._latest is not None and self._latest != self.idle_value:
             if not self._seen_activity:
@@ -137,7 +142,8 @@ class ExternalSessionBehavior(py_trees.behaviour.Behaviour):
                 f'[{self.name}] external session reported finished')
             return py_trees.common.Status.SUCCESS
 
-        if not self._seen_activity and now > self._start_deadline:
+        if (not self._seen_activity and self._start_deadline is not None
+                and now > self._start_deadline):
             self.node.get_logger().error(
                 f'[{self.name}] no operator published on {self.topic} within '
                 f'{self.start_timeout_sec:.0f}s. The trajectory controller is '
@@ -145,7 +151,7 @@ class ExternalSessionBehavior(py_trees.behaviour.Behaviour):
                 'running and pointed at this robot?')
             return py_trees.common.Status.FAILURE
 
-        if now > self._session_deadline:
+        if self._session_deadline is not None and now > self._session_deadline:
             self.node.get_logger().error(
                 f'[{self.name}] external session exceeded '
                 f"{self.session_timeout_sec:.0f}s (last operator: "

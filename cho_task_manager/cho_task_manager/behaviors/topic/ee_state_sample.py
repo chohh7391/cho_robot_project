@@ -26,9 +26,9 @@ import math
 import py_trees
 from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
+from cho_task_manager.utils.clock import arm, deadline_after
 from cho_task_manager.utils.blackboard import (
     MIT_TUNING_NAMESPACE,
     read_if_set,
@@ -88,11 +88,14 @@ class EeStateSampleBehavior(py_trees.behaviour.Behaviour):
         # Drop any pose cached before this tick so the sample belongs to the
         # motion that just finished, not to the one before it.
         self._latest = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def update(self):
         if self._latest is None:
-            if self._deadline is not None and self.node.get_clock().now() > self._deadline:
+            clock = self.node.get_clock()
+            self._deadline = arm(self._deadline, clock, self.timeout_sec)
+            if self._deadline is not None and clock.now() > self._deadline:
                 self.node.get_logger().error(
                     f'[{self.name}] No {self.topic} message within {self.timeout_sec}s; '
                     'is ee_state_broadcaster active?'

@@ -12,7 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Drive a VLA controller with a synthetic action-chunk stream (a small circle).
+
+    ros2 run cho_control_tools vla_action_client                       # Franka's vla_controller
+    ros2 run cho_control_tools vla_action_client --robot openarm       # the registry's VLA role
+    ros2 run cho_control_tools vla_action_client --robot openarm --arm left
+    ros2 run cho_control_tools vla_action_client --controller my_vla_controller
+
+The action is the controller's own ``/<controller>/vla`` (cho_interfaces/CONTRACT.md).
+Chunks go to the topic the controller reads them from: its ``chunk_topic``
+parameter, asked of it at start-up, unless ``--chunk-topic`` names one. A
+bimanual OpenArm reads ``/vla/action/<side>``, not the single-arm default.
+"""
+
 import argparse
+import sys
 
 import rclpy
 from rclpy.node import Node
@@ -25,17 +39,83 @@ import math
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
+# Franka's VLA controller (cho_robot_config franka.yaml controllers.vla), the
+# controller this client has always driven.
+DEFAULT_CONTROLLER = 'vla_controller'
+# What both VLA controllers read when their chunk_topic is left unset.
+DEFAULT_CHUNK_TOPIC = '/vla/action/ee_pose'
+
+
+def _registry_loader():
+    """cho_robot_config's load_robot_config, imported only when --robot asks for it.
+
+    Not a declared dependency (see package.xml): like the generic debug client,
+    this tool uses the registry when it is installed and works without it when
+    the controller is named.
+    """
+    try:
+        from cho_robot_config import load_robot_config
+    except ImportError as exc:
+        raise ValueError(
+            '--robot reads the VLA controller from cho_robot_config, which is not '
+            'installed here; name it with --controller instead') from exc
+    return load_robot_config
+
+
+def resolve_controller(controller=None, robot=None, arm='single', load_robot_config=None):
+    """The VLA controller to drive.
+
+    *controller* as given; else the registry's ``controllers.vla`` role for
+    *robot* and its profile *arm*; else Franka's ``vla_controller``.
+    """
+    if controller:
+        return controller
+    if robot is None:
+        if arm not in (None, '', 'single'):
+            raise ValueError('--arm selects a registry profile and needs --robot')
+        return DEFAULT_CONTROLLER
+    loader = load_robot_config or _registry_loader()
+    name = (loader(robot, arm or 'single').get('controllers') or {}).get('vla')
+    if not name:
+        raise ValueError(
+            f"{robot} ({arm or 'single'}) has no VLA controller in cho_robot_config "
+            f'(controllers.vla); name one with --controller')
+    return name
+
+
+def controller_chunk_topic(node, controller, timeout_sec=2.0):
+    """The controller's ``chunk_topic`` parameter, or None if it does not say."""
+    from rcl_interfaces.msg import ParameterType
+    from rcl_interfaces.srv import GetParameters
+
+    client = node.create_client(GetParameters, f'/{controller}/get_parameters')
+    try:
+        if not client.wait_for_service(timeout_sec=timeout_sec):
+            return None
+        future = client.call_async(GetParameters.Request(names=['chunk_topic']))
+        rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_sec)
+        response = future.result() if future.done() else None
+        if response is None or not response.values:
+            return None
+        value = response.values[0]
+        if value.type != ParameterType.PARAMETER_STRING or not value.string_value:
+            return None
+        return value.string_value
+    finally:
+        node.destroy_client(client)
+
+
 class VLAActionTester(Node):
-    def __init__(self):
+    def __init__(self, controller=DEFAULT_CONTROLLER, chunk_topic=None):
         super().__init__('vla_action_tester')
 
         # "axis_angle", "euler", "quaternion", "rotation6d"
         self.test_rotation_type = "quaternion"
         self.is_relative = True
 
+        self.controller = controller
         self._action_client = ActionClient(
-            self, VisionLanguageAction, controller_action_name('vla_controller', 'vla'))
-        self.publisher_ = self.create_publisher(ActionChunk, '/vla/action/ee_pose', 10)
+            self, VisionLanguageAction, controller_action_name(controller, 'vla'))
 
         self.count = 0
         self.chunk_size = 16
@@ -44,7 +124,21 @@ class VLAActionTester(Node):
         self.goal_accepted = False
         self.timer = None
 
-        self.get_logger().info(f'VLA Tester: Mode={self.test_rotation_type}, Relative={self.is_relative}')
+        self.get_logger().info(f'Waiting for {controller_action_name(controller, "vla")} ...')
+        self._action_client.wait_for_server()
+        # Asked once the controller is up, so its parameters can answer.
+        if not chunk_topic:
+            chunk_topic = controller_chunk_topic(self, controller)
+            if chunk_topic is None:
+                chunk_topic = DEFAULT_CHUNK_TOPIC
+                self.get_logger().warn(
+                    f'{controller} did not report its chunk_topic; publishing on '
+                    f'{chunk_topic}. Give --chunk-topic if that is not what it reads.')
+        self.publisher_ = self.create_publisher(ActionChunk, chunk_topic, 10)
+
+        self.get_logger().info(
+            f'VLA Tester: controller={controller}, chunks on {chunk_topic}, '
+            f'Mode={self.test_rotation_type}, Relative={self.is_relative}')
         self.send_goal()
 
     def send_goal(self):
@@ -131,18 +225,42 @@ class VLAActionTester(Node):
         self.get_logger().info(f'Published {self.test_rotation_type} chunk {self.count}')
         self.count += 1
 
-def main(args=None):
+def build_parser():
     parser = argparse.ArgumentParser(
-        description='Publish a synthetic VLA action stream for controller integration testing.')
-    _, ros_args = parser.parse_known_args(args)
-    rclpy.init(args=ros_args)
-    tester = VLAActionTester()
+        description=__doc__.split('\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split('\n', 1)[1])
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument('--controller', default=None,
+                        help=f'VLA controller to drive (default: {DEFAULT_CONTROLLER}, Franka\'s)')
+    target.add_argument('--robot', default=None,
+                        help="take the controller from cho_robot_config's VLA role for this robot")
+    parser.add_argument('--arm', default='single',
+                        help='registry profile with --robot, e.g. left/right for OpenArm (default: single)')
+    parser.add_argument('--chunk-topic', default=None,
+                        help="ActionChunk topic (default: the controller's chunk_topic parameter)")
+    return parser
+
+
+def main(args=None):
+    parsed, ros_args = build_parser().parse_known_args(args)
     try:
+        controller = resolve_controller(parsed.controller, parsed.robot, parsed.arm)
+    except ValueError as exc:
+        print(f'vla_action_client: {exc}', file=sys.stderr)
+        return 2
+    rclpy.init(args=ros_args)
+    tester = None
+    try:
+        tester = VLAActionTester(controller, parsed.chunk_topic)
         rclpy.spin(tester)
-    except KeyboardInterrupt: pass
+    except KeyboardInterrupt:
+        pass
     finally:
-        tester.destroy_node()
-        rclpy.shutdown()
+        if tester is not None:
+            tester.destroy_node()
+        rclpy.try_shutdown()
+    return 0
+
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

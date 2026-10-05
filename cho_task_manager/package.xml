@@ -49,9 +49,15 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
   <!-- test_goal_frames expands every bringup's robot description to prove the
-       registry's TaskSpace goal frames are root frames the controllers accept.
-       Skipped where they are not installed. -->
+       registry's TaskSpace goal frames are root frames the controllers accept,
+       and reads the UR real description's mappings out of ur_robot_driver's
+       ur_control.launch.py. A missing one FAILS that test rather than skipping
+       it; CHO_GOAL_FRAMES_ALLOW_MISSING=1 makes it skip instead. The bringups
+       themselves and their launch goldens are read from the source tree, so
+       they are not dependencies. -->
   <test_depend>xacro</test_depend>
+  <test_depend>pinocchio</test_depend>
+  <test_depend>ur_robot_driver</test_depend>
   <test_depend>cho_description_franka</test_depend>
   <test_depend>cho_description_fr5</test_depend>
   <test_depend>cho_description_ur</test_depend>

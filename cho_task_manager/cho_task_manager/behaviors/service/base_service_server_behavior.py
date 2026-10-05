@@ -13,8 +13,9 @@
 # limitations under the License.
 
 import py_trees
-from rclpy.duration import Duration
 from rclpy.node import Node
+
+from cho_task_manager.utils.clock import arm, deadline_after
 
 
 class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
@@ -79,23 +80,30 @@ class BaseServiceServerBehavior(py_trees.behaviour.Behaviour):
 
     def initialise(self):
         self.signal_received = False
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = None
         if self.timeout_sec is not None:
-            self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
-        else:
-            self._deadline = None
+            self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
         self.waiting = True
         self.node.get_logger().info(f"[{self.name}] Waiting for signal on {self.service_name}...")
 
     def update(self):
         if self.signal_received:
             return py_trees.common.Status.SUCCESS
-        if self._deadline is not None and self.node.get_clock().now() > self._deadline:
+        if self._timed_out():
             self.node.get_logger().error(
                 f"[{self.name}] Timed out after {self.timeout_sec}s waiting for signal on "
                 f"{self.service_name}"
             )
             return py_trees.common.Status.FAILURE
         return py_trees.common.Status.RUNNING
+
+    def _timed_out(self):
+        if self.timeout_sec is None:
+            return False
+        clock = self.node.get_clock()
+        self._deadline = arm(self._deadline, clock, self.timeout_sec)
+        return self._deadline is not None and clock.now() > self._deadline
 
     def terminate(self, new_status):
         self.waiting = False

@@ -29,10 +29,10 @@ a message in any other frame fails the behaviour instead of being obeyed.
 import py_trees
 from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE, write_client
+from cho_task_manager.utils.clock import arm, deadline_after
 
 
 class PoseTargetBehavior(py_trees.behaviour.Behaviour):
@@ -86,11 +86,14 @@ class PoseTargetBehavior(py_trees.behaviour.Behaviour):
         # Drop anything cached before this tick: the target must belong to this
         # run, not to a pose that was sitting on the topic beforehand.
         self._latest = None
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); update() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.timeout_sec)
 
     def update(self):
         if self._latest is None:
-            if self._deadline is not None and self.node.get_clock().now() > self._deadline:
+            clock = self.node.get_clock()
+            self._deadline = arm(self._deadline, clock, self.timeout_sec)
+            if self._deadline is not None and clock.now() > self._deadline:
                 self.node.get_logger().error(
                     f'[{self.name}] no {self.topic} message within '
                     f'{self.timeout_sec}s; is the publisher running'

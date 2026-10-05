@@ -21,7 +21,8 @@ after it would call the deadline missed: a goal times out, a wait ends, a
 sweep gives up, none of them having waited at all. Every deadline in the
 behaviours is therefore taken through :func:`deadline_after`, which returns
 None while the clock has not started, and is armed on the first tick that
-sees a running clock (:func:`arm`).
+sees a running clock (:func:`arm`). ``test/test_clock_deadlines.py`` pins each
+leaf to that and fails on a ``Duration(seconds=...)`` taken in a behaviour.
 """
 
 from rclpy.duration import Duration

@@ -121,6 +121,20 @@ the absolute goal frame everywhere: on the OpenArm bimanual profiles each arm's
 `link0` is offset from the torso the controllers' model is rooted at, so their
 goals say `world`.
 
+A relative goal stamped `''` (every single-arm profile: the registry declares no
+`relative_goal_frame` there) is composed in the EE frame of whichever server
+takes it: a controller's `ee_name` (`ee_frame` on the OpenArm MIT task
+controller), or the MoveIt bridge's `ee_link`, which is the registry's
+`model.ee_link`. With their default arguments every bringup gives the task
+controllers that same frame, and `test/test_goal_frames.py` checks it against the
+launch goldens and the controllers files. A launch argument can still move the
+controllers off it: Franka's `ee_name:=fr3_link7|fr3_link8|fr3_hand`, and any
+string on the FR5 and UR bringups. Under such an override the same relative goal
+is a different motion on a controller than on the bridge -- on Franka,
+`fr3_link8` is 0.138 m short of `fr3_hand_tcp` and turned 45 degrees about z --
+so run task trees, and any client that may pick either server, with the default
+`ee_name`.
+
 `best_effort=True` is needed for a publisher using sensor-data QoS — including
 `/ee_state/pose`, which makes "record where the arm is now, come back to exactly
 here later" a use of the same two behaviours with no extra code.
@@ -168,6 +182,13 @@ Every guard is off unless its threshold is given, and a monitor with no guard
 enabled is refused rather than silently watching nothing. Staleness counts as a
 trip: a sensor that dies mid-mission fails the monitor instead of freezing it at
 its last good sample.
+
+Arming (`arming_timeout_sec`, 10 s) waits only for what the monitor has never
+had -- the first sample of each input a guard needs, and `/robot_description` --
+and fails the mission if that does not arrive in time. Everything else trips at
+once, inside the window too: an input that was seen and then went quiet for
+`max_age_sec`, or a description the guards cannot use. The window starts with
+the node clock, so under sim time it does not run out before `/clock` arrives.
 
 **It is √det(J Jᵀ), not det(J).** `det(J)` does not exist for the 7-DOF arms
 here — J is 6×7. The two agree up to sign when J is square, so this is the same

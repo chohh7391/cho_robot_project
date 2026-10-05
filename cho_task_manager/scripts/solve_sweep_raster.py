@@ -90,9 +90,7 @@ obvious thing to make adaptive next.
 import argparse
 import math
 import os
-import subprocess
 import sys
-import tempfile
 
 import numpy as np
 import yaml
@@ -114,18 +112,22 @@ def share(package, *parts):
     return os.path.join(get_package_share_directory(package), *parts)
 
 
+def expand_description(spec):
+    """The robot's URDF, from xacro's Python API -- the call every launch file makes.
+
+    In-process and without a shell, so an argument value reaches xacro exactly
+    as the spec wrote it: nothing in it can be taken for a command.
+    """
+    import xacro
+    mappings = {str(key): str(value)
+                for key, value in (spec['robot'].get('xacro_args') or {}).items()}
+    return xacro.process_file(
+        share(spec['robot']['package'], spec['robot']['xacro']), mappings=mappings).toxml()
+
+
 def build_model(spec):
     """Expand the robot's xacro and add the camera frame the extrinsics name."""
-    xacro_args = ' '.join(f'{key}:={value}'
-                          for key, value in spec['robot']['xacro_args'].items())
-    with tempfile.NamedTemporaryFile('w+', suffix='.urdf', delete=False) as handle:
-        urdf_path = handle.name
-    command = (f"xacro {share(spec['robot']['package'], spec['robot']['xacro'])} "
-               f'{xacro_args}')
-    with open(urdf_path, 'w', encoding='utf-8') as handle:
-        subprocess.run(command, shell=True, check=True, stdout=handle)
-    model = pin.buildModelFromUrdf(urdf_path)
-    os.unlink(urdf_path)
+    model = pin.buildModelFromXML(expand_description(spec))
 
     # The camera rides a link, and where it rides is the cell's measured
     # extrinsic -- the same file the static publisher reads, so the poses this

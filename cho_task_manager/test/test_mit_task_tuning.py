@@ -14,6 +14,8 @@
 
 """Unit tests for the OpenArm MIT task-space tuning probe."""
 
+from pathlib import Path
+import re
 from unittest.mock import MagicMock
 
 import py_trees
@@ -21,6 +23,8 @@ import pytest
 from std_srvs.srv import Trigger
 
 from cho_task_manager.behaviors.service.mit_task_diagnostics import (
+    DiagnosticsFormatError,
+    FORMATS,
     MitTaskDiagnosticsServiceBehavior,
     parse_diagnostics,
 )
@@ -37,7 +41,12 @@ TASK_DIAGNOSTICS_MESSAGE = (
     'peak_tau_ff=[0.0744137,0.377507,0.0745415,0.816182,0.0716371,0.195585,0.311662] '
     'q_ref=[0,0,0,0.001,0,0,0]'
 )
-PROTOCOL_STATUS_MESSAGE = 'session=1 ack=26427 safe_generation=1 safe_ack=1 status=1'
+PROTOCOL_STATUS_MESSAGE = (
+    'session=1 ack=26427 safe_generation=1 safe_ack=1 status=1 controller_active=1')
+
+#: Where the controller writes those messages (source tree, read-only).
+MIT_CONTROLLER_SOURCES = (Path(__file__).resolve().parents[2] / 'cho_controller'
+                          / 'cho_controller_openarm_mit' / 'src')
 
 
 def _config(**overrides):
@@ -54,7 +63,7 @@ def _named(root, name):
 
 
 def test_parses_the_task_diagnostics_array_message():
-    parsed = parse_diagnostics(TASK_DIAGNOSTICS_MESSAGE)
+    parsed = parse_diagnostics('task_diagnostics', TASK_DIAGNOSTICS_MESSAGE)
     assert len(parsed['last_pose_error']) == 6
     assert len(parsed['peak_wrench']) == 6
     assert len(parsed['peak_tau_ff']) == 7
@@ -66,16 +75,66 @@ def test_parses_the_task_diagnostics_array_message():
 
 
 def test_parses_the_scalar_protocol_status_message():
-    parsed = parse_diagnostics(PROTOCOL_STATUS_MESSAGE)
+    parsed = parse_diagnostics('protocol_status', PROTOCOL_STATUS_MESSAGE)
     assert parsed == {
         'session': 1.0, 'ack': 26427.0, 'safe_generation': 1.0,
-        'safe_ack': 1.0, 'status': 1.0,
+        'safe_ack': 1.0, 'status': 1.0, 'controller_active': 1.0,
     }
 
 
-def test_malformed_message_yields_nothing_instead_of_raising():
-    assert parse_diagnostics('') == {}
-    assert parse_diagnostics('peak_wrench=[not,a,number]') == {}
+def test_what_std_ostream_prints_for_a_double_is_a_number():
+    # Every field is a C++ double through std::ostream: 6 significant digits,
+    # exponents, and nan / -nan / inf for a value that went bad.
+    parsed = parse_diagnostics(
+        'task_diagnostics',
+        'last_pose_error=[nan,-nan,inf,-inf,1e-05,-1.14801e-06] '
+        'peak_wrench=[0,0,0,0,0,0] peak_tau_ff=[0,0,0,0,0,0,0] q_ref=[0,0,0,0,0,0,0]')
+    assert parsed['last_pose_error'][2:] == [float('inf'), float('-inf'), 1e-05, -1.14801e-06]
+    assert parse_diagnostics(
+        'protocol_status', PROTOCOL_STATUS_MESSAGE.replace('session=1', 'session=1.23457e+06')
+    )['session'] == 1234570.0
+
+
+@pytest.mark.parametrize('service,message', [
+    ('task_diagnostics', ''),
+    ('task_diagnostics', 'peak_wrench=[not,a,number]'),
+    # a field the controller no longer writes / one it added
+    ('protocol_status', 'session=1 ack=26427 safe_generation=1 safe_ack=1 status=1'),
+    ('protocol_status', PROTOCOL_STATUS_MESSAGE + ' extra=1'),
+    # reordered, renamed, wrong width, not an array, not a number
+    ('protocol_status', 'ack=26427 session=1 safe_generation=1 safe_ack=1 status=1 controller_active=1'),
+    ('task_diagnostics', TASK_DIAGNOSTICS_MESSAGE.replace('peak_wrench', 'peak_force')),
+    ('task_diagnostics', TASK_DIAGNOSTICS_MESSAGE.replace('q_ref=[0,0,0,0.001,0,0,0]', 'q_ref=[0,0,0]')),
+    ('task_diagnostics', TASK_DIAGNOSTICS_MESSAGE.replace('q_ref=[0,0,0,0.001,0,0,0]', 'q_ref=0')),
+    ('protocol_status', PROTOCOL_STATUS_MESSAGE.replace('status=1', 'status=SAFE')),
+    ('no_such_service', PROTOCOL_STATUS_MESSAGE),
+])
+def test_a_message_that_is_not_the_known_format_raises_instead_of_being_half_read(service, message):
+    with pytest.raises(DiagnosticsFormatError):
+        parse_diagnostics(service, message)
+
+
+def _written_fields(source, service):
+    """(name, count) per field the controller's ~/<service> lambda writes, from its C++."""
+    text = (MIT_CONTROLLER_SOURCES / source).read_text()
+    start = text.index(f'"~/{service}"')
+    body = text[start:text.index('out.str()', start)]
+    names = re.findall(r'"[\]\s]*(\w+)=(\[?)"', body)
+    counts = iter(int(bound) for bound in re.findall(r'i < (\d+);', body))
+    return [(name, next(counts) if bracket else None) for name, bracket in names]
+
+
+@pytest.mark.parametrize('source,service', [
+    ('task_space_impedance_controller.cpp', 'task_diagnostics'),
+    ('direct_controller.cpp', 'protocol_status'),
+])
+def test_the_formats_are_the_ones_the_controller_writes(source, service):
+    assert _written_fields(source, service) == list(FORMATS[service])
+
+
+def test_an_unknown_service_is_refused_when_the_tree_is_built():
+    with pytest.raises(ValueError, match='no known message format'):
+        MitTaskDiagnosticsServiceBehavior(name='Diag', controller_name='c', service='status')
 
 
 def test_task_is_registered_for_openarm_only():
@@ -177,6 +236,17 @@ def test_a_baseline_that_was_never_recorded_skips_the_diff_instead_of_raising():
     assert leaf.handle_response(response) == py_trees.common.Status.SUCCESS
     logged = leaf.node.get_logger().info.call_args[0][0]
     assert 'growth since baseline' not in logged
+
+
+def test_a_message_in_an_unknown_format_fails_the_read_and_says_so():
+    # It used to be read as far as it matched, or as nothing, and SUCCEED:
+    # the baseline diff then compared the wrong field or silently skipped.
+    py_trees.blackboard.Blackboard.clear()
+    leaf = _diagnostics_leaf(record_as='baseline')
+    response = Trigger.Response(success=True, message='peak_wrench=[not,a,number]')
+
+    assert leaf.handle_response(response) == py_trees.common.Status.FAILURE
+    assert 'same version' in leaf.node.get_logger().error.call_args[0][0]
 
 
 def test_a_recorded_baseline_is_diffed_against():

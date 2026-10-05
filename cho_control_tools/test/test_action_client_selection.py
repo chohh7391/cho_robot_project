@@ -240,8 +240,8 @@ def test_openarm_registry_task_reach_is_absolute_and_idempotent_at_action_bounda
 
 
 @pytest.mark.parametrize('arm', ['single', 'left', 'right'])
-def test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary(monkeypatch, arm,
-                                                                         capsys):
+def test_openarm_direct_mit_task_reach_accumulates_at_the_action_boundary(
+        monkeypatch, arm, capsys):
     """The one documented exception to the absolute registry contract.
 
     Direct MIT task control starts from nominal zero, where the `home 1`-derived
@@ -481,17 +481,30 @@ class _Future:
             callback(self)
 
 
+def _cancel_response(return_code=None, canceling=1):
+    """A CancelGoal answer; ERROR_NONE listing *canceling* goals by default."""
+    from action_msgs.msg import GoalInfo
+    from action_msgs.srv import CancelGoal
+    response = CancelGoal.Response()
+    response.return_code = (CancelGoal.Response.ERROR_NONE if return_code is None
+                            else return_code)
+    response.goals_canceling = [GoalInfo() for _ in range(canceling)]
+    return response
+
+
 class _Handle:
-    def __init__(self):
+    def __init__(self, cancel_answer=None, answered=True):
         self.accepted = True
         self.cancels = 0
+        self.cancel_answer = _cancel_response() if cancel_answer is None else cancel_answer
+        self.answered = answered
 
     def get_result_async(self):
         return _Future(done=False)          # the result never arrives
 
     def cancel_goal_async(self):
         self.cancels += 1
-        return _Future(object())
+        return _Future(self.cancel_answer, done=self.answered)
 
 
 class _GoalClient:
@@ -521,7 +534,101 @@ def test_ctrl_c_while_a_goal_runs_cancels_it(monkeypatch, capsys):
     assert shell._send_goal_and_wait(_GoalClient(handle), MODULE.JointSpace.Goal()) is False
     assert handle.cancels == 1
     assert 'interrupted' in shell._last_result_message
-    assert 'Goal cancelled' in capsys.readouterr().out
+    assert 'cancel accepted' in shell._last_result_message
+    assert 'Cancel accepted' in capsys.readouterr().out
+
+
+def _code(name):
+    from action_msgs.srv import CancelGoal
+    return getattr(CancelGoal.Response, name)
+
+
+# What each answer must be reported as. Only an ERROR_NONE answer that lists
+# the goal means the server is stopping it; every other one used to print
+# "Goal cancelled" all the same.
+_REFUSED_CANCELS = [
+    ('ERROR_REJECTED', 1, 'REJECTED'),
+    ('ERROR_REJECTED', 0, 'REJECTED'),
+    ('ERROR_UNKNOWN_GOAL_ID', 0, 'does not know this goal'),
+    ('ERROR_GOAL_TERMINATED', 0, 'already finished'),
+    ('ERROR_NONE', 0, 'cancelling no goal'),
+]
+
+
+@pytest.mark.parametrize('code,canceling,expected', _REFUSED_CANCELS)
+def test_ctrl_c_reports_a_refused_cancel_as_refused(monkeypatch, capsys, code, canceling,
+                                                    expected):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    _interrupt_on_first_sleep(monkeypatch)
+    shell = bare_shell('fr5')
+    handle = _Handle(_cancel_response(_code(code), canceling))
+    assert shell._send_goal_and_wait(_GoalClient(handle), MODULE.JointSpace.Goal()) is False
+    out = capsys.readouterr().out
+    assert expected in out
+    assert expected in shell._last_result_message
+    assert 'Goal cancelled' not in out
+    assert 'cancel accepted' not in out.lower()
+    assert 'the goal was cancelled' not in shell._last_result_message
+    assert 'cancel accepted' not in shell._last_result_message
+
+
+def test_a_cancel_nobody_answers_says_the_arm_may_still_be_moving(monkeypatch, capsys):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    _interrupt_on_first_sleep(monkeypatch)
+    clock = {'now': 0.0}
+
+    def monotonic():
+        clock['now'] += 1.0
+        return clock['now']
+    monkeypatch.setattr(MODULE.time, 'monotonic', monotonic)
+    shell = bare_shell('fr5')
+    handle = _Handle(answered=False)
+    assert shell._send_goal_and_wait(_GoalClient(handle), MODULE.JointSpace.Goal()) is False
+    out = capsys.readouterr().out
+    assert 'No answer to the cancel; the arm may still be moving' in out
+    assert 'no answer to the cancel' in shell._last_result_message
+
+
+def test_a_timed_out_goal_whose_cancel_is_rejected_does_not_claim_it_was_cancelled(monkeypatch):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    clock = {'now': 0.0}
+    monkeypatch.setattr(MODULE.time, 'monotonic', lambda: clock['now'])
+    monkeypatch.setattr(MODULE.time, 'sleep',
+                        lambda seconds: clock.__setitem__('now', clock['now'] + 10.0))
+    shell = bare_shell('fr5')
+    handle = _Handle(_cancel_response(_code('ERROR_REJECTED'), 0))
+    goal = MODULE.JointSpace.Goal()
+    goal.duration_sec = 5.0
+    assert shell._send_goal_and_wait(_GoalClient(handle), goal) is False
+    assert 'no result within 65s' in shell._last_result_message
+    assert 'REJECTED' in shell._last_result_message
+    assert 'the goal was cancelled' not in shell._last_result_message
+
+
+@pytest.mark.parametrize('code,canceling,expected', [
+    ('ERROR_NONE', 1, 'cancel accepted'),
+    ('ERROR_REJECTED', 0, 'REJECTED'),
+])
+def test_ctrl_c_before_acceptance_reports_the_late_cancel_answer(monkeypatch, capsys, code,
+                                                                 canceling, expected):
+    monkeypatch.setattr(MODULE.rclpy, 'ok', lambda: True)
+    _interrupt_on_first_sleep(monkeypatch)
+    shell = bare_shell('fr5')
+    handle = _Handle(_cancel_response(_code(code), canceling))
+    client = _GoalClient(handle, accepted_yet=False)
+    send_future = []
+    original = client.send_goal_async
+    client.send_goal_async = lambda goal: send_future.append(original(goal)) or send_future[0]
+    assert shell._send_goal_and_wait(client, MODULE.JointSpace.Goal()) is False
+    # Nothing is known yet, so nothing may be claimed.
+    assert 'the goal was cancelled' not in shell._last_result_message
+    assert 'before the server answered' in shell._last_result_message
+    capsys.readouterr()
+    send_future[0]._done = True
+    for callback in send_future[0].callbacks:
+        callback(send_future[0])
+    assert handle.cancels == 1
+    assert expected in capsys.readouterr().out
 
 
 def test_ctrl_c_before_the_goal_is_accepted_cancels_it_on_acceptance(monkeypatch):

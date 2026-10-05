@@ -37,6 +37,16 @@ while the tree walks away. The Selector around it then runs the safe abort.
 The monitor never returns SUCCESS -- a watchdog has no success condition. The
 Parallel's success is decided by the mission alone, which is why the policy
 selects it explicitly.
+
+Arming. The monitor waits, RUNNING, only for what it has never had: the first
+sample of each input a guard needs, and the robot description. That wait is
+bounded by ``arming_timeout_sec``, after which it fails -- a mission that asked
+to be watched does not run unwatched. Everything else trips at once, inside the
+arming window as well as after it: an input that has been seen and then goes
+quiet for ``max_age_sec`` (a sensor dying in the first seconds of a mission is
+no less dead), and a description the guards cannot use. The window is on the
+node clock and starts with it (utils/clock.py), and a sample that arrives
+before /clock is aged from the clock's first reading, not from 0.
 """
 
 import math
@@ -49,6 +59,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
+from cho_task_manager.utils.clock import arm, deadline_after, restamp, seconds_since, stamp
 from cho_task_manager.utils.controller_names import arm_model
 from cho_task_manager.utils.robot_description import (
     DEFAULT_ROBOT_DESCRIPTION_TOPIC,
@@ -68,8 +79,9 @@ DEFAULT_JOINT_STATES_TOPIC = '/joint_states'
 # useless, so it asks for the weaker guarantee and matches everything. Depth 1:
 # only the newest sample can trip anything.
 _LATEST = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-# robot_state_publisher latches the description, so a late subscriber needs
-# TRANSIENT_LOCAL to receive it at all (utils/robot_description.py).
+# robot_state_publisher latches the description, RELIABLE + TRANSIENT_LOCAL: a
+# late subscriber needs TRANSIENT_LOCAL to receive it at all, and RELIABLE to be
+# sent the latched sample (utils/robot_description.py). NOT _LATEST's best effort.
 _LATCHED = LATCHED_QOS
 
 
@@ -156,6 +168,7 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
             min_manipulability is not None or min_singular_value is not None)
 
         self.node = None
+        # received_at is utils.clock.stamp(): a Time, or CLOCK_NOT_STARTED.
         self._wrench = None           # (received_at, [fx, fy, fz], [tx, ty, tz])
         self._joints = None           # (received_at, {name: position})
         self._urdf = None
@@ -199,21 +212,19 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
 
     # -- subscriptions ----------------------------------------------------
 
-    def _now(self):
-        # Plain float seconds: the guards only ever take differences, and a
-        # Time object would drag rclpy arithmetic into every comparison.
-        return self.node.get_clock().now().nanoseconds * 1e-9
+    def _received_at(self):
+        return stamp(self.node.get_clock().now())
 
     def _on_wrench(self, msg):
         force, torque = msg.wrench.force, msg.wrench.torque
         self._wrench = (
-            self._now(),
+            self._received_at(),
             (force.x, force.y, force.z),
             (torque.x, torque.y, torque.z),
         )
 
     def _on_joints(self, msg):
-        self._joints = (self._now(), dict(zip(msg.name, msg.position)))
+        self._joints = (self._received_at(), dict(zip(msg.name, msg.position)))
 
     def _on_description(self, msg):
         self._urdf = msg.data
@@ -311,50 +322,74 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
     # -- lifecycle --------------------------------------------------------
 
     def initialise(self):
-        now = self._now()
-        self._arming_deadline = now + self.arming_timeout_sec
-        # Back-dated so the first armed tick reports: a commissioning run wants
-        # the baseline numbers immediately, not one period in.
-        self._last_report = now - self.report_period_sec
+        # None while the node clock reads 0; update() takes it then.
+        self._arming_deadline = deadline_after(self.node.get_clock(), self.arming_timeout_sec)
+        # None so the first armed tick reports: a commissioning run wants the
+        # baseline numbers immediately, not one period in.
+        self._last_report = None
 
-    def _unarmed_reason(self, now):
-        """What the monitor is still missing, or None once it can watch."""
+    def _age(self, attribute, now):
+        """Seconds since the sample held in *attribute* arrived, re-stamping one from before /clock."""
+        sample = getattr(self, attribute)
+        received_at = restamp(sample[0], now)
+        if received_at is not sample[0]:
+            setattr(self, attribute, (received_at,) + sample[1:])
+        return seconds_since(received_at, now)
+
+    def _input_problem(self, now):
+        """(waiting, broken): what the monitor has never had, or why it cannot watch.
+
+        At most one is set. *waiting* is worth the arming window -- a first
+        sample can still come. *broken* is not: an input that went quiet after
+        it was seen, or a description the guards cannot use.
+        """
+        inputs = []
         if self.needs_wrench:
-            if self._wrench is None:
-                return f'no {self.wrench_topic} message yet'
-            if now - self._wrench[0] > self.max_age_sec:
-                return (f'{self.wrench_topic} is '
-                        f'{now - self._wrench[0]:.2f}s stale')
+            inputs.append(('_wrench', self.wrench_topic))
         if self.needs_kinematics:
-            if self._joints is None:
-                return f'no {self.joint_states_topic} message yet'
-            if now - self._joints[0] > self.max_age_sec:
-                return (f'{self.joint_states_topic} is '
-                        f'{now - self._joints[0]:.2f}s stale')
+            inputs.append(('_joints', self.joint_states_topic))
+        for attribute, topic in inputs:
+            if getattr(self, attribute) is None:
+                return f'no {topic} message yet', None
+            age = self._age(attribute, now)
+            if age > self.max_age_sec:
+                return None, f'{topic} is {age:.2f}s stale'
+        if self.needs_kinematics and self._kinematics is None:
             if self._urdf is None:
-                return f'no {self.robot_description_topic} message yet'
-            if self._kinematics is None:
-                if self._model_error is not None:
-                    return self._model_error
+                return f'no {self.robot_description_topic} message yet', None
+            if self._model_error is None:
                 try:
                     self._kinematics = self._build_kinematics()
                 except Exception as exc:            # noqa: BLE001 - reported, not swallowed
                     self._model_error = f'cannot use the robot description: {exc}'
-                    return self._model_error
-        return None
+            if self._model_error is not None:
+                return None, self._model_error
+        return None, None
+
+    def _unarmed_reason(self, now):
+        """Why the monitor cannot watch yet, or None once it can."""
+        waiting, broken = self._input_problem(now)
+        return waiting or broken
 
     def update(self):
-        now = self._now()
+        clock = self.node.get_clock()
+        now = clock.now()
+        self._arming_deadline = arm(self._arming_deadline, clock, self.arming_timeout_sec)
 
-        unarmed = self._unarmed_reason(now)
-        if unarmed is not None:
-            if now > self._arming_deadline:
+        waiting, broken = self._input_problem(now)
+        if broken is not None:
+            # At once, inside the arming window too: a sensor that dies in the
+            # first seconds of a mission is as dead as one that dies later, and
+            # a monitor frozen at its last good sample watches nothing.
+            self.node.get_logger().error(f'[{self.name}] cannot watch the arm: {broken}')
+            return py_trees.common.Status.FAILURE
+        if waiting is not None:
+            if self._arming_deadline is not None and now > self._arming_deadline:
                 # Failing, not warning: a mission asked to be watched, and
-                # running it unwatched is not a lesser version of that. Staleness
-                # lands here too, so a sensor that dies mid-mission trips the
-                # monitor instead of freezing it at its last good sample.
+                # running it unwatched is not a lesser version of that.
                 self.node.get_logger().error(
-                    f'[{self.name}] cannot watch the arm: {unarmed}')
+                    f'[{self.name}] cannot watch the arm: {waiting} after '
+                    f'{self.arming_timeout_sec:.1f}s')
                 return py_trees.common.Status.FAILURE
             return py_trees.common.Status.RUNNING
 
@@ -373,7 +408,9 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
                 self.node.get_logger().error(f'[{self.name}] tripped: {reason}')
                 return py_trees.common.Status.FAILURE
 
-        if self.report_period_sec > 0.0 and now - self._last_report >= self.report_period_sec:
+        if self.report_period_sec > 0.0 and (
+                self._last_report is None
+                or seconds_since(self._last_report, now) >= self.report_period_sec):
             self._last_report = now
             self.node.get_logger().info(f'[{self.name}] {self._format(measured)}')
         return py_trees.common.Status.RUNNING
@@ -394,3 +431,4 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
 
     def terminate(self, new_status):
         self._arming_deadline = None
+        self._last_report = None

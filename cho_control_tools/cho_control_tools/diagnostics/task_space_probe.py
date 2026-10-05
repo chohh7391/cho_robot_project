@@ -50,12 +50,22 @@ import xml.etree.ElementTree as ElementTree
 
 import numpy as np
 
-from cho_control_tools.action_names import controller_action_name
+from cho_control_tools.action_names import controller_action_name, task_goal_frame
+from cho_control_tools.clients.fr5 import metadata as fr5_metadata
 
 #: wrist3_link is the controllers' end-effector frame (`ee_name` in
 #: controllers.yaml). Every pose printed here is that frame, so it can be pasted
 #: into a TaskSpace goal unchanged.
 EE_FRAME = 'wrist3_link'
+
+#: The frame every goal is stamped with: the FR5 registry's absolute goal frame
+#: (cho_interfaces/CONTRACT.md, Frames), read from the operator client's bundled
+#: copy. It is a root frame of every FR5 bringup's description -- world ->
+#: base_link at the identity -- so it coincides with Pinocchio's universe here,
+#: which is what the poses computed below are in. A controller rejects a goal stamped
+#: in a frame that is not one of its root frames, so a description where that
+#: stopped being true is refused rather than driven to.
+GOAL_FRAME = task_goal_frame(fr5_metadata.load('single'), relative=False)
 
 #: MoveIt's own floor, from cho_moveit_fr5/config/planning_scene.yaml: a
 #: 4 x 4 x 0.10 m box centred at z = -0.05, so its top face is exactly z = 0.
@@ -423,9 +433,9 @@ class Probe:
             goal.duration_sec = float(duration)
             # Absolute, because the controller resolves a RELATIVE goal against
             # its own reference, which is not where the previous leg was asked
-            # to finish once any of them has been clamped. frame_id stays '':
-            # the controller's model root, which is what these poses are in.
+            # to finish once any of them has been clamped.
             goal.relative = False
+            goal.target_pose.header.frame_id = GOAL_FRAME
             pose = goal.target_pose.pose
             (pose.position.x, pose.position.y, pose.position.z) = (float(v) for v in leg.target)
             (pose.orientation.x, pose.orientation.y,
@@ -508,7 +518,7 @@ def report(cell, start_pose, start_q, legs, floor_guard):
     print('%d of %d legs passed' % (len(safe), len(legs)))
     if safe:
         print()
-        print('poses (absolute %s, same orientation throughout):' % EE_FRAME)
+        print('poses (absolute %s in %s, same orientation throughout):' % (EE_FRAME, GOAL_FRAME))
         for leg in safe:
             print('  %-11s position: [%+.9f, %+.9f, %+.9f]' % (leg.name, *leg.target))
         print('  %-11s orientation: [%+.9f, %+.9f, %+.9f, %+.9f]' % ('', *quaternion))

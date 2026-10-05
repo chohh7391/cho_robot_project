@@ -46,6 +46,7 @@ from cho_control_tools.action_names import (
     static_scene_ready_service,
     task_goal_frame,
 )
+from cho_control_tools.cancel_outcome import describe_cancel_response, sentence
 
 # Every goal this shell sends asks for at least this long [s]; the controller
 # takes longer if its limits require (cho_interfaces/CONTRACT.md).
@@ -433,7 +434,6 @@ class ControlSuiteShell(cmd.Cmd):
             print("No Cho joint_space/task_space/gripper action servers found.")
             return
         for action_name in sorted(available_actions):
-            controller = self._controller_name(action_name)
             active = ""
             if active_controllers is not None:
                 active = " [active]" if self._action_has_active_backend(
@@ -709,9 +709,9 @@ class ControlSuiteShell(cmd.Cmd):
             deadline = time.monotonic() + timeout
             while rclpy.ok() and not get_result_future.done():
                 if time.monotonic() > deadline:
-                    self._cancel(goal_handle)
+                    outcome = self._cancel(goal_handle)
                     self._last_result_message = (
-                        f'no result within {timeout:.0f}s; the goal was cancelled')
+                        f'no result within {timeout:.0f}s; {outcome.text}')
                     return False
                 time.sleep(0.1)
             if not get_result_future.done():
@@ -720,11 +720,15 @@ class ControlSuiteShell(cmd.Cmd):
         except KeyboardInterrupt:
             print('\nInterrupted: cancelling the goal')
             if goal_handle is not None:
-                self._cancel(goal_handle)
+                outcome = self._cancel(goal_handle)
+                self._last_result_message = f'interrupted (Ctrl-C); {outcome.text}'
             else:
-                # Not answered yet: cancel it the moment it is accepted.
+                # Not answered yet: cancel it the moment it is accepted, and
+                # say what the server made of that when it answers.
                 send_goal_future.add_done_callback(self._cancel_if_accepted)
-            self._last_result_message = 'interrupted (Ctrl-C); the goal was cancelled'
+                self._last_result_message = (
+                    'interrupted (Ctrl-C) before the server answered; the goal is '
+                    'cancelled if it is accepted')
             return False
 
         wrapped = get_result_future.result()
@@ -741,7 +745,12 @@ class ControlSuiteShell(cmd.Cmd):
         return float(duration) + RESULT_TIMEOUT_MARGIN_SEC
 
     def _cancel(self, goal_handle):
-        """Cancel *goal_handle* and wait, briefly, for the server to answer."""
+        """Cancel *goal_handle*, wait briefly for the answer, and print what it was.
+
+        The answer is read, not assumed: a server can REJECT a cancel, or have
+        no such goal left to cancel (cancel_outcome.py). Returns the
+        :class:`CancelOutcome`.
+        """
         future = goal_handle.cancel_goal_async()
         deadline = time.monotonic() + CANCEL_WAIT_SEC
         try:
@@ -749,16 +758,24 @@ class ControlSuiteShell(cmd.Cmd):
                 time.sleep(0.05)
         except KeyboardInterrupt:
             pass
-        if future.done():
-            print('Goal cancelled')
-        else:
-            print('No answer to the cancel; the arm may still be moving')
+        outcome = describe_cancel_response(future.result() if future.done() else None)
+        print(sentence(outcome.text))
+        return outcome
 
     @staticmethod
     def _cancel_if_accepted(send_goal_future):
+        """Cancel a goal Ctrl-C interrupted before the server answered it."""
         handle = send_goal_future.result()
-        if handle is not None and handle.accepted:
-            handle.cancel_goal_async()
+        if handle is None or not handle.accepted:
+            print('The interrupted goal was not accepted; nothing to cancel')
+            return
+        handle.cancel_goal_async().add_done_callback(
+            ControlSuiteShell._report_late_cancel)
+
+    @staticmethod
+    def _report_late_cancel(cancel_future):
+        outcome = describe_cancel_response(cancel_future.result())
+        print(f'Interrupted goal: {outcome.text}')
 
     def _report_outcome(self, succeeded: bool) -> None:
         """Print the goal outcome, naming the reason the server reported."""

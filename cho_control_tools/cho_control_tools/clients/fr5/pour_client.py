@@ -54,6 +54,8 @@ from rclpy.signals import SignalHandlerOptions
 from cho_interfaces.action import Pour
 from cho_interfaces.msg import ScaleReading
 
+from cho_control_tools.cancel_outcome import describe_cancel_response, goal_status_name, sentence
+
 ACTION_NAME = '/controller_action_server/pouring_controller'
 SCALE_TOPIC = '/scale/reading'
 
@@ -140,13 +142,22 @@ class PourClient(Node):
         try:
             rclpy.spin_until_future_complete(self, result_future)
         except KeyboardInterrupt:
-            print('\nCancelling; the controller parks the vessel before it ends.')
+            print('\nCancelling ...')
             cancel = handle.cancel_goal_async()
             rclpy.spin_until_future_complete(self, cancel)
+            # Read the answer: a REJECTED cancel leaves the pour running on to
+            # target, and the operator has to know that, not be told it stopped.
+            outcome = describe_cancel_response(cancel.result() if cancel.done() else None)
+            if outcome.accepted:
+                print(f'{sentence(outcome.text)}; the controller parks the vessel before it ends.')
+            else:
+                print(f'{sentence(outcome.text)}. Waiting for the pour to end.')
             rclpy.spin_until_future_complete(self, result_future)
 
-        result = result_future.result().result
+        wrapped = result_future.result()
+        result = wrapped.result
         print()
+        print(f'  goal status      {goal_status_name(wrapped.status)}')
         print(f'  delivered        {result.final_grams:8.2f} g   '
               f'(target {goal.target_grams:.2f}, off by '
               f'{result.final_grams - goal.target_grams:+.2f})')

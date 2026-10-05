@@ -13,9 +13,10 @@
 # limitations under the License.
 
 import py_trees
-from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
+
+from cho_task_manager.utils.clock import arm, deadline_after
 
 
 class BaseServiceBehavior(py_trees.behaviour.Behaviour):
@@ -77,10 +78,13 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
         self.server_available = True
         self.node.get_logger().info(f"[{self.name}] Sending Service Request...")
         self.future = self.client.call_async(req)
-        self._deadline = self.node.get_clock().now() + Duration(seconds=self.response_timeout_sec)
+        # None while the node clock reads 0 (utils/clock.py); _timed_out() takes it then.
+        self._deadline = deadline_after(self.node.get_clock(), self.response_timeout_sec)
 
     def _timed_out(self):
-        return self._deadline is not None and self.node.get_clock().now() > self._deadline
+        clock = self.node.get_clock()
+        self._deadline = arm(self._deadline, clock, self.response_timeout_sec)
+        return self._deadline is not None and clock.now() > self._deadline
 
     def update(self):
         if self.future is None:

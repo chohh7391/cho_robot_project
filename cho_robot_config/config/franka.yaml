@@ -14,7 +14,7 @@ model:
   # fr3_link0, not base_frame 'world': the real, MuJoCo and Isaac descriptions
   # are rooted at 'base' and have no 'world'; only Gazebo's is. fr3_link0 is
   # at the root in all four. No relative_goal_frame: the Franka bringups take
-  # ee_name as a launch argument (fr3_link8 | fr3_hand | fr3_hand_tcp), so a
+  # ee_name as a launch argument (fr3_link7 | fr3_link8 | fr3_hand | fr3_hand_tcp), so a
   # client cannot know the controller's EE frame is fr3_hand_tcp.
   absolute_goal_frame: fr3_link0
 controllers:

@@ -51,3 +51,88 @@ def test_ctrl_c_is_left_to_python_so_the_cancel_can_still_be_sent(monkeypatch):
     with pytest.raises(Stop):
         pour_client.main(['--target', '50', '--container', '139.15'])
     assert seen.get('signal_handler_options') == pour_client.SignalHandlerOptions.NO
+
+
+class _Future:
+    def __init__(self, result):
+        self._result = result
+
+    def done(self):
+        return True
+
+    def result(self):
+        return self._result
+
+
+def _pour_result(status, completed):
+    wrapped = type('Wrapped', (), {})()
+    wrapped.status = status
+    wrapped.result = pour_client.Pour.Result()
+    wrapped.result.is_completed = completed
+    wrapped.result.message = '' if completed else 'stopped'
+    return wrapped
+
+
+def _interrupted_pour(monkeypatch, cancel_answer, status):
+    """Run pour() with Ctrl-C arriving while the result is awaited."""
+    from action_msgs.msg import GoalInfo
+    from action_msgs.srv import CancelGoal
+
+    response = CancelGoal.Response()
+    response.return_code, canceling = cancel_answer
+    response.goals_canceling = [GoalInfo() for _ in range(canceling)]
+    result_future = _Future(_pour_result(status, completed=False))
+
+    class Handle:
+        accepted = True
+
+        def get_result_async(self):
+            return result_future
+
+        def cancel_goal_async(self):
+            return _Future(response)
+
+    class Client:
+        def wait_for_server(self, timeout_sec):
+            return True
+
+        def send_goal_async(self, goal, feedback_callback=None):
+            return _Future(Handle())
+
+    calls = {'n': 0}
+
+    def spin_until_future_complete(_node, future, **_kwargs):
+        calls['n'] += 1
+        if future is result_future and calls['n'] == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(pour_client.rclpy, 'spin_until_future_complete', spin_until_future_complete)
+    client = object.__new__(pour_client.PourClient)
+    client._client = Client()
+    goal = pour_client.Pour.Goal()
+    goal.target_grams = 50.0
+    return client.pour(goal)
+
+
+def test_a_rejected_cancel_is_reported_and_the_pour_is_not_said_to_stop(monkeypatch, capsys):
+    from action_msgs.msg import GoalStatus
+    from action_msgs.srv import CancelGoal
+
+    assert _interrupted_pour(monkeypatch, (CancelGoal.Response.ERROR_REJECTED, 0),
+                             GoalStatus.STATUS_ABORTED) == 1
+    out = capsys.readouterr().out
+    assert 'Cancel REJECTED' in out
+    assert 'still running' in out
+    assert 'parks the vessel' not in out
+    assert 'ABORTED' in out
+
+
+def test_an_accepted_cancel_is_reported_with_how_the_goal_ended(monkeypatch, capsys):
+    from action_msgs.msg import GoalStatus
+    from action_msgs.srv import CancelGoal
+
+    assert _interrupted_pour(monkeypatch, (CancelGoal.Response.ERROR_NONE, 1),
+                             GoalStatus.STATUS_CANCELED) == 1
+    out = capsys.readouterr().out
+    assert 'cancel accepted' in out.lower()
+    assert 'CANCELED' in out

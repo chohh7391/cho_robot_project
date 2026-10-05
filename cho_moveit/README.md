@@ -48,8 +48,10 @@ Goals follow the contract:
   1-10 s) and the motion took whatever MoveIt's scaling gave it.
 - Joints may be named; a target with the wrong number of positions, or a non-finite
   one, is **rejected** when it arrives rather than accepted and then aborted, as is a
-  pose with a non-finite value or a zero quaternion, and a `duration_sec` over
-  `MAX_GOAL_DURATION_SEC` (3600 s).
+  pose with a non-finite value or a zero quaternion, a `duration_sec` over
+  `MAX_GOAL_DURATION_SEC` (3600 s), a home goal while home is disabled, a relative
+  goal while TF has no `world_frame -> ee_link`, and any goal while nothing
+  subscribes to move_group's `trajectory_execution_event` (no way to stop it).
 - A `PoseStamped`'s `frame_id`, absolute: empty, the planning frame (`world_frame`,
   the registry's `model.base_frame`), or the registry's `model.arm_base_link` while TF
   has it at the planning frame (checked when the goal arrives). Relative: empty or the
@@ -62,9 +64,11 @@ Goals follow the contract:
   `world`, and none of them has a MoveIt entry point. One that is added needs a
   `world` in TF first.
 
-Only the execution can move the arm, so only an execution whose outcome is unknown
-(transport failure, no result, a cancel that is not confirmed) latches the bridge's
-fault; a planning failure aborts the goal and leaves the bridge usable.
+Only the execution can move the arm. A cancel stops it by publishing `"stop"` on
+move_group's `trajectory_execution_event` (Humble ignores the action cancel; see
+CONTRACT.md, Cancel). Only an execution that reports no terminal state (transport
+failure, no result, nothing within 10 s of the stop) latches the bridge's fault. A
+planning failure aborts the goal and leaves the bridge usable.
 
 ## Bimanual OpenArm
 
