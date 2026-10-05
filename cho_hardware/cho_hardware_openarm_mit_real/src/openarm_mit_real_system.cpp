@@ -16,12 +16,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <linux/can.h>
+#include <linux/can/error.h>
+#include <linux/can/raw.h>
 #include <net/if.h>
 #include <poll.h>
+#include <sstream>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <pluginlib/class_list_macros.hpp>
 #include <stdexcept>
@@ -34,6 +41,40 @@
 
 namespace cho_hardware_openarm_mit_real
 {
+bool parse_param_reply(
+  const std::uint32_t can_id, const std::uint8_t * const data, const std::size_t length,
+  const std::uint32_t reply_id, const std::uint8_t rid, std::uint32_t & value)
+{
+  if ((can_id & (CAN_ERR_FLAG | CAN_RTR_FLAG | CAN_EFF_FLAG)) != 0U || can_id != reply_id ||
+    data == nullptr || length < 8 || (data[2] != 0x33 && data[2] != 0x55) || data[3] != rid)
+  {
+    return false;
+  }
+  value = static_cast<std::uint32_t>(data[4]) | (static_cast<std::uint32_t>(data[5]) << 8) |
+    (static_cast<std::uint32_t>(data[6]) << 16) | (static_cast<std::uint32_t>(data[7]) << 24);
+  return true;
+}
+
+bool configure_control_socket(const int fd, std::string & why)
+{
+  const int flags = ::fcntl(fd, F_GETFL, 0);
+  if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    why = std::string{"cannot make the CAN socket non-blocking: "} + std::strerror(errno);
+    return false;
+  }
+  const can_err_mask_t mask = CAN_ERR_BUSOFF | CAN_ERR_RESTARTED;
+  if (::setsockopt(fd, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &mask, sizeof(mask)) < 0) {
+    why = std::string{"cannot subscribe to CAN bus-off error frames: "} + std::strerror(errno);
+    return false;
+  }
+  return true;
+}
+
+bool is_bus_off_error_frame(const std::uint32_t can_id)
+{
+  return (can_id & CAN_ERR_FLAG) != 0U && (can_id & (CAN_ERR_BUSOFF | CAN_ERR_RESTARTED)) != 0U;
+}
+
 namespace
 {
 using cho_openarm_mit_core::JointTuple;
@@ -110,6 +151,15 @@ public:
     // OpenArm constructs CANSocket here, deliberately after all plugin gates.
     arm_ = std::make_unique<openarm::can::socket::OpenArm>(
       config_.can_interface, config_.can_fd);
+    // O_NONBLOCK and the bus-off error filter, on the vendor's own descriptor
+    // (extern/openarm_can is not modified; it opens the socket blocking and
+    // asks for no error frames).
+    std::string why;
+    if (!configure_control_socket(arm_->get_master_can_device_collection().get_socket_fd(), why)) {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArmMitRealSystem"), "%s: %s",
+        config_.can_interface.c_str(), why.c_str());
+      return false;
+    }
     arm_->init_arm_motors(
       std::vector<openarm::damiao_motor::MotorType>{
           openarm::damiao_motor::MotorType::DM8009,
@@ -207,8 +257,27 @@ public:
     if (!arm_) {
       return false;
     }
+    bus_off_ = false;
     arm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
-    arm_->enable_all();
+    // Framed here like send() and disable(): OpenArm::enable_all() discards
+    // whether each enable frame reached the bus, and on the non-blocking socket
+    // a full transmit queue would then leave a motor disabled while the adapter
+    // went on to "hold" it.
+    using openarm::damiao_motor::CanPacketEncoder;
+    bool all_written = true;
+    for (auto * const device : devices_) {
+      all_written = device != nullptr &&
+        write_frame(*device, CanPacketEncoder::create_enable_command(device->get_motor())) &&
+        all_written;
+    }
+    if (gripper_device_ != nullptr) {
+      all_written = write_frame(
+        *gripper_device_,
+        CanPacketEncoder::create_enable_command(gripper_device_->get_motor())) && all_written;
+    }
+    if (!all_written) {
+      return false;
+    }
     // The upstream OpenArmHW leaves one CAN scheduling interval for the
     // enable frames to take effect before it asks for the first state packet.
     // Without this gap, some actuators are still red/disabled when the
@@ -223,17 +292,102 @@ public:
     return true;
   }
 
-  void disable() noexcept override
+  // Framed here for the same reason as send(): OpenArm::disable_all() discards
+  // whether each disable frame reached the bus, and a disable that did not is
+  // a motor still executing its last frame.
+  bool disable() noexcept override
   {
     query_.disabled();
+    bool all_written = true;
     try {
-      if (arm_) {
-        arm_->disable_all();
-        arm_->recv_all();
+      if (!arm_) {
+        return false;
       }
+      using openarm::damiao_motor::CanPacketEncoder;
+      for (auto * const device : devices_) {
+        all_written = device != nullptr &&
+          write_frame(*device, CanPacketEncoder::create_disable_command(device->get_motor())) &&
+          all_written;
+      }
+      if (gripper_device_ != nullptr) {
+        all_written = write_frame(
+          *gripper_device_,
+          CanPacketEncoder::create_disable_command(gripper_device_->get_motor())) && all_written;
+      }
+      arm_->recv_all();
     } catch (...) {
       // A safe stop must never throw out of lifecycle/watchdog cleanup.
+      return false;
     }
+    return all_written;
+  }
+
+  bool bus_off() const override {return bus_off_;}
+
+  // Register 9 of each motor, by the vendor's parameter read (0x7FF, 0x33).
+  // Its replies are parsed here and never handed to the vendor's dispatch,
+  // which in STATE callback mode would read them as a state frame.
+  CanTimeouts read_can_timeouts() override
+  {
+    CanTimeouts out;
+    if (!arm_) {
+      return out;
+    }
+    using openarm::damiao_motor::CanPacketEncoder;
+    const auto rid = static_cast<std::uint8_t>(openarm::damiao_motor::RID::TIMEOUT);
+    std::vector<std::pair<openarm::damiao_motor::DMCANDevice *, std::int64_t *>> motors;
+    for (std::size_t index = 0; index < kArmDof; ++index) {
+      if (devices_[index] != nullptr) {
+        motors.emplace_back(devices_[index], &out.arm[index]);
+      }
+    }
+    if (config_.hand && gripper_device_ != nullptr) {
+      motors.emplace_back(gripper_device_, &out.gripper);
+    }
+    const int fd = arm_->get_master_can_device_collection().get_socket_fd();
+    const auto unanswered = [&motors]() {
+        return std::any_of(motors.begin(), motors.end(), [](const auto & m) {return *m.second < 0;});
+      };
+    // Three rounds of 30 ms: the vendor CLI waits 35 ms for one register.
+    for (int round = 0; round < 3 && unanswered(); ++round) {
+      for (const auto & motor : motors) {
+        if (*motor.second < 0) {
+          write_frame(
+            *motor.first,
+            CanPacketEncoder::create_query_param_command(motor.first->get_motor(), rid));
+        }
+      }
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+      while (unanswered()) {
+        const auto left = deadline - std::chrono::steady_clock::now();
+        if (left <= std::chrono::nanoseconds::zero()) {
+          break;
+        }
+        pollfd readable{fd, POLLIN, 0};
+        const auto left_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(left).count();
+        const timespec timeout{
+          static_cast<time_t>(left_ns / 1000000000LL), static_cast<long>(left_ns % 1000000000LL)};
+        if (::ppoll(&readable, 1, &timeout, nullptr) <= 0 || (readable.revents & POLLIN) == 0) {
+          break;
+        }
+        canfd_frame frame{};
+        const auto bytes = ::read(fd, &frame, config_.can_fd ? sizeof(canfd_frame) : sizeof(can_frame));
+        if (bytes <= 0) {
+          continue;
+        }
+        for (const auto & motor : motors) {
+          std::uint32_t value = 0;
+          if (*motor.second < 0 &&
+            parse_param_reply(
+              frame.can_id, frame.data, frame.len, motor.first->get_motor().get_recv_can_id(), rid,
+              value))
+          {
+            *motor.second = value;
+          }
+        }
+      }
+    }
+    return out;
   }
 
   bool read(
@@ -336,19 +490,28 @@ private:
         canfd_frame frame{};
         if (::read(fd, &frame, sizeof(frame)) <= 0) {break;}
         id = frame.can_id;
-        bus.dispatch_frame_callback(frame);
+        if ((id & CAN_ERR_FLAG) == 0U) {
+          bus.dispatch_frame_callback(frame);
+        }
       } else {
         can_frame frame{};
         if (::read(fd, &frame, sizeof(frame)) <= 0) {break;}
         id = frame.can_id;
-        bus.dispatch_frame_callback(frame);
+        if ((id & CAN_ERR_FLAG) == 0U) {
+          bus.dispatch_frame_callback(frame);
+        }
+      }
+      timeout_ns = 0;
+      if ((id & CAN_ERR_FLAG) != 0U) {
+        // Never a motor's: the error filter configure_control_socket() set.
+        bus_off_ = bus_off_ || is_bus_off_error_frame(id);
+        continue;
       }
       if (id >= kArmReplyBase && id < kArmReplyBase + kArmDof) {
         replied_[id - kArmReplyBase] = true;
       } else if (config_.hand && id == config_.gripper_recv_can_id) {
         gripper_replied_ = true;
       }
-      timeout_ns = 0;
     }
   }
 
@@ -364,6 +527,8 @@ private:
   openarm::damiao_motor::DMCANDevice * gripper_device_{nullptr};
   std::array<bool, kArmDof> replied_{};
   bool gripper_replied_{false};
+  // Sticky until the next enable(): a bus-off loses frames, whatever follows.
+  bool bus_off_{false};
   StateQuery query_{config_.state_from_command_reply};
 };
 
@@ -376,6 +541,11 @@ bool same_commit(const double a, const double b)
 
 // Reads allowed at activation for every motor to answer the seed.
 constexpr std::size_t kSeedReadAttempts = 10;
+// A disable the bus refused (a full transmit queue drains in a few frames'
+// time; a bus-off interface does not come back that fast) is sent again this
+// many times in all, this far apart.
+constexpr int kDisableAttempts = 3;
+constexpr auto kDisableRetryInterval = std::chrono::milliseconds(2);
 
 TransportFactory default_factory()
 {
@@ -401,8 +571,9 @@ OpenArmMitRealSystem::~OpenArmMitRealSystem()
 {
   // controller_manager may be torn down without shutting its components down
   // first; this is then the only stop. Same as on_shutdown(): a final hold if
-  // still active, nothing after a fault (which disabled already).
-  stop_with_final_frame("destruction");
+  // still active or holding, nothing after a fault (which disabled already) or
+  // after a write-watchdog trip (whose hold is the last frame already).
+  stop_with_final_frame("destruction", false);
   close_transport();
 }
 
@@ -436,6 +607,8 @@ bool OpenArmMitRealSystem::parse_and_validate_static_config()
       return false;
     }
   }
+
+  allow_no_can_timeout_ = strict_bool(info_.hardware_parameters, "mit_allow_no_can_timeout");
 
   hand_ = strict_bool(info_.hardware_parameters, "hand");
   transport_config_.hand = hand_;
@@ -531,6 +704,8 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_init(
   if (SystemInterface::on_init(info) != hardware_interface::CallbackReturn::SUCCESS) {
     return hardware_interface::CallbackReturn::ERROR;
   }
+  // Nothing is accepted before the first activation, which starts a session.
+  protocol_[4] = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
   try {
     return parse_and_validate_static_config() ? hardware_interface::CallbackReturn::SUCCESS :
            hardware_interface::CallbackReturn::ERROR;
@@ -578,8 +753,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
     // Per-joint safe-hold gains from the profile.  Collapsing them onto the
     // smallest wrist value would leave the DM8009 shoulder and DM4340 elbow
     // with a fraction of a N*m/rad while the hold has no gravity model.
+    // The hold's tau_ff is the measured joint torque (ArmConsumer), bounded
+    // per joint by the same tau_ff_max a producer's commit is validated against.
     consumer_ = std::make_unique<cho_openarm_mit_core::ArmConsumer>(
-      limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness);
+      limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness,
+      safety_profile_.tau_ff_max);
     auto candidate = factory_(transport_config_);
     if (!candidate || !candidate->initialize()) {
       return hardware_interface::CallbackReturn::ERROR;
@@ -709,13 +887,90 @@ bool OpenArmMitRealSystem::finite_state() const
   return true;
 }
 
+bool OpenArmMitRealSystem::can_timeouts_allow_activation()
+{
+  {
+    std::lock_guard<std::mutex> lock(transport_mutex_);
+    can_timeouts_ = transport_->read_can_timeouts();
+  }
+  const auto logger = rclcpp::get_logger("OpenArmMitRealSystem");
+  std::ostringstream unset;
+  std::ostringstream values;
+  std::ostringstream ids;
+  const auto check = [&](const char * motor, const std::uint32_t id, const std::int64_t value) {
+      values << " " << motor << "=" << (value < 0 ? std::string{"?"} : std::to_string(value));
+      ids << (ids.tellp() > 0 ? "," : "") << id;
+      if (value <= 0) {
+        unset << (unset.tellp() > 0 ? ", " : "") << motor << " (id " << id << ") " <<
+        (value < 0 ? "did not answer" : "reads 0");
+      }
+    };
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    check(
+      ("joint" + std::to_string(index + 1)).c_str(), static_cast<std::uint32_t>(index + 1),
+      can_timeouts_.arm[index]);
+  }
+  if (hand_) {
+    check("gripper", transport_config_.gripper_send_can_id, can_timeouts_.gripper);
+  }
+  if (unset.tellp() <= 0) {
+    RCLCPP_INFO(
+      logger, "%s: motor CAN timeout (register 9, firmware units):%s", arm_resource_name().c_str(),
+      values.str().c_str());
+    return true;
+  }
+  if (allow_no_can_timeout_) {
+    RCLCPP_WARN(
+      logger,
+      "%s: motor CAN timeout (register 9) not set on %s; activating anyway "
+      "(mit_allow_no_can_timeout). If this process dies, those motors keep executing their last "
+      "frame for as long as they are powered.", arm_resource_name().c_str(), unset.str().c_str());
+    return true;
+  }
+  RCLCPP_ERROR(
+    logger,
+    "%s: refusing to activate: the motor CAN timeout (register 9, RID::TIMEOUT) is not set on %s. "
+    "Without it a motor keeps executing its last MIT frame for as long as it is powered once "
+    "nothing sends to it -- after a crash, a kill or a dead PC the arm would be held, or pushed, "
+    "with nobody supervising it. Read it with `openarm-can-cli -i %s show_param --id %s` and set "
+    "it on each motor with `openarm-can-cli -i %s write_param --id <motor id> --rid 9 --value "
+    "<timeout> --save` (the unit is the firmware's; extern/openarm_can does not document it, so "
+    "measure the resulting timeout on the bench, and keep it above this adapter's 100 ms enable "
+    "gap), then activate again. To accept the risk instead, set the hardware parameter "
+    "mit_allow_no_can_timeout to true.",
+    arm_resource_name().c_str(), unset.str().c_str(), transport_config_.can_interface.c_str(),
+    ids.str().c_str(), transport_config_.can_interface.c_str());
+  return false;
+}
+
 hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcpp_lifecycle::State &)
 {
   if (!configured_ || !transport_ || next_session_ > cho_openarm_mit_core::kMaxExactInteger) {
     return hardware_interface::CallbackReturn::ERROR;
   }
-  missed_replies_.fill(0);
-  missed_gripper_replies_ = 0;
+  // Not while activating: write() arms it again (see watchdog_armed_). Under
+  // the watchdog lock, which a trip holds for its whole run: past this point
+  // no trip is in progress and none can start.
+  {
+    std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
+    watchdog_armed_.store(false);
+  }
+  if (watchdog_tripped_.load()) {
+    // The supervised hold already lost its supervision; the control thread
+    // never got to turn that into the FAULT it is.
+    transition_to_safe(true, "activation: the write watchdog had tripped");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  // Out of the supervised hold (an orderly deactivation): the motors are
+  // enabled and executing that hold, and must keep executing it if this
+  // activation fails.
+  const bool was_holding = holding_.load();
+  // Before anything is enabled: nothing has been sent if this refuses, so a
+  // refusal is FAILURE (the component stays INACTIVE) rather than ERROR, whose
+  // on_error() would send a disable.
+  if (!was_holding && !can_timeouts_allow_activation()) {
+    return hardware_interface::CallbackReturn::FAILURE;
+  }
   watchdog_tripped_.store(false);
   faulted_.store(false);
   switch_gate_.reset();
@@ -724,16 +979,20 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
   try {
     std::array<double, kArmDof> position{}, velocity{}, effort{};
     // Follow the vendor OpenArmHW activation sequence: enable first, then use
-    // the first measured state to seed the protocol-owned SAFE hold.
-    bool enabled = false;
-    {
-      std::lock_guard<std::mutex> lock(transport_mutex_);
-      enabled = transport_->enable();
-      transport_enabled_ = enabled;
-    }
-    if (!enabled) {
-      transition_to_safe(true, "activation: enabling the motors failed");
-      return hardware_interface::CallbackReturn::ERROR;
+    // the first measured state to seed the protocol-owned SAFE hold. Not from
+    // the supervised hold: the motors are enabled, and enable()'s 100 ms
+    // silent wait could only let their CAN timeout drop the arm.
+    if (!was_holding) {
+      bool enabled = false;
+      {
+        std::lock_guard<std::mutex> lock(transport_mutex_);
+        enabled = transport_->enable();
+        transport_enabled_ = enabled;
+      }
+      if (!enabled) {
+        transition_to_safe(true, "activation: enabling the motors failed");
+        return hardware_interface::CallbackReturn::ERROR;
+      }
     }
     // The seed is where the first SAFE hold commands the arm, so every motor
     // must have answered it: one that has not still reads the vendor's initial
@@ -746,14 +1005,17 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
     for (std::size_t attempt = 0; attempt < kSeedReadAttempts; ++attempt) {
       std::array<bool, kArmDof> replied{};
       bool gripper_replied = false;
+      bool bus_off = false;
       {
         std::lock_guard<std::mutex> lock(transport_mutex_);
         initial_read_ok = transport_->read(position, velocity, effort);
         if (initial_read_ok) {
           replied = transport_->replied();
           gripper_replied = transport_->gripper_replied();
+          bus_off = transport_->bus_off();
         }
       }
+      initial_read_ok = initial_read_ok && !bus_off;
       if (!initial_read_ok) {
         break;
       }
@@ -771,19 +1033,39 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
       }
     }
     if (!initial_read_ok) {
-      transition_to_safe(true, "activation: the first state read failed");
+      transition_to_safe(true, "activation: the first state read failed (or the bus went off)");
       return hardware_interface::CallbackReturn::ERROR;
     }
     if (!gripper_answered ||
       !std::all_of(answered.begin(), answered.end(), [](const bool value) {return value;}))
     {
+      if (was_holding) {
+        // The arm is held, and a disable would drop it. Stay INACTIVE with the
+        // hold supervised: re-send it now, and let the stale-state limit fault
+        // the arm (and disable it) if the motor really is gone.
+        if (!dispatch_safe_hold()) {
+          transition_to_safe(true, "activation: the supervised hold could not be re-sent");
+          return hardware_interface::CallbackReturn::ERROR;
+        }
+        RCLCPP_ERROR(
+          rclcpp::get_logger("OpenArmMitRealSystem"),
+          "%s: activation refused: a motor did not answer the seed read. The arm keeps its "
+          "supervised hold; the stale-state limit faults it if the motor stays silent.",
+          arm_resource_name().c_str());
+        return hardware_interface::CallbackReturn::FAILURE;
+      }
       transition_to_safe(true, "activation: a motor did not answer the seed read");
       return hardware_interface::CallbackReturn::ERROR;
     }
     for (std::size_t index = 0; index < kArmDof; ++index) {
       position[index] = state_[index][0];
+      effort[index] = state_[index][2];
     }
-    if (!finite_state() || !consumer_->configure(next_session_++, position)) {
+    // The first hold of the session is at the measured pose with the measured
+    // torque (ArmConsumer::configure): about zero on motors enabled just now,
+    // the gravity torque on an arm that was being held. It used to be zero
+    // always, and at the safe gains that dropped a held arm on reactivation.
+    if (!finite_state() || !consumer_->configure(next_session_++, position, effort)) {
       transition_to_safe(true, "activation: the first state is non-finite or the session could not be configured");
       return hardware_interface::CallbackReturn::ERROR;
     }
@@ -801,19 +1083,21 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_activate(const rclcp
       gripper_command_[1] = gripper_max_force_;
       gripper_write_counter_ = 0;
     }
-    // The first MIT tuple is the post-enable measured-position SAFE hold.
+    // The first MIT tuple of the session is the measured-position SAFE hold.
     if (!dispatch_safe_hold()) {
       transition_to_safe(true, "activation: the first SAFE hold could not be sent");
       return hardware_interface::CallbackReturn::ERROR;
     }
+    missed_replies_.fill(0);
+    missed_gripper_replies_ = 0;
     active_.store(true);
+    holding_.store(false);
     {std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_); last_write_ = std::chrono::steady_clock::now();}
     watchdog_armed_.store(false);
-    // A new session starts with no producer input. In particular the effort
-    // command interfaces must read the hold's tau_ff, which a fresh session
-    // does not have (0): an incoming producer seeds its first commit from them,
-    // and a gravity torque left there by the previous session's producer
-    // would arrive as a step on an arm that has meanwhile been disabled.
+    // A new session starts with no producer input. The effort command
+    // interfaces read the feed-forward the hold applies -- the torque measured
+    // at the seed read -- because an incoming producer seeds its first commit
+    // from them; whatever the previous session's producer left there is not it.
     for (auto & joint : command_) {
       joint.fill(0.0);
     }
@@ -836,10 +1120,16 @@ hardware_interface::return_type
 OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
   if (watchdog_tripped_.exchange(false)) {
-    transition_to_safe(false, "controller_manager stopped writing (write watchdog)");
+    // The watchdog thread held (or disabled) the arm when writes stopped. A
+    // control loop that comes back has lost supervision for longer than the
+    // watchdog allows: a FAULT, which disables.
+    transition_to_safe(true, "controller_manager stopped writing (write watchdog)");
     return hardware_interface::return_type::ERROR;
   }
-  if (!active_.load()) {
+  // Active, or INACTIVE in the supervised hold, which reads and checks state
+  // the same way: joint_states keep following the arm, and a silent motor or a
+  // dead bus faults it.
+  if (!active_.load() && !holding_.load()) {
     // Not driving: nothing on the bus. Only a FAULT is an error (faulted_).
     return faulted_.load() ? hardware_interface::return_type::ERROR :
            hardware_interface::return_type::OK;
@@ -850,6 +1140,7 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
     bool gripper_replied = false;
     bool read_ok = false;
     bool enabled = false;
+    bool bus_off = false;
     {
       std::lock_guard<std::mutex> lock(transport_mutex_);
       // Under the same lock as every disable: a read() racing the watchdog's
@@ -859,6 +1150,7 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
       if (read_ok) {
         replied = transport_->replied();
         gripper_replied = transport_->gripper_replied();
+        bus_off = transport_->bus_off();
       }
     }
     if (!enabled) {
@@ -867,6 +1159,10 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
     }
     if (!read_ok) {
       transition_to_safe(true, "transport read failed");
+      return hardware_interface::return_type::ERROR;
+    }
+    if (bus_off) {
+      transition_to_safe(true, "the CAN controller reported bus-off: frames were lost");
       return hardware_interface::return_type::ERROR;
     }
     for (std::size_t index = 0; index < kArmDof; ++index) {
@@ -889,11 +1185,16 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
       transition_to_safe(true, "non-finite motor state");
       return hardware_interface::return_type::ERROR;
     }
-    std::array<double, kArmDof> measured{};
+    std::array<double, kArmDof> measured{}, measured_effort{};
     for (std::size_t index = 0; index < kArmDof; ++index) {
       measured[index] = state_[index][0];
+      measured_effort[index] = state_[index][2];
     }
-    consumer_->observe(measured);
+    // The pose and the torque a SAFE hold latched now would take.
+    consumer_->observe(measured, measured_effort);
+    if (consumer_->status() == cho_openarm_mit_core::MitStatus::ACTIVE) {
+      remember_measured_fallback_hold();
+    }
     // A gripper that stopped answering is evidence about the shared CAN
     // socket, not just about the hand, so the contract safes the same-bus arm.
     // Its state frames come at least every gripper_write_decimation_ cycles
@@ -938,9 +1239,9 @@ void OpenArmMitRealSystem::discard_leftover_commit()
     protocol_[1] = static_cast<double>(consumer_->ack_generation());
   }
   // Its tau_ff too: the incoming producer seeds from the effort command
-  // interfaces, and must find what the SAFE hold applies there -- the last
-  // ACCEPTED tau_ff, which the next write's SAFE keeps -- not the discarded
-  // commit's.
+  // interfaces, and must find what the SAFE hold applies there -- the joint
+  // torque measured when the hold was latched (ArmConsumer) -- not the
+  // discarded commit's.
   if (consumer_) {
     publish_held_effort();
   }
@@ -970,7 +1271,29 @@ bool OpenArmMitRealSystem::dispatch_safe_hold(const bool force_new_generation)
     return false;
   }
   *consumer_ = shadow;
+  remember_fallback_hold(shadow.submitted().joints);
   return true;
+}
+
+void OpenArmMitRealSystem::remember_fallback_hold(
+  const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & hold)
+{
+  std::lock_guard<std::mutex> lock(transport_mutex_);
+  fallback_hold_ = hold;
+  fallback_hold_valid_ = true;
+}
+
+void OpenArmMitRealSystem::remember_measured_fallback_hold()
+{
+  // What a SAFE hold latched from this read would be (ArmConsumer), for the
+  // watchdog thread, which must not touch the consumer.
+  std::array<cho_openarm_mit_core::JointTuple, kArmDof> hold{};
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    hold[index] = {
+      state_[index][0], 0.0, safety_profile_.safe_stiffness[index],
+      safety_profile_.safe_damping[index], consumer_->hold_effort()[index]};
+  }
+  remember_fallback_hold(hold);
 }
 
 bool OpenArmMitRealSystem::transition_to_safe(
@@ -987,6 +1310,7 @@ bool OpenArmMitRealSystem::transition_to_safe(
   }
   faulted_.store(true);
   active_.store(false);
+  holding_.store(false);
   watchdog_armed_.store(false);
   if (consumer_) {
     consumer_->inject_fault();
@@ -994,8 +1318,9 @@ bool OpenArmMitRealSystem::transition_to_safe(
   try {
     std::lock_guard<std::mutex> lock(transport_mutex_);
     transport_enabled_ = false;
-    if (transport_ && transport_disable) {
-      transport_->disable();
+    fallback_hold_valid_ = false;
+    if (transport_disable) {
+      disable_motors_locked(reason);
     }
   } catch (...) {
   }
@@ -1003,14 +1328,46 @@ bool OpenArmMitRealSystem::transition_to_safe(
   return false;
 }
 
+bool OpenArmMitRealSystem::disable_motors_locked(const char * why) noexcept
+{
+  transport_enabled_ = false;
+  if (!transport_) {
+    return true;
+  }
+  for (int attempt = 1; attempt <= kDisableAttempts; ++attempt) {
+    bool delivered = false;
+    try {
+      delivered = transport_->disable();
+    } catch (...) {
+    }
+    if (delivered) {
+      return true;
+    }
+    if (attempt < kDisableAttempts) {
+      std::this_thread::sleep_for(kDisableRetryInterval);
+    }
+  }
+  try {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("OpenArmMitRealSystem"),
+      "%s: the disable (%s) could not be handed to the bus after %d attempts. The motors may still "
+      "be executing their last frame: only their own CAN timeout (register 9) or the emergency "
+      "stop ends it now.", arm_resource_name().c_str(), why != nullptr ? why : "",
+      kDisableAttempts);
+  } catch (...) {
+  }
+  return false;
+}
+
 hardware_interface::return_type
 OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
   if (watchdog_tripped_.exchange(false)) {
-    transition_to_safe(false, "controller_manager stopped writing (write watchdog)");
+    transition_to_safe(true, "controller_manager stopped writing (write watchdog)");
     return hardware_interface::return_type::ERROR;
   }
-  if (!active_.load() || !consumer_) {
+  const bool holding = holding_.load();
+  if ((!active_.load() && !holding) || !consumer_) {
     return faulted_.load() ? hardware_interface::return_type::ERROR :
            hardware_interface::return_type::OK;
   }
@@ -1037,6 +1394,21 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
     if (!finite_state()) {
       transition_to_safe(true, "non-finite motor state");
       return hardware_interface::return_type::ERROR;
+    }
+    if (holding) {
+      // INACTIVE, the supervised hold: the same SAFE tuple again every cycle
+      // (it is not re-latched, so it does not follow a sagging arm), and no
+      // producer input is evaluated. A Damiao motor with a CAN timeout needs
+      // the frames; this process stopping them is what lets it time out.
+      if (!dispatch_safe_hold()) {
+        transition_to_safe(true, "the supervised hold could not be sent");
+        return hardware_interface::return_type::ERROR;
+      }
+      if (hand_ && !write_gripper()) {
+        transition_to_safe(true, "gripper write failed");
+        return hardware_interface::return_type::ERROR;
+      }
+      return hardware_interface::return_type::OK;
     }
     // The controller-switch rule (cho_openarm_mit_core::SwitchGate). Only
     // write() submits a SAFE tuple; prepare/perform only ask for it.
@@ -1082,7 +1454,7 @@ OpenArmMitRealSystem::write(const rclcpp::Time &, const rclcpp::Duration &)
       }
     }
     // While the arm holds, its effort command interfaces read the feed-forward
-    // the hold applies (the last accepted tau_ff, 0 in a fresh session), not
+    // the hold applies (the joint torque measured when it was latched), not
     // what a producer last wrote there. A producer seeds its first commit from
     // them, so a rejected or discarded commit's tau_ff can never become the
     // next producer's seed.
@@ -1147,9 +1519,13 @@ bool OpenArmMitRealSystem::apply_producer_input()
   // a sagging arm down for as long as the producer left it there (a faulted
   // Direct producer leaves it forever). MuJoCo has always handled a generation
   // once.
+  //
+  // A REJECTED tuple is a SAFE transition; a tuple that could not be SENT is a
+  // transport FAULT, whatever the next frame does. It used to fall through to
+  // the SAFE hold, and when that hold's send went through the arm ended in
+  // SAFE with the transport that had just failed still enabled.
   const bool new_commit = !same_commit(command.generation, observed_commit_);
   const auto status = consumer_->status();
-  bool ok = false;
   if ((status == cho_openarm_mit_core::MitStatus::SAFE ||
     status == cho_openarm_mit_core::MitStatus::ACTIVE) && new_commit)
   {
@@ -1158,31 +1534,50 @@ bool OpenArmMitRealSystem::apply_producer_input()
     // session/generation/tuple must never put its target on the bus, even
     // transiently.
     auto shadow = *consumer_;
-    if (per_joint_limits_valid && shadow.accept_and_write(command, true) &&
-      dispatch(shadow.submitted()))
-    {
+    if (per_joint_limits_valid && shadow.accept_and_write(command, true)) {
+      if (!dispatch(shadow.submitted())) {
+        return transition_to_safe(true, "an accepted commit could not be sent");
+      }
       *consumer_ = shadow;
-      ok = true;
+      return true;
     }
-  } else if (status == cho_openarm_mit_core::MitStatus::ACTIVE) {
-    auto shadow = *consumer_;
-    if (shadow.successful_write_cycle() && dispatch(shadow.submitted())) {
-      *consumer_ = shadow;
-      ok = true;
+    if (!dispatch_safe_hold(true)) {
+      return transition_to_safe(true, "a rejected commit's SAFE hold could not be sent");
     }
-  } else if (status == cho_openarm_mit_core::MitStatus::SAFE) {
-    ok = dispatch_safe_hold();
+    return true;
   }
-  if (!ok && !dispatch_safe_hold(true)) {
-    return transition_to_safe(true, "a rejected commit's SAFE hold could not be sent");
+  if (status == cho_openarm_mit_core::MitStatus::ACTIVE) {
+    auto shadow = *consumer_;
+    if (shadow.successful_write_cycle()) {
+      if (!dispatch(shadow.submitted())) {
+        return transition_to_safe(true, "the ACTIVE tuple could not be sent");
+      }
+      *consumer_ = shadow;
+      return true;
+    }
+    // The lease ran out: measured SAFE.
+    if (!dispatch_safe_hold(true)) {
+      return transition_to_safe(true, "the lease expiry's SAFE hold could not be sent");
+    }
+    return true;
+  }
+  if (status == cho_openarm_mit_core::MitStatus::SAFE) {
+    if (!dispatch_safe_hold()) {
+      return transition_to_safe(true, "the SAFE hold could not be sent");
+    }
+    return true;
+  }
+  if (!dispatch_safe_hold(true)) {
+    return transition_to_safe(true, "the SAFE hold could not be sent");
   }
   return true;
 }
 
 void OpenArmMitRealSystem::publish_held_effort()
 {
-  // Every hold retains the last accepted tau_ff (ArmConsumer), so that is what
-  // submitted() carries in any status but ACTIVE.
+  // Every hold carries the joint torque measured when it was latched
+  // (ArmConsumer), so that is what submitted() carries in any status but
+  // ACTIVE.
   for (std::size_t index = 0; index < kArmDof; ++index) {
     command_[index][4] = consumer_->submitted().joints[index].effort;
   }
@@ -1227,12 +1622,17 @@ void OpenArmMitRealSystem::watchdog_loop()
     std::chrono::milliseconds(std::max<std::size_t>(1, watchdog_ms_ / 4));
   while (!watchdog_stop_.load()) {
     std::this_thread::sleep_for(interval);
+    // Again after the sleep: a stop that began meanwhile (Ctrl-C's destructor,
+    // a deactivation) owns the arm now, and a trip here would undo its hold.
+    if (watchdog_stop_.load()) {
+      break;
+    }
     std::chrono::steady_clock::time_point previous_write;
     {
       std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
       previous_write = last_write_;
     }
-    if (active_.load() && watchdog_armed_.load() &&
+    if ((active_.load() || holding_.load()) && watchdog_armed_.load() &&
       std::chrono::steady_clock::now() - previous_write >
       std::chrono::milliseconds(watchdog_ms_))
     {
@@ -1243,17 +1643,46 @@ void OpenArmMitRealSystem::watchdog_loop()
 
 void OpenArmMitRealSystem::trip_watchdog() noexcept
 {
+  // Under watchdog_mutex_, which stop_watchdog() sets the stop flag under:
+  // either this trip completes before a stop begins, or it does not happen.
+  std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
+  if (watchdog_stop_.load() || !watchdog_armed_.load()) {
+    return;
+  }
   // Only what is safe from this thread: the consumer and protocol_ belong to
   // the control thread (read()/write()), which faults them on its next cycle.
   active_.store(false);
+  holding_.store(false);
   watchdog_armed_.store(false);
   watchdog_tripped_.store(true);
+  bool held = false;
   try {
     std::lock_guard<std::mutex> lock(transport_mutex_);
-    transport_enabled_ = false;
-    if (transport_) {
-      transport_->disable();
+    // "hold": the arm has no brakes, and the likeliest reason writes stopped
+    // is a process shutting down (Ctrl-C ends the control loop before the
+    // destructor's orderly stop runs). The measured SAFE hold goes out as the
+    // last frame -- replacing an ACTIVE tuple the motors would otherwise keep
+    // executing at full gains -- and nothing follows it, so the motors' CAN
+    // timeout ends it if this process does not come back.
+    if (stop_behavior_ == StopBehavior::HOLD && transport_ && transport_enabled_ &&
+      fallback_hold_valid_)
+    {
+      held = transport_->send(fallback_hold_);
     }
+    transport_enabled_ = false;
+    if (!held) {
+      disable_motors_locked("write watchdog");
+    }
+  } catch (...) {
+  }
+  try {
+    RCLCPP_ERROR(
+      rclcpp::get_logger("OpenArmMitRealSystem"),
+      "%s: controller_manager stopped writing for %zu ms (write watchdog): %s",
+      arm_resource_name().c_str(), watchdog_ms_,
+      held ? "a measured SAFE hold is the last frame; the motors' CAN timeout ends it unless "
+      "the control loop comes back, which faults (and disables) the arm" :
+      "motors disabled");
   } catch (...) {
   }
 }
@@ -1267,22 +1696,58 @@ void OpenArmMitRealSystem::start_watchdog()
 
 void OpenArmMitRealSystem::stop_watchdog() noexcept
 {
-  watchdog_stop_.store(true);
-  watchdog_armed_.store(false);
+  {
+    std::lock_guard<std::mutex> watchdog_lock(watchdog_mutex_);
+    watchdog_stop_.store(true);
+    watchdog_armed_.store(false);
+  }
   if (watchdog_thread_.joinable()) {
     watchdog_thread_.join();
   }
 }
 
-void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion) noexcept
+void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion, const bool supervise) noexcept
 {
-  stop_watchdog();
+  const bool keep_watchdog = supervise && stop_behavior_ == StopBehavior::HOLD;
+  // Either way no trip can interleave with this stop: stop_watchdog() ends the
+  // thread (a trip in progress completes first), and a watchdog kept running
+  // is held off by its lock, which a trip holds for its whole run, and finds
+  // itself disarmed afterwards.
+  std::unique_lock<std::mutex> watchdog_lock(watchdog_mutex_, std::defer_lock);
+  if (keep_watchdog) {
+    watchdog_lock.lock();
+    watchdog_armed_.store(false);
+  } else {
+    stop_watchdog();
+  }
   // Never activated, already stopped, or faulted -- a fault disabled the
-  // motors already, and a hold cannot be trusted on a bus that failed.
-  if (!active_.load() || !consumer_) {
+  // motors already, and a hold cannot be trusted on a bus that failed -- or
+  // tripped by the write watchdog, whose hold is the last frame already.
+  if ((!active_.load() && !holding_.load()) || !consumer_) {
     return;
   }
+  const auto logger = rclcpp::get_logger("OpenArmMitRealSystem");
   try {
+    if (holding_.load()) {
+      if (supervise) {
+        return;  // already supervised
+      }
+      // Cleanup, shutdown or destruction of the supervised hold: that hold,
+      // unchanged, is the last frame.
+      if (!dispatch_safe_hold()) {
+        transition_to_safe(true, "the final re-send of the supervised hold failed");
+        return;
+      }
+      holding_.store(false);
+      {
+        std::lock_guard<std::mutex> lock(transport_mutex_);
+        transport_enabled_ = false;
+      }
+      RCLCPP_WARN(
+        logger, "%s: %s: the supervised hold is the last frame; nothing supervises it now, and "
+        "the motors' CAN timeout (register 9) ends it.", arm_resource_name().c_str(), occasion);
+      return;
+    }
     // A fresh measurement, so the hold is where the arm is now. Humble runs
     // hardware lifecycle callbacks and read()/write() under one lock
     // (ResourceManager::resources_lock_), so nothing else touches the
@@ -1292,7 +1757,8 @@ void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion) noexcept
     bool read_ok = false;
     {
       std::lock_guard<std::mutex> lock(transport_mutex_);
-      read_ok = transport_ && transport_enabled_ && transport_->read(position, velocity, effort);
+      read_ok = transport_ && transport_enabled_ && transport_->read(position, velocity, effort) &&
+        !transport_->bus_off();
       if (read_ok) {
         replied = transport_->replied();
       }
@@ -1309,41 +1775,61 @@ void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion) noexcept
         state_[index] = {position[index], velocity[index], effort[index]};
       }
     }
-    std::array<double, kArmDof> measured{};
+    std::array<double, kArmDof> measured{}, measured_effort{};
     for (std::size_t index = 0; index < kArmDof; ++index) {
       measured[index] = state_[index][0];
+      measured_effort[index] = state_[index][2];
     }
-    consumer_->observe(measured);
+    consumer_->observe(measured, measured_effort);
     if (stop_behavior_ == StopBehavior::DISABLE) {
-      std::lock_guard<std::mutex> lock(transport_mutex_);
-      transport_enabled_ = false;
-      if (transport_) {
-        transport_->disable();
+      bool delivered = false;
+      {
+        std::lock_guard<std::mutex> lock(transport_mutex_);
+        delivered = disable_motors_locked(occasion);
       }
       RCLCPP_WARN(
-        rclcpp::get_logger("OpenArmMitRealSystem"),
-        "%s: %s: motors disabled (mit_stop_behavior: disable); the arm is not held",
-        arm_resource_name().c_str(), occasion);
+        logger, "%s: %s: motors %sdisabled (mit_stop_behavior: disable); the arm is not held",
+        arm_resource_name().c_str(), occasion, delivered ? "" : "NOT ");
     } else {
+      // A measured SAFE hold: the pose and the joint torque of this read (see
+      // ArmConsumer), with the profile's safe gains.
       if (!dispatch_safe_hold(true)) {
         transition_to_safe(true, "the stop's final SAFE hold could not be sent");
         return;
       }
-      RCLCPP_WARN(
-        rclcpp::get_logger("OpenArmMitRealSystem"),
-        "%s: %s: the motors stay enabled, executing the last frame: a SAFE hold at the measured "
-        "pose with the profile's safe gains and the last accepted tau_ff. Nothing supervises it "
-        "now. It lasts until the motors are disabled, lose power, or their own CAN timeout "
-        "(register 9) expires, if one is configured; then the arm is unpowered.",
-        arm_resource_name().c_str(), occasion);
+      if (supervise) {
+        // Set before active_ is cleared, so the watchdog thread never sees
+        // neither: the hold is supervised from this moment.
+        holding_.store(true);
+        RCLCPP_WARN(
+          logger,
+          "%s: %s: the motors stay enabled holding the measured pose (the profile's safe gains, "
+          "the measured joint torque). While INACTIVE the hold is re-sent every cycle and "
+          "supervised -- stale state, a transport error or the write watchdog disables the "
+          "motors.", arm_resource_name().c_str(), occasion);
+      } else {
+        {
+          std::lock_guard<std::mutex> lock(transport_mutex_);
+          transport_enabled_ = false;
+        }
+        RCLCPP_WARN(
+          logger,
+          "%s: %s: the last frame is a SAFE hold at the measured pose (the profile's safe gains, "
+          "the measured joint torque). Nothing supervises it now: the motors' CAN timeout "
+          "(register 9) ends it, then the arm is unpowered.", arm_resource_name().c_str(),
+          occasion);
+      }
     }
     active_.store(false);
+    // The next write() arms the watchdog of a supervised hold again.
     watchdog_armed_.store(false);
     protocol_[1] = static_cast<double>(consumer_->ack_generation());
     protocol_[2] = static_cast<double>(consumer_->safe_generation());
     protocol_[3] = static_cast<double>(consumer_->safe_ack_generation());
     // No producer input is accepted any more.
     protocol_[4] = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
+    // A producer activated later seeds from what the hold applies.
+    publish_held_effort();
   } catch (...) {
     transition_to_safe(true, "the stop threw");
   }
@@ -1357,14 +1843,18 @@ void OpenArmMitRealSystem::close_transport() noexcept
     // whatever the motors execute now, they keep executing.
     transport_.reset();
     transport_enabled_ = false;
+    fallback_hold_valid_ = false;
   } catch (...) {
   }
   consumer_.reset();
   configured_ = false;
   active_.store(false);
+  holding_.store(false);
   // The transport that faulted is gone; a new configure starts clean.
   faulted_.store(false);
+  watchdog_tripped_.store(false);
   protocol_.fill(0.0);
+  protocol_[4] = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
   for (auto & joint : command_) {
     joint.fill(0.0);
   }
@@ -1374,15 +1864,16 @@ hardware_interface::CallbackReturn
 OpenArmMitRealSystem::on_deactivate(const rclcpp_lifecycle::State &)
 {
   // It used to disable the motors here, and the arm -- which has no brakes --
-  // dropped on every deactivation, Ctrl-C included.
-  stop_with_final_frame("deactivation");
+  // dropped on every deactivation. Then it left them holding with nothing
+  // watching. Now the hold stays supervised while INACTIVE.
+  stop_with_final_frame("deactivation", true);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn
 OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
 {
-  stop_with_final_frame("cleanup");
+  stop_with_final_frame("cleanup", false);
   close_transport();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -1390,7 +1881,7 @@ OpenArmMitRealSystem::on_cleanup(const rclcpp_lifecycle::State &)
 hardware_interface::CallbackReturn
 OpenArmMitRealSystem::on_shutdown(const rclcpp_lifecycle::State &)
 {
-  stop_with_final_frame("shutdown");
+  stop_with_final_frame("shutdown", false);
   close_transport();
   return hardware_interface::CallbackReturn::SUCCESS;
 }

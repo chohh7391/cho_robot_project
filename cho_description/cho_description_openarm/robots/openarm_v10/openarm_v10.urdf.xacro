@@ -68,6 +68,13 @@ limitations under the License.
   <xacro:arg name="right_arm_base_rpy"  default="1.5708 0 0"/>
   <xacro:arg name="can_fd"        default="true"/>
   <xacro:arg name="mit_state_from_command_reply" default="false"/>
+  <!-- Real MIT adapter only. What an orderly stop leaves the motors doing:
+       "hold" (a supervised measured SAFE hold while INACTIVE; the motors' own
+       CAN timeout ends the last hold after cleanup, shutdown or a crash) or
+       "disable" (motors disabled, the arm drops). Activation refuses motors
+       whose CAN timeout (register 9) is 0 unless mit_allow_no_can_timeout. -->
+  <xacro:arg name="mit_stop_behavior" default="hold"/>
+  <xacro:arg name="mit_allow_no_can_timeout" default="false"/>
   <!-- Real gripper. The CAN ids are upstream OpenArm's defaults (0x08 / 0x18)
        expressed in decimal because xacro parses these as numbers. The motor
        endpoints are measured on the physical hand: zero is wherever it was last
@@ -175,6 +182,8 @@ limitations under the License.
       can_interface="$(arg can_interface)"
       can_fd="$(arg can_fd)"
       mit_state_from_command_reply="$(arg mit_state_from_command_reply)"
+      mit_stop_behavior="$(arg mit_stop_behavior)"
+      mit_allow_no_can_timeout="$(arg mit_allow_no_can_timeout)"
       gripper_send_can_id="$(arg gripper_send_can_id)"
       gripper_recv_can_id="$(arg gripper_recv_can_id)"
       gripper_pos_force="$(arg gripper_pos_force)"

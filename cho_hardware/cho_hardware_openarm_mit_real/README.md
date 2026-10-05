@@ -31,26 +31,78 @@ The hardware block must specify all of these exact parameters:
 | `mit_safety_profile_file`, `mit_safety_profile` | Explicit commissioning profile; `real_conservative_commissioning` or `real_return_to_zero_commissioning` |
 | `mit_expected_update_rate_hz` | Must equal the selected profile's `update_rate_hz` (currently `750`) |
 
+Optional: `mit_stop_behavior` (`hold`, the default, or `disable`; see Stopping),
+`mit_allow_no_can_timeout` (default `false`; see the CAN timeout below), and the
+gripper block with `hand`. Both are xacro arguments of
+`cho_description_openarm/robots/openarm_v10/openarm_v10.urdf.xacro`.
+
 No socket is opened by `on_init`. `on_configure` rejects unknown CAN
 interfaces, noncanonical joint mappings, and an unapproved or malformed safety
-profile before calling the vendor factory.
+profile before calling the vendor factory. The vendor's socket is then made
+non-blocking (a `write()` into a full transmit queue fails at once -- and faults
+the arm -- instead of blocking the control loop while it holds the transport
+lock) and subscribed to bus-off error frames (`CAN_RAW_ERR_FILTER`), both from
+this side: `extern/openarm_can` opens it blocking and asks for no error frames.
 `on_activate` enables motors only after a finite measured state and sends a
-measured-position safe hold. NaN/read/write faults and the 100 ms profile
-watchdog disable the vendor motors immediately, and the reason is logged.
+measured-position safe hold. NaN/read/write faults, a bus-off, a stale motor and
+the 100 ms profile write watchdog fault the arm and disable the motors, and the
+reason is logged.
 
-**Stopping.** The arm has no brakes. `on_deactivate`, `on_cleanup`,
-`on_shutdown` and the destructor do not disable the motors: they take one
-fresh read and send a final measured SAFE hold (the profile's safe gains, the
-last accepted `tau_ff`) as the last frame, and send nothing after it. A Damiao
-motor keeps executing its last MIT frame, so the arm stays where it is --
-unsupervised -- until the motors are disabled, lose power, or their own CAN
-timeout expires. That timeout is a motor register (`RID::TIMEOUT`, 9, "CAN
-Timeout") that nothing here writes and whose semantics `extern/openarm_can`
-does not document; read it on every motor during commissioning
-(`openarm-can-cli`). While INACTIVE, `read()`/`write()` (still called by Humble)
-put nothing on the bus and return OK. Set `mit_stop_behavior: disable` for the
-old behaviour (motors disabled, arm dropped). A fault and `on_error()` still
-disable at once and close the socket.
+**The motors' CAN timeout.** A Damiao motor keeps executing its last MIT frame
+for as long as it is powered, unless its "CAN Timeout" register (`RID::TIMEOUT`,
+9) is set: then it stops on its own when no frame arrives for that long. That is
+the only thing that ends a hold once this process can no longer send (a crash,
+a kill, a dead PC, or after cleanup/shutdown). Before an activation that enables
+the motors, `on_activate` reads register 9 on every motor (and the gripper's,
+with `hand`) and **refuses** -- `FAILURE`, nothing enabled or sent -- when one
+reads 0 or does not answer, naming the motors and the commands to fix it:
+
+```bash
+openarm-can-cli -i can0 show_param --id 1,2,3,4,5,6,7,8      # read every register
+openarm-can-cli -i can0 write_param --id 3 --rid 9 --value <timeout> --save
+```
+
+The unit is the firmware's; `extern/openarm_can` does not document it, so set a
+value and measure the resulting timeout on the bench (stop a running hold and
+time the drop). Keep it above this adapter's 100 ms silent wait after
+`enable()`, or the motors time out during activation. `mit_allow_no_can_timeout:
+true` accepts motors without one, with a warning.
+
+**Stopping.** The arm has no brakes. With `mit_stop_behavior: hold` (the
+default):
+
+- `on_deactivate` takes one fresh read and sends a measured SAFE hold, then
+  keeps it **supervised while INACTIVE**: Humble keeps calling `read()` and
+  `write()` on an INACTIVE component (2.54: `System::read/write` run for
+  `INACTIVE` and `ACTIVE`), so `write()` re-sends the same hold every cycle (not
+  re-latched: it does not follow a sagging arm), `read()` reads and checks state
+  (joint_states keep following the arm), and the stale-state check and the write
+  watchdog keep running. Any failure -- a silent motor, a failed send or read, a
+  bus-off, non-finite state -- disables the motors (`read()`/`write()` return
+  ERROR, Humble runs `on_error()`). No producer input is accepted (status
+  DISABLED).
+- If controller_manager stops calling `write()` (ACTIVE or held) the write
+  watchdog puts the measured SAFE hold on the bus as the last frame and sends
+  nothing after it: the motors' CAN timeout ends it if the process does not come
+  back, and a control loop that does come back finds a FAULT (which disables).
+  Ctrl-C ends the control loop before the destructor runs, and the watchdog used
+  to win that race by disabling the motors -- the arm fell. The watchdog also
+  checks again after each sleep that no stop has begun.
+- `on_cleanup`, `on_shutdown` and the destructor send the hold one last time and
+  nothing after it; the motors' CAN timeout ends it.
+- Reactivating out of the supervised hold does not call `enable()` (the motors
+  are enabled, and its 100 ms of silence could only let their CAN timeout drop
+  the arm) and does not read register 9 again. If a motor misses the seed read
+  then, activation is refused with `FAILURE` and the arm stays in its supervised
+  hold -- the stale-state limit decides whether the motor is really gone -- where
+  it used to be disabled and dropped.
+
+`mit_stop_behavior: disable` disables the motors at every orderly stop and on a
+write-watchdog trip (the arm drops). A fault and `on_error()` disable at once
+in both modes. A disable whose frames the bus refuses is sent again (three
+attempts, 2 ms apart); if it never goes out the error says the motors may
+still be executing their last frame and that their CAN timeout or the E-stop is
+what is left.
 
 - **The activation seed is measured, by every motor.** The first SAFE hold is
   commanded to the state read at activation, so every arm motor (and the
@@ -58,15 +110,31 @@ disable at once and close the socket.
   reads the vendor's initial zero, and holding it there is a jump to zero. Up
   to ten reads are allowed for a reply that missed a receive window; activation
   fails otherwise.
-- **SAFE holds the latest measured pose.** Lease expiry, an invalid commit or a
-  SAFE request holds `q_des` = the pose measured at that moment (every `read()`
-  feeds `ArmConsumer::observe()`), not the pose at activation.
+- **SAFE holds the latest measured pose with the measured torque.** Lease
+  expiry, an invalid commit, a SAFE request, a controller switch and a stop hold
+  `q_des` = the pose measured at that moment and `tau_ff` = the joint torque the
+  motors were measured applying in the same read (every `read()` feeds
+  `ArmConsumer::observe()`), clamped per joint to the profile's
+  `tau_ff_magnitude`. It used to keep the producer's last `tau_ff`, which is not
+  the gravity torque: a producer splits the support between its
+  `kp*(q_des - q)` spring and `tau_ff` (the drive-side TaskSpace law puts the
+  Cartesian error in the spring, the FollowJointTrajectory producer all of it),
+  and at the safe gains (kp 3 on the shoulder) the spring's share sagged away.
+  At rest in free space the measured torque is the gravity torque of the real
+  arm and payload -- no model error, no step at the boundary, and a residual
+  inside the joints' static friction moves nothing. Moving or in contact it also
+  carries that instant's inertial or contact torque, which the safe gains then
+  resist.
+- **The first hold of a session carries the torque measured at the seed read.**
+  About zero on motors enabled just now; the gravity torque on an arm the
+  supervised hold was holding. It used to be zero always, and at kp 3 that was a
+  drop on every reactivation.
 - **The effort commands read the hold's tau_ff.** Whenever the arm is not ACTIVE,
-  `write()` sets each joint's `effort` command to the feed-forward the hold applies (the
-  last accepted one); activation zeroes every command (a fresh session's hold has none);
-  perform restores it when it discards the outgoing producer's commit. A producer seeds
-  its first `tau_ff` from these, so a rejected commit's value, or a previous session's
-  gravity torque on an arm that faulted and dropped, can never arrive as a step.
+  `write()` sets each joint's `effort` command to the feed-forward the hold
+  applies; activation sets them to the new session's (the measured torque);
+  perform restores them when it discards the outgoing producer's commit. A
+  producer seeds its first `tau_ff` from these, so a rejected or discarded
+  commit's value can never arrive as a step.
 - **A commit is evaluated once.** A rejected commit puts the arm in SAFE once,
   with one new SAFE generation; while the producer leaves that same generation
   in place (a faulted Direct producer leaves it forever) the hold is retransmitted
@@ -78,8 +146,11 @@ disable at once and close the socket.
   took the frame. `ArmComponent::mit_control_all()` builds the same frames but
   discards that result, so a bus-off interface (`ENETDOWN`) or a full transmit
   queue (`ENOBUFS`, nothing acknowledging on the bus) used to look like a
-  successful send until the stale-reply limit caught it. The gripper's frames
-  are written the same way. `extern/openarm_can` is not modified.
+  successful send until the stale-reply limit caught it. The gripper's frames,
+  and the enable and disable frames (`OpenArm::enable_all()`/`disable_all()`
+  discard their results too), are written the same way. A commit whose frame could not be sent faults the
+  arm even if the SAFE hold after it goes out: it used to end in SAFE with that
+  transport still enabled. `extern/openarm_can` is not modified.
 - **Stale state is a fault.** The adapter receives the bus itself, counting each
   arm motor's replies, because `openarm_can`'s `recv_all()` reports none: a dead
   bus or a command that never reached it otherwise looked like an arm holding
@@ -118,17 +189,22 @@ disable at once and close the socket.
   drains whatever was pending, so after a deactivate/activate nothing answered the
   seed read and activation always failed; `enable()`/`disable()` now reset that
   decision (`StateQuery`, which a test transport shares) and the seed read refreshes.
-- The write watchdog runs on its own thread and only disables transport there;
-  the protocol state is faulted by the control thread on its next cycle. Every
-  disable marks the transport disabled under the transport lock, so neither a
-  `write()` nor a `read()` (its state query) racing it puts one more frame on the
-  bus afterwards.
+- The write watchdog runs on its own thread and only holds (or disables)
+  transport there; the protocol state is faulted by the control thread on its
+  next cycle. Every disable, and the watchdog's last hold, marks the transport
+  disabled under the transport lock, so neither a `write()` nor a `read()` (its
+  state query) racing it puts one more frame on the bus afterwards. The trip and
+  a stop exclude each other under the watchdog lock: either the trip completes
+  before a stop begins, or it does not happen.
 
 Not verified on hardware: everything above is exercised against a fake
-transport -- including what the motors do with the final hold, which is the
-firmware's behaviour, not this adapter's (`test/test_openarm_mit_real_gates.cpp`); the vendor transport itself
-(`VendorCanTransport`) is only compiled, since this repository's CI has no CAN
-interface.
+transport -- including what the motors do with the final hold and with their
+CAN timeout, which is the firmware's behaviour, not this adapter's
+(`test/test_openarm_mit_real_gates.cpp`). Of the vendor transport
+(`VendorCanTransport`) only the socket options (on an unbound `CAN_RAW` socket)
+and the register-9 reply parsing are tested; the reads, sends, disables and
+bus-off frames themselves need a CAN interface this repository's CI does not
+have.
 
 Never use this envelope until
 mechanical limits, CAN IDs, motor zeroes, emergency stop, and a supervised

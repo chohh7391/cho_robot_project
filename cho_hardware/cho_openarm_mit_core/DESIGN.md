@@ -29,3 +29,12 @@ first write after perform is flagged (`Cycle::performed`): a SAFE request still
 pending then belongs to the outgoing producer. The class
 only decides; each backend owns its SAFE tuple and commit bookkeeping (the real
 adapter and the fake through `ArmConsumer`, MuJoCo through its limiter).
+
+`ArmConsumer`'s SAFE hold is `q_des = q_measured, dq_des = 0`, the per-joint safe gains, and
+`tau_ff = tau_measured`: the joint torque measured in the same read as the pose
+(`observe(position, effort)`), clamped per joint to the hold's effort limit (the profile's
+`tau_ff_magnitude` on the real adapter). A new session (`configure()`) is seeded with the torque
+measured at the seed read, so a reactivation out of a hold keeps the arm's gravity torque. It used
+to retain the producer's last `tau_ff`, which is not the gravity torque whenever the producer carried
+part of the support in its `kp*(q_des - q)` spring, and to start every session at zero; see the
+class comment for why the measured torque and not a gravity model.

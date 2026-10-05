@@ -20,6 +20,14 @@
 #include <stdexcept>
 namespace cho_hardware_openarm_mit_test {
 namespace {
+// The feed-forward the arm's hold applies on joint i: the materialized hold's,
+// or -- in a fresh session, SAFE before any hold went out -- the torque the
+// session was seeded with, which is what its first hold will carry.
+double held_effort(const ArmConsumer &c, std::size_t i) {
+  return c.status() == MitStatus::SAFE && c.safe_ack_generation() == 0
+             ? c.hold_effort()[i]
+             : c.submitted().joints[i].effort;
+}
 double number(const hardware_interface::HardwareInfo &i, const char *n) {
   auto p = i.hardware_parameters.find(n);
   if (p == i.hardware_parameters.end())
@@ -98,41 +106,63 @@ FakeMitSystem::on_configure(const rclcpp_lifecycle::State &) {
       next_session_ > static_cast<uint64_t>(kMaxExactInteger)) {
     return hardware_interface::CallbackReturn::ERROR;
   }
-  std::array<double, 7> l{}, r{};
+  // As the real adapter and MuJoCo: no session until the first activation, and
+  // nothing accepted (DISABLED) until then.
+  left_.cleanup();
+  right_.cleanup();
+  pair_.reset();
+  driving_ = false;
+  command_ = {};
+  left_protocol_.fill(0);
+  right_protocol_.fill(0);
+  pair_protocol_.fill(0);
+  sync_protocol();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+hardware_interface::CallbackReturn
+FakeMitSystem::on_activate(const rclcpp_lifecycle::State &) {
+  // Every activation is a new session (the contract's rule, which the real
+  // adapter and MuJoCo apply too), seeded from the measured state: the first
+  // hold is at the measured pose with the measured joint torque.
+  if (next_session_ == 0 ||
+      next_session_ > static_cast<uint64_t>(kMaxExactInteger)) {
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  std::array<double, 7> l{}, r{}, le{}, re{};
   for (size_t i = 0; i < 7; ++i) {
     l[i] = state_[i][0];
-    if (bimanual_)
+    le[i] = state_[i][2];
+    if (bimanual_) {
       r[i] = state_[i + 7][0];
+      re[i] = state_[i + 7][2];
+    }
   }
   if (bimanual_) {
     pair_ = std::make_unique<PairedConsumer>(limits_, next_session_,
                                              safe_hold_damping_);
-    if (!pair_->configure(next_session_, l, r))
+    if (!pair_->configure(next_session_, l, r, le, re))
       return hardware_interface::CallbackReturn::ERROR;
     // The bimanual fake is also used to exercise the production ownership
     // split: two disjoint direct controllers use independent consumers while
     // the MoveIt controller exclusively uses PairedConsumer.
-    if (!left_.configure(next_session_, l) || !right_.configure(next_session_, r))
+    if (!left_.configure(next_session_, l, le) || !right_.configure(next_session_, r, re))
       return hardware_interface::CallbackReturn::ERROR;
-  } else if (!left_.configure(next_session_, l))
+  } else if (!left_.configure(next_session_, l, le))
     return hardware_interface::CallbackReturn::ERROR;
   ++next_session_;
   ownership_selected_ = direct_ownership_active_ = false;
   left_gate_.reset();
   right_gate_.reset();
-  // A new session starts with no producer input: its hold has no tau_ff, and
-  // the effort commands must say so (publish_held_effort()).
+  // A new session starts with no producer input: the effort commands read the
+  // feed-forward its hold applies (publish_held_effort()).
   command_ = {};
   left_protocol_.fill(0);
   right_protocol_.fill(0);
+  pair_protocol_.fill(0);
   left_observed_ = right_observed_ = 0.0;
+  driving_ = true;
   sync_protocol();
   publish_held_effort();
-  return hardware_interface::CallbackReturn::SUCCESS;
-}
-hardware_interface::CallbackReturn
-FakeMitSystem::on_activate(const rclcpp_lifecycle::State &) {
-  driving_ = true;
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 void FakeMitSystem::stop_holding() {
@@ -184,6 +214,8 @@ FakeMitSystem::on_cleanup(const rclcpp_lifecycle::State &) {
   pair_protocol_.fill(0);
   left_gate_.reset();
   right_gate_.reset();
+  driving_ = false;
+  sync_protocol();  // session 0, DISABLED
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 std::vector<hardware_interface::StateInterface>
@@ -255,17 +287,21 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
     return c;
   };
   // The fake tracks its commands perfectly, so its state IS the measured pose
-  // a SAFE transition must hold (ArmConsumer::observe).
+  // and torque a SAFE transition must hold (ArmConsumer::observe).
   {
-    std::array<double, 7> l{}, r{};
+    std::array<double, 7> l{}, r{}, le{}, re{};
     for (size_t i = 0; i < 7; ++i) {
       l[i] = state_[i][0];
-      if (bimanual_) r[i] = state_[i + 7][0];
+      le[i] = state_[i][2];
+      if (bimanual_) {
+        r[i] = state_[i + 7][0];
+        re[i] = state_[i + 7][2];
+      }
     }
-    left_.observe(l);
+    left_.observe(l, le);
     if (bimanual_) {
-      right_.observe(r);
-      if (pair_) pair_->observe(l, r);
+      right_.observe(r, re);
+      if (pair_) pair_->observe(l, r, le, re);
     }
   }
   bool ok = true;
@@ -450,7 +486,7 @@ void FakeMitSystem::publish_held_effort() {
   auto publish = [&](const ArmConsumer &c, std::size_t offset) {
     if (c.status() == MitStatus::ACTIVE) return;
     for (std::size_t i = 0; i < 7; ++i)
-      command_[offset + i][4] = c.submitted().joints[i].effort;
+      command_[offset + i][4] = held_effort(c, i);
   };
   if (bimanual_ && pair_) {
     publish(direct_ownership_active_ ? left_ : pair_->left(), 0);
@@ -459,12 +495,14 @@ void FakeMitSystem::publish_held_effort() {
     publish(left_, 0);
 }
 void FakeMitSystem::sync_protocol() {
-  auto s = [](const ArmConsumer &c, auto &p) {
+  // Not driving (configured, or deactivated): no producer input is accepted,
+  // which every backend reports as DISABLED.
+  auto s = [this](const ArmConsumer &c, auto &p) {
     p[0] = c.session();
     p[1] = c.ack_generation();
     p[2] = c.safe_generation();
     p[3] = c.safe_ack_generation();
-    p[4] = static_cast<double>(c.status());
+    p[4] = static_cast<double>(driving_ ? c.status() : MitStatus::DISABLED);
   };
   if (bimanual_ && pair_) {
     const auto & left = direct_ownership_active_ ? left_ : pair_->left();
@@ -477,8 +515,13 @@ void FakeMitSystem::sync_protocol() {
                                 left.safe_ack_generation() == right.safe_ack_generation()
                             ? 1.0
                             : 0.0;
-  } else
+  } else {
     s(left_, left_protocol_);
+    if (bimanual_) {
+      s(right_, right_protocol_);
+      pair_protocol_[1] = 0.0;
+    }
+  }
 }
 bool FakeMitSystem::enter_switch_safe(ArmConsumer & consumer, bool & ok) {
   const auto status = consumer.status();
@@ -558,7 +601,7 @@ FakeMitSystem::perform_command_mode_switch(const std::vector<std::string> &start
     // producer, activated right after this, must not seed from it.
     auto restore = [&](const ArmConsumer &c, std::size_t offset) {
       for (std::size_t i = 0; i < 7; ++i)
-        command_[offset + i][4] = c.submitted().joints[i].effort;
+        command_[offset + i][4] = held_effort(c, i);
     };
     if (bimanual_ && pair_) {
       restore(direct_ownership_active_ ? left_ : pair_->left(), 0);

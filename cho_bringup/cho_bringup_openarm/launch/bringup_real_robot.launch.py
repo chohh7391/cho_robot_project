@@ -92,6 +92,19 @@ def generate_launch_description():
                 'false only when also lowering the rate, and note the cost - one '
                 'cycle of state age, 1.3 ms at 750 Hz.')),
         DeclareLaunchArgument(
+            'mit_stop_behavior', default_value='hold', choices=['hold', 'disable'],
+            description=(
+                'hold: an orderly stop leaves a measured SAFE hold, supervised while the '
+                'hardware is INACTIVE (any failure disables); after cleanup, shutdown or a '
+                "crash the motors' CAN timeout ends it. disable: motors disabled, the arm "
+                'drops.')),
+        DeclareLaunchArgument(
+            'mit_allow_no_can_timeout', default_value='false', choices=['true', 'false'],
+            description=(
+                "Activate even if a motor's CAN timeout (register 9) is 0 or unread; such a "
+                'motor keeps its last frame after a crash. Set it with openarm-can-cli '
+                'write_param --rid 9.')),
+        DeclareLaunchArgument(
             'hand', default_value='false', choices=['true', 'false'],
             description=(
                 'Drive the parallel-link hand. The adapter then owns an eighth '
@@ -166,6 +179,8 @@ def generate_launch_description():
             ' can_fd:=', LaunchConfiguration('can_fd'),
             ' mit_state_from_command_reply:=',
             LaunchConfiguration('mit_state_from_command_reply'),
+            ' mit_stop_behavior:=', LaunchConfiguration('mit_stop_behavior'),
+            ' mit_allow_no_can_timeout:=', LaunchConfiguration('mit_allow_no_can_timeout'),
             ' hand:=', LaunchConfiguration('hand'),
             # Quoted: the value carries spaces and Command() shlex-splits the
             # whole line, so an unquoted "0 0 0" reaches xacro as three tokens.

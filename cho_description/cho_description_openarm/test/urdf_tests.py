@@ -220,6 +220,10 @@ def test_real_mit_single_arm_is_exactly_seven_axis_with_full_protocol():
     assert block.find("hardware/param[@name='enable_motors']") is None
     assert block.find("hardware/param[@name='operator_approval']") is None
     assert block.find("hardware/param[@name='arm_side']").text == 'single'
+    # The stop policy and the CAN-timeout gate default to their safe settings: a
+    # supervised hold, and no activation while a motor has no CAN timeout.
+    assert block.find("hardware/param[@name='mit_stop_behavior']").text == 'hold'
+    assert block.find("hardware/param[@name='mit_allow_no_can_timeout']").text.lower() == 'false'
     # The real MIT adapter exposes one five-field tuple per joint.  A duplicate
     # effort entry makes ResourceManager reject the entire component before the
     # adapter has a chance to export its interfaces.

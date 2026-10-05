@@ -190,12 +190,10 @@ def generate_launch_description():
         always_active = launch_utils.always_active_controllers(bimanual)
         switchable_controllers = launch_utils.get_switchable_controllers(
             control_mode=mode, requested_controller=ctrl_name, bimanual=bimanual)
-        runtime_param_file = launch_utils.create_runtime_param_file(
-            controller_names=always_active + switchable_controllers,
-            bringup_type=bringup_type,
-            control_mode=mode,
-            ee_name=ee_name,
-        )
+        # Everything that can refuse the launch runs before the runtime
+        # parameter file is written: a refusal raises out of here, and the
+        # cleanup handler that would delete the file is never registered.
+        shutdown_on_failure = shutdown_on_gate_failure(context)
         controller_spawners = create_controller_spawners(
             always_active=always_active,
             switchable_controllers=switchable_controllers,
@@ -230,6 +228,13 @@ def generate_launch_description():
             additional_env={'ISAAC_SIM_PATH': isaac_sim_path},
         )
 
+        runtime_param_file = launch_utils.create_runtime_param_file(
+            controller_names=always_active + switchable_controllers,
+            bringup_type=bringup_type,
+            control_mode=mode,
+            ee_name=ee_name,
+        )
+
         node_ros2_control = Node(
             package='mujoco_ros2_control',
             executable='ros2_control_node',
@@ -248,7 +253,7 @@ def generate_launch_description():
         # controller is active (see isaac_controller_startup for both reasons).
         return [isaac_sim, node_ros2_control] + isaac_controller_startup(
             isaac_sim, controller_spawners, active_spawner, isaac_command_gate(use_sim_time),
-            shutdown_on_failure=shutdown_on_gate_failure(context),
+            shutdown_on_failure=shutdown_on_failure,
         ) + [runtime_param_cleanup(runtime_param_file)]
 
     return LaunchDescription(

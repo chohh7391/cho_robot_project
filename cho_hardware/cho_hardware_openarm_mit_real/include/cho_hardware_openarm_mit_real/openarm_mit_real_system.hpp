@@ -17,6 +17,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -89,6 +91,35 @@ private:
   bool command_sent_{false};
 };
 
+// Each motor's "CAN Timeout" register (RID::TIMEOUT, 9) as it answered a
+// parameter read; -1 where it did not answer. 0 means no timeout: the motor
+// executes its last MIT frame for as long as it is powered, whatever happens
+// to this process. The unit is the firmware's (extern/openarm_can does not
+// document it); only zero versus nonzero is interpreted here.
+struct CanTimeouts
+{
+  CanTimeouts() {arm.fill(-1);}
+  std::array<std::int64_t, kArmDof> arm{};
+  std::int64_t gripper{-1};
+};
+
+// The reply of a Damiao motor to a parameter read of `rid`: a frame on the
+// motor's own reply id whose data is [id lo, id hi, 0x33 (read) or 0x55
+// (write echo), rid, value as little-endian uint32]. False for anything else.
+bool parse_param_reply(
+  std::uint32_t can_id, const std::uint8_t * data, std::size_t length,
+  std::uint32_t reply_id, std::uint8_t rid, std::uint32_t & value);
+// What the adapter needs from the vendor's SocketCAN descriptor on top of what
+// openarm_can sets up: O_NONBLOCK, so a write() into a full transmit queue
+// fails at once (and faults the arm) instead of blocking the control loop while
+// it holds the transport lock, and a CAN_RAW_ERR_FILTER for bus-off and
+// controller-restart error frames, which openarm_can never asks for. False,
+// with the reason in `why`, if the descriptor refuses either.
+bool configure_control_socket(int fd, std::string & why);
+// An error frame (CAN_ERR_FLAG) reporting bus-off, or the restart that follows
+// one: frames were lost and the bus cannot be trusted.
+bool is_bus_off_error_frame(std::uint32_t can_id);
+
 // The vendor object opens a SocketCAN descriptor in its constructor.  Keeping
 // it behind this interface makes configuration failure paths unit-testable.
 class MitTransport
@@ -97,7 +128,9 @@ public:
   virtual ~MitTransport() = default;
   virtual bool initialize() = 0;
   virtual bool enable() = 0;
-  virtual void disable() noexcept = 0;
+  // False when a disable frame could not be handed to the bus (the adapter
+  // retries, then says the motors may still be running their last frame).
+  virtual bool disable() noexcept = 0;
   virtual bool read(
     std::array<double, kArmDof> & position, std::array<double, kArmDof> & velocity,
     std::array<double, kArmDof> & effort) = 0;
@@ -115,6 +148,13 @@ public:
   }
   // Whether the gripper motor answered during the last read(); same convention.
   virtual bool gripper_replied() const {return true;}
+  // Register 9 of every motor (the gripper's too, with a hand). A transport
+  // that cannot ask reports none, and activation then refuses unless
+  // mit_allow_no_can_timeout is set.
+  virtual CanTimeouts read_can_timeouts() {return {};}
+  // Whether the CAN controller reported bus-off (or a restart after one) since
+  // the last enable(). A transport that cannot tell reports false.
+  virtual bool bus_off() const {return false;}
 
   // Gripper, optional. A transport that answers false to supports_gripper()
   // makes a `hand:=true` configuration fail at configure time rather than at
@@ -188,23 +228,45 @@ private:
   // evidence about the bus, not just about the hand.
   bool read_gripper();
   bool write_gripper();
-  // The orderly stop of deactivate, shutdown, cleanup and destruction: one
-  // fresh read, then one more measured SAFE hold as the LAST frame -- the
-  // Damiao motors keep executing their last MIT frame -- and no frame after
-  // it. With mit_stop_behavior "disable" the motors are disabled instead.
-  // A no-op unless active; a failed read or send falls back to a FAULT stop.
-  void stop_with_final_frame(const char * occasion) noexcept;
+  // The orderly stop. With mit_stop_behavior "hold": one fresh read, then a
+  // measured SAFE hold. `supervise` (deactivation) keeps the hold supervised
+  // while INACTIVE -- read()/write(), which Humble keeps calling then, go on
+  // reading state and re-sending the hold, with the stale-state check and the
+  // write watchdog running. Otherwise (cleanup, shutdown, destruction) the
+  // hold is the LAST frame: the Damiao motors keep executing it until their
+  // own CAN timeout (register 9) ends it. With "disable" the motors are
+  // disabled instead. A no-op unless active or holding; a failed read or send
+  // falls back to a FAULT stop.
+  void stop_with_final_frame(const char * occasion, bool supervise) noexcept;
   // Closes the CAN socket and forgets the session. Sends nothing.
   void close_transport() noexcept;
   // Faults the consumer, publishes FAULT and (optionally) disables transport;
   // `reason` is logged. Control thread or lifecycle only -- the watchdog thread
   // uses trip_watchdog(), since the consumer is the control thread's.
   bool transition_to_safe(bool transport_disable, const char * reason = "") noexcept;
-  // Watchdog thread: disable transport now, leave the consumer and protocol
-  // state to the next read()/write() on the control thread.
+  // Caller holds transport_mutex_. Marks the transport disabled and sends the
+  // disable, retrying a send that the bus refused; false (and an error naming
+  // the motors' CAN timeout and the E-stop as what is left) if it never went
+  // out.
+  bool disable_motors_locked(const char * why) noexcept;
+  // Watchdog thread, controller_manager stopped calling write(). "hold": the
+  // last fallback hold (a measured SAFE hold, see fallback_hold_) goes out as
+  // the last frame and nothing follows it -- the motors' CAN timeout ends it if
+  // this process does not come back, and the control thread turns the trip
+  // into a FAULT (which disables) if it does. "disable": disable now. Either
+  // way the consumer and protocol state are left to the control thread.
   void trip_watchdog() noexcept;
   bool dispatch_safe_hold(bool force_new_generation = false);
   bool dispatch(const cho_openarm_mit_core::ArmCommand & command);
+  // The hold the watchdog thread sends if writes stop: the hold the consumer
+  // last dispatched, or, while it is ACTIVE, a measured SAFE hold built from
+  // the latest read. Under transport_mutex_.
+  void remember_fallback_hold(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & hold);
+  void remember_measured_fallback_hold();
+  // Before an activation that enables the motors: reads every motor's CAN
+  // timeout and returns false (logged, with how to set it) when one is 0 or
+  // did not answer, unless mit_allow_no_can_timeout.
+  bool can_timeouts_allow_activation();
   // The controller-switch fence: whatever the commit handle holds now is never
   // evaluated, and the ack advances past it (ArmConsumer::discard_commit).
   void discard_leftover_commit();
@@ -233,12 +295,24 @@ private:
   enum class StopBehavior : std::uint8_t {HOLD, DISABLE};
   StopBehavior stop_behavior_{StopBehavior::HOLD};
   // Set by every FAULT (transition_to_safe()), cleared by on_activate(). While
-  // the adapter is not active, read() and write() -- which Humble keeps
-  // calling while INACTIVE -- put nothing on the bus and return OK, so the
-  // motors keep the last frame an orderly stop sent and their own CAN timeout
-  // stays meaningful; only a FAULT is reported as ERROR. Returning ERROR there
-  // made Humble run on_error() one cycle after every orderly deactivation.
+  // the adapter is neither active nor holding, read() and write() -- which
+  // Humble keeps calling while INACTIVE -- put nothing on the bus and return
+  // OK; only a FAULT is reported as ERROR. Returning ERROR there made Humble
+  // run on_error() one cycle after every orderly deactivation.
   std::atomic<bool> faulted_{false};
+  // INACTIVE after an orderly "hold" deactivation: the supervised hold
+  // (stop_with_final_frame()). No producer input is accepted (status
+  // DISABLED), but read() reads and checks state, write() re-sends the hold,
+  // and the write watchdog runs. Any failure is a FAULT, which disables.
+  std::atomic<bool> holding_{false};
+  // Accept motors whose CAN timeout is 0 (or that do not answer the register
+  // read). Off by default: with no timeout a crash leaves the arm held
+  // unsupervised for as long as the motors are powered.
+  bool allow_no_can_timeout_{false};
+  CanTimeouts can_timeouts_{};
+  // See remember_fallback_hold(). Under transport_mutex_.
+  std::array<cho_openarm_mit_core::JointTuple, kArmDof> fallback_hold_{};
+  bool fallback_hold_valid_{false};
   std::string gripper_joint_;
   double gripper_joint_closed_{0.0};
   double gripper_joint_open_{0.044};

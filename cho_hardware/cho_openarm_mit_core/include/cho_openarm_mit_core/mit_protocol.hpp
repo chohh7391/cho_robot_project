@@ -146,6 +146,29 @@ struct ValidationLimits
 bool is_exact_nonnegative_integer(double value);
 bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
 
+// The hardware-owned SAFE hold is
+//   q_des = q_measured, dq_des = 0, kp = safe_hold_stiffness, kd = safe_hold_damping,
+//   tau_ff = tau_measured
+// where q_measured and tau_measured come from the same read: the pose the arm
+// is at when the hold is latched, and the joint torque the motors were
+// measured applying there. The torque is clamped per joint to the hold's
+// effort limit (the profile's tau_ff_max on the real adapter).
+//
+// Why the measured torque and not the last accepted tau_ff: an MIT motor has
+// no gravity model, so the hold needs the gravity torque in tau_ff, and the
+// producer's tau_ff is not that. A producer splits the support between its
+// kp*(q_des - q) spring and tau_ff however its law does (the drive-side
+// TaskSpace law puts the Cartesian error in the spring, the null-space and
+// joint-limit springs in tau_ff; the FollowJointTrajectory producer puts
+// everything in the spring), and only the sum is what holds the arm. Kept
+// alone at the safe gains, the producer's tau_ff left whatever the spring had
+// carried to sag away at kp = 3. At rest in free space the measured torque IS
+// the gravity torque -- of the real arm with its real payload, not a model's
+// -- so the hold continues the support the arm actually had: no torque step
+// at the boundary, and a residual inside the joints' static friction moves
+// nothing. Moving or in contact, it also carries the inertial or contact
+// torque of that instant, which the safe gains then resist; that is the
+// trade-off against a gravity model, whose error would never go away.
 class ArmConsumer
 {
 public:
@@ -161,14 +184,37 @@ public:
     ValidationLimits limits,
     const std::array<double, kJointsPerArm> & safe_hold_damping,
     const std::array<double, kJointsPerArm> & safe_hold_stiffness);
-  bool configure(std::uint64_t session, const std::array<double, kJointsPerArm> & measured);
+  // As above, with a per-joint bound on the hold's feed-forward (default: the
+  // validation limit's max_abs_effort on every joint).
+  ArmConsumer(
+    ValidationLimits limits,
+    const std::array<double, kJointsPerArm> & safe_hold_damping,
+    const std::array<double, kJointsPerArm> & safe_hold_stiffness,
+    const std::array<double, kJointsPerArm> & hold_effort_limit);
+  // A new session, seeded from the state read at activation: the first SAFE
+  // hold of the session is at `measured` with the torque `measured_effort`
+  // (see above). A motor that was enabled just now reads about zero; one that
+  // was holding the arm reads its gravity torque, which the first hold must
+  // keep -- a hold seeded with zero dropped a held arm on every reactivation.
+  bool configure(
+    std::uint64_t session, const std::array<double, kJointsPerArm> & measured,
+    const std::array<double, kJointsPerArm> & measured_effort = {});
   void cleanup();
   // The adapter's latest measured joint positions, every read(). A SAFE
   // transition holds the pose measured when it happens, as the contract's
   // `q_des = q_measured` requires; without this it held the pose measured at
   // configure(), and a lease expiry or stop request pulled the arm back there.
   // Non-finite readings are ignored (the adapter faults on those itself).
+  // This overload leaves the torque sample as it was.
   void observe(const std::array<double, kJointsPerArm> & measured);
+  // The same, with the joint torques of that read: what the next hold's
+  // tau_ff is latched from. Each value is clamped to the hold's effort limit;
+  // a non-finite one keeps that joint's previous sample.
+  void observe(
+    const std::array<double, kJointsPerArm> & measured,
+    const std::array<double, kJointsPerArm> & measured_effort);
+  // What a SAFE hold latched now would carry as tau_ff.
+  const std::array<double, kJointsPerArm> & hold_effort() const {return measured_effort_;}
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
   bool successful_write_cycle();
   void request_safe_transition(bool recoverable = false);
@@ -200,10 +246,13 @@ private:
   bool permanent_latched_{false};
   bool safe_recoverable_{false};
   std::array<double, kJointsPerArm> measured_{};
+  std::array<double, kJointsPerArm> measured_effort_{};
   ArmCommand submitted_{};
   std::uint64_t accepted_lease_cycles_{0};
   std::array<double, kJointsPerArm> safe_hold_damping_{};
   std::array<double, kJointsPerArm> safe_hold_stiffness_{};
+  std::array<double, kJointsPerArm> hold_effort_limit_{};
+  void sample_effort(const std::array<double, kJointsPerArm> & effort);
 };
 
 class PairedConsumer
@@ -212,12 +261,19 @@ public:
   PairedConsumer(ValidationLimits limits, std::uint64_t session, double safe_hold_damping = 1.0);
   bool configure(
     std::uint64_t session, const std::array<double, kJointsPerArm> & left_measured,
-    const std::array<double, kJointsPerArm> & right_measured);
+    const std::array<double, kJointsPerArm> & right_measured,
+    const std::array<double, kJointsPerArm> & left_effort = {},
+    const std::array<double, kJointsPerArm> & right_effort = {});
   bool write_pair(const ArmCommand & left, const ArmCommand & right, bool transport_succeeded = true);
   // ArmConsumer::observe() for both arms.
   void observe(
     const std::array<double, kJointsPerArm> & left_measured,
     const std::array<double, kJointsPerArm> & right_measured);
+  void observe(
+    const std::array<double, kJointsPerArm> & left_measured,
+    const std::array<double, kJointsPerArm> & right_measured,
+    const std::array<double, kJointsPerArm> & left_effort,
+    const std::array<double, kJointsPerArm> & right_effort);
   bool successful_write_cycle();
   void request_safe_transition(bool left, bool right, bool recoverable = false);
   bool submit_safe_transition(bool left, bool right, bool transport_succeeded = true);

@@ -165,7 +165,7 @@ TEST(Consumer, SafeAckOnlyAfterTransportAndLeaseExpiresOnWriteCycles) {
   EXPECT_EQ(c.safe_ack_generation(), c.safe_generation());
   EXPECT_EQ(c.status(), MitStatus::SAFE);
 }
-TEST(Consumer, SafeHoldKeepsPerJointGainsAndLastAcceptedFeedforward) {
+TEST(Consumer, SafeHoldKeepsPerJointGainsAndTheMeasuredTorque) {
   std::array<double, 7> damping{}, stiffness{};
   for (std::size_t i = 0; i < 7; ++i) {
     damping[i] = 0.1 * static_cast<double>(i + 1);
@@ -175,7 +175,7 @@ TEST(Consumer, SafeHoldKeepsPerJointGainsAndLastAcceptedFeedforward) {
   std::array<double, 7> q{};
   q[2] = -0.3;
   ASSERT_TRUE(c.configure(1, q));
-  // A fresh session has accepted nothing, so its hold carries no feed-forward.
+  // A session seeded without a torque (motors enabled just now) holds with none.
   c.request_safe_transition(true);
   ASSERT_TRUE(c.submit_safe_transition(true));
   for (const auto & joint : c.submitted().joints) EXPECT_DOUBLE_EQ(joint.effort, 0.0);
@@ -184,26 +184,36 @@ TEST(Consumer, SafeHoldKeepsPerJointGainsAndLastAcceptedFeedforward) {
   x.joints[0].effort = -1.5;
   x.joints[2].effort = 4.2;
   ASSERT_TRUE(c.accept_and_write(x));
+  // What the motors measured holding the arm with: the producer's tau_ff plus
+  // whatever its spring carried.
+  std::array<double, 7> torque{};
+  torque[0] = -2.0;
+  torque[2] = 5.1;
+  c.observe(q, torque);
   EXPECT_TRUE(c.successful_write_cycle());
   EXPECT_FALSE(c.successful_write_cycle());
   ASSERT_EQ(c.status(), MitStatus::SAFE_TRANSITION);
   ASSERT_TRUE(c.submit_safe_transition(true));
-  // The MIT motor has no gravity model: the hold keeps the last accepted
-  // tau_ff around the measured position with the profile's per-joint gains.
+  // The MIT motor has no gravity model: the hold keeps the torque the arm was
+  // measured holding with, around the measured position, with the profile's
+  // per-joint gains.
   for (std::size_t i = 0; i < 7; ++i) {
     EXPECT_DOUBLE_EQ(c.submitted().joints[i].position, q[i]);
     EXPECT_DOUBLE_EQ(c.submitted().joints[i].velocity, 0.0);
     EXPECT_DOUBLE_EQ(c.submitted().joints[i].stiffness, stiffness[i]);
     EXPECT_DOUBLE_EQ(c.submitted().joints[i].damping, damping[i]);
   }
-  EXPECT_DOUBLE_EQ(c.submitted().joints[0].effort, -1.5);
+  EXPECT_DOUBLE_EQ(c.submitted().joints[0].effort, -2.0);
   EXPECT_DOUBLE_EQ(c.submitted().joints[1].effort, 0.0);
-  EXPECT_DOUBLE_EQ(c.submitted().joints[2].effort, 4.2);
-  // A new session must not inherit the retained feed-forward.
-  ASSERT_TRUE(c.configure(2, q));
+  EXPECT_DOUBLE_EQ(c.submitted().joints[2].effort, 5.1);
+  // A new session's first hold is seeded from the torque measured then.
+  std::array<double, 7> seed{};
+  seed[2] = 4.9;
+  ASSERT_TRUE(c.configure(2, q, seed));
   c.request_safe_transition(true);
   ASSERT_TRUE(c.submit_safe_transition(true));
-  EXPECT_DOUBLE_EQ(c.submitted().joints[2].effort, 0.0);
+  EXPECT_DOUBLE_EQ(c.submitted().joints[0].effort, 0.0);
+  EXPECT_DOUBLE_EQ(c.submitted().joints[2].effort, 4.9);
   damping[6] = 0.0;
   EXPECT_THROW(ArmConsumer(limits(), damping, stiffness), std::invalid_argument);
 }

@@ -39,9 +39,13 @@ Limiter::Limiter(const cho_openarm_mit_core::SafetyProfile & p, std::size_t rate
 }
 void Limiter::reset(const std::array<double, N> & q)
 {
-  for (std::size_t i = 0; i < N; ++i)
-    command_[i] = applied_[i] = {q[i], 0, limits_.safe_kp[i], limits_.safe_kd[i], 0};
-  last_tau_.fill(0);
+  // last_tau_ is kept: it is the torque being applied, the reference of the
+  // final slew, and (clamped) the new hold's tau_ff. Zeroing both dropped an
+  // arm that was being held, for as long as the slew took to bring it back.
+  for (std::size_t i = 0; i < N; ++i) {
+    const double held = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
+    command_[i] = applied_[i] = {q[i], 0, limits_.safe_kp[i], limits_.safe_kd[i], held};
+  }
   ack_ = lease_ = age_ = 0;
   safe_ = true;
   fault_ = false;
@@ -75,12 +79,19 @@ std::array<double, N> Limiter::update(
     capture_safe_position_ = true;
   }
   if (capture_safe_position_) {
-    for (std::size_t i = 0; i < N; ++i) command_[i].q = q[i];
+    // The hold: the measured position, and the torque applied there in the
+    // previous cycle as tau_ff -- the gravity torque of an arm at rest, which
+    // the MIT motor has no model of. Not the last accepted tau_ff, which left
+    // whatever the producer's spring had carried to sag away at the safe gains.
+    for (std::size_t i = 0; i < N; ++i) {
+      command_[i].q = q[i];
+      command_[i].tau = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
+    }
     capture_safe_position_ = false;
   }
   for (std::size_t i = 0; i < N; ++i) {
     auto target = command_[i];
-    // SAFE keeps the last accepted tau_ff: the MIT motor has no gravity model of its own.
+    // SAFE keeps the latched tau_ff: the MIT motor has no gravity model of its own.
     if (safe_) target = {command_[i].q, 0, limits_.safe_kp[i], limits_.safe_kd[i], command_[i].tau};
     target.q = clamp(target.q, limits_.q_lo[i], limits_.q_hi[i]);
     target.dq = clamp(target.dq, -limits_.dq[i], limits_.dq[i]);

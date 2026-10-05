@@ -18,14 +18,24 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <limits>
+#include <linux/can.h>
+#include <linux/can/error.h>
+#include <linux/can/raw.h>
 #include <set>
+#include <string>
+#include <sys/socket.h>
 #include <thread>
+#include <unistd.h>
+#include <vector>
 
 namespace
 {
+using cho_hardware_openarm_mit_real::CanTimeouts;
 using cho_hardware_openarm_mit_real::MitTransport;
 using cho_hardware_openarm_mit_real::OpenArmMitRealSystem;
 using cho_hardware_openarm_mit_real::TransportConfig;
@@ -33,20 +43,31 @@ using cho_hardware_openarm_mit_real::TransportConfig;
 class CountingTransport final : public MitTransport
 {
 public:
+  CountingTransport()
+  {
+    timeouts.arm.fill(100);
+    timeouts.gripper = 100;
+  }
   bool initialize() override {return true;}
   bool enable() override
   {
     events.push_back("enable");
     return true;
   }
-  void disable() noexcept override
+  bool disable() noexcept override
   {
-    ++disable_calls;
     events.push_back("disable");
+    bool delivered = true;
+    if (!disable_results.empty()) {
+      delivered = disable_results.front();
+      disable_results.pop_front();
+    }
+    ++disable_calls;
+    return delivered;
   }
   bool read(
     std::array<double, 7> & position, std::array<double, 7> &,
-    std::array<double, 7> &) override
+    std::array<double, 7> & effort) override
   {
     events.push_back("read");
     if (!scripted_replies.empty()) {
@@ -54,6 +75,7 @@ public:
       scripted_replies.pop_front();
     }
     position = next_position;
+    effort = next_effort;
     if (read_nan) {
       position[0] = std::numeric_limits<double>::quiet_NaN();
     }
@@ -61,12 +83,24 @@ public:
   }
   std::array<bool, 7> replied() const override {return replies;}
   bool gripper_replied() const override {return gripper_reply;}
+  CanTimeouts read_can_timeouts() override
+  {
+    ++timeout_reads;
+    return timeouts;
+  }
+  bool bus_off() const override {return bus_off_reported;}
   bool
   send(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuple) override
   {
     events.push_back("send");
     sent.push_back(tuple);
-    return !fail_send;
+    bool ok = !fail_send;
+    if (fail_sends > 0) {
+      --fail_sends;
+      ok = false;
+    }
+    ++send_calls;
+    return ok;
   }
   bool supports_gripper() const override {return gripper_supported;}
 
@@ -90,8 +124,20 @@ public:
   }
 
   bool fail_send{false};
+  // The next N sends fail, then they go through again.
+  int fail_sends{0};
   bool read_nan{false};
+  bool bus_off_reported{false};
   std::array<double, 7> next_position{};
+  // The joint torque each read reports.
+  std::array<double, 7> next_effort{};
+  // Consumed one per disable(); true once empty.
+  std::deque<bool> disable_results;
+  CanTimeouts timeouts;
+  int timeout_reads{0};
+  // Incremented after the frame is recorded, so a thread that sees it sees
+  // the frame too (the watchdog thread sends).
+  std::atomic<int> send_calls{0};
   std::array<bool, 7> replies{true, true, true, true, true, true, true};
   // Consumed one per read(), each replacing `replies` for that read.
   std::deque<std::array<bool, 7>> scripted_replies;
@@ -483,7 +529,24 @@ TEST(OpenArmMitRealSafety, WatchdogArmsOnFirstManagerWriteNotDuringSiblingActiva
   EXPECT_EQ(transport->disable_calls.load(), 0);
 }
 
-TEST(OpenArmMitRealSafety, ArmedWatchdogDisablesTransportAfterManagerWriteStall)
+namespace
+{
+// Polls `done` for up to `limit`; false if it never came true.
+template<typename Predicate>
+bool wait_for(Predicate done, std::chrono::milliseconds limit = std::chrono::milliseconds(400))
+{
+  const auto deadline = std::chrono::steady_clock::now() + limit;
+  while (!done()) {
+    if (std::chrono::steady_clock::now() > deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return true;
+}
+}  // namespace
+
+TEST(OpenArmMitRealSafety, ArmedWatchdogHoldsTheArmAfterManagerWriteStall)
 {
   CountingTransport * transport = nullptr;
   OpenArmMitRealSystem system([&transport](const TransportConfig &) {
@@ -498,16 +561,43 @@ TEST(OpenArmMitRealSafety, ArmedWatchdogDisablesTransportAfterManagerWriteStall)
   ASSERT_EQ(
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
     hardware_interface::return_type::OK);
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
-  while (transport->disable_calls.load() == 0 &&
-    std::chrono::steady_clock::now() < deadline)
-  {
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
+  const int sends = transport->send_calls.load();
+  // mit_stop_behavior "hold": the watchdog puts the measured SAFE hold on the
+  // bus as the last frame instead of dropping the arm. The motors' CAN timeout
+  // ends it if this process does not come back.
+  ASSERT_TRUE(wait_for([&] {return transport->send_calls.load() > sends;}));
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  EXPECT_EQ(transport->send_calls.load(), sends + 1);  // and nothing after it
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].stiffness, 3.0);  // the profile's safe gains
+  // A control loop that comes back has lost supervision for longer than the
+  // watchdog allows: a FAULT, which disables.
+  EXPECT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+}
+
+TEST(OpenArmMitRealSafety, WithTheDisableStopBehaviourTheWatchdogDisables)
+{
+  CountingTransport * transport = nullptr;
+  OpenArmMitRealSystem system([&transport](const TransportConfig &) {
+    auto out = std::make_unique<CountingTransport>();
+    transport = out.get();
+    return out;
+  });
+  auto info = hardware_info();
+  info.hardware_parameters["mit_stop_behavior"] = "disable";
+  ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::OK);
+  const int sends = transport->send_calls.load();
+  ASSERT_TRUE(wait_for([&] {return transport->disable_calls.load() > 0;}));
   EXPECT_EQ(transport->disable_calls.load(), 1);
-  // transition_to_safe() clears active_ before disabling transport, so a
-  // subsequent manager write proves the hardware is in its FAULT path rather
-  // than merely observing a transport-side callback.
+  EXPECT_EQ(transport->send_calls.load(), sends);
   EXPECT_EQ(
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
     hardware_interface::return_type::ERROR);
@@ -1294,7 +1384,8 @@ std::unique_ptr<OpenArmMitRealSystem> counting_system(CountingTransport * & tran
 
 // The incoming producer seeds its first tau_ff from the effort command
 // interfaces, so while the arm holds they must read what the hold APPLIES --
-// the last accepted tau_ff -- not what a producer last wrote there.
+// the joint torque measured when it was latched -- not what a producer last
+// wrote there.
 TEST(OpenArmMitRealHeldEffort, ARejectedCommitsFeedForwardIsNotLeftInTheEffortCommands) {
   CountingTransport * transport = nullptr;
   auto system = counting_system(transport);
@@ -1305,32 +1396,62 @@ TEST(OpenArmMitRealHeldEffort, ARejectedCommitsFeedForwardIsNotLeftInTheEffortCo
   set_effort(commands, 0.5);
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   ASSERT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kActive);
+  // The motors hold the arm with 0.6 N m: the 0.5 tau_ff plus what the spring carries.
+  transport->next_effort.fill(0.6);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   commit(commands, states, 2.0, 0.05);
   set_effort(commands, 0.9);
   command_interface(commands, "openarm_joint1/stiffness")->set_value(1.0e6);  // rejected
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   ASSERT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kSafe);
-  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.5);  // the hold
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.6);  // the hold
   for (int joint = 1; joint <= 7; ++joint) {
-    EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.5) << joint;
+    EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.6) << joint;
   }
 }
 
-TEST(OpenArmMitRealHeldEffort, ANewSessionStartsWithTheEffortCommandsAtZero) {
-  // A FAULT disables the motors and the arm drops; the next session's hold has
-  // no tau_ff. The previous producer's gravity torque left in the effort
-  // commands would be the next producer's seed -- a step on the dropped arm.
+TEST(OpenArmMitRealHeldEffort, ANewSessionSeedsItsFirstHoldFromTheTorqueMeasuredAtTheSeedRead) {
+  // A reactivation out of the supervised hold: the motors are holding the arm
+  // up. The new session's first hold used to have tau_ff = 0, and at the safe
+  // gains (kp 3 on the shoulder) that was a drop. It now keeps the torque the
+  // motors are measured applying, and the effort commands -- what the incoming
+  // producer seeds from -- read the same.
   CountingTransport * transport = nullptr;
   auto system = counting_system(transport);
   activate(*system, transport);
   auto commands = system->export_command_interfaces();
   auto states = system->export_state_interfaces();
+  const double first_session = state_interface(states, "openarm_arm/mit_session_id")->get_value();
   commit(commands, states, 1.0, 0.05);
   set_effort(commands, 0.8);
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_effort.fill(0.8);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_effort = {0.75, -2.0, 0.75, 0.75, 9.0, 0.75, 0.75};
+  transport->events.clear();
   ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
-  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.0);  // the fresh session's hold
+  // The motors were enabled and holding: not enabled again (its 100 ms of
+  // silence could only let their CAN timeout drop the arm).
+  EXPECT_EQ(std::count(transport->events.begin(), transport->events.end(), "enable"), 0);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_session_id")->get_value(), first_session + 1.0);
+  const auto & hold = transport->sent.back();
+  EXPECT_DOUBLE_EQ(hold[0].effort, 0.75);
+  EXPECT_DOUBLE_EQ(hold[1].effort, -2.0);
+  EXPECT_DOUBLE_EQ(hold[4].effort, 7.0);  // clamped to joint 5's tau_ff_max
+  EXPECT_DOUBLE_EQ(hold[0].stiffness, 3.0);
+  EXPECT_DOUBLE_EQ(effort_command(commands, 1), 0.75);
+  EXPECT_DOUBLE_EQ(effort_command(commands, 2), -2.0);
+  EXPECT_DOUBLE_EQ(effort_command(commands, 5), 7.0);
+}
+
+TEST(OpenArmMitRealHeldEffort, AFirstActivationSeedsAboutZeroBecauseTheMotorsWereJustEnabled) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.0);
   for (int joint = 1; joint <= 7; ++joint) {
     EXPECT_DOUBLE_EQ(effort_command(commands, joint), 0.0) << joint;
   }
@@ -1345,6 +1466,8 @@ TEST(OpenArmMitRealHeldEffort, TheIncomingProducerFindsTheHeldFeedForwardNotTheD
   commit(commands, states, 1.0, 0.05);
   set_effort(commands, 0.5);
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_effort.fill(0.5);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   const auto claims = claims_of(commands);
   ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
@@ -1414,12 +1537,13 @@ public:
     query_.enabled();
     return true;
   }
-  void disable() noexcept override
+  bool disable() noexcept override
   {
     pending_ = false;
     query_.disabled();
+    return true;
   }
-  bool read(std::array<double, 7> & position, std::array<double, 7> &, std::array<double, 7> &) override
+  bool read(std::array<double, 7> & position, std::array<double, 7> &, std::array<double, 7> & effort) override
   {
     if (query_.refresh_needed()) {
       pending_ = true;
@@ -1427,15 +1551,24 @@ public:
     replies_.fill(pending_);
     pending_ = false;
     position.fill(0.1);
+    effort.fill(0.3);
     return true;
   }
   std::array<bool, 7> replied() const override {return replies_;}
-  bool send(const std::array<cho_openarm_mit_core::JointTuple, 7> &) override
+  cho_hardware_openarm_mit_real::CanTimeouts read_can_timeouts() override
+  {
+    cho_hardware_openarm_mit_real::CanTimeouts timeouts;
+    timeouts.arm.fill(100);
+    return timeouts;
+  }
+  bool send(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuple) override
   {
     pending_ = true;
     query_.command_sent();
+    sent.push_back(tuple);
     return true;
   }
+  std::vector<std::array<cho_openarm_mit_core::JointTuple, 7>> sent;
 
 private:
   cho_hardware_openarm_mit_real::StateQuery query_;
@@ -1447,22 +1580,34 @@ private:
 TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCycle) {
   // With mit_state_from_command_reply the refresh is skipped once a command has
   // gone out -- but enable() drains the replies, so after a deactivate/activate
-  // nothing answered the seed read and activation failed every time.
-  OpenArmMitRealSystem system([](const TransportConfig & config) {
-      return std::make_unique<BusTransport>(config.state_from_command_reply);
-    });
-  auto info = hardware_info();
-  info.hardware_parameters["mit_state_from_command_reply"] = "true";
-  ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
-  ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
-  ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
-  for (int cycle = 0; cycle < 20; ++cycle) {
-    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
-    ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+  // nothing answered the seed read and activation failed every time. Both stop
+  // behaviours: "disable" goes through enable() again, "hold" keeps the motors
+  // enabled and answering the hold.
+  for (const char * behaviour : {"disable", "hold"}) {
+    std::vector<std::array<cho_openarm_mit_core::JointTuple, 7>> * sent = nullptr;
+    OpenArmMitRealSystem system([&sent](const TransportConfig & config) {
+        auto out = std::make_unique<BusTransport>(config.state_from_command_reply);
+        sent = &out->sent;
+        return out;
+      });
+    auto info = hardware_info();
+    info.hardware_parameters["mit_state_from_command_reply"] = "true";
+    info.hardware_parameters["mit_stop_behavior"] = behaviour;
+    ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    for (int cycle = 0; cycle < 20; ++cycle) {
+      ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+      ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+    }
+    ASSERT_EQ(system.on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS)
+      << behaviour;
+    // The new session's first hold carries the torque the seed read measured.
+    ASSERT_FALSE(sent->empty());
+    EXPECT_DOUBLE_EQ(sent->back()[0].effort, 0.3) << behaviour;
+    EXPECT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   }
-  ASSERT_EQ(system.on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
-  EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
-  EXPECT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,7 +1621,7 @@ namespace
 constexpr double kDisabled = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
 }  // namespace
 
-TEST(OpenArmMitRealStop, ADeactivateLeavesTheMotorsHoldingTheMeasuredPose) {
+TEST(OpenArmMitRealStop, ADeactivateLeavesTheMotorsHoldingTheMeasuredPoseUnderSupervision) {
   CountingTransport * transport = nullptr;
   auto system = counting_system(transport);
   activate(*system, transport);
@@ -1486,30 +1631,46 @@ TEST(OpenArmMitRealStop, ADeactivateLeavesTheMotorsHoldingTheMeasuredPose) {
   set_effort(commands, 0.5);
   ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   transport->next_position.fill(0.04);  // where the arm is when it is deactivated
+  transport->next_effort.fill(0.7);     // and the torque it is held there with
   ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(transport->disable_calls.load(), 0);
   ASSERT_GE(transport->events.size(), 2u);
   EXPECT_EQ(transport->events[transport->events.size() - 2], "read");  // a fresh measurement
-  EXPECT_EQ(transport->events.back(), "send");                         // then the last frame
-  const auto & hold = transport->sent.back();
+  EXPECT_EQ(transport->events.back(), "send");                         // then the hold
+  const auto hold = transport->sent.back();
   EXPECT_DOUBLE_EQ(hold[0].position, 0.04);
   EXPECT_DOUBLE_EQ(hold[0].velocity, 0.0);
   EXPECT_DOUBLE_EQ(hold[0].stiffness, 3.0);  // the profile's safe gains
   EXPECT_DOUBLE_EQ(hold[0].damping, 0.40);
-  EXPECT_DOUBLE_EQ(hold[0].effort, 0.5);     // the last accepted tau_ff: gravity support
+  // The measured torque, not the producer's 0.5 tau_ff: what actually held the arm.
+  EXPECT_DOUBLE_EQ(hold[0].effort, 0.7);
   EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kDisabled);
-  // INACTIVE: Humble keeps calling read() and write(). They put nothing on the
-  // bus -- the motors keep that frame -- and they are not errors, which would
-  // send the component through on_error().
-  const auto events = transport->events.size();
+  // INACTIVE: Humble keeps calling read() and write(). The hold is supervised:
+  // every write() re-sends it unchanged -- not re-latched, so it does not follow
+  // a sagging arm -- and every read() reads state, so joint_states keep
+  // following the arm. Neither is an error, which would run on_error().
+  const auto * position = state_interface(states, "openarm_joint1/position");
   for (int cycle = 0; cycle < 5; ++cycle) {
+    transport->next_position.fill(0.04 - 0.002 * (cycle + 1));
+    const auto sent = transport->sent.size();
     EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_DOUBLE_EQ(position->get_value(), 0.04 - 0.002 * (cycle + 1));
     EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ASSERT_EQ(transport->sent.size(), sent + 1);
+    EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.04);
+    EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.7);
   }
-  EXPECT_EQ(transport->events.size(), events);
-  // Reactivating continues from the hold: a new session seeded where the arm is.
-  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  // No producer input is evaluated meanwhile.
+  commit(commands, states, 2.0, 0.30);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.04);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kDisabled);
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  // Reactivating continues from the hold: a new session seeded where the arm is.
+  transport->next_position.fill(0.03);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.03);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.7);
 }
 
 TEST(OpenArmMitRealStop, AConfiguredButInactiveComponentIsNotAnError) {
@@ -1584,4 +1745,341 @@ TEST(OpenArmMitRealStop, AFaultStillDisablesAtOnceAndStaysAnError) {
   const auto sent = transport->sent.size();
   ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(transport->sent.size(), sent);
+}
+
+// ---------------------------------------------------------------------------
+// The supervised hold (mit_stop_behavior "hold"). While INACTIVE after an
+// orderly deactivation the hold is re-sent every cycle and supervised; any
+// failure of that supervision disables the motors, and the motors' own CAN
+// timeout covers a process that stops sending altogether.
+// ---------------------------------------------------------------------------
+namespace
+{
+void deactivate_into_the_hold(
+  OpenArmMitRealSystem & system, CountingTransport * transport,
+  std::vector<hardware_interface::CommandInterface> & commands,
+  std::vector<hardware_interface::StateInterface> & states)
+{
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_position.fill(0.04);
+  transport->next_effort.fill(0.7);
+  ASSERT_EQ(system.on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->disable_calls.load(), 0);
+}
+}  // namespace
+
+TEST(OpenArmMitRealSupervisedHold, AMotorThatStopsAnsweringWhileHeldDisablesTheArm) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  deactivate_into_the_hold(*system, transport, commands, states);
+  transport->replies[3] = false;
+  for (int cycle = 0; cycle < 75; ++cycle) {  // the profile's stale limit
+    ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+  }
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kFault);
+  // And nothing goes out after the disable.
+  const auto sent = transport->sent.size();
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(transport->sent.size(), sent);
+}
+
+TEST(OpenArmMitRealSupervisedHold, AHoldThatCannotBeSentDisablesTheArm) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  deactivate_into_the_hold(*system, transport, commands, states);
+  transport->fail_sends = 1;
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kFault);
+}
+
+TEST(OpenArmMitRealSupervisedHold, TheWriteWatchdogStillRunsWhileHeld) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  deactivate_into_the_hold(*system, transport, commands, states);
+  // controller_manager stops calling write(): the hold goes out once more as
+  // the last frame (nothing follows it, so the motors' CAN timeout ends it)...
+  const int sends = transport->send_calls.load();
+  ASSERT_TRUE(wait_for([&] {return transport->send_calls.load() > sends;}));
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  EXPECT_EQ(transport->send_calls.load(), sends + 1);
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.04);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, 0.7);
+  // ...and a control loop that comes back finds a FAULT, which disables.
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+}
+
+TEST(OpenArmMitRealSupervisedHold, ASilentMotorAtReactivationKeepsTheHoldInsteadOfDroppingTheArm) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  deactivate_into_the_hold(*system, transport, commands, states);
+  const auto hold = transport->sent.back();
+  transport->replies[5] = false;
+  // Refused, but not with a disable: the arm is being held, and dropping it is
+  // the one thing a missing reply must not cause. FAILURE keeps the component
+  // INACTIVE (ERROR would run on_error(), which disables).
+  EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::FAILURE);
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, hold[0].position);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].effort, hold[0].effort);
+  // Still supervised: the hold keeps going out, and the stale limit decides.
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.04);
+  for (int cycle = 0; cycle < 80; ++cycle) {
+    if (system->read(rclcpp::Time(0), kCycle) != hardware_interface::return_type::OK) {
+      break;
+    }
+  }
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  // The motor answering again before that would have let a retry succeed.
+}
+
+TEST(OpenArmMitRealSupervisedHold, AStalledLoopThenTheDestructorLeavesTheArmHeldNotDropped) {
+  // Ctrl-C: the control loop ends first, the component is destroyed later. The
+  // write watchdog used to win that race and disable the motors (the arm fell),
+  // after which the destructor's stop had nothing left to do.
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.5);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_position.fill(0.045);
+  transport->next_effort.fill(0.65);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_DOUBLE_EQ(transport->sent.back()[0].stiffness, 1.0);  // the producer's tuple
+  const int sends = transport->send_calls.load();
+  ASSERT_TRUE(wait_for([&] {return transport->send_calls.load() > sends;}));
+  system.reset();
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  // The last frame replaced the producer's tuple with a measured SAFE hold.
+  const auto & last = transport->sent.back();
+  EXPECT_DOUBLE_EQ(last[0].position, 0.045);
+  EXPECT_DOUBLE_EQ(last[0].stiffness, 3.0);
+  EXPECT_DOUBLE_EQ(last[0].effort, 0.65);
+}
+
+TEST(OpenArmMitRealSupervisedHold, ADestructionWithoutAStallStillEndsOnTheHold) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_position.fill(0.02);
+  system.reset();
+  EXPECT_EQ(transport->disable_calls.load(), 0);
+  EXPECT_EQ(transport->events.back(), "send");
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.02);
+}
+
+// ---------------------------------------------------------------------------
+// The motors' CAN timeout (register 9) is what ends a hold this process can no
+// longer supervise. Activation reads it and refuses a motor without one.
+// ---------------------------------------------------------------------------
+TEST(OpenArmMitRealCanTimeout, ActivationRefusesAMotorWithoutACanTimeoutBeforeEnablingAnything) {
+  for (const std::int64_t value : {std::int64_t{0}, std::int64_t{-1}}) {  // zero, or no answer
+    CountingTransport * transport = nullptr;
+    auto system = counting_system(transport);
+    ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    transport->timeouts.arm[2] = value;
+    // FAILURE, not ERROR: nothing was enabled, and on_error() would send a
+    // disable to motors this process never commanded.
+    EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::FAILURE);
+    EXPECT_TRUE(transport->events.empty()) << value;
+    EXPECT_EQ(transport->timeout_reads, 1);
+    // Set on the bench (openarm-can-cli write_param --rid 9), then activate again.
+    transport->timeouts.arm[2] = 50;
+    EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  }
+}
+
+TEST(OpenArmMitRealCanTimeout, TheGripperMotorNeedsOneToo) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info_with_hand()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->timeouts.gripper = 0;
+  EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::FAILURE);
+  EXPECT_TRUE(transport->events.empty());
+}
+
+TEST(OpenArmMitRealCanTimeout, AnExplicitParameterAcceptsMotorsWithoutOne) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  auto info = hardware_info();
+  info.hardware_parameters["mit_allow_no_can_timeout"] = "true";
+  ASSERT_EQ(system->on_init(info), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->timeouts.arm.fill(0);
+  EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  // An ambiguous spelling is refused at init, like every boolean here.
+  OpenArmMitRealSystem strict;
+  info.hardware_parameters["mit_allow_no_can_timeout"] = "1";
+  EXPECT_EQ(strict.on_init(info), hardware_interface::CallbackReturn::ERROR);
+}
+
+TEST(OpenArmMitRealCanTimeout, AReactivationOutOfTheHoldDoesNotReadTheRegistersAgain) {
+  // The motors are enabled and holding; the read waits up to 90 ms with no
+  // frame going out, which could only let a short timeout drop the arm.
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  deactivate_into_the_hold(*system, transport, commands, states);
+  ASSERT_EQ(transport->timeout_reads, 1);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(transport->timeout_reads, 1);
+}
+
+// ---------------------------------------------------------------------------
+// The hold's feed-forward is the measured joint torque, not the producer's
+// tau_ff (ArmConsumer). A drive-side TaskSpace producer carries part of the
+// gravity support in its kp*(q_des - q) spring; at kp = 3 the hold used to let
+// that part sag away.
+// ---------------------------------------------------------------------------
+TEST(OpenArmMitRealHeldEffort, AHoldCarriesTheMeasuredTorqueClampedToTheProfile) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  set_effort(commands, 0.5);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_effort = {1.1, -3.0, 1.1, 1.1, 9.5, -9.5, 1.1};
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kSafe);
+  const auto & hold = transport->sent.back();
+  EXPECT_DOUBLE_EQ(hold[0].effort, 1.1);   // not the producer's 0.5
+  EXPECT_DOUBLE_EQ(hold[1].effort, -3.0);
+  EXPECT_DOUBLE_EQ(hold[4].effort, 7.0);   // joint 5's tau_ff_max
+  EXPECT_DOUBLE_EQ(hold[5].effort, -7.0);
+  EXPECT_DOUBLE_EQ(effort_command(commands, 1), 1.1);
+}
+
+// ---------------------------------------------------------------------------
+// Transport failures.
+// ---------------------------------------------------------------------------
+TEST(OpenArmMitRealTransport, ACommitThatCouldNotBeSentIsAFaultEvenWhenTheHoldAfterItIsSent) {
+  // The README's rule: a failed send is a fault. A failed commit send used to
+  // fall through to the SAFE hold, and when that send went through the arm
+  // ended in SAFE, its transport -- which had just failed -- still enabled.
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  transport->fail_sends = 1;  // only the commit's frame
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kFault);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+  // The same for the cycle-by-cycle re-send of an accepted tuple.
+  CountingTransport * second = nullptr;
+  auto other = counting_system(second);
+  activate(*other, second);
+  auto other_commands = other->export_command_interfaces();
+  auto other_states = other->export_state_interfaces();
+  commit(other_commands, other_states, 1.0, 0.05);
+  ASSERT_EQ(other->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  second->fail_sends = 1;
+  EXPECT_EQ(other->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(state_interface(other_states, "openarm_arm/mit_status")->get_value(), kFault);
+}
+
+TEST(OpenArmMitRealTransport, ADisableTheBusRefusedIsSentAgain) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  transport->disable_results = {false, true};
+  transport->read_nan = true;
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(transport->disable_calls.load(), 2);
+  // Bounded: three attempts, then the error names what is left (the motors'
+  // CAN timeout and the E-stop).
+  CountingTransport * stuck = nullptr;
+  auto other = counting_system(stuck);
+  activate(*other, stuck);
+  stuck->disable_results = {false, false, false, false, false};
+  stuck->read_nan = true;
+  EXPECT_EQ(other->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(stuck->disable_calls.load(), 3);
+}
+
+TEST(OpenArmMitRealTransport, ABusOffIsAFault) {
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto states = system->export_state_interfaces();
+  transport->bus_off_reported = true;
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_status")->get_value(), kFault);
+  EXPECT_GE(transport->disable_calls.load(), 1);
+}
+
+TEST(OpenArmMitRealTransport, TheControlSocketIsNonBlockingAndSubscribedToBusOff) {
+  // An unbound CAN_RAW socket takes the same options as the vendor's bound one.
+  const int fd = ::socket(PF_CAN, SOCK_RAW, CAN_RAW);
+  if (fd < 0) {
+    GTEST_SKIP() << "no PF_CAN socket on this machine";
+  }
+  std::string why;
+  EXPECT_TRUE(cho_hardware_openarm_mit_real::configure_control_socket(fd, why)) << why;
+  EXPECT_NE(::fcntl(fd, F_GETFL, 0) & O_NONBLOCK, 0);
+  can_err_mask_t mask = 0;
+  socklen_t length = sizeof(mask);
+  ASSERT_EQ(::getsockopt(fd, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &mask, &length), 0);
+  EXPECT_NE(mask & CAN_ERR_BUSOFF, 0U);
+  EXPECT_NE(mask & CAN_ERR_RESTARTED, 0U);
+  ::close(fd);
+  EXPECT_TRUE(cho_hardware_openarm_mit_real::is_bus_off_error_frame(CAN_ERR_FLAG | CAN_ERR_BUSOFF));
+  EXPECT_TRUE(cho_hardware_openarm_mit_real::is_bus_off_error_frame(CAN_ERR_FLAG | CAN_ERR_RESTARTED));
+  EXPECT_FALSE(cho_hardware_openarm_mit_real::is_bus_off_error_frame(CAN_ERR_FLAG | CAN_ERR_ACK));
+  EXPECT_FALSE(cho_hardware_openarm_mit_real::is_bus_off_error_frame(CAN_ERR_BUSOFF));  // a data frame id
+  // A descriptor that is not a socket refuses: configure fails closed.
+  EXPECT_FALSE(cho_hardware_openarm_mit_real::configure_control_socket(-1, why));
+}
+
+TEST(OpenArmMitRealTransport, AParameterReplyIsParsedOnlyFromItsOwnMotor) {
+  using cho_hardware_openarm_mit_real::parse_param_reply;
+  // Joint 3 (command 0x03, reply 0x13) answers a read of register 9 with 200.
+  const std::uint8_t reply[8] = {0x03, 0x00, 0x33, 9, 200, 0, 0, 0};
+  std::uint32_t value = 0;
+  EXPECT_TRUE(parse_param_reply(0x13, reply, 8, 0x13, 9, value));
+  EXPECT_EQ(value, 200u);
+  const std::uint8_t large[8] = {0x03, 0x00, 0x33, 9, 0x01, 0x02, 0x03, 0x04};
+  EXPECT_TRUE(parse_param_reply(0x13, large, 8, 0x13, 9, value));
+  EXPECT_EQ(value, 0x04030201u);
+  EXPECT_FALSE(parse_param_reply(0x14, reply, 8, 0x13, 9, value));  // another motor
+  EXPECT_FALSE(parse_param_reply(0x13, reply, 8, 0x13, 10, value));  // another register
+  EXPECT_FALSE(parse_param_reply(0x13, reply, 7, 0x13, 9, value));  // short
+  const std::uint8_t state[8] = {0x13, 0x80, 0x00, 0x80, 0x07, 0xFF, 30, 30};
+  EXPECT_FALSE(parse_param_reply(0x13, state, 8, 0x13, 9, value));  // a state frame
+  EXPECT_FALSE(parse_param_reply(CAN_ERR_FLAG | 0x13, reply, 8, 0x13, 9, value));
 }

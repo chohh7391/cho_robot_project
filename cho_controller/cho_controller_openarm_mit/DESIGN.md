@@ -130,9 +130,17 @@ Relative and absolute goals use the same Cartesian trajectory law without a
 separate workspace/displacement admission cap. FK/dynamics/capacity failure
 aborts and requests SAFE.
 
-The hardware SAFE hold that these requests reach keeps the per-joint profile safe-hold gains and the
-last accepted `tau_ff` (see `cho_openarm_mit_core::ArmConsumer::submit_safe_transition`), because an
-MIT motor has no gravity model of its own and a hold with `tau_ff = 0` would let the arm fall.
+The hardware SAFE hold that these requests reach keeps the per-joint profile safe-hold gains and, as
+`tau_ff`, the joint torque the motors were measured applying when it was latched (see
+`cho_openarm_mit_core::ArmConsumer`), because an MIT motor has no gravity model of its own and a hold
+with `tau_ff = 0` would let the arm fall. Not this producer's last `tau_ff`: under the drive-side law
+part of the support is in the `kp*(q_des - q)` spring, which the safe gains do not reproduce. The
+effort command interfaces read that torque while the arm holds, and the next producer seeds from it.
+
+The FollowJointTrajectory producers carry `tau_ff = 0` by design (no model; see
+`docs/openarm_mit_contract_v1.md`): switched in after a producer that supported the arm, their seed
+drops the hold's gravity torque onto the safe-gain spring. They run in the MuJoCo prototype only; the
+real bringup does not offer them until they have a gravity term.
 
 ## Action contract of the direct and TaskSpace producers
 

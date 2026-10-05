@@ -15,13 +15,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <hardware_interface/resource_manager.hpp>
 #include <iterator>
 #include <lifecycle_msgs/msg/state.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 TEST(MitMujocoSystem, SingleResourceManagerExportsExactWrapperSurface)
@@ -342,18 +346,26 @@ TEST(MitMujocoSystem, TheEffortCommandsReadTheHeldFeedForwardAndAGenerationIsEva
   set("mit_commit_generation", 1.0);
   ASSERT_TRUE(write());
   ASSERT_DOUBLE_EQ(state("mit_status"), 1.0);  // ACTIVE
-  // A generation that is no generation: rejected, SAFE holding tau_ff 1.0.
+  // A generation that is no generation: rejected, SAFE. The hold carries the
+  // torque the limiter was applying (slewing toward 1.0 here), and the effort
+  // commands read that -- never the rejected commit's 2.0.
   set("/effort", 2.0);
   set("mit_commit_generation", std::nan(""));
   ASSERT_TRUE(write());
   EXPECT_DOUBLE_EQ(state("mit_status"), 4.0);  // INVALID, this cycle
-  for (int joint = 1; joint <= 7; ++joint) EXPECT_DOUBLE_EQ(effort(joint), 1.0) << joint;
+  std::array<double, 7> held{};
+  for (int joint = 1; joint <= 7; ++joint) {
+    held[joint - 1] = effort(joint);
+    EXPECT_NE(held[joint - 1], 2.0) << joint;
+    EXPECT_LE(std::abs(held[joint - 1]), 1.0 + 1e-9) << joint;
+  }
   // ...and only this cycle: the same NaN is not evaluated again, so the arm
-  // reports its SAFE hold instead of a fresh INVALID (and SAFE re-latch) every
-  // cycle.
+  // reports its SAFE hold instead of a fresh INVALID (and SAFE re-latch, which
+  // would latch a new torque too) every cycle.
   for (int cycle = 0; cycle < 5; ++cycle) {
     ASSERT_TRUE(write());
     EXPECT_DOUBLE_EQ(state("mit_status"), 0.0) << cycle;  // SAFE
+    for (int joint = 1; joint <= 7; ++joint) EXPECT_DOUBLE_EQ(effort(joint), held[joint - 1]);
   }
   loaned.clear();
   EXPECT_TRUE(manager.shutdown_components());
@@ -414,6 +426,113 @@ TEST(MitMujocoSystem, ADeactivatedArmKeepsItsSafeHoldAndAcceptsNoCommit)
   for (int i = 0; i < 20; ++i) ASSERT_TRUE(cycle());
   EXPECT_DOUBLE_EQ(state("mit_ack_generation"), 1.0);  // not evaluated
   EXPECT_DOUBLE_EQ(state("mit_status"), 6.0);
+  loaned.clear();
+  EXPECT_TRUE(manager.shutdown_components());
+}
+TEST(MitMujocoSystem, AReactivationKeepsTheTorqueTheHoldWasApplying)
+{
+  // The real adapter's rule, in simulation: a hold carries the torque applied
+  // when it is latched (gravity, for an arm at rest), and a new session's hold
+  // starts from the torque the limiter was applying. Both used to be the last
+  // accepted tau_ff -- zero here, and zero always after a reactivation -- so
+  // the held arm sagged onto the safe-gain spring.
+  if (!rclcpp::ok()) {
+    int argc = 0;
+    char ** argv = nullptr;
+    rclcpp::init(argc, argv);
+  }
+  std::ifstream input(MIT_SINGLE_URDF);
+  ASSERT_TRUE(input.good());
+  const std::string urdf((std::istreambuf_iterator<char>(input)), {});
+  hardware_interface::ResourceManager manager(urdf, true, false);
+  rclcpp_lifecycle::State active(lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE, "active");
+  rclcpp_lifecycle::State inactive(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
+  ASSERT_EQ(
+    manager.set_component_state("OpenArmHardwareInterface", active),
+    hardware_interface::return_type::OK);
+  const auto claims = cho_openarm_mit_core::complete_claims("");
+  ASSERT_TRUE(manager.prepare_command_mode_switch(claims, {}));
+  ASSERT_TRUE(manager.perform_command_mode_switch(claims, {}));
+  std::vector<hardware_interface::LoanedCommandInterface> loaned;
+  for (const auto & key : claims) loaned.push_back(manager.claim_command_interface(key));
+  const auto state = [&manager](const std::string & name) {
+    return manager.claim_state_interface(name).get_value();
+  };
+  const auto set = [&loaned](const std::string & name, double value) {
+    for (auto & handle : loaned)
+      if (handle.get_name() == name) handle.set_value(value);
+  };
+  const auto held = [&loaned](int joint) {
+    for (auto & handle : loaned)
+      if (handle.get_name() == "openarm_joint" + std::to_string(joint) + "/effort")
+        return handle.get_value();
+    return std::nan("");
+  };
+  const auto cycle = [&manager]() {
+    const auto ok = manager.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.001)).ok &&
+                    manager.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.001)).ok;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return ok;
+  };
+  // Bend the elbow out of the hanging pose on a spring with no feed-forward:
+  // whatever holds the forearm there is the spring.
+  for (auto & handle : loaned) handle.set_value(0.0);
+  for (int joint = 1; joint <= 7; ++joint) {
+    const auto name = "openarm_joint" + std::to_string(joint);
+    set(name + "/position", joint == 4 ? 1.2 : 0.0);
+    set(name + "/stiffness", joint <= 4 ? 20.0 : 5.0);
+    set(name + "/damping", joint <= 4 ? 2.0 : 0.3);
+  }
+  set("openarm_arm/mit_session_echo", state("openarm_arm/mit_session_id"));
+  set("openarm_arm/mit_lease_cycles", 50.0);
+  // Until the arm is there and still (the simulation runs on its own thread,
+  // so this waits on the arm, not on a cycle count), refreshing the commit
+  // inside its lease.
+  const auto settled = [&state]() {
+    return std::abs(state("openarm_joint4/position") - 1.2) < 0.3 &&
+           std::abs(state("openarm_joint2/velocity")) < 0.05 &&
+           std::abs(state("openarm_joint4/velocity")) < 0.05;
+  };
+  int generation = 0;
+  for (int i = 0; i < 20000 && !(i > 500 && settled()); ++i) {
+    if (i % 40 == 0) set("openarm_arm/mit_commit_generation", ++generation);
+    ASSERT_TRUE(cycle());
+  }
+  ASSERT_TRUE(settled()) << "q2=" << state("openarm_joint2/position")
+                         << " q4=" << state("openarm_joint4/position")
+                         << " dq2=" << state("openarm_joint2/velocity")
+                         << " dq4=" << state("openarm_joint4/velocity");
+  // Let the lease run out: the hardware latches a SAFE hold here.
+  for (int i = 0; i < 300; ++i) ASSERT_TRUE(cycle());
+  ASSERT_DOUBLE_EQ(state("openarm_arm/mit_status"), 0.0);  // SAFE
+  double largest = 0.0;
+  int loaded = 0;
+  for (int joint = 1; joint <= 7; ++joint) {
+    if (std::abs(held(joint)) > largest) {
+      largest = std::abs(held(joint));
+      loaded = joint;
+    }
+  }
+  // The hold carries the gravity torque the spring had been supplying (the
+  // last accepted tau_ff was 0).
+  ASSERT_GT(largest, 0.5);
+  const double before = held(loaded);
+  // Deactivate (the hold keeps running) and activate again: a new session,
+  // whose hold -- and the effort commands a producer seeds from -- keep the
+  // torque being applied. (Not exactly `before`: the arm is still settling on
+  // the hold's spring in this short run.)
+  ASSERT_EQ(
+    manager.set_component_state("OpenArmHardwareInterface", inactive),
+    hardware_interface::return_type::OK);
+  for (int i = 0; i < 100; ++i) ASSERT_TRUE(cycle());
+  const double session = state("openarm_arm/mit_session_id");
+  ASSERT_EQ(
+    manager.set_component_state("OpenArmHardwareInterface", active),
+    hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(state("openarm_arm/mit_session_id"), session + 1.0);
+  EXPECT_GT(std::abs(held(loaded)), 0.5);
+  EXPECT_GT(held(loaded) * before, 0.0);  // the same direction
+  for (int i = 0; i < 100; ++i) ASSERT_TRUE(cycle());
   loaned.clear();
   EXPECT_TRUE(manager.shutdown_components());
 }

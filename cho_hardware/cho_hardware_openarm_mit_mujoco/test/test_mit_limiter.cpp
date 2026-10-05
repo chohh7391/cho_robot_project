@@ -109,25 +109,69 @@ TEST(MitLimiter, ExplicitSafeCapturesMeasuredPositionInsteadOfStaleTarget)
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {1, 0, 5, .5, 0};
   ASSERT_TRUE(l.submit(c, 1, 20));
-  (void)l.update(q, dq, 1);
+  const auto applied = l.update(q, dq, 1);
   q.fill(.4);
   l.request_safe();
+  // No spring toward the stale target 1.0 (at the safe kp of 10..70 that would
+  // be several N m): the hold is at the measured 0.4 and carries the torque
+  // applied there.
   auto tau = l.update(q, dq, 1);
-  for (double value : tau) EXPECT_NEAR(value, 0, 1e-12);
+  for (std::size_t i = 0; i < N; ++i) EXPECT_NEAR(tau[i], applied[i], 1e-12) << i;
 }
-TEST(MitLimiter, SafeHoldRetainsLastAcceptedFeedforward)
+TEST(MitLimiter, SafeHoldKeepsTheTorqueAppliedNotTheLastAcceptedFeedforward)
 {
+  // The producer held the arm with a spring as well as tau_ff: 2 N m/rad over
+  // 0.5 rad plus 1 N m. The MIT motor has no gravity model, and the safe gains
+  // are not that spring, so the hold must keep the 2 N m actually applied --
+  // keeping the 1 N m tau_ff alone dropped the spring's share.
   Limiter l(profile(), 1000);
   std::array<double, N> q{}, dq{};
   l.reset(q);
   std::array<Tuple, N> c{};
-  for (auto & x : c) x = {0, 0, 0, 0, 1};
+  for (auto & x : c) x = {0.5, 0, 2, 0, 1};
   ASSERT_TRUE(l.submit(c, 1, 20));
-  (void)l.update(q, dq, 1);
-  // SAFE keeps the last accepted tau_ff around the captured position: the MIT
-  // motor has no gravity model.
+  const auto applied = l.update(q, dq, 1);
+  for (std::size_t i = 0; i < N; ++i) ASSERT_NEAR(applied[i], 2.0, 1e-12) << i;
   l.request_safe();
   auto tau = l.update(q, dq, 1);
   EXPECT_TRUE(l.safe());
-  for (double value : tau) EXPECT_NEAR(value, 1, 1e-12);
+  for (std::size_t i = 0; i < N; ++i) {
+    EXPECT_NEAR(tau[i], 2.0, 1e-12) << i;
+    EXPECT_NEAR(l.held_effort(i), 2.0, 1e-12) << i;
+  }
+}
+TEST(MitLimiter, AResetOfAHoldingLimiterKeepsItsTorqueAndAFaultedOneHasNone)
+{
+  // A reactivation: the new session's hold continues the torque the limiter
+  // was applying. reset() used to zero both the hold's tau_ff and the final
+  // slew's reference, so a held arm dropped while the slew brought it back.
+  Limiter l(profile(), 1000);
+  std::array<double, N> q{}, dq{};
+  l.reset(q);
+  std::array<Tuple, N> c{};
+  for (auto & x : c) x = {0, 0, 0, 0, 5};
+  std::array<double, N> tau{};
+  // Long enough for the wrist's 17.5 N m/s feed-forward slew; refreshed well
+  // inside the lease.
+  for (int cycle = 0; cycle < 500; ++cycle) {
+    if (cycle % 50 == 0) {
+      ASSERT_TRUE(l.submit(c, static_cast<std::uint64_t>(cycle / 50 + 1), 100));
+    }
+    tau = l.update(q, dq, .001);
+  }
+  for (std::size_t i = 0; i < N; ++i)
+    ASSERT_NEAR(tau[i], std::min(5.0, profile().tau_ff_max[i]), 1e-9);
+  l.request_safe();
+  (void)l.update(q, dq, .001);
+  l.reset(q);
+  tau = l.update(q, dq, .001);
+  for (std::size_t i = 0; i < N; ++i) {
+    EXPECT_NEAR(tau[i], std::min(5.0, profile().tau_ff_max[i]), 1e-9) << i;
+    EXPECT_NEAR(l.held_effort(i), std::min(5.0, profile().tau_ff_max[i]), 1e-9) << i;
+  }
+  // A fault commands nothing, so the next session starts from nothing.
+  l.fault();
+  l.reset(q);
+  tau = l.update(q, dq, .001);
+  for (double value : tau) EXPECT_NEAR(value, 0.0, 1e-12);
 }

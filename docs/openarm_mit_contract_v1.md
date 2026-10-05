@@ -23,7 +23,7 @@ arm-scoped protocol interfaces (ROS handle form `<arm_resource>/<interface>`):
 - command `mit_commit_generation`: monotonically increasing integer-valued double, written last
 - command `mit_safe_request_generation`: monotonically increasing integer-valued double, written
   last instead of tuple commit when requesting hardware-owned measured SAFE
-- state `mit_session_id`: consumer session changed on configure/activate restart
+- state `mit_session_id`: consumer session, a new one on every hardware activation
 - state `mit_ack_generation`: last whole-arm generation accepted by the consumer, or discarded
   by a controller switch (see the external-switch paragraph below)
 - state `mit_safe_generation`: hardware-requested safe transition generation
@@ -81,32 +81,64 @@ It is selected only by
 `mujoco_mit_prototype:=true bimanual:=true arm:=both`; legacy MoveIt continues
 to use its position-controller map.
 
-On activation the consumer itself enters SAFE from its latest measured position. A direct,
-TaskSpace or VLA producer's first commit is a seed at `q_des=q_measured,dq_des=0` whose `tau_ff` is
-what the effort command interfaces hold. Every backend keeps those equal to the feed-forward its
-hold applies whenever the arm is not ACTIVE: zeroed when a session starts (a fresh hold has no
-`tau_ff`), the last ACCEPTED `tau_ff` after a rejected commit or a SAFE, and restored at
-`perform_command_mode_switch()` when the outgoing producer's leftover commit is discarded. So a producer
-switch does not drop the arm's gravity support for a cycle and slew it back from zero, and a stale
-`tau_ff` -- a rejected commit's, or a previous session's on an arm that faulted and dropped -- never
-becomes a seed. It waits for the matching ack before ramping. (The
-FollowJointTrajectory producer carries `tau_ff=0` throughout, by design: its seed is the measured
-SAFE-gain hold, and between goals it holds where it began -- the seed or the last trajectory point --
-not the latest measurement.) The consumer's own SAFE hold tuple is
-`q_des=q_measured,dq_des=0,kp=safe_hold_stiffness[i],kd=safe_hold_damping[i],tau_ff=last accepted tau_ff`:
-gains are per joint, and the feed-forward is retained because the MIT equation inside the motor has no
-gravity model, so a hold with `tau_ff=0` would let the arm fall at the moment it stops being commanded.
-A fresh session has no accepted command and therefore holds with `tau_ff=0`. Deactivation requires another safe generation and matching ack before
-release. Humble lifecycle callbacks cannot wait for a future hardware write safely, so shutdown is
-an explicit update-state controlled-stop handshake. The controller reports stop-ready only after
-equal per-arm safe acknowledgements and the hardware-owned pair stop-ready state; orchestration then
-switches or unloads it without blocking a lifecycle callback.
+The consumer's own (hardware-owned) SAFE hold tuple is
+`q_des=q_measured, dq_des=0, kp=safe_hold_stiffness[i], kd=safe_hold_damping[i], tau_ff=tau_measured[i]`,
+where `q_measured` and `tau_measured` come from the same read: the pose the arm is at when the hold is
+latched and the joint torque the motors were measured applying there, clamped per joint to the
+profile's `tau_ff_magnitude` (`cho_openarm_mit_core::ArmConsumer`). Gains are per joint. The
+feed-forward is needed because the MIT equation inside the motor has no gravity model, so a hold with
+`tau_ff=0` lets the arm fall at the moment it stops being commanded. It is the measured torque and
+not the producer's last `tau_ff` because a producer splits its support between the
+`kp*(q_des - q)` spring and `tau_ff` however its law does (the drive-side TaskSpace law carries the
+Cartesian error in the spring and the null-space and joint-limit springs in `tau_ff`; the
+FollowJointTrajectory producer carries everything in the spring), and only their sum holds the arm:
+kept alone at the safe gains, the producer's `tau_ff` let the spring's share sag away. At rest in free
+space the measured torque is the gravity torque of the real arm and payload (no model error), the
+hold continues the support the arm had (no step), and a residual inside the joints' static friction
+moves nothing. Moving or in contact it also carries that instant's inertial or contact torque, which
+the safe gains then resist. MuJoCo applies the same rule with the torque its limiter applied in the
+previous cycle; the test fake with its mirrored state.
 
-`mit_session_id` is allocated/incremented only after successful consumer `on_configure()` and is
-invalidated to zero by cleanup; `on_activate()` does not change it. A producer in SEEDING reads and
-echoes the session each update, commits generation one, and retries until ack for a configured
-maximum handshake-cycle count. It rejects action goals while seeding and reports activation failure
-when that bound expires. A session mismatch never refreshes lease or ack.
+On activation the consumer itself enters SAFE from the state measured by the seed read: the
+measured pose, and the measured torque as `tau_ff` -- about zero on motors enabled just now, the
+gravity torque on an arm the hardware was holding (an INACTIVE hold, below). A direct, TaskSpace or
+VLA producer's first commit is a seed at `q_des=q_measured,dq_des=0` whose `tau_ff` is what the
+effort command interfaces hold. Every backend keeps those equal to the feed-forward its hold applies
+whenever the arm is not ACTIVE: the new session's hold torque when a session starts, the hold's
+torque after a rejected commit or a SAFE, and restored at `perform_command_mode_switch()` when the
+outgoing producer's leftover commit is discarded. So a producer switch does not drop the arm's
+gravity support for a cycle and slew it back from zero, and a rejected or discarded commit's
+`tau_ff` never becomes a seed. The producer waits for the matching ack before ramping.
+
+The FollowJointTrajectory producers carry `tau_ff=0` throughout, by design: they have no dynamics
+model, their seed is the measured SAFE-gain hold, and between goals they hold where they began --
+the seed or the last trajectory point -- not the latest measurement. Activated after a producer that
+was supporting the arm, the seed therefore drops the hold's gravity torque onto the safe-gain spring
+(a sag of about `tau_g / safe_hold_stiffness`), and trajectories carry gravity on their explicit
+stiffness alone. That is accepted for the MuJoCo prototype, where these producers run; a constant
+feed-forward taken at activation was rejected because it is wrong anywhere but the seed pose (twice
+the error of zero once gravity changes sign along a trajectory). The real bringup does not offer the
+FollowJointTrajectory producers (`cho_bringup_openarm/utils/launch_utils.py`); before it may, they need
+a gravity term of their own (a model, or the effort state they do not claim yet).
+
+`mit_session_id` is allocated when the hardware is **activated**: every activation starts a new
+session, with ack, SAFE generation and SAFE ack back at zero, seeded from the state read then, so a
+producer from an earlier activation can never commit into it. Before the first activation it reads
+zero and `mit_status` reads DISABLED; a deactivated arm keeps its session and reads DISABLED (no
+producer input is accepted, see "Stopping the hardware"); cleanup invalidates it to zero. All three
+backends (real, MuJoCo, the test fake) do this. A producer in SEEDING reads and echoes the session
+each update, commits its seed generation, and retries until ack for a configured maximum
+handshake-cycle count. It rejects action goals while seeding and reports activation failure when that
+bound expires. A session mismatch never refreshes lease or ack.
+
+**Stopping a producer.** The orderly way is the SAFE handshake: `~/request_safe_stop` (the paired
+FollowJointTrajectory producer: a controlled stop) makes the producer write a new
+`mit_safe_request_generation` last and report stop-ready only after the matching SAFE
+acknowledgement -- and, for the paired producer, the hardware-owned pair stop-ready state --
+without blocking a ROS or lifecycle callback; orchestration then switches or unloads it. It is not a
+precondition: a producer's `on_deactivate()` returns SUCCESS without it (with a warning), because
+the external-switch rule below makes any switch safe on its own. An ERROR there would not stop the
+switch anyway; it would only leave the controller finalized.
 
 External switch/unload/shutdown cannot rely on the outgoing controller for safety. One rule,
 `cho_openarm_mit_core::SwitchGate`, is applied per arm by every backend (real, MuJoCo, and the test
@@ -139,33 +171,51 @@ Only consumer `write()` can submit the safe tuple, copy safe generation to safe 
 `SAFE`. Merely requesting a transition is never reported as SAFE. A producer SAFE request at or below
 the current `safe_generation` is no request (the hardware advances that generation itself on a
 switch).
-A producer's `on_deactivate()` returns SUCCESS without its SAFE handshake too (with a warning):
-the switch rule above makes the external switch safe, and an ERROR would only leave the controller
-finalized.
+A producer's `on_deactivate()` returns SUCCESS without its SAFE handshake ("Stopping a producer").
 
-**Stopping the hardware.** The arm has no brakes, so a disabled motor drops it. A Damiao motor keeps
-executing the last MIT frame it received; the vendor code in `extern/openarm_can` neither documents
-nor sets what the firmware does after that, beyond exposing a "CAN Timeout" register (`RID::TIMEOUT`,
-9, RW uint32) that nothing in this repository writes. The hardware's orderly stops --
-`on_deactivate()`, `on_cleanup()`, `on_shutdown()` and the destructor (controller_manager may be torn
-down without shutting its components down) -- therefore take one fresh read and send one more
-measured SAFE hold (`q_des = q_measured`, `dq_des = 0`, the profile's per-joint safe gains, the last
-accepted `tau_ff`) as the LAST frame, and nothing after it. While INACTIVE, `read()` and `write()`
-(which Humble 2.54 keeps calling then) put nothing on the bus and return OK; they used to return
-ERROR, which Humble turns straight into `on_error()`. What happens next is the motors' own: they hold
-that pose, unsupervised -- no lease, no stale-state check, no write watchdog -- until they are disabled,
-lose power, or their CAN timeout expires if one is configured, at which point the arm is unpowered and
-drops. Commissioning must read that register on every motor (`openarm-can-cli`, read parameters).
-`mit_stop_behavior: disable` restores the old stop (motors disabled, arm dropped). A **fault** --
-transport, stale or non-finite state, write watchdog -- and `on_error()` (reached only through a failed
-`read()`/`write()` or transition) still disable at once: a hold cannot be trusted on a bus or a state
-that just failed. `on_error()` and `on_shutdown()` close the CAN socket and never throw. MuJoCo
-mirrors this (INACTIVE keeps the limiter's SAFE hold running and evaluates no producer input; after
-`on_shutdown()` the last torque it computed stays applied, as FINALIZED gets no more writes;
-`on_error()` zeroes the torque); the test fake holds SAFE and evaluates nothing while not active.
-A steady-clock watchdog owned by the real adapter disables its CAN sockets if controller-manager
-`write()` stops. SIGKILL, power and transceiver failures additionally require the motor communication
-watchdog and physical E-stop.
+**Stopping the hardware.** The arm has no brakes, so a disabled motor drops it, and a Damiao motor
+keeps executing the last MIT frame it received for as long as it is powered -- unless its "CAN
+Timeout" register (`RID::TIMEOUT`, 9, RW uint32, unit not documented by `extern/openarm_can`) is
+nonzero, in which case it stops on its own when no frame arrives for that long. The real adapter's
+`mit_stop_behavior` decides what an orderly stop does; `hold` is the default:
+
+- **Deactivation: a supervised hold.** `on_deactivate()` takes one fresh read and sends the measured
+  SAFE hold. While INACTIVE the hardware keeps it supervised: Humble (2.54) keeps calling `read()` and
+  `write()` on an INACTIVE component, so `write()` re-sends the same hold every cycle (not re-latched,
+  so it does not follow a sagging arm) and `read()` reads and checks state (joint_states keep
+  following the arm), with the stale-state check and the controller-write watchdog running. Any
+  failure of that supervision -- a silent motor, a failed send or read, a bus-off, non-finite state
+  -- is a FAULT, which disables the motors (a stalled `write()` is the watchdog's case, next).
+  `mit_status` reads DISABLED: no producer input is accepted until the hardware is activated again,
+  which starts a new session from that hold without re-enabling the motors; if a motor misses that
+  seed read the activation is refused (FAILURE) and the supervised hold continues, rather than
+  disabling a held arm.
+- **The process stops writing.** The write watchdog (ACTIVE or held) puts the measured SAFE hold on
+  the bus as the last frame and sends nothing after it -- replacing an ACTIVE tuple the motors would
+  otherwise keep executing at full gains -- and the motors' CAN timeout ends it if the process does
+  not come back; a control loop that does come back finds a FAULT, which disables. This covers Ctrl-C
+  too, where the control loop ends before the destructor's stop runs.
+- **Cleanup, shutdown, destruction** (controller_manager may be torn down without shutting its
+  components down) send the hold one last time and nothing after it; the motors' CAN timeout ends it.
+- **The CAN timeout is checked.** Before an activation that enables the motors, the real adapter
+  reads register 9 on every motor (and the gripper's) and refuses to activate (FAILURE, nothing
+  enabled or sent) when one reads 0 or does not answer, unless the hardware parameter
+  `mit_allow_no_can_timeout` is true. Commissioning sets it with the vendor CLI
+  (`openarm-can-cli write_param --id <id> --rid 9 --value <timeout> --save`) and measures the
+  resulting timeout on the bench; it must exceed the adapter's 100 ms silent wait after enable.
+
+`mit_stop_behavior: disable` disables the motors at every orderly stop and on a write-watchdog trip
+(the arm drops). A **fault** -- transport, bus-off, stale or non-finite state, a failed send (a commit
+whose frame could not be sent faults the arm even if the SAFE hold after it goes out) -- and
+`on_error()` (reached only through a failed `read()`/`write()` or transition) disable at once in both
+modes: a hold cannot be trusted on a bus or a state that just failed. A disable the bus refuses is
+sent again (three attempts); if it never goes out the adapter says so, naming the motors' CAN
+timeout and the physical E-stop as what is left. `on_error()` and `on_shutdown()` close the CAN
+socket and never throw. MuJoCo mirrors this (INACTIVE keeps the limiter's SAFE hold running and
+evaluates no producer input; after `on_shutdown()` the last torque it computed stays applied, as
+FINALIZED gets no more writes; `on_error()` zeroes the torque); the test fake holds SAFE and
+evaluates nothing while not active. SIGKILL, power and transceiver failures rely on the motors' CAN
+timeout and the physical E-stop.
 A FAULT (transport, stale state, watchdog) disables the transport and rejects new active commands
 until the hardware is reactivated, which creates a new session; a new generation alone never clears
 it. An external switch does not latch: the incoming producer commits after perform. An invalid commit
@@ -289,10 +339,12 @@ An adapter must call this loader and validate the CAN interface **before opening
   lease, stale-state timing, write watchdog and bimanual send-skew limit remain `null`. They require
   supported-arm tests, CAN timing measurement, motor watchdog verification, physical E-stop and a
   recorded manual low-output approval before any real command path may enable motors.
-- `real_conservative_commissioning` is a separately named, 200 Hz, lower-output envelope. It is
-  selected by real bringup with `return_to_zero:=false`. It has not been physically validated in
-  this repository; the profile is not a substitute for an E-stop, verified motor identity/zeroing,
-  or an operator commissioning record.
+- `real_conservative_commissioning` is a separately named, 750 Hz (`update_rate_hz`; its lease,
+  stale-state and watchdog cycle counts keep the wall-clock timeouts of the earlier 200 Hz
+  envelope), lower-output envelope. It is selected by real bringup with `return_to_zero:=false`. It
+  has not been physically validated in this repository; the profile is not a substitute for an
+  E-stop, verified motor identity/zeroing, the motors' CAN timeout, or an operator commissioning
+  record.
 
 Timing priority is hardware fault, controller-write watchdog, stale state, then lease. Lease and
 stale counters advance only on a successful consumer write cycle. All gain/feed-forward/final-torque

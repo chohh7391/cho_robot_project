@@ -63,6 +63,8 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_init(
       }
       a.limiter = std::make_unique<Limiter>(p, rate);
       a.shadow = std::make_unique<Limiter>(p, rate);
+      // Nothing is accepted before the first activation, which starts a session.
+      a.protocol[4] = 6;  // DISABLED
       // A switch abandoned after a successful prepare opens after one second.
       a.gate.set_expiry_cycles(rate);
       arms_.push_back(std::move(a));
@@ -131,7 +133,8 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
   if (next_session_ > cho_openarm_mit_core::kMaxExactInteger)
     return hardware_interface::CallbackReturn::ERROR;
   const double session = next_session_++;
-  for (auto & a : arms_) {
+  for (std::size_t i = 0; i < arms_.size(); ++i) {
+    auto & a = arms_[i];
     std::array<double, N> q{};
     for (std::size_t j = 0; j < N; ++j) {
       if (!a.position[j] || !a.velocity[j] || !a.raw_effort[j])
@@ -139,6 +142,10 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
       q[j] = a.position[j]->get_value();
       if (!std::isfinite(q[j])) return hardware_interface::CallbackReturn::ERROR;
     }
+    // The new session's hold, seeded with the torque the limiter was applying:
+    // the gravity torque of an arm it was holding (INACTIVE), zero before the
+    // first activation or after a fault. It used to be zero always, which
+    // dropped a held arm on every reactivation.
     a.limiter->reset(q);
     a.protocol.fill(0);
     a.protocol[0] = session;
@@ -147,10 +154,11 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
     a.gate.reset();
     // A new session starts with no producer input. A SAFE request left from
     // the previous session would read as a new one against a SAFE generation
-    // back at 0, and the effort commands must read the fresh hold's tau_ff
-    // (0): a producer seeds its first commit from them.
+    // back at 0, and the effort commands must read the new hold's tau_ff: a
+    // producer seeds its first commit from them.
     a.safe_request = 0;
     for (auto & joint : a.command) joint.fill(0);
+    publish_held_effort(i);
   }
   pair_ownership_token_ = 0;
   pair_stop_ready_ = 0;

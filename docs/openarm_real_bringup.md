@@ -52,6 +52,16 @@ E-stop, bus wiring and interface names, encoder direction/zero state, motor
 identity, supported-arm firmware, and a documented low-output commissioning
 procedure. Keep people and obstacles clear of the arm.
 
+Set every motor's CAN timeout (register 9) before the first activation;
+activation refuses a motor that reads 0 or does not answer. Read it with
+`openarm-can-cli -i <can> show_param --id 1,2,3,4,5,6,7,8` and write it with
+`openarm-can-cli -i <can> write_param --id <n> --rid 9 --value <timeout> --save`.
+The unit is the firmware's: measure the resulting timeout (kill the bringup and
+time the drop) and keep it above the adapter's 100 ms enable gap. See
+`cho_hardware_openarm_mit_real/README.md` for `mit_stop_behavior` (default
+`hold`: a supervised measured hold after an orderly stop) and
+`mit_allow_no_can_timeout`.
+
 ## Default nominal-zero initialization
 
 `return_to_zero` defaults to `true`. With it enabled, the launch selects the narrowly scoped

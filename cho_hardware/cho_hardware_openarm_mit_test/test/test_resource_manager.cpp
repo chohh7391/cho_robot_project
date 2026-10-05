@@ -249,8 +249,9 @@ TEST(ResourceManager, AnExternalStopSafesTheArmAndNeverRunsTheLeftoverCommit) {
 
 TEST(ResourceManager, TheEffortCommandsReadTheFeedForwardTheHoldApplies) {
   // A producer seeds its first tau_ff from the effort command interfaces, so
-  // while the arm holds they must read what the hold applies -- the last
-  // ACCEPTED tau_ff -- never a rejected or discarded commit's.
+  // while the arm holds they must read what the hold applies -- the joint
+  // torque measured when it was latched, which this fake mirrors from the
+  // accepted tuple -- never a rejected or discarded commit's.
   hardware_interface::ResourceManager rm(urdf(), true, true);
   auto session = rm.claim_state_interface("openarm_arm/mit_session_id");
   auto status = rm.claim_state_interface("openarm_arm/mit_status");
@@ -327,11 +328,53 @@ TEST(ResourceManager, ADeactivatedArmHoldsSafeAndEvaluatesNoCommit) {
                    static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE));
   rclcpp_lifecycle::State inactive(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
   ASSERT_EQ(rm.set_component_state("mit_fake", inactive), hardware_interface::return_type::OK);
+  // Held, and no producer input accepted: DISABLED, as the real adapter and
+  // MuJoCo report it.
   EXPECT_DOUBLE_EQ(status.get_value(),
-                   static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE));
+                   static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED));
   generation.set_value(2.0);
   EXPECT_TRUE(write());
   EXPECT_DOUBLE_EQ(ack.get_value(), 1.0);
   EXPECT_DOUBLE_EQ(status.get_value(),
-                   static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE));
+                   static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED));
+}
+
+TEST(ResourceManager, ASessionStartsAtActivationAndEveryActivationIsANewOne) {
+  // The contract's rule, the same in all three backends: configure opens no
+  // session; each activation starts one (ack 0, seeded from the measured
+  // state), so a producer from an earlier activation can never commit into it.
+  hardware_interface::ResourceManager rm(urdf(), true, false);
+  rclcpp_lifecycle::State inactive(lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE, "inactive");
+  rclcpp_lifecycle::State active(lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE, "active");
+  ASSERT_EQ(rm.set_component_state("mit_fake", inactive), hardware_interface::return_type::OK);
+  auto session = rm.claim_state_interface("openarm_arm/mit_session_id");
+  auto ack = rm.claim_state_interface("openarm_arm/mit_ack_generation");
+  auto status = rm.claim_state_interface("openarm_arm/mit_status");
+  EXPECT_DOUBLE_EQ(session.get_value(), 0.0);
+  EXPECT_DOUBLE_EQ(status.get_value(), static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED));
+  ASSERT_EQ(rm.set_component_state("mit_fake", active), hardware_interface::return_type::OK);
+  const double first = session.get_value();
+  EXPECT_GE(first, 1.0);
+  EXPECT_DOUBLE_EQ(status.get_value(), static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE));
+  auto echo = rm.claim_command_interface("openarm_arm/mit_session_echo");
+  auto lease = rm.claim_command_interface("openarm_arm/mit_lease_cycles");
+  auto generation = rm.claim_command_interface("openarm_arm/mit_commit_generation");
+  std::vector<hardware_interface::LoanedCommandInterface> effort;
+  for (int i = 1; i <= 7; ++i) {
+    rm.claim_command_interface("openarm_joint" + std::to_string(i) + "/damping").set_value(1.0);
+    effort.push_back(rm.claim_command_interface("openarm_joint" + std::to_string(i) + "/effort"));
+  }
+  echo.set_value(first);
+  lease.set_value(50.0);
+  for (auto &e : effort) e.set_value(0.4);  // the fake's plant holds with what it is given
+  generation.set_value(1.0);
+  ASSERT_TRUE(rm.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(.01)).ok);
+  ASSERT_DOUBLE_EQ(ack.get_value(), 1.0);
+  ASSERT_EQ(rm.set_component_state("mit_fake", inactive), hardware_interface::return_type::OK);
+  ASSERT_EQ(rm.set_component_state("mit_fake", active), hardware_interface::return_type::OK);
+  EXPECT_DOUBLE_EQ(session.get_value(), first + 1.0);
+  EXPECT_DOUBLE_EQ(ack.get_value(), 0.0);
+  // The new session's hold keeps the measured torque, and a producer seeding
+  // from the effort commands finds it.
+  for (auto &e : effort) EXPECT_DOUBLE_EQ(e.get_value(), 0.4);
 }

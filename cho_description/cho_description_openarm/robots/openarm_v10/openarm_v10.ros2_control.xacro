@@ -44,6 +44,8 @@ limitations under the License.
       right_can_interface:=can0
       can_fd:=true
       mit_state_from_command_reply:=false
+      mit_stop_behavior:=hold
+      mit_allow_no_can_timeout:=false
       gripper_send_can_id:=8
       gripper_recv_can_id:=24
       gripper_pos_force:=true
@@ -142,6 +144,17 @@ limitations under the License.
       <param name="can_fd">${can_fd}</param>
           <param name="mit_state_from_command_reply">${mit_state_from_command_reply}</param>
       <param name="arm_side">${side}</param>
+      <!-- "hold": an orderly deactivation leaves the arm in a measured SAFE
+           hold that stays supervised while INACTIVE (re-sent every cycle, state
+           read, stale-state check and write watchdog running; any failure
+           disables). "disable": the motors are disabled and the arm drops. -->
+      <param name="mit_stop_behavior">${mit_stop_behavior}</param>
+      <!-- Activation reads every motor's CAN timeout (register 9) and refuses
+           one that is 0 or does not answer: with no timeout a motor keeps its
+           last frame after a crash for as long as it is powered. true accepts
+           that. The register is set with the vendor CLI, openarm-can-cli
+           write_param (see cho_hardware_openarm_mit_real/README.md). -->
+      <param name="mit_allow_no_can_timeout">${mit_allow_no_can_timeout}</param>
       <!-- The gripper is one more Damiao motor on this same CAN socket, but
            outside the MIT arm contract: its values never enter an arm vector,
            a lease generation or a SAFE acknowledgement. Only its failure

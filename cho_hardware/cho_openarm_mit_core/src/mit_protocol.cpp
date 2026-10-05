@@ -323,7 +323,15 @@ ArmConsumer::ArmConsumer(
   ValidationLimits limits,
   const std::array<double, kJointsPerArm> & safe_hold_damping,
   const std::array<double, kJointsPerArm> & safe_hold_stiffness)
-: limits_(limits), safe_hold_damping_(safe_hold_damping), safe_hold_stiffness_(safe_hold_stiffness)
+: ArmConsumer(limits, safe_hold_damping, safe_hold_stiffness, uniform(limits.max_abs_effort)) {}
+
+ArmConsumer::ArmConsumer(
+  ValidationLimits limits,
+  const std::array<double, kJointsPerArm> & safe_hold_damping,
+  const std::array<double, kJointsPerArm> & safe_hold_stiffness,
+  const std::array<double, kJointsPerArm> & hold_effort_limit)
+: limits_(limits), safe_hold_damping_(safe_hold_damping), safe_hold_stiffness_(safe_hold_stiffness),
+  hold_effort_limit_(hold_effort_limit)
 {
   const std::array<double, 5> numeric{limits.max_abs_position, limits.max_abs_velocity,
     limits.max_stiffness, limits.max_damping, limits.max_abs_effort};
@@ -337,20 +345,30 @@ ArmConsumer::ArmConsumer(
         safe_hold_stiffness_[i] < 0.0 || safe_hold_stiffness_[i] > limits.max_stiffness) {
       throw std::invalid_argument("invalid MIT safe-hold gains");
     }
+    if (!std::isfinite(hold_effort_limit_[i]) || hold_effort_limit_[i] < 0.0 ||
+        hold_effort_limit_[i] > limits.max_abs_effort) {
+      throw std::invalid_argument("invalid MIT hold effort limit");
+    }
   }
 }
 
-bool ArmConsumer::configure(std::uint64_t session, const std::array<double, kJointsPerArm> & measured)
+bool ArmConsumer::configure(
+  std::uint64_t session, const std::array<double, kJointsPerArm> & measured,
+  const std::array<double, kJointsPerArm> & measured_effort)
 {
   if (session == 0 || session > static_cast<std::uint64_t>(kMaxExactInteger) ||
-      !std::all_of(measured.begin(), measured.end(), [](double x) {return std::isfinite(x);})) {
+      !std::all_of(measured.begin(), measured.end(), [](double x) {return std::isfinite(x);}) ||
+      !std::all_of(measured_effort.begin(), measured_effort.end(), [](double x) {return std::isfinite(x);})) {
     cleanup(); return false;
   }
   session_ = session; measured_ = measured; ack_generation_ = 0; age_cycles_ = 0;
   safe_generation_ = 0; safe_ack_generation_ = 0; latched_ = false; permanent_latched_ = false; safe_recoverable_ = false; status_ = MitStatus::SAFE;
-  // A new session starts with no accepted command, so its first SAFE hold
-  // carries no retained feed-forward from an earlier session.
+  // A new session starts with no accepted command. Its first SAFE hold takes
+  // the torque measured at the seed read, not anything an earlier session's
+  // producer commanded.
   submitted_ = ArmCommand{};
+  measured_effort_.fill(0.0);
+  sample_effort(measured_effort);
   return true;
 }
 
@@ -358,13 +376,30 @@ void ArmConsumer::cleanup()
 {
   session_ = 0; ack_generation_ = 0; safe_generation_ = 0; safe_ack_generation_ = 0;
   age_cycles_ = 0; accepted_lease_cycles_ = 0; latched_ = false; permanent_latched_ = false; safe_recoverable_ = false;
-  submitted_ = ArmCommand{}; measured_.fill(0.0); status_ = MitStatus::DISABLED;
+  submitted_ = ArmCommand{}; measured_.fill(0.0); measured_effort_.fill(0.0); status_ = MitStatus::DISABLED;
 }
 
 void ArmConsumer::observe(const std::array<double, kJointsPerArm> & measured)
 {
   if (std::all_of(measured.begin(), measured.end(), [](double x) {return std::isfinite(x);})) {
     measured_ = measured;
+  }
+}
+
+void ArmConsumer::observe(
+  const std::array<double, kJointsPerArm> & measured,
+  const std::array<double, kJointsPerArm> & measured_effort)
+{
+  observe(measured);
+  sample_effort(measured_effort);
+}
+
+void ArmConsumer::sample_effort(const std::array<double, kJointsPerArm> & effort)
+{
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    if (std::isfinite(effort[i])) {
+      measured_effort_[i] = std::clamp(effort[i], -hold_effort_limit_[i], hold_effort_limit_[i]);
+    }
   }
 }
 
@@ -422,13 +457,13 @@ bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
   if (status_ != MitStatus::SAFE_TRANSITION || !transport_succeeded) return false;
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     // The MIT equation runs inside the motor with no gravity model, so a hold
-    // that zeroed tau_ff would drop the arm's gravity compensation at the
-    // moment it stops being commanded.  Retain the last accepted feed-forward
-    // (already bounded by validate_tuple) around the measured position; the
+    // that zeroed tau_ff would drop the arm at the moment it stops being
+    // commanded. It carries the torque measured with the pose it holds (see
+    // the class comment), already clamped to the hold's effort limit; the
     // per-joint safe gains then resist motion away from that pose.
     submitted_.joints[i] = {
       measured_[i], 0.0, safe_hold_stiffness_[i], safe_hold_damping_[i],
-      submitted_.joints[i].effort};
+      measured_effort_[i]};
   }
   safe_ack_generation_ = safe_generation_;
   status_ = MitStatus::SAFE;
@@ -460,10 +495,13 @@ PairedConsumer::PairedConsumer(ValidationLimits limits, std::uint64_t session, d
 
 bool PairedConsumer::configure(
   std::uint64_t session, const std::array<double, kJointsPerArm> & left_measured,
-  const std::array<double, kJointsPerArm> & right_measured)
+  const std::array<double, kJointsPerArm> & right_measured,
+  const std::array<double, kJointsPerArm> & left_effort,
+  const std::array<double, kJointsPerArm> & right_effort)
 {
   ArmConsumer l = left_; ArmConsumer r = right_;
-  if (!l.configure(session, left_measured) || !r.configure(session, right_measured)) return false;
+  if (!l.configure(session, left_measured, left_effort) ||
+      !r.configure(session, right_measured, right_effort)) return false;
   left_ = l; right_ = r; return true;
 }
 
@@ -473,6 +511,16 @@ void PairedConsumer::observe(
 {
   left_.observe(left_measured);
   right_.observe(right_measured);
+}
+
+void PairedConsumer::observe(
+  const std::array<double, kJointsPerArm> & left_measured,
+  const std::array<double, kJointsPerArm> & right_measured,
+  const std::array<double, kJointsPerArm> & left_effort,
+  const std::array<double, kJointsPerArm> & right_effort)
+{
+  left_.observe(left_measured, left_effort);
+  right_.observe(right_measured, right_effort);
 }
 
 bool PairedConsumer::write_pair(const ArmCommand & left, const ArmCommand & right, const bool transport_succeeded)
