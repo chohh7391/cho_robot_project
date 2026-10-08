@@ -59,6 +59,7 @@ RealSense 퍼블리셔와의 QoS 매칭은 이걸로 해결한다.
 
 - `cho_sensor/bota_ft_sensor`: extern 드라이버 위의 **config/launch/urdf 래퍼**, 노드 코드 없음.
 - `cho_sensor/hansung_scale`: **cho_* 의존 0인 독립 드라이버**(CLAUDE.md가 엮지 말라고 못박음).
+  지금은 main 에 없고 `auto_chem` 브랜치에 있다.
 - 손목 액세서리는 [franka_robot.xacro:55](../cho_description/cho_description_franka/robots/common/franka_robot.xacro:55)의
   `special_connection` 플래그가 `xacro:unless`로 게이팅한다 → 카메라도 같은 방식.
 - 브링업별 디스크립션 소비 방식이 **다르다**:
@@ -97,7 +98,7 @@ RealSense 퍼블리셔와의 QoS 매칭은 이걸로 해결한다.
 `cho_perception/cho_object_pose`(로봇을 앎).
 
 **왜 두 번째를 `cho_sensor`에 넣지 않는가:** 이 노드는 base frame 이름, grasp 오프셋,
-`cho_robot_config` 레지스트리를 알아야 한다. CLAUDE.md가 `hansung_scale`에 대해 선언한
+`cho_robot_config` 레지스트리를 알아야 한다. CLAUDE.md가 `hansung_scale`에 대해 선언했던
 "cho_* 와 엮지 않는다" 경계를 넘는다. 대신 `cho_robot_config`에서 `arm_base_link`를 읽으면
 task manager와 **같은 레지스트리**를 보게 되어 생산자/소비자 프레임이 어긋날 수 없다.
 

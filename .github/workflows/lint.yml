@@ -64,8 +64,7 @@ jobs:
           for pkg in \
               cho_bringup/cho_bringup_common \
               cho_task_manager \
-              cho_perception/cho_object_pose \
-              cho_sensor/hansung_scale/hansung_scale_driver; do
+              cho_perception/cho_object_pose; do
             echo "::group::${pkg}"
             # ls fails when one of the two is absent; keep the one that exists.
             tests=$(cd "${pkg}" && ls test/test_flake8.py test/test_pep257.py 2>/dev/null || true)

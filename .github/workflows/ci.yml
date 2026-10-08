@@ -14,8 +14,6 @@ defaults:
     shell: bash
 
 # Only the packages that build from binary (apt) dependencies alone are covered.
-# hansung_scale_msgs / hansung_scale_driver qualify: rosidl, rclpy and
-# python3-serial are all rosdep keys, so the scale stack builds and tests here.
 # cho_controller_franka, bota_ft_sensor and the OpenArm hardware packages are not
 # built: they need extern/ sources built from source (franka_ros2 + libfranka,
 # bota_driver_ros2, openarm_can + mujoco_ros2_control). franka_gripper,
@@ -69,8 +67,6 @@ env:
     cho_object_pose
     cho_realsense
     cho_oak
-    hansung_scale_msgs
-    hansung_scale_driver
   # Dependencies of BUILD_PACKAGES that are not installed here; see above.
   # Workspace packages left out of BUILD_PACKAGES, then Franka keys whose debs
   # do not exist.
@@ -117,8 +113,6 @@ env:
     cho_object_pose
     cho_realsense
     cho_oak
-    hansung_scale_msgs
-    hansung_scale_driver
 
 jobs:
   build-and-test:

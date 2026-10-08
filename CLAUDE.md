@@ -253,10 +253,6 @@ cho_sensor/                  # Sensor stacks; grouping directory, not a package
                              # bota_driver (extern/bota_driver_ros2) and, for its default
                              # config, bota_driver_example (extern/bota_driver_ros2_example)
                              # instead of copies; only what differs lives here.
-  hansung_scale/             # Hansung HS-AA RS232 scale driver + its msgs.
-                             # SELF-CONTAINED: no cho_* dependencies, meant to be
-                             # usable as a standalone module. Do not entangle it
-                             # with cho_interfaces or the robot verticals.
   cho_realsense/             # D435 only. Includes the stock rs_launch.py and hands
                              # it our config_file, bota-style. No detection, and
                              # deliberately NO camera->robot transform.
