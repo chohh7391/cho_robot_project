@@ -38,10 +38,8 @@ from cho_task_manager.behaviors.service.base_service_server_behavior import (
 from cho_task_manager.behaviors.service.vla_completion_waiter import VLACompletionWaiterBehavior
 from cho_task_manager.behaviors.topic.ee_state_sample import EeStateSampleBehavior
 from cho_task_manager.behaviors.topic.external_session import ExternalSessionBehavior
-from cho_task_manager.behaviors.topic.grasp_marker import GraspMarkerSampleBehavior
 from cho_task_manager.behaviors.topic.joint_state_check import JointStateCheckBehavior
 from cho_task_manager.behaviors.topic.pose_target import PoseTargetBehavior
-from cho_task_manager.behaviors.topic.scale_latch import ScaleLatchBehavior
 
 RUNNING = py_trees.common.Status.RUNNING
 SUCCESS = py_trees.common.Status.SUCCESS
@@ -80,11 +78,6 @@ LEAVES = {
     'ee_state_sample': (lambda: EeStateSampleBehavior('Sample', record_as='before', timeout_sec=5.0), 5.0),
     'pose_target': (lambda: PoseTargetBehavior(
         'Target', record_as='target', topic='/pose', required_frame='base', timeout_sec=5.0), 5.0),
-    'grasp_marker': (lambda: GraspMarkerSampleBehavior(
-        'Grasp', marker_topic='/marker', required_frame='base', joint_names=['j1'],
-        timeout_sec=5.0), 5.0),
-    'scale_latch': (lambda: ScaleLatchBehavior(
-        'Latch', record_as='zero', settle_sec=2.0, timeout_sec=6.0), 6.0),
     'joint_state_check': (lambda: JointStateCheckBehavior(
         'Check', ['j1'], [0.0], timeout_sec=3.0), 3.0),
     'service_server': (lambda: BaseServiceServerBehavior(
@@ -129,32 +122,6 @@ def test_a_running_clock_times_out_exactly_as_before(kind):
     assert leaf.update() == RUNNING
     clock.seconds += 0.2
     assert leaf.update() == FAILURE
-
-
-def _reading(grams):
-    msg = MagicMock()
-    msg.grams, msg.stable = grams, True
-    return msg
-
-
-def test_a_scale_hold_that_began_before_the_clock_is_timed_from_its_first_reading():
-    # Stamped 0, the hold would read as 5000 s settled the moment /clock came,
-    # and an unsettled pan would become every later pour's zero.
-    leaf, clock = _wire(LEAVES['scale_latch'][0], start=0.0)
-    leaf.initialise()
-    for _ in range(3):
-        leaf._on_reading(_reading(139.15))
-        assert leaf.update() == RUNNING
-
-    clock.seconds = 5000.0
-    leaf._on_reading(_reading(139.15))
-    assert leaf.update() == RUNNING
-    clock.seconds += 1.9
-    leaf._on_reading(_reading(139.15))
-    assert leaf.update() == RUNNING
-    clock.seconds += 0.2
-    leaf._on_reading(_reading(139.15))
-    assert leaf.update() == SUCCESS
 
 
 def test_no_behaviour_takes_a_deadline_off_the_clock_directly():

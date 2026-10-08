@@ -88,10 +88,9 @@ env:
   STUB_PACKAGES: >-
     franka_gripper
     franka_ign_ros2_control
-  # Built but not tested here: cho_controller_fr5 (its tests are the pour
-  # cell's). The cho_description_* forks other than franka and openarm, and the
-  # MoveIt configuration packages, have no tests of their own; their launch
-  # files are covered by the golden test.
+  # Built but not tested here: the cho_description_* forks other than franka
+  # and openarm, and the MoveIt configuration packages, have no tests of their
+  # own; their launch files are covered by the golden test.
   TEST_PACKAGES: >-
     cho_interfaces
     cho_controller_common
@@ -99,6 +98,7 @@ env:
     cho_vla_core
     cho_controller_gripper
     cho_controller_ur
+    cho_controller_fr5
     cho_openarm_mit_core
     cho_hardware_openarm_mit_test
     cho_controller_openarm_mit

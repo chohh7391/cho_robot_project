@@ -65,7 +65,6 @@ jobs:
               cho_bringup/cho_bringup_common \
               cho_task_manager \
               cho_perception/cho_object_pose \
-              cho_perception/cho_pour_stream \
               cho_sensor/hansung_scale/hansung_scale_driver; do
             echo "::group::${pkg}"
             # ls fails when one of the two is absent; keep the one that exists.

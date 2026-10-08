@@ -17,7 +17,6 @@ from .occlusion_sweep import DEFAULT_VISIBILITY_TOPIC, OcclusionSweepBehavior
 from .single_pass_sweep import SinglePassSweepBehavior, SweepTarget
 from .task_space import TaskSpaceActionBehavior
 from .gripper import GripperActionBehavior
-from .pour import MATERIALS, PourActionBehavior
 from .follow_joint_trajectory import (
     FollowJointTrajectoryBehavior,
     TrajectoryRejected,
@@ -33,8 +32,6 @@ __all__ = [
     'DEFAULT_VISIBILITY_TOPIC',
     'TaskSpaceActionBehavior',
     'GripperActionBehavior',
-    'PourActionBehavior',
-    'MATERIALS',
     'FollowJointTrajectoryBehavior',
     'TrajectoryRejected',
     'build_trajectory',

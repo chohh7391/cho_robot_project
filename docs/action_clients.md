@@ -48,8 +48,7 @@ when it refuses; `nothing was cancelled` when the goal had already finished or i
 unknown to it; and `No answer to the cancel; the arm may still be moving` when no
 answer comes within 3 s. A Ctrl-C before the server has answered the goal itself
 cancels it on acceptance and prints that cancel's answer when it arrives.
-`fr5_pour_client` reports the cancel's answer the same way, then the goal's final
-status. With a MoveIt bridge for the profile, the client waits for
+With a MoveIt bridge for the profile, the client waits for
 that profile's own static-scene gate (`/cho_moveit/<robot>[/<profile>]/static_scene_ready`)
 before it settles on the direct controllers.
 

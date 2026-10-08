@@ -49,7 +49,7 @@ LAUNCH cho_bringup_fr5/bringup_mujoco_moveit.launch.py ['gripper:=ag95']
             ON OnProcessExit target=<controller_manager/spawner args=['joint_state_broadcaster', 'joint_space_position_controller', 'gripper_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30']>
               NODE controller_manager/spawner
                 name=None namespace=None
-                args=['joint_trajectory_controller', 'task_space_ik_controller', 'pouring_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '--inactive', '-p <RT:cho_fr5_mujoco_runtime_params_#0>']
+                args=['joint_trajectory_controller', 'task_space_ik_controller', '|', '--controller-manager /controller_manager', '--controller-manager-timeout 30', '--inactive', '-p <RT:cho_fr5_mujoco_runtime_params_#0>']
                 output='screen' on_exit=NoneType
             NODE controller_manager/spawner
               name=None namespace=None

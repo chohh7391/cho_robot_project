@@ -347,8 +347,8 @@ Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` acti
 What every controller serves and a client may rely on is written down in
 `cho_interfaces/CONTRACT.md`: actions are relative to the controller's node
 (`/<controller>/joint_space`, `/task_space`, `/gripper`, `/vla`; the old
-`/controller_action_server/<controller>` namespace is gone except for the FR5 pour
-action), goals take `duration_sec`, JointSpace goals may name their joints, and a
+`/controller_action_server/<controller>` namespace is gone), goals take
+`duration_sec`, JointSpace goals may name their joints, and a
 TaskSpace goal is a `PoseStamped` that must be in the model's root frame (absolute) or
 the EE frame (relative) -- controllers never transform, they reject. Python builds
 every name through `controller_action_name(controller, kind)`, never by hand: the rule
@@ -573,7 +573,3 @@ packages, which exhausts memory and locks the machine up hard enough to
 need a reboot. The `-l2` load limit matters as much as the job count.
 Prefer scoping the package set (`--packages-select`, `--packages-above`)
 to keep a wide rebuild short instead of adding parallelism.
----
-
-@./.conventions/project.md
-@./.conventions/session-log.md

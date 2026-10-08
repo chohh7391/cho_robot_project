@@ -269,7 +269,7 @@ def test_openarm_reach_targets_are_fixed_absolute_world_poses():
      r'/<node>/gripper'),
     (lambda c: c['actions']['preferences'].__setitem__(
         'vla', ['/vla_controller/joint_space']), r'/<node>/vla'),
-    (lambda c: c['actions']['preferences'].__setitem__('pour', []), 'unknown spaces'),
+    (lambda c: c['actions']['preferences'].__setitem__('scoop', []), 'unknown spaces'),
     (lambda c: c['actions']['preferences'].__setitem__(
         'task', ['/fr5_moveit_action_bridge/task_space']),
      'task preferences must contain /task_space_ik_controller/task_space'),
@@ -317,9 +317,6 @@ def test_controller_action_names_follow_the_contract():
         '/gripper_controller/gripper')
     assert controller_action_name('joint_trajectory_controller', 'follow_joint_trajectory') == (
         '/joint_trajectory_controller/follow_joint_trajectory')
-    # The one exception the contract makes: the FR5 pour keeps its own name.
-    assert controller_action_name('pouring_controller', 'pour') == (
-        '/controller_action_server/pouring_controller')
     with pytest.raises(ValueError, match='unknown action kind'):
         controller_action_name('joint_space_qp_controller', 'moveit_joint')
     with pytest.raises(ValueError, match='non-empty'):

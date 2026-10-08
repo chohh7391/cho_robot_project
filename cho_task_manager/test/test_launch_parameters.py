@@ -59,8 +59,7 @@ def test_the_node_and_the_launch_default_to_the_same_task():
 
 def test_double_parameters_are_typed_on_the_way_in():
     parameters = _node_parameters()
-    for name in ('probe_duration', 'replay_speed_scale', 'replay_pour_grams',
-                 'replay_pour_flow_index', 'replay_pour_timeout'):
+    for name in ('probe_duration', 'replay_speed_scale'):
         value = next(v for k, v in parameters.items()
                      if ''.join(getattr(part, 'text', '') for part in k) == name)
         assert isinstance(value, ParameterValue), name

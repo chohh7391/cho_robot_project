@@ -52,17 +52,6 @@ add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp
     src/joint_space_position_controller.cpp
     src/task_space_ik_controller.cpp
-    src/pouring_controller.cpp
-    src/pour/container_gate.cpp
-    src/pour/flow_model.cpp
-    src/pour/guards.cpp
-    src/pour/lip_path.cpp
-    src/pour/material_profile.cpp
-    src/pour/pour_planner.cpp
-    src/pour/pour_types.cpp
-    src/pour/scale_filter.cpp
-    src/pour/shaping_law.cpp
-    src/servers/pour_action_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include
@@ -114,45 +103,6 @@ if(BUILD_TESTING)
         ament_index_cpp cho_controller_base cho_interfaces controller_manager
         hardware_interface rclcpp rclcpp_action)
 
-    # The pour law only. These link src/pour/ directly and pull in no ROS at
-    # all, which is the point of that subdirectory: a material's behaviour can
-    # be pinned against a synthetic vessel without a controller_manager, a
-    # scale, or a robot.
-    ament_add_gtest(test_pour
-        test/test_pour.cpp
-        src/pour/container_gate.cpp
-        src/pour/flow_model.cpp
-        src/pour/guards.cpp
-        src/pour/material_profile.cpp
-        src/pour/pour_planner.cpp
-        src/pour/pour_types.cpp
-        src/pour/scale_filter.cpp
-        src/pour/shaping_law.cpp
-    )
-    target_include_directories(test_pour PRIVATE include test)
-
-    # Where the lip goes, from where the vessel sits in the gripper. Eigen only.
-    ament_add_gtest(test_lip_path
-        test/test_lip_path.cpp
-        src/pour/lip_path.cpp
-    )
-    target_include_directories(test_lip_path PRIVATE include ${EIGEN3_INCLUDE_DIRS})
-
-    # Not a test: prints both laws' results on pour_sim.hpp's vessels, which is
-    # where the comparison quoted in controllers.yaml comes from. Built with the
-    # tests, left in the build tree, never installed.
-    add_executable(pour_ab
-        test/pour_ab.cpp
-        src/pour/container_gate.cpp
-        src/pour/flow_model.cpp
-        src/pour/guards.cpp
-        src/pour/material_profile.cpp
-        src/pour/pour_planner.cpp
-        src/pour/pour_types.cpp
-        src/pour/scale_filter.cpp
-        src/pour/shaping_law.cpp
-    )
-    target_include_directories(pour_ab PRIVATE include test)
 endif()
 
 # Everything the installed headers include, so a package that includes them

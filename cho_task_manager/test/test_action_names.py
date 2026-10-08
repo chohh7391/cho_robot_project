@@ -49,11 +49,6 @@ def test_a_controller_serves_each_kind_under_its_own_node(kind):
         f'/joint_space_qp_controller/{kind}')
 
 
-def test_the_pour_action_keeps_its_own_name():
-    assert controller_action_name('pouring_controller', 'pour') == (
-        '/controller_action_server/pouring_controller')
-
-
 def test_an_unknown_kind_is_refused_rather_than_guessed():
     with pytest.raises(ValueError, match='unknown action kind'):
         controller_action_name(ControllerNames.JOINT_QP, 'moveit_joint')
@@ -121,7 +116,7 @@ def test_the_bridge_is_never_mistaken_for_a_controller(robot_type, profile):
     assert not any('moveit_action_bridge' in name for name in names)
 
 
-def test_only_the_pour_action_is_named_the_old_way():
+def test_no_action_is_named_the_old_way():
     legacy = [name for name in valid_controller_action_names()
               if 'controller_action_server' in name]
-    assert legacy == ['/controller_action_server/pouring_controller']
+    assert legacy == []

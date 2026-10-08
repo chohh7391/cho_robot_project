@@ -15,7 +15,7 @@
 from enum import Enum
 from typing import List
 
-from cho_robot_config import ACTION_KINDS, CONTROL_MODES, POUR_ACTION_KIND
+from cho_robot_config import ACTION_KINDS, CONTROL_MODES
 from cho_robot_config import available_profiles as registry_profiles
 from cho_robot_config import available_robot_types as registry_robot_types
 from cho_robot_config import controller_action_name as registry_action_name
@@ -116,9 +116,6 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
         'task_space': compatibility.get('task_space', controllers['direct_task']),
         'gripper': compatibility.get('gripper', controllers['gripper']),
         'vla': compatibility.get('vla', controllers['vla']),
-        # Present only on a robot that has one (FR5). None elsewhere, which is
-        # how every other optional role here reads.
-        'pour': compatibility.get('pour', controllers.get('pour')),
     }
 
 
@@ -156,7 +153,7 @@ def controller_name_value(controller):
 # interfaces. 'gripper' is deliberately absent: it claims the finger interfaces,
 # so it must stay active across an arm-controller switch.
 _EXCLUSIVE_CONTROLLER_ROLES = ('hold', 'direct_joint', 'direct_task',
-                               'moveit_trajectory', 'vla', 'pour')
+                               'moveit_trajectory', 'vla')
 
 
 def _serving_node(action_name):
@@ -240,7 +237,7 @@ def exclusive_arm_controllers(robot_config) -> List[str]:
         if value and value not in names:
             names.append(value)
 
-    for role in ('joint_space', 'task_space', 'vla', 'pour'):
+    for role in ('joint_space', 'task_space', 'vla'):
         add(robot_config.get(role))
     for name in _arm_controllers_of(_registry_entry(robot_config)):
         add(name)
@@ -316,9 +313,8 @@ def controller_action_name(controller, kind):
     (cho_interfaces/CONTRACT.md), so this is ``/<controller>/<kind>``:
     ``controller_action_name('joint_space_qp_controller', 'joint_space')`` is
     ``/joint_space_qp_controller/joint_space``. *kind* is one of
-    ``joint_space``, ``task_space``, ``gripper``, ``vla``,
-    ``follow_joint_trajectory``, or ``pour`` -- the FR5 pour action, which the
-    contract leaves at its own ``/controller_action_server/<controller>``.
+    ``joint_space``, ``task_space``, ``gripper``, ``vla`` or
+    ``follow_joint_trajectory``.
 
     *controller* may be a :class:`ControllerNames` member, a registry role's
     value, or the MoveIt bridge's node name (``moveit_bridge_node()``), which
@@ -356,10 +352,10 @@ def _command_controller_names() -> List[str]:
 
     for registry in _registry_entries():
         view = load_robot_config(registry['robot_type'], registry.get('profile', 'single'))
-        for role in ('joint_space', 'task_space', 'gripper', 'vla', 'pour'):
+        for role in ('joint_space', 'task_space', 'gripper', 'vla'):
             add(view.get(role))
         controllers = registry.get('controllers') or {}
-        for role in ('hold', 'direct_joint', 'direct_task', 'gripper', 'vla', 'pour'):
+        for role in ('hold', 'direct_joint', 'direct_task', 'gripper', 'vla'):
             add(controllers.get(role))
         for hold in (controllers.get('hold_by_control_mode') or {}).values():
             for name in (hold if isinstance(hold, list) else [hold]):
@@ -415,22 +411,12 @@ def _trajectory_controller_names() -> List[str]:
 
     Read from the registry rather than from the compatibility view, which does
     not carry this role: the view exposes the roles a task tree commands
-    directly (joint_space, task_space, gripper, vla, pour), and the trajectory
+    directly (joint_space, task_space, gripper, vla), and the trajectory
     controller is normally driven by MoveIt or by an external executor instead.
     """
     names: List[str] = []
     for registry in _registry_entries():
         controller = (registry.get('controllers') or {}).get('moveit_trajectory')
-        if controller and controller not in names:
-            names.append(controller)
-    return names
-
-
-def _pour_controller_names() -> List[str]:
-    """Every robot's pour role, the one controller still named the old way."""
-    names: List[str] = []
-    for registry in _registry_entries():
-        controller = (registry.get('controllers') or {}).get('pour')
         if controller and controller not in names:
             names.append(controller)
     return names
@@ -443,8 +429,7 @@ def valid_controller_action_names() -> List[str]:
     :func:`controller_action_name`. Includes each trajectory controller's own
     FollowJointTrajectory endpoint, so a behaviour that replays a recorded
     trajectory goes through the same name check as every other action
-    behaviour instead of around it, and the pour role's legacy name. Nothing
-    comes from :class:`ControllerNames`: a controller the registry does not
+    behaviour instead of around it. Nothing comes from :class:`ControllerNames`: a controller the registry does not
     know is not one a tree can address.
     """
     names: List[str] = []
@@ -458,8 +443,6 @@ def valid_controller_action_names() -> List[str]:
             add(controller_action_name(controller, kind))
     for controller in _trajectory_controller_names():
         add(controller_action_name(controller, 'follow_joint_trajectory'))
-    for controller in _pour_controller_names():
-        add(controller_action_name(controller, POUR_ACTION_KIND))
     for action_name in _preference_action_names():
         add(action_name)
     return names

@@ -35,8 +35,6 @@ start unless its resolved names are exactly the ones its registry profile
 expects. Running a robot under a namespace therefore needs the registry entry
 (and the operator tools' bundled copy of it) to name it; nothing does today.
 
-The FR5 pour action (`Pour`) is application-specific and keeps its own name.
-
 ## Goals
 
 - **JointSpace**: `target_joints.position` has one entry per joint the

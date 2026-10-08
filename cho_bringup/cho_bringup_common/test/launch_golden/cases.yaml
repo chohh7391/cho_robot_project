@@ -129,7 +129,6 @@ cases:
       default: []
       ik_ag95: [controller_name:=task_space_ik_controller, gripper:=ag95]
       load_gripper: [load_gripper:=true]
-      pouring: [controller_name:=pouring_controller]
       gripper_contradiction: [gripper:=ag95, load_gripper:=false]
     bringup_mujoco_moveit.launch.py:
       default: []

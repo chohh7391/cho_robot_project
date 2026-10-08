@@ -44,9 +44,7 @@ set(MSG_FILES
   "msg/GripperState.msg"
   "msg/ObjectVisibility.msg"
   "msg/ObjectVisibilityArray.msg"
-  "msg/PourStream.msg"
   "msg/PoseLog.msg"
-  "msg/ScaleReading.msg"
   "msg/VlaTelemetry.msg"
 )
 
@@ -55,7 +53,6 @@ set(ACTION_FILES
   action/JointSpace.action
   action/TaskSpace.action
   action/Gripper.action
-  action/Pour.action
   action/VisionLanguageAction.action
 )
 

@@ -39,12 +39,6 @@ CONTROL_MODES = ('position', 'velocity', 'torque')
 # name check) to say so; an arm prefix is just part of the controller name.
 ACTION_KINDS = ('joint_space', 'task_space', 'gripper', 'vla', 'follow_joint_trajectory')
 
-# The FR5 pour action is application-specific and keeps the name it had before
-# the contract, `/controller_action_server/<controller>`. It is a kind here so
-# the exception lives in one place instead of at every call site.
-POUR_ACTION_KIND = 'pour'
-_POUR_ACTION_NAMESPACE = '/controller_action_server'
-
 # actions.preferences key -> the action kind every entry of that list must name.
 PREFERENCE_ACTION_KINDS = {
     'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'vla': 'vla',
@@ -55,20 +49,17 @@ def controller_action_name(controller, kind):
     """The absolute name of action *kind* served by node *controller*.
 
     *controller* is a controller name (or the MoveIt bridge's node name, see
-    :func:`moveit_bridge_node`); *kind* is one of :data:`ACTION_KINDS` or
-    :data:`POUR_ACTION_KIND`. This is the one place the naming rule is written
+    :func:`moveit_bridge_node`); *kind* is one of :data:`ACTION_KINDS`. This is
+    the one place the naming rule is written
     down: every client builds its action names through it, never from a string
     of its own.
     """
     node = str(controller).strip('/')
     if not node:
         raise ValueError('controller name must be non-empty')
-    if kind == POUR_ACTION_KIND:
-        return f'{_POUR_ACTION_NAMESPACE}/{node}'
     if kind not in ACTION_KINDS:
         raise ValueError(
-            f"unknown action kind '{kind}'; expected one of "
-            f'{list(ACTION_KINDS) + [POUR_ACTION_KIND]}')
+            f"unknown action kind '{kind}'; expected one of {list(ACTION_KINDS)}")
     return f'/{node}/{kind}'
 
 
