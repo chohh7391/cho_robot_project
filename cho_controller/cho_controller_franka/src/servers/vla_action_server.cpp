@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -28,12 +28,67 @@ namespace cho_controller {
 namespace franka {
 
 namespace {
-// A zero stamp means the bridge did not stamp the chunk; fall back to arrival.
+// A zero stamp means the bridge did not stamp the chunk.
 bool stamp_is_set(const builtin_interfaces::msg::Time & stamp)
 {
     return stamp.sec != 0 || stamp.nanosec != 0u;
 }
+
+// Session::end_goal()'s host code for end_goal_on_deactivation().
+constexpr std::uint8_t kHostDeactivated = 1;
+
+GoalPhase phase_of(const cho_vla_core::Terminal terminal)
+{
+    switch (terminal) {
+        case cho_vla_core::Terminal::kSucceeded: return GoalPhase::kFinishSucceeded;
+        case cho_vla_core::Terminal::kCanceled: return GoalPhase::kFinishCanceled;
+        case cho_vla_core::Terminal::kAborted: break;
+    }
+    return GoalPhase::kFinishAborted;
+}
+
+// The result message of a goal the session ended. String literals: the control
+// thread passes them on.
+const char * end_reason_text(const cho_vla_core::EndReason reason)
+{
+    switch (reason) {
+        case cho_vla_core::EndReason::kCanceled: return cho_controller_base::kReasonCanceled;
+        case cho_vla_core::EndReason::kSucceeded: return "";
+        case cho_vla_core::EndReason::kGoalTimeout: return "the goal ran past goal_timeout_sec";
+        case cho_vla_core::EndReason::kStreamDead:
+            return "chunk stream went quiet past hold_timeout_sec; the policy or its bridge stopped";
+        case cho_vla_core::EndReason::kHost: break;
+    }
+    // end_goal_on_deactivation(), the only end of this host's own, never
+    // reaches step().
+    return cho_controller_base::kReasonDeactivated;
+}
 }  // namespace
+
+// What the controller commands now, for the session's limiter seeds: on the
+// control thread, inside step(), so nothing here allocates.
+class VLAActionServer::Seeds final : public cho_vla_core::HostCommand
+{
+public:
+    Seeds(const VLAActionServer & server, const State & state) : server_(server), state_(state) {}
+
+    void commanded(const Seed kind, cho_vla_core::Reference & seed) override
+    {
+        if (kind == Seed::kSwitch) {
+            server_.commanded_now(state_, seed);
+            return;
+        }
+        // A goal's first followed reference: what the controller holds, *_des
+        // (the hold latched from it, or the idle target before the first held
+        // cycle).
+        seed.pose = state_.H_ee_des;
+        seed.joints = state_.q_arm_des;
+    }
+
+private:
+    const VLAActionServer & server_;
+    const State & state_;
+};
 
 void VLAActionServer::set_joint_window(const Vector7d & lower, const Vector7d & upper)
 {
@@ -53,20 +108,23 @@ void VLAActionServer::init()
 {
     BaseActionServer::init();
 
+    cho_vla_core::SessionParams params;
+
     // Guarded declares: init() reruns on controller re-configure.
     // 0 = off. A VLA rollout has no known length, so a goal budget cannot tell a
     // long task from a dead policy; the stream watchdog ends the latter. > 0
     // aborts any goal that runs longer.
-    goal_timeout_sec_ = declare_or_get_double("goal_timeout_sec", 0.0);
+    params.goal_timeout = declare_or_get_double("goal_timeout_sec", 0.0);
     // 1.0 = no input low-pass: chained across chunks it trails the policy by
     // ~4 waypoints. See cho_vla_core::apply_ema.
-    ema_factor_ = declare_or_get_double("chunk_ema_factor", 1.0);
+    double ema_factor = declare_or_get_double("chunk_ema_factor", 1.0);
     // Least quiet time after the last accepted chunk before the stream holds:
     // three 15 Hz inference periods, so a normal gap is not a fault. A buffered
     // horizon that outlasts it moves the hold to the horizon's end, at most
     // stream_horizon_credit_sec after that chunk (StreamWatchdog::update()).
-    stream_timeout_sec_ = declare_or_get_double("stream_timeout_sec", 0.2);
-    hold_timeout_sec_ = declare_or_get_double("hold_timeout_sec", 5.0);
+    // A goal's own stream_timeout replaces it (Session::begin_goal()).
+    params.watchdog.stream_timeout = declare_or_get_double("stream_timeout_sec", 0.2);
+    params.watchdog.hold_timeout = declare_or_get_double("hold_timeout_sec", 5.0);
     // [s], > 0: the longest a quiet stream's buffered horizon keeps it out of
     // hold, from the last accepted chunk -- the most open-loop playback a dead
     // policy's last chunk gets.
@@ -78,9 +136,10 @@ void VLAActionServer::init()
             horizon_credit, kDefaultHorizonCredit);
         horizon_credit = kDefaultHorizonCredit;
     }
+    params.watchdog.max_horizon_credit = horizon_credit;
     telemetry_period_ = declare_or_get_double("telemetry_period_sec", 0.1);
 
-    cho_vla_core::ReferenceLimiter::Params limiter;
+    cho_vla_core::ReferenceLimiter::Params & limiter = params.limiter;
     limiter.max_linear_velocity = declare_or_get_double("max_task_lin_vel", 0.25);
     limiter.max_angular_velocity = declare_or_get_double("max_task_ang_vel", 1.5);
     limiter.max_linear_acceleration = declare_or_get_double("max_task_lin_acc", 1.0);
@@ -108,9 +167,8 @@ void VLAActionServer::init()
         limiter.joint_upper = joint_window_upper_;
         limiter.clamp_joint_window = true;
     }
-    limiter_.set_params(limiter);
 
-    cho_vla_core::ActionBuffer::Params buffer;
+    cho_vla_core::ActionBuffer::Params & buffer = params.buffer;
     // 1.0 = latest-chunk-wins. Flow-matching policies are multimodal, so
     // averaging two chunks lands between modes where neither is valid; weighted
     // aggregation is for ACT-style checkpoints. See cho_vla_core/DESIGN.md.
@@ -132,31 +190,33 @@ void VLAActionServer::init()
             "chunk_interpolation '%s' is not 'spline', 'pchip' or 'linear'; using 'spline'.",
             interpolation.c_str());
     }
-    buffer_.set_params(buffer);
 
-    cho_vla_core::StreamWatchdog::Params watchdog;
-    watchdog.stream_timeout = stream_timeout_sec_;
-    watchdog.max_horizon_credit = horizon_credit;
-    watchdog.hold_timeout = hold_timeout_sec_;
     // See StreamWatchdog::Params::resume_on_chunk: with this off, one gap longer
     // than stream_timeout_sec ends the rollout even when chunks resume
     // immediately, because hold only leaves via hold_timeout -> abort.
     if (!node_->has_parameter("resume_on_stream_recovery")) {
         node_->declare_parameter<bool>("resume_on_stream_recovery", true);
     }
-    watchdog.resume_on_chunk =
+    params.watchdog.resume_on_chunk =
         node_->get_parameter("resume_on_stream_recovery").as_bool();
-    watchdog_.set_params(watchdog);
 
+    // "arrival" reproduces the pre-v2 behaviour: playback restarts at the instant
+    // a chunk lands. "observation" uses ActionChunk.header.stamp, which only
+    // works if the bridge echoes the controller's own clock (see the message
+    // doc). Default is arrival, because an unsynchronised bridge clock would
+    // otherwise place every waypoint in the wrong epoch; the observation window
+    // does not change that: a stamp from another clock is refused by it or,
+    // inside it, anchors the chunk at the wrong instant (cho_vla_core DESIGN.md,
+    // Time alignment).
     if (!node_->has_parameter("chunk_time_source")) {
         node_->declare_parameter<std::string>("chunk_time_source", "arrival");
     }
-    chunk_time_source_ = node_->get_parameter("chunk_time_source").as_string();
-    if (chunk_time_source_ != "arrival" && chunk_time_source_ != "observation") {
+    const std::string time_source = node_->get_parameter("chunk_time_source").as_string();
+    if (!cho_vla_core::parse_time_source(time_source, params.time_source)) {
         RCLCPP_ERROR(node_->get_logger(),
             "chunk_time_source '%s' is neither 'arrival' nor 'observation'; using 'arrival'.",
-            chunk_time_source_.c_str());
-        chunk_time_source_ = "arrival";
+            time_source.c_str());
+        params.time_source = cho_vla_core::TimeSource::kArrival;
     }
 
     if (!node_->has_parameter("robot_type")) {
@@ -168,6 +228,7 @@ void VLAActionServer::init()
     // a wrong window is worse than none, so they are opt-in per deployment.
     // These are the outermost gate on untrusted policy output -- the reference
     // limiter bounds how FAST a target moves, these bound WHERE it may be.
+    cho_vla_core::ValidationLimits & limits = params.limits;
     const auto declare_array = [this](const std::string & name) {
         if (!node_->has_parameter(name)) {
             node_->declare_parameter<std::vector<double>>(name, std::vector<double>{});
@@ -179,9 +240,9 @@ void VLAActionServer::init()
     if (joint_lower.size() == cho_vla_core::kJoints &&
         joint_upper.size() == cho_vla_core::kJoints)
     {
-        limits_.joint_lower = Eigen::Map<const cho_vla_core::Vector7>(joint_lower.data());
-        limits_.joint_upper = Eigen::Map<const cho_vla_core::Vector7>(joint_upper.data());
-        limits_.check_joint_window = true;
+        limits.joint_lower = Eigen::Map<const cho_vla_core::Vector7>(joint_lower.data());
+        limits.joint_upper = Eigen::Map<const cho_vla_core::Vector7>(joint_upper.data());
+        limits.check_joint_window = true;
     } else if (!joint_lower.empty() || !joint_upper.empty()) {
         RCLCPP_ERROR(node_->get_logger(),
             "chunk_joint_lower/upper need %zu values each or none at all; joint-window "
@@ -190,40 +251,58 @@ void VLAActionServer::init()
     const auto workspace_min = declare_array("chunk_workspace_min");
     const auto workspace_max = declare_array("chunk_workspace_max");
     if (workspace_min.size() == 3 && workspace_max.size() == 3) {
-        limits_.workspace_min = Eigen::Map<const Eigen::Vector3d>(workspace_min.data());
-        limits_.workspace_max = Eigen::Map<const Eigen::Vector3d>(workspace_max.data());
-        limits_.check_workspace = true;
+        limits.workspace_min = Eigen::Map<const Eigen::Vector3d>(workspace_min.data());
+        limits.workspace_max = Eigen::Map<const Eigen::Vector3d>(workspace_max.data());
+        limits.check_workspace = true;
     } else if (!workspace_min.empty() || !workspace_max.empty()) {
         RCLCPP_ERROR(node_->get_logger(),
             "chunk_workspace_min/max need 3 values each or none at all; workspace "
             "admission stays OFF.");
     }
-    limits_.max_control_dt = declare_or_get_double("chunk_max_control_dt", 1.0);
+    limits.max_control_dt = declare_or_get_double("chunk_max_control_dt", 1.0);
     // The observation window under chunk_time_source 'observation' [s]: a stamp
     // more than chunk_max_future_skew after its arrival, or more than
     // chunk_max_observation_age before it, is refused (cho_vla_core::validate()).
     constexpr double kDefaultObservationAge = 1.0;
     constexpr double kDefaultFutureSkew = 0.05;
-    limits_.max_observation_age =
+    limits.max_observation_age =
         declare_or_get_double("chunk_max_observation_age", kDefaultObservationAge);
-    if (!(std::isfinite(limits_.max_observation_age) && limits_.max_observation_age > 0.0)) {
+    if (!(std::isfinite(limits.max_observation_age) && limits.max_observation_age > 0.0)) {
         RCLCPP_WARN(node_->get_logger(),
             "chunk_max_observation_age %g is not a finite value > 0; using the default %g",
-            limits_.max_observation_age, kDefaultObservationAge);
-        limits_.max_observation_age = kDefaultObservationAge;
+            limits.max_observation_age, kDefaultObservationAge);
+        limits.max_observation_age = kDefaultObservationAge;
     }
-    limits_.max_future_skew = declare_or_get_double("chunk_max_future_skew", kDefaultFutureSkew);
-    if (!(std::isfinite(limits_.max_future_skew) && limits_.max_future_skew >= 0.0)) {
+    limits.max_future_skew = declare_or_get_double("chunk_max_future_skew", kDefaultFutureSkew);
+    if (!(std::isfinite(limits.max_future_skew) && limits.max_future_skew >= 0.0)) {
         RCLCPP_WARN(node_->get_logger(),
             "chunk_max_future_skew %g is not a finite value >= 0; using the default %g",
-            limits_.max_future_skew, kDefaultFutureSkew);
-        limits_.max_future_skew = kDefaultFutureSkew;
+            limits.max_future_skew, kDefaultFutureSkew);
+        limits.max_future_skew = kDefaultFutureSkew;
     }
 
-    if (!(ema_factor_ > 0.0 && ema_factor_ <= 1.0)) {
+    if (!(ema_factor > 0.0 && ema_factor <= 1.0)) {
         RCLCPP_WARN(node_->get_logger(),
-            "chunk_ema_factor %.3f out of (0, 1]; falling back to 1.0 (off)", ema_factor_);
-        ema_factor_ = 1.0;
+            "chunk_ema_factor %.3f out of (0, 1]; falling back to 1.0 (off)", ema_factor);
+        ema_factor = 1.0;
+    }
+    params.ema_factor = ema_factor;
+
+    // ActionChunk.seq ordering (C18), both action spaces, the gripper, and the
+    // default anchor history: Franka's every deployment.
+    params.order_by_seq = true;
+    params.accept_joint = true;
+    params.accept_task = true;
+    params.gripper = true;
+
+    // Every value refused above already fell back to its default, so this
+    // refuses nothing today; if it ever does, configure fails.
+    if (const char * field = cho_vla_core::validate(params)) {
+        RCLCPP_ERROR(node_->get_logger(),
+            "[%s] VLA session parameters refused at %s.", action_name_.c_str(), field);
+        configured_ = false;
+    } else {
+        configured_ = session_.configure(params);
     }
 
     // Both names stay at their historical globals by default: the behaviour-tree
@@ -294,7 +373,7 @@ void VLAActionServer::init()
                 RCLCPP_WARN(self->node_->get_logger(),
                     "[%s] Gripper goal rejected (server still settling from a previous "
                     "result); will retry on the next crossing.", self->action_name_.c_str());
-                self->gripper_rejected_.store(true);
+                self->session_.gripper_refused();
             }
         };
     if (!gripper_client_->wait_for_action_server(std::chrono::seconds(1))) {
@@ -346,34 +425,38 @@ rclcpp_action::GoalResponse VLAActionServer::handle_goal(
 rclcpp_action::CancelResponse VLAActionServer::handle_cancel(
     const std::shared_ptr<VLAGoalHandle> /*goal_handle*/)
 {
-    // Only flag it; RT observes the atomic and transitions the phase, and the
-    // finisher timer performs the canceled() call.
-    cancel_requested_.store(true);
+    // Only requested: the session ends the goal on the control loop's next
+    // step(), and the finisher timer performs the canceled() call.
+    session_.request_cancel(goal_);
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void VLAActionServer::handle_accepted(const std::shared_ptr<VLAGoalHandle> goal_handle)
 {
-    // Stage everything BEFORE activate_goal(): RT resets its own per-goal state
-    // when it observes the epoch change.
-    const double requested_stream_timeout = goal_handle->get_goal()->stream_timeout;
-    cho_vla_core::StreamWatchdog::Params watchdog = watchdog_.params();
-    watchdog.stream_timeout =
-        (std::isfinite(requested_stream_timeout) && requested_stream_timeout > 0.0)
-            ? requested_stream_timeout
-            : stream_timeout_sec_;
-    watchdog.hold_timeout = hold_timeout_sec_;
-    watchdog_.set_params(watchdog);
-
-    buffer_.reset();
-    timeline_buffer_.writeFromNonRT(cho_vla_core::Timeline{});
-    telemetry_ = cho_vla_core::Telemetry{};
-    accepted_count_.store(0);
-    pending_gripper_.store(0);
-    gripper_rejected_.store(false);
-    task_success_flag_.store(false);
-
+    // The session goal is opened BEFORE activate_goal(), whose phase store
+    // publishes the action goal: a control loop that sees the action goal sees
+    // this one too and starts both on the same cycle. begin_goal() clears the
+    // timeline, the telemetry, the seq order, the gripper and success requests,
+    // and takes the goal's stream_timeout when it is finite and > 0.
+    const cho_vla_core::GoalId goal = session_.begin_goal(goal_handle->get_goal()->stream_timeout);
+    if (goal == 0) {
+        // A session goal still open with no action goal: one is ended on every
+        // deactivation and with every action goal, so this does not happen.
+        RCLCPP_ERROR(node_->get_logger(),
+            "[%s] Goal aborted: the VLA session still has a goal open.", action_name_.c_str());
+        auto result = std::make_shared<VLAAction::Result>();
+        result->is_completed = false;
+        result->message = "the VLA session still had a goal open";
+        goal_handle->abort(result);
+        return;
+    }
+    goal_ = goal;
     activate_goal(goal_handle);
+}
+
+void VLAActionServer::end_goal_on_deactivation()
+{
+    session_.end_goal(cho_vla_core::Terminal::kAborted, kHostDeactivated);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,8 +464,8 @@ void VLAActionServer::handle_accepted(const std::shared_ptr<VLAGoalHandle> goal_
 // ---------------------------------------------------------------------------
 
 bool VLAActionServer::build_chunk(
-    const cho_interfaces::msg::ActionChunk & msg, const double arrival,
-    cho_vla_core::Chunk & chunk, std::string & reason)
+    const cho_interfaces::msg::ActionChunk & msg,
+    cho_vla_core::Chunk & chunk, std::string & reason) const
 {
     if (!cho_vla_core::parse_action_space(msg.action_space, chunk.space)) {
         reason = "action_space '" + msg.action_space + "'";
@@ -423,20 +506,12 @@ bool VLAActionServer::build_chunk(
             "relative_frame to \"ee\" or \"base\" explicitly.");
     }
 
-    // Observation time. With chunk_time_source 'arrival' the chunk is placed at
-    // the instant it landed, which is the pre-v2 behaviour; the stamp is ignored
-    // entirely, because a bridge that has not been taught to echo the controller
-    // clock is publishing a different time domain.
-    const bool use_observation =
-        chunk_time_source_ == "observation" && stamp_is_set(msg.header.stamp);
-    chunk.t_obs = use_observation
+    // The stamp, on the controller's clock if the bridge echoes it. Read only
+    // under chunk_time_source 'observation'; a chunk without one is played from
+    // its arrival either way (Session::ingest()).
+    chunk.t_obs = stamp_is_set(msg.header.stamp)
         ? rclcpp::Time(msg.header.stamp).seconds()
-        : arrival;
-    // Only a stamp the chunk brought is judged against its arrival (validate()'s
-    // observation window); an arrival-timed chunk has nothing to compare.
-    if (use_observation) {
-        chunk.t_arrival = arrival;
-    }
+        : std::numeric_limits<double>::quiet_NaN();
 
     chunk.seq = msg.seq;
     chunk.chunk_size = msg.chunk_size;
@@ -476,79 +551,42 @@ void VLAActionServer::process_vla_action(
 
     cho_vla_core::Chunk chunk;
     std::string reason;
-    if (!build_chunk(*msg, arrival, chunk, reason)) {
-        ++telemetry_.chunks_rejected;
-        telemetry_.last_reject = cho_vla_core::Reject::kUnparseableField;
+    if (!build_chunk(*msg, chunk, reason)) {
+        session_.refuse(cho_vla_core::Reject::kUnparseableField);
         RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
             "VLA chunk rejected: unparseable %s.", reason.c_str());
         return;
     }
 
-    // Anchor at the OBSERVATION time. The policy measured its offsets from
-    // s(t_obs); adding them to s(t_arrival) overshoots by the motion that
-    // happened during inference, every chunk, in the same direction.
-    cho_vla_core::Anchor anchor;
-    bool exact = false;
-    if (!history_.at(chunk.t_obs, anchor, &exact)) {
-        // The control loop has not published a reference yet, so there is nothing
-        // to anchor to. Absolute chunks do not need one, relative chunks do.
-        if (chunk.relative != cho_vla_core::RelativeMode::kAbsolute) {
-            ++telemetry_.chunks_rejected;
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                "VLA chunk rejected: no reference history to anchor a relative chunk.");
-            return;
-        }
+    // Anchored, validated (the seq order included), smoothed and spliced by the
+    // session; the logs are this host's.
+    const cho_vla_core::IngestReport report = session_.ingest(std::move(chunk), arrival);
+    switch (report.outcome) {
+        case cho_vla_core::IngestOutcome::kRejected:
+            if (report.no_anchor) {
+                // The control loop has not recorded a reference yet, so there is
+                // nothing to anchor a relative chunk to.
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                    "VLA chunk rejected: no reference history to anchor a relative chunk.");
+            } else {
+                RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                    "VLA chunk rejected: %s (chunk_size=%d, action_space=%s).",
+                    cho_vla_core::reject_name(report.verdict), msg->chunk_size,
+                    msg->action_space.c_str());
+            }
+            break;
+        case cho_vla_core::IngestOutcome::kDropped:
+            // Nothing in it is still ahead, so it is not an accepted chunk and does
+            // not tell the watchdog the stream is alive.
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                "VLA chunk dropped: every waypoint was already in the past on arrival "
+                "(latency %.3f s vs horizon %.3f s): inference is slower than the chunk "
+                "it plans.", report.latency, report.horizon);
+            break;
+        case cho_vla_core::IngestOutcome::kNoGoal:
+        case cho_vla_core::IngestOutcome::kAccepted:
+            break;
     }
-
-    std::vector<cho_vla_core::Waypoint> waypoints;
-    const cho_vla_core::Reject verdict =
-        cho_vla_core::ingest(chunk, anchor, limits_, waypoints);
-    if (verdict != cho_vla_core::Reject::kNone) {
-        ++telemetry_.chunks_rejected;
-        telemetry_.last_reject = verdict;
-        RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-            "VLA chunk rejected: %s (chunk_size=%d, action_space=%s).",
-            cho_vla_core::reject_name(verdict), chunk.chunk_size,
-            msg->action_space.c_str());
-        return;
-    }
-
-    // Cross-chunk EMA is only valid when consecutive chunks share a frame.
-    // Relative chunks are each expressed against their own observation-time
-    // anchor, so blending offsets from different anchors distorts the command.
-    // Chained from where the timeline already is just before this chunk starts
-    // (see cho_vla_core::ema_seed). Relative chunks are each expressed
-    // against their own anchor, so blending one into another is meaningless.
-    cho_vla_core::Waypoint seed;
-    const bool chainable =
-        chunk.relative == cho_vla_core::RelativeMode::kAbsolute &&
-        cho_vla_core::ema_seed(buffer_.timeline(), waypoints, chunk.space, chunk.control_dt, seed);
-    cho_vla_core::apply_ema(waypoints, ema_factor_, chainable ? &seed : nullptr);
-
-    const cho_vla_core::ActionBuffer::SpliceResult spliced =
-        buffer_.splice(waypoints, chunk.space, arrival, chunk.control_dt);
-    timeline_buffer_.writeFromNonRT(buffer_.timeline());
-
-    telemetry_.waypoints_dropped_past += spliced.dropped_past;
-    telemetry_.queue_depth = buffer_.size();
-    if (spliced.admitted == 0) {
-        // Nothing in it is still ahead, so it is not an accepted chunk and does
-        // not tell the watchdog the stream is alive: a bridge emitting only such
-        // chunks would otherwise keep it fed while the arm stands still.
-        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
-            "VLA chunk dropped: every waypoint was already in the past on arrival "
-            "(latency %.3f s vs horizon %.3f s): inference is slower than the chunk "
-            "it plans.", arrival - chunk.t_obs, chunk.control_dt * chunk.chunk_size);
-        return;
-    }
-
-    ++telemetry_.chunks_accepted;
-    telemetry_.last_reject = cho_vla_core::Reject::kNone;
-    telemetry_.last_chunk_stamp = chunk.t_obs;
-    telemetry_.last_chunk_latency = arrival - chunk.t_obs;
-    // Of the last accepted chunk, as the fields above: a refused one says nothing.
-    anchor_inexact_.store(!exact);
-    accepted_count_.fetch_add(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -574,11 +612,15 @@ void VLAActionServer::non_rt_tick()
 
 void VLAActionServer::non_rt_tick_impl()
 {
-    const int pending = pending_gripper_.exchange(0);
-    if (pending == 1) {
-        call_gripper(true);
-    } else if (pending == 2) {
-        call_gripper(false);
+    switch (session_.take_gripper()) {
+        case cho_vla_core::GripperCommand::kGrasp:
+            call_gripper(true);
+            break;
+        case cho_vla_core::GripperCommand::kOpen:
+            call_gripper(false);
+            break;
+        default:
+            break;
     }
 
     const rclcpp::Time now = node_->now();
@@ -595,33 +637,30 @@ void VLAActionServer::non_rt_tick_impl()
     }
     last_telemetry_ = now;
 
+    // Stamps are ROS time already: the controller_manager's update() time and
+    // node_->now() for arrivals.
+    const cho_vla_core::TelemetrySnapshot telemetry = session_.telemetry();
     cho_interfaces::msg::VlaTelemetry msg;
     msg.header.stamp = now;
-    msg.stream_state = cho_vla_core::stream_state_name(
-        static_cast<cho_vla_core::StreamState>(rt_stream_state_.load()));
-    msg.action_space =
-        static_cast<cho_vla_core::ActionSpace>(rt_action_space_.load()) ==
-            cho_vla_core::ActionSpace::kJoint ? "joint" : "task";
-    msg.chunks_accepted = telemetry_.chunks_accepted;
-    msg.chunks_rejected = telemetry_.chunks_rejected;
-    msg.waypoints_dropped_past = telemetry_.waypoints_dropped_past;
-    msg.last_reject = cho_vla_core::reject_name(telemetry_.last_reject);
-    msg.last_chunk_latency = telemetry_.last_chunk_latency;
-    msg.last_chunk_stamp = telemetry_.last_chunk_stamp;
-    msg.playback_stamp = rt_playback_stamp_.load();
-    msg.remaining_horizon_sec = rt_remaining_horizon_.load();
-    msg.queue_depth = static_cast<std::uint32_t>(telemetry_.queue_depth);
-    msg.anchor_inexact = anchor_inexact_.load();
+    msg.stream_state = cho_vla_core::stream_state_name(telemetry.stream_state);
+    msg.action_space = telemetry.action_space == cho_vla_core::ActionSpace::kJoint ? "joint" : "task";
+    msg.chunks_accepted = telemetry.chunks_accepted;
+    msg.chunks_rejected = telemetry.chunks_rejected;
+    msg.waypoints_dropped_past = telemetry.waypoints_dropped_past;
+    msg.last_reject = cho_vla_core::reject_name(telemetry.last_reject);
+    msg.last_chunk_latency = telemetry.last_chunk_latency;
+    msg.last_chunk_stamp = telemetry.last_chunk_stamp;
+    msg.playback_stamp = telemetry.playback_stamp;
+    msg.remaining_horizon_sec = telemetry.remaining_horizon;
+    msg.queue_depth = static_cast<std::uint32_t>(telemetry.queue_depth);
+    msg.anchor_inexact = telemetry.anchor_inexact;
     telemetry_pub_->publish(msg);
 
     if (pending_goal_handle_ && rt_active()) {
         auto feedback = std::make_shared<VLAAction::Feedback>();
-        feedback->remaining_horizon_sec =
-            static_cast<float>(rt_remaining_horizon_.load());
-        feedback->chunks_accepted =
-            static_cast<std::uint32_t>(telemetry_.chunks_accepted);
-        feedback->chunks_rejected =
-            static_cast<std::uint32_t>(telemetry_.chunks_rejected);
+        feedback->remaining_horizon_sec = static_cast<float>(telemetry.remaining_horizon);
+        feedback->chunks_accepted = static_cast<std::uint32_t>(telemetry.chunks_accepted);
+        feedback->chunks_rejected = static_cast<std::uint32_t>(telemetry.chunks_rejected);
         pending_goal_handle_->publish_feedback(feedback);
     }
 }
@@ -739,102 +778,57 @@ void VLAActionServer::on_goal_finished(GoalPhase terminal)
 bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
     const double now = current_time.seconds();
-    // The previous call's time: when what state's *_ref and *_des fields and
-    // twist_des_ hold now was commanded. compute() runs on every cycle.
-    const double previous_now = previous_compute_time_;
-    previous_compute_time_ = now;
 
-    // Feed the anchor ring every cycle, goal or no goal: a chunk arriving in the
-    // first cycles of a goal still needs history behind it. That holds only
+    // Feed the anchor history every cycle, goal or no goal: a chunk arriving in
+    // the first cycles of a goal still needs history behind it. That holds only
     // because VLAController calls compute() on every cycle, not just while a goal
     // runs. state.*_ref holds the previous cycle's commanded reference here (the
     // controller writes it after this call), which is one cycle stale and far
     // finer than any anchor needs.
-    history_.push(now, state.H_ee_ref, state.q_arm_ref);
+    session_.record(now, state.H_ee_ref, state.q_arm_ref);
 
+    // Stepped only under an active action goal, so the session goal opened with
+    // it starts on this cycle (class comment).
     if (!rt_active()) {
         return false;
     }
 
-    if (rt_new_goal_epoch()) {
-        // New goal: reset per-goal RT state here, on the RT thread, so these
-        // non-atomic members stay RT-thread-only.
+    // In order (Session::step()): a cancel, a success request, goal_timeout_sec,
+    // the watchdog; then, in kRunning only, the sampled reference, limited, the
+    // limiter seeded from `seeds` where it needs one.
+    Seeds seeds(*this, state);
+    const cho_vla_core::Step step = session_.step(now, seeds);
+    if (step.goal_started) {
         hold_latched_ = false;
-        limiter_seeded_ = false;
-        gripper_dispatch_.reset();
-        watchdog_.reset(now);
-        rt_seen_accepted_ = 0;
-        start_time_ = current_time;
     }
 
-    // Terminal conditions BEFORE any target processing, so cancel/success/timeout
-    // also work while still waiting for the first chunk.
-    if (cancel_requested_.load()) {
-        finish_goal_rt(GoalPhase::kFinishCanceled, state, cho_controller_base::kReasonCanceled);
-        return false;
-    }
-    if (task_success_flag_.exchange(false)) {
-        // The controller runs this cycle on it: the arm where it is, at rest.
-        state.H_ee_des = state.H_ee;
-        state.q_arm_des = state.q_arm;
-        state.v_arm_des.setZero();
-        twist_des_.setZero();
-        finish_goal_rt(GoalPhase::kFinishSucceeded, state);
-        return true;
-    }
-    if (goal_timeout_sec_ > 0.0 &&
-        (current_time - start_time_).seconds() > goal_timeout_sec_)
-    {
-        finish_goal_rt(GoalPhase::kFinishAborted, state, "the goal ran past goal_timeout_sec");
-        return false;
-    }
-
-    // The watchdog lives here rather than in the subscription callback so its
-    // state machine is single-threaded; the executor only publishes a count.
-    const std::uint64_t accepted = accepted_count_.load();
-    if (accepted != rt_seen_accepted_) {
-        rt_seen_accepted_ = accepted;
-        watchdog_.note_chunk(now);
-    }
-    // The buffered horizon counts as liveness: the hold waits for the timeline's
-    // last waypoint as well as stream_timeout, up to the horizon credit (see
-    // StreamWatchdog::update()). The same timeline is sampled below.
-    const cho_vla_core::Timeline * timeline = timeline_buffer_.readFromRT();
-    const double horizon_end =
-        (timeline != nullptr && !timeline->waypoints.empty())
-            ? timeline->waypoints.back().t
-            : -std::numeric_limits<double>::infinity();
-    const cho_vla_core::StreamState stream = watchdog_.update(now, horizon_end);
-    rt_stream_state_.store(static_cast<int>(stream));
-
-    if (stream == cho_vla_core::StreamState::kAborted) {
-        finish_goal_rt(GoalPhase::kFinishAborted, state,
-            "chunk stream went quiet past hold_timeout_sec; the policy or its bridge stopped");
-        return false;
-    }
-
-    if (gripper_rejected_.exchange(false)) {
-        gripper_dispatch_.retry();
-    }
-
-    cho_vla_core::Reference reference;
-    const bool have_reference =
-        timeline != nullptr &&
-        stream != cho_vla_core::StreamState::kHold &&
-        cho_vla_core::sample_timeline(*timeline, now, reference);
-
-    if (!have_reference) {
-        // Once the limiter has run in this goal, a hold brings the reference to
-        // rest from the limiter's own state, within its acceleration bounds, and
-        // stands where it stops. Freezing the last output instead stops it in
-        // one cycle, a v/dt acceleration step in the command (100 rad/s^2 at
-        // 0.1 rad/s and 1 ms). The limiter's clock stays current through the
-        // hold, so a resume continues with apply() and no re-seed.
-        cho_vla_core::Reference stop;
-        if (limiter_seeded_) {
-            stop = limiter_.come_to_rest(now);
+    using Mode = cho_vla_core::Step::Mode;
+    switch (step.mode) {
+        case Mode::kFollow: {
+            const cho_vla_core::Reference & reference = step.reference;
+            hold_latched_ = false;
+            active_action_space_ = reference.space;
+            state.H_ee_des = reference.pose;
+            state.q_arm_des = reference.joints;
+            // The limiter's own derivative of what it emitted: the rate the
+            // reference moves at, for the control law's velocity feed-forward.
+            if (reference.space == cho_vla_core::ActionSpace::kJoint) {
+                state.v_arm_des = reference.joint_velocity;
+                twist_des_.setZero();
+            } else {
+                state.v_arm_des.setZero();
+                twist_des_ = reference.twist;
+            }
+            return true;
         }
-        if (stop.valid) {
+        case Mode::kStopping: {
+            // A hold once the limiter has run in this goal: the reference comes
+            // to rest from the limiter's own state, within its acceleration
+            // bounds, and stands where it stops. Freezing the last output
+            // instead stops it in one cycle, a v/dt acceleration step in the
+            // command (100 rad/s^2 at 0.1 rad/s and 1 ms). A resume continues
+            // from the stop with no re-seed.
+            const cho_vla_core::Reference & stop = step.reference;
             state.H_ee_des = stop.pose;
             state.q_arm_des = stop.joints;
             if (stop.space == cho_vla_core::ActionSpace::kJoint) {
@@ -847,8 +841,10 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
             hold_pose_ = stop.pose;
             hold_joints_ = stop.joints;
             hold_latched_ = true;
-        } else {
-            // No chunk has been played yet: hold a FROZEN target rather than the
+            return true;
+        }
+        case Mode::kWaiting:
+            // No reference followed yet: hold a FROZEN target rather than the
             // live *_ref fields, which in velocity and effort modes track the
             // MEASURED state, so the target would follow gravity sag instead of
             // arresting it.
@@ -856,93 +852,26 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
             apply_hold(state);
             state.v_arm_des.setZero();
             twist_des_.setZero();
-        }
-        rt_remaining_horizon_.store(0.0);
-        return true;
+            return true;
+        case Mode::kEnded:
+            if (step.reason == cho_vla_core::EndReason::kSucceeded) {
+                // The controller runs this cycle on it: the arm where it is, at rest.
+                state.H_ee_des = state.H_ee;
+                state.q_arm_des = state.q_arm;
+                state.v_arm_des.setZero();
+                twist_des_.setZero();
+                finish_goal_rt(GoalPhase::kFinishSucceeded, state);
+                return true;
+            }
+            finish_goal_rt(phase_of(step.terminal), state, end_reason_text(step.reason));
+            return false;
+        case Mode::kIdle:
+            break;
     }
-
-    hold_latched_ = false;
-    // A chunk in the other action space replaced the timeline (ActionBuffer
-    // clears it on a space change), and this is the first cycle sampling it.
-    // Compared against the space the controller ran last cycle -- also across a
-    // hold, during which active_action_space_ keeps the space being held -- and
-    // only within a goal: limiter_seeded_ is false until its first reference.
-    const bool space_switched =
-        limiter_seeded_ && reference.space != active_action_space_;
-    active_action_space_ = reference.space;
-    rt_action_space_.store(static_cast<int>(reference.space));
-
-    if (!limiter_seeded_ || space_switched) {
-        // Goal start: seed from what the controller is already commanding, so
-        // the first limited cycle is continuous. A resume out of hold is not
-        // seeded: come_to_rest() kept the limiter's clock and state current
-        // through the hold, and apply() continues from the stop's position and
-        // rate. A seed at rest there would cut a stop still in progress to zero
-        // rate in one cycle.
-        //
-        // A space switch inside the goal re-seeds too, from a different source.
-        // Unseeded, the limiter starts the new space from the value it last
-        // emitted in that representation, and while the other space ran that
-        // value was the running chunks' anchor, carried through unlimited:
-        // joint chunks carry the pose they were observed at (H_ee_des), task
-        // chunks the joints (q_arm_des). On mock hardware in position mode, a
-        // joint chunk that moved joint 1 by 0.3 rad, then a task chunk asking
-        // the arm to stay where it was, pulled it 0.15 rad back first. The
-        // same stale values sit in *_des and in a hold latched from them, so
-        // the switch seeds from what is commanded now instead, and -- the arm
-        // may be moving -- at the rate it is commanded to move: seeded at rest,
-        // the new space's reference would stop for a cycle and accelerate
-        // again, the arm falling behind meanwhile. See commanded_now().
-        cho_vla_core::Reference seed = reference;
-        if (space_switched) {
-            commanded_now(state, seed);
-            // Dated when it was commanded, the previous cycle, so this cycle
-            // advances from it at the seeded rate like any other. Seeded at
-            // `now`, the switch cycle emits the seed itself: a moving reference
-            // stands still for one cycle, a 300 rad/s^2 notch in a position
-            // command at 0.3 rad/s.
-            const bool dated = std::isfinite(previous_now) && previous_now < now;
-            limiter_.seed_with_rates(seed, dated ? previous_now : now);
-        } else {
-            seed.pose = state.H_ee_des;
-            seed.joints = state.q_arm_des;
-            limiter_.seed(seed, now);
-        }
-        limiter_seeded_ = true;
-    }
-    limiter_.apply(now, reference);
-
-    state.H_ee_des = reference.pose;
-    state.q_arm_des = reference.joints;
-    // The limiter's own derivative of what it emitted: the rate the reference
-    // moves at, for the control law's velocity feed-forward.
-    if (reference.space == cho_vla_core::ActionSpace::kJoint) {
-        state.v_arm_des = reference.joint_velocity;
-        twist_des_.setZero();
-    } else {
-        state.v_arm_des.setZero();
-        twist_des_ = reference.twist;
-    }
-
-    if (reference.has_gripper) {
-        // Edge-detect on the SAMPLED value, so the gripper fires at the
-        // waypoint's own playback time rather than at chunk arrival. The send
-        // itself is handed to non_rt_tick(): async_send_goal() must not run here.
-        const cho_vla_core::GripperCommand command =
-            gripper_dispatch_.update(reference.gripper, reference.gripper_mode);
-        if (command == cho_vla_core::GripperCommand::kGrasp) {
-            pending_gripper_.store(1);
-        } else if (command == cho_vla_core::GripperCommand::kOpen) {
-            pending_gripper_.store(2);
-        }
-    }
-
-    rt_playback_stamp_.store(now);
-    rt_remaining_horizon_.store(
-        timeline->waypoints.empty()
-            ? 0.0
-            : std::max(0.0, timeline->waypoints.back().t - now));
-    return true;
+    // An action goal with no session goal: handle_accepted() never activates
+    // one, so this does not happen. Ended rather than left to hang.
+    finish_goal_rt(GoalPhase::kFinishAborted, state, "the VLA session had no goal for the action goal");
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -953,15 +882,15 @@ void VLAActionServer::handle_success_trigger(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-    if (!rt_active()) {
-        task_success_flag_.store(false);
+    // Applied on the control loop's next step(): the arm held where it is and
+    // the goal succeeded.
+    if (!rt_active() || !session_.request_success()) {
         response->success = true;
         response->message = "No active VLA goal. Controller is ready for a new goal.";
         RCLCPP_INFO(node_->get_logger(),
             "VLA success trigger received without an active goal; controller is ready.");
         return;
     }
-    task_success_flag_.store(true);
     response->success = true;
     response->message = "Task success signal received and applied.";
     RCLCPP_INFO(node_->get_logger(), "User triggered task success via Service!");

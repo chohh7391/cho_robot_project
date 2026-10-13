@@ -306,12 +306,17 @@ A behavior-tree task runs against any of these: [tasks.md](tasks.md#run).
 [`ActionChunk.msg`](../cho_interfaces/msg/ActionChunk.msg) defines the fields (including
 `relative_frame`), the `rotation_type` conventions and the message versions; a bridge must be
 built against the current `cho_interfaces`.
-[`cho_vla_core/DESIGN.md`](../cho_controller/utils/cho_vla_core/DESIGN.md) describes the pipeline.
+[`cho_vla_core/DESIGN.md`](../cho_controller/utils/cho_vla_core/DESIGN.md) describes the pipeline
+and the `Session` both controllers use.
 
 - `max_task_ang_acc` [rad/s²] bounds the angular acceleration of the task reference; 0 turns it
   off. Default: 10 on Franka `vla_controller`, 0 on OpenArm `vla_mit_controller`.
 - `ActionChunk.control_dt` must be positive: a chunk with `control_dt <= 0` is rejected
   (`last_reject: control_dt`), never timed from the goal's `inference_frequency`.
+- `ActionChunk.seq` is ordered per goal: a chunk whose `seq` is not 0 and not above the last one
+  the goal accepted is rejected (`last_reject: stale_seq`); 0 is not checked (arrival order).
+- `last_chunk_stamp` and `playback_stamp` in `~/vla_telemetry` are ROS time on both controllers
+  (0 until set).
 - `stream_timeout_sec` (0.2 s) is the least quiet time after the last accepted chunk before the
   stream holds. A buffered horizon that outlasts it moves the hold to the horizon's end, at most
   `stream_horizon_credit_sec` (1 s, > 0) after that chunk, so a policy that re-infers every 0.5 s

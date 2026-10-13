@@ -45,7 +45,8 @@ add_library(${PROJECT_NAME} SHARED
   src/reference_history.cpp
   src/reference_limiter.cpp
   src/stream_watchdog.cpp
-  src/gripper_dispatch.cpp)
+  src/gripper_dispatch.cpp
+  src/session.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -74,7 +75,8 @@ if(BUILD_TESTING)
       test_reference_limiter
       test_stream_watchdog
       test_gripper_dispatch
-      test_reference_history)
+      test_reference_history
+      test_session)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     ament_target_dependencies(${test_name} Eigen3 pinocchio)

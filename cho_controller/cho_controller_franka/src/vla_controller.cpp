@@ -92,6 +92,9 @@ CallbackReturn VLAController::on_configure(
   // same window clamp_to_joint_limits() holds q_ref_ to. Before init().
   action_server_->set_joint_window(q_lower_limits_, q_upper_limits_);
   action_server_->init();
+  if (!action_server_->configured()) {
+    return CallbackReturn::FAILURE;
+  }
   action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
@@ -100,14 +103,15 @@ CallbackReturn VLAController::on_configure(
 CallbackReturn VLAController::on_activate(
     const rclcpp_lifecycle::State& previous_state) {
 
+  // The VLA session starts this activation clean: a chunk observed before it
+  // must not be anchored to a reference recorded in the previous one. Before
+  // the base marks the activity active, so no goal is accepted while it resets,
+  // and before the first compute().
+  if (action_server_) {
+    action_server_->reset_for_activation();
+  }
   if (FrankaBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
-  }
-  // A chunk observed before this activation must not be anchored to a
-  // reference recorded in the previous one. After the base marked the activity
-  // active, and before the first compute().
-  if (action_server_) {
-    action_server_->reset_history();
   }
   task_ik_gain_fault_ = false;
   // Position mode: prefer what the position command interface is still holding
@@ -122,6 +126,18 @@ CallbackReturn VLAController::on_activate(
   // Everything else is seeded on the first update(), where state_ is fresh.
   activation_state_latched_ = false;
   return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn VLAController::on_deactivate(const rclcpp_lifecycle::State & previous_state)
+{
+  const CallbackReturn result = FrankaBaseController::on_deactivate(previous_state);
+  // The VLA session's goal ends with the activation, so chunks arriving now are
+  // not taken; GoalPhase's finisher aborts the action goal. After the base
+  // marked the activity inactive, so no goal is accepted after it.
+  if (action_server_) {
+    action_server_->end_goal_on_deactivation();
+  }
+  return result;
 }
 
 void VLAController::latch_activation_state()

@@ -38,8 +38,8 @@ finite-math would break there and which test catches it.
 ## Threading
 
 `splice()` allocates, so it belongs on the executor. `sample_timeline()` only
-reads, so a host publishes a `Timeline` snapshot through its own
-`RealtimeBuffer` and samples it from the control loop without allocating. The
+reads, so the session publishes a `Timeline` snapshot through a
+`SnapshotChannel` and samples it from the control loop without allocating. The
 same code serves both, so a single-threaded test exercises the real RT path.
 
 `ReferenceHistory` is the one genuinely concurrent structure: the control loop
@@ -49,6 +49,72 @@ retries rather than returning a pose whose rotation and translation came from
 different cycles. `test_reference_history` runs a real writer thread against
 200k reads and asserts zero torn reads.
 
+## Session
+
+`Session` (`session.hpp`) is one controller's chunk stream end to end: ingest,
+a reference per control cycle, the goal's lifetime and the telemetry values.
+Both hosts (Franka `VLAActionServer`, OpenArm `VlaController`) use it. A host
+keeps its ROS adapter — parameters into `SessionParams`, the subscription and
+`ActionChunk` into `Chunk`, the action server, telemetry publication — and its
+control law.
+
+Each call group runs on one thread:
+
+- lifecycle: `configure()`, `activate()`, while `step()` is not running and no
+  goal is open.
+- executor: `begin_goal()`, `request_cancel()`, `request_success()`,
+  `ingest()`, `refuse()`, `telemetry()`, `poll_terminal()`, `take_gripper()`,
+  `gripper_refused()`. Both hosts call them from the node's default callback
+  group. They may allocate.
+- control: `record()`, `step()`, `invalidate_rate_state()`, `end_goal()`. No
+  allocation, lock, log or string; a goal's end is a code (`EndReason`, plus
+  `TerminalEvent::host_code` for the host's own).
+
+The groups meet in `ReferenceHistory`, a `SnapshotChannel<Timeline>` (a triple
+buffer: one atomic exchange per side, so the control loop never waits and never
+gets a torn or an older timeline than the newest written), an `SpscRing` of
+`TerminalEvent`s, and atomics. `begin_goal()` stages the goal's watchdog
+parameters and the control loop copies them when it starts the goal, so only
+that thread touches the watchdog. `ingest()` publishes the timeline before it
+counts the chunk, so the cycle that feeds the watchdog the chunk also samples
+it.
+
+The host gives `record(now, pose, joints)` every cycle before `step()` (the
+reference it commanded, for anchoring), its clock (`now`, `arrival`; the
+session reads none), `refuse(reason)` for a chunk it could not build, and a
+`HostCommand`. `step()` calls that only on a cycle that seeds the limiter:
+`kRest` at a goal's first followed reference and after
+`invalidate_rate_state()` (the pose and joints it commands), `kSwitch` when
+the sampled action space changes (with the rates, dated at the previous
+cycle; see Seeding).
+
+`step()` returns a mode. `kIdle`: no goal. `kWaiting`: a goal and nothing to
+follow. `kFollow`: the limited reference. `kStopping`: a hold after the
+limiter has run, with `come_to_rest()`'s stop; Franka commands it, OpenArm
+releases to the measured pose instead and calls `invalidate_rate_state()`, so
+its resume seeds at rest. `kEnded`: the goal ended this cycle, with its
+terminal and reason, which are also queued for `poll_terminal()`. The
+timeline is sampled in `kRunning` only, never before the first chunk.
+
+`begin_goal()` opens a goal (ids rise from 1 and are never reused) and clears
+the timeline, the telemetry, the seq order and pending gripper and success
+requests; the control loop starts it on its next `step()`. A goal ends on a
+cancel, a success request, `goal_timeout`, the watchdog's `kAborted`, or the
+host's `end_goal()`, and chunks count only while one is open. `activate()`
+closes any goal left and clears the anchor history too, so a chunk observed
+before an activation gets the inexact anchor.
+
+`ActionChunk.seq`: a chunk whose seq is not 0 and not above the last seq its
+goal accepted is refused as `kStaleSeq`; seq 0 is not checked (arrival
+order). Only an accepted chunk, one that put a waypoint in the timeline,
+moves the order, and every goal and activation restarts it.
+
+`telemetry()` combines the executor's counters with the control loop's
+stamps and states. Stamps are on the clock the host passed in. OpenArm's
+control clock is not ROS time (seconds since activation), so that host
+converts `last_chunk_stamp` and `playback_stamp` before publishing: a bridge
+compares them with ROS time. `anchor_inexact` is the last accepted chunk's.
+
 ## Time alignment
 
 Waypoint `k` of a chunk is timed at `t_obs + k * control_dt`, and `t_obs` is the
@@ -57,14 +123,16 @@ observation from, echoed verbatim. Not the bridge's own wall clock: this repo's
 multi-PC setup has no clock sync, so a bridge clock would be a different time
 domain. Echoing the controller's stamp makes the alignment work without any.
 
-Hosts read the stamp only under `chunk_time_source: observation`; the default
-`arrival` sets `t_obs` to the arrival time. Under `observation` the host also
-sets `Chunk::t_arrival`, and `validate()` refuses a stamp more than
-`max_future_skew` (0.05 s) after arrival as `kObservationInFuture` and one more
-than `max_observation_age` (1 s) before it as `kObservationTooOld`. The default
-is `arrival` because `observation` is right only for a bridge that echoes the
-controller's stamp: any other stamp is either refused by that window or, inside
-it, anchors the chunk at the wrong instant.
+The stamp is read only under `chunk_time_source: observation`
+(`TimeSource::kObservation`); the default `arrival` sets `t_obs` to the arrival
+time, and so does a chunk without a stamp. Under `observation`
+`Session::ingest()` also sets `Chunk::t_arrival`, and `validate()` refuses a
+stamp more than `max_future_skew` (0.05 s) after arrival as
+`kObservationInFuture` and one more than `max_observation_age` (1 s) before it
+as `kObservationTooOld`. The default is `arrival` because `observation` is
+right only for a bridge that echoes the controller's stamp: any other stamp is
+either refused by that window or, inside it, anchors the chunk at the wrong
+instant.
 
 `splice()` drops the waypoints whose time has already passed, which is the
 prefix the robot executed while inference ran. The historical pipeline instead
@@ -234,8 +302,9 @@ The limiter carries rate state, so wherever the reference source changes by
 design the host seeds it with what it is *commanding* at that moment. There are
 two cases, and they differ in the rates:
 
-- `seed()` — goal start and a resume out of hold. The arm is held, so every
-  rate and acceleration starts at zero.
+- `seed()` — goal start, and a resume after the host held the arm by other
+  means than `come_to_rest()` (`Session::invalidate_rate_state()`). The arm is
+  held, so every rate and acceleration starts at zero.
 - `seed_with_rates()` — a change of action space within a goal, seen on the
   control thread as the sampled `Reference::space` differing from the previous
   cycle's. The pipeline cannot bridge that by itself: the limiter runs on the

@@ -61,8 +61,9 @@ struct ValidationLimits
   double max_future_skew {0.05};
 
   // Reject a chunk whose seq is not newer than the last accepted one. Guards
-  // against a transport that reorders or replays; off by default because a
-  // bridge that leaves seq at 0 is still supported.
+  // against a transport that reorders or replays. Session sets both per chunk
+  // (SessionParams::order_by_seq): on for a seq other than 0, against the last
+  // seq its goal accepted.
   std::uint64_t last_seq {0};
   bool check_seq {false};
 };

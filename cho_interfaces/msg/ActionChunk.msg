@@ -27,8 +27,11 @@
 std_msgs/Header header
 
 # Monotonic per-bridge chunk counter, incremented on every publish including a
-# re-inference that supersedes an earlier chunk. 0 means "not supplied" and the
-# controller orders by arrival instead.
+# re-inference that supersedes an earlier chunk. A chunk whose seq is not 0 and
+# is not above the seq of the last chunk the goal accepted is refused
+# (last_reject "stale_seq"); the order starts over with every goal. 0 means "not
+# supplied": it is not checked, the chunk is ordered by arrival, and it does not
+# move the last accepted seq.
 uint64 seq
 
 string action_space  # "joint" or "task" (empty = "task")

@@ -20,7 +20,8 @@ string last_reject           # reject reason name, "none" when nothing was refus
 # t_arr - t_obs of the last accepted chunk [s].
 float64 last_chunk_latency
 # Observation stamp of the last accepted chunk, and the absolute time the
-# sampler last produced a reference for. Both are on the controller clock.
+# sampler last produced a reference for. Both are ROS time (the node clock), in
+# seconds; 0 until set.
 float64 last_chunk_stamp
 float64 playback_stamp
 float64 remaining_horizon_sec

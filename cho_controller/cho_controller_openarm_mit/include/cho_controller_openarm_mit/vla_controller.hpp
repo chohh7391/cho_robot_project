@@ -17,7 +17,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,16 +25,9 @@
 #include <cho_interfaces/action/vision_language_action.hpp>
 #include <cho_interfaces/msg/action_chunk.hpp>
 #include <cho_interfaces/msg/vla_telemetry.hpp>
-#include <realtime_tools/realtime_buffer.hpp>
 
 #include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
-#include "cho_vla_core/action_buffer.hpp"
-#include "cho_vla_core/chunk_smoother.hpp"
-#include "cho_vla_core/chunk_validator.hpp"
-#include "cho_vla_core/gripper_dispatch.hpp"
-#include "cho_vla_core/reference_history.hpp"
-#include "cho_vla_core/reference_limiter.hpp"
-#include "cho_vla_core/stream_watchdog.hpp"
+#include "cho_vla_core/session.hpp"
 
 namespace cho_controller_openarm_mit
 {
@@ -104,6 +96,13 @@ namespace cho_controller_openarm_mit
 //     GripperController on its own interfaces (on the real adapter, hand:=true:
 //     an eighth motor on the arm's CAN socket).
 //
+// The chunk stream itself -- ingest, the per-cycle reference, the goal's
+// lifetime and the telemetry values -- is cho_vla_core::Session (its
+// DESIGN.md, "Session"). This class is its ROS adapter (parameters, the chunk
+// subscription, the VLA action server, telemetry) and the control law. The
+// session runs on the action clock (action_control_time_, seconds since
+// activation); telemetry stamps are published in ROS time.
+//
 // Chunk stream parameters (cho_vla_core's rules, shared with the Franka host):
 //  - stream_timeout_sec [s, > 0]: least quiet time since the last accepted chunk
 //    before hold (a goal's stream_timeout > 0 overrides it). While the buffer
@@ -139,21 +138,27 @@ protected:
   void abort_goals_from_before() override
   {
     TaskSpaceImpedanceController::abort_goals_from_before();
-    vla_abort_through_.store(vla_next_id_.load() - 1, std::memory_order_release);
+    vla_abort_through_.store(session_.newest_goal(), std::memory_order_release);
   }
 
 private:
   friend struct VlaControllerTestAccess;
   using VlaAction = cho_interfaces::action::VisionLanguageAction;
   using VlaGoalHandle = rclcpp_action::ServerGoalHandle<VlaAction>;
-  enum class VlaTerminal : std::uint8_t {SUCCEEDED, CANCELED, ABORTED};
-  struct VlaTerminalEvent
+
+  // The session's HostCommand: seed_from_command(), on the control thread.
+  class CommandedSeed final : public cho_vla_core::HostCommand
   {
-    std::uint64_t id {0};
-    VlaTerminal terminal {VlaTerminal::ABORTED};
-    // Fixed reason code rather than a string: this crosses the SPSC queue from
-    // the control loop, which must not allocate.
-    std::uint8_t reason {0};
+public:
+    explicit CommandedSeed(VlaController & host)
+    : host_(host) {}
+    void commanded(Seed kind, cho_vla_core::Reference & seed) override
+    {
+      host_.seed_from_command(kind, seed);
+    }
+
+private:
+    VlaController & host_;
   };
 
   // ---- executor ----------------------------------------------------------
@@ -171,11 +176,16 @@ private:
   // kNone, or why `message` cannot become a chunk here, for the telemetry's
   // last_reject: kUnparseableField for a string field it cannot parse,
   // kActionSpaceNotAccepted for a well-formed joint chunk under the legacy law.
-  // `reason` carries the detail for the log.
+  // `reason` carries the detail for the log. chunk.t_obs is the stamp on the
+  // action clock, NaN without one; the session decides whether it is read.
   cho_vla_core::Reject build_chunk(
-    const cho_interfaces::msg::ActionChunk & message, double arrival,
-    cho_vla_core::Chunk & chunk, std::string & reason);
-  static const char * terminal_reason(std::uint8_t reason);
+    const cho_interfaces::msg::ActionChunk & message, cho_vla_core::Chunk & chunk,
+    std::string & reason);
+  // The result message of a goal the session ended.
+  static const char * terminal_message(const cho_vla_core::TerminalEvent & event);
+  // A session stamp (action clock) in ROS time, for telemetry. 0, the
+  // session's "not set", stays 0.
+  double ros_time(double action_time) const;
 
   // ---- control loop ------------------------------------------------------
   // Joint-space branch of write_task_target(): the sampled joint reference
@@ -192,31 +202,30 @@ private:
   // less any part pointing out of the window at a joint the clamp pinned.
   // Called after every target this controller writes, so the two are always
   // "the q_des and dq_des being commanded", inside the limiter's joint window
-  // -- the anchor ring's joint field and every limiter seed read task_q_ref_,
-  // the space-switch seed both.
+  // -- the anchor ring's joint field (Session::record()) and every limiter seed
+  // (seed_from_command()) read task_q_ref_, the space-switch seed both.
   void note_commanded_joints(const DirectMitTarget & target);
-  // Seeds the limiter for a reference that has switched action space within a
-  // goal, from what the last cycle commanded and how fast (seed_with_rates()):
-  // joints = task_q_ref_ and joint_velocity = commanded_dq_des_ in either
-  // direction, and for a switch to task space pose = FK(task_q_ref_) and
-  // twist = J(task_q_ref_) * commanded_dq_des_ (LOCAL_WORLD_ALIGNED, the
-  // limiter's linear-then-world-aligned-angular convention). Not the
-  // measurement: the drive is pushing q toward q_des, and seeding from q drops
-  // that offset in one cycle. If that forward kinematics fails, the task side
-  // falls back to idle_pose_ at rest. `seed_time` is when that was commanded,
-  // the previous cycle's control_time (write_task_target()).
-  void seed_limiter_from_command(const cho_vla_core::Reference & reference, double seed_time);
-  void finish_vla(std::uint64_t id, VlaTerminal terminal, std::uint8_t reason);
+  // The session's limiter seed (HostCommand::commanded()): what this controller
+  // commands, never the measurement.
+  //   kRest    a goal's first reference, and the resume after a hold (which
+  //            released the reference, see write_task_target()): pose =
+  //            idle_pose_, joints = task_q_ref_.
+  //   kSwitch  the sampled reference changed action space within a goal: what
+  //            the last cycle commanded and how fast. joints = task_q_ref_ and
+  //            joint_velocity = commanded_dq_des_ in either direction, and for a
+  //            switch to task space pose = FK(task_q_ref_) and twist =
+  //            J(task_q_ref_) * commanded_dq_des_ (LOCAL_WORLD_ALIGNED, the
+  //            limiter's linear-then-world-aligned-angular convention). Not the
+  //            measurement: the drive is pushing q toward q_des, and seeding
+  //            from q drops that offset in one cycle. If that forward kinematics
+  //            fails, the task side falls back to idle_pose_ at rest. The
+  //            session dates it at the previous cycle.
+  // Without a latched idle_pose_ the pose is left as sampled.
+  void seed_from_command(cho_vla_core::HostCommand::Seed kind, cho_vla_core::Reference & seed);
 
-  // ---- core objects ------------------------------------------------------
-  cho_vla_core::ActionBuffer buffer_;                // executor
-  cho_vla_core::ValidationLimits limits_;            // executor
-  cho_vla_core::ReferenceHistory history_ {2048};    // RT writes, executor reads
-  cho_vla_core::ReferenceLimiter limiter_;           // RT
-  cho_vla_core::StreamWatchdog watchdog_;            // RT
-  cho_vla_core::GripperDispatch gripper_dispatch_;   // RT
-  realtime_tools::RealtimeBuffer<cho_vla_core::Timeline> timeline_buffer_;
-  cho_vla_core::Telemetry telemetry_ {};
+  // ---- chunk stream ------------------------------------------------------
+  cho_vla_core::Session session_;
+  CommandedSeed commanded_seed_ {*this};
 
   // ---- goal plumbing ----------------------------------------------------
   rclcpp_action::Server<VlaAction>::SharedPtr vla_server_;
@@ -226,62 +235,23 @@ private:
     telemetry_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr success_service_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr notify_completion_client_;
-  realtime_tools::LockFreeSPSCQueue<VlaTerminalEvent, 8> vla_terminal_queue_;
+  // Keyed by the session's GoalId.
   std::mutex vla_handles_mutex_;
   std::unordered_map<std::uint64_t, std::shared_ptr<VlaGoalHandle>> vla_handles_;
-  std::atomic<std::uint64_t> vla_next_id_ {1};
   // DirectControllerBase::action_abort_through_, for the VLA server.
   std::atomic<std::uint64_t> vla_abort_through_ {0};
-  std::atomic<std::uint64_t> vla_cancel_id_ {0};
-  std::atomic<std::uint64_t> vla_public_id_ {0};
-  std::atomic<bool> vla_success_flag_ {false};
-  // Bumped once per ACCEPTED chunk. The watchdog runs on the control loop, so it
-  // cannot be poked from the subscription callback; the loop compares this
-  // against its own last-seen value. Rejected chunks, and ones with no waypoint
-  // left to play, do not bump it.
-  std::atomic<std::uint64_t> accepted_count_ {0};
-  std::atomic<int> pending_gripper_ {0};
-  std::atomic<bool> gripper_rejected_ {false};
-  std::atomic<double> rt_playback_stamp_ {0.0};
-  std::atomic<double> rt_remaining_horizon_ {0.0};
-  std::atomic<int> rt_stream_state_ {0};
-  std::atomic<bool> anchor_inexact_ {false};
 
   // ---- control-loop-only state ------------------------------------------
-  std::uint64_t vla_id_ {0};
-  std::uint64_t rt_seen_accepted_ {0};
-  bool vla_epoch_seen_ {false};
-  std::uint64_t vla_started_id_ {0};
-  bool limiter_seeded_ {false};
+  // The reference is being released to the measured pose (release_and_idle()
+  // in write_task_target()); cleared by a goal start, a new chunk and a
+  // followed reference.
   bool releasing_on_hold_ {false};
-  // Set when release_and_idle() starts handing the reference back to the
-  // measured pose, cleared by the re-seed on the next accepted chunk. Separate
-  // from releasing_on_hold_, which a new chunk clears before the cycle knows
-  // whether a reference could be sampled.
-  bool limiter_resume_pending_ {false};
-  // Action space of the reference the limiter last ran on. A sampled reference
-  // in the other space (a chunk switched space inside one goal) re-seeds the
-  // limiter from the commanded q_des and dq_des (seed_limiter_from_command()),
-  // whose state in the new space would otherwise be whatever the old chunks
-  // carried there.
-  cho_vla_core::ActionSpace limiter_space_ {cho_vla_core::ActionSpace::kTask};
   // The MIT dq_des of the last target this controller wrote; see
   // note_commanded_joints(). task_q_ref_ is its position counterpart.
   std::array<double, 7> commanded_dq_des_ {};
-  // control_time of the previous write_task_target() call, when task_q_ref_ and
-  // commanded_dq_des_ were commanded. NaN until the first call after activation.
-  double previous_control_time_ {std::numeric_limits<double>::quiet_NaN()};
-  // Written by the control loop, read by the telemetry timer: atomic, because
-  // a std::string shared that way was a data race.
-  std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};
 
   // ---- parameters -------------------------------------------------------
-  std::string chunk_time_source_ {"arrival"};
   std::string chunk_topic_ {"/vla/action/ee_pose"};
-  double ema_factor_ {1.0};
-  double goal_timeout_sec_ {0.0};
-  double stream_timeout_sec_ {0.2};
-  double hold_timeout_sec_ {5.0};
   double telemetry_period_ {0.1};
   bool enable_gripper_ {false};
   rclcpp::Time last_telemetry_;

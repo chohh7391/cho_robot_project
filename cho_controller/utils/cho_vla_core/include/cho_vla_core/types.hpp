@@ -312,8 +312,8 @@ struct Chunk
   std::vector<std::size_t> joint_order;
 };
 
-// Counters and stamps the host publishes. Cumulative fields are never reset by
-// the pipeline; the host resets them per goal.
+// Counters and stamps the host publishes, per goal: Session resets them when a
+// goal begins. Stamps are on the host's control clock.
 struct Telemetry
 {
   std::uint64_t chunks_accepted {0};

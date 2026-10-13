@@ -14,16 +14,12 @@
 
 #pragma once
 
-#include <atomic>
-#include <cstdint>
 #include <functional>
-#include <limits>
+#include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include <Eigen/Geometry>
-#include <realtime_tools/realtime_buffer.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
 #include "cho_controller_franka/servers/base_action_server.hpp"
@@ -33,13 +29,8 @@
 #include "cho_interfaces/msg/action_chunk.hpp"
 #include "cho_interfaces/msg/vla_telemetry.hpp"
 
-#include "cho_vla_core/action_buffer.hpp"
-#include "cho_vla_core/chunk_smoother.hpp"
-#include "cho_vla_core/chunk_validator.hpp"
-#include "cho_vla_core/gripper_dispatch.hpp"
-#include "cho_vla_core/reference_history.hpp"
-#include "cho_vla_core/reference_limiter.hpp"
-#include "cho_vla_core/stream_watchdog.hpp"
+#include "cho_vla_core/session.hpp"
+#include "cho_vla_core/types.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -57,26 +48,30 @@ using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 // metre of error.
 inline constexpr double kVlaDlsLambda = 0.1;
 
-// Franka's adapter over cho_vla_core.
+// Franka's adapter over cho_vla_core::Session.
 //
-// Everything about chunk semantics -- validation, observation-time alignment,
-// splicing, sampling, rate limiting, stream liveness, gripper edge detection --
-// lives in cho_vla_core and is tested there without a controller_manager. What
-// remains here is exactly the ROS-shaped work: the action lifecycle, the
-// ActionChunk <-> POD conversion, the gripper action client, the behaviour-tree
-// completion service, and telemetry publication.
+// The session holds the chunk stream: ingest, the anchor history, the timeline,
+// the reference limiter, the stream watchdog, gripper edges, how a goal ends and
+// the telemetry values (cho_vla_core DESIGN.md, Session). What remains here is
+// ROS-shaped -- parameters into SessionParams, ActionChunk into Chunk, the
+// GoalPhase action lifecycle, the gripper action client, the behaviour-tree
+// completion service, telemetry publication -- and the Franka side of a cycle:
+// what the controller commands while it holds, and the limiter seeds
+// (HostCommand).
 //
-// Threading, unchanged in principle from the previous implementation: the RT
-// compute() never touches a goal handle or any rclcpp_action API. The split is
-// now explicit about which core object belongs to which thread.
+// Threads, as the session's call groups:
+//   executor  the subscription, action and service callbacks and the 5 ms
+//             timer, all in the node's default callback group.
+//   control   compute(), and the controller's on_activate/on_deactivate (Humble
+//             switches controllers inside the controller_manager's update()).
 //
-//   executor  ChunkValidator, ActionBuffer, chunk smoother. splice() allocates,
-//             so it must not run on the control loop. Publishes a Timeline
-//             snapshot through timeline_buffer_.
-//   RT        sample_timeline(), ReferenceLimiter, StreamWatchdog,
-//             GripperDispatch. Allocation-free.
-//   shared    ReferenceHistory (RT writes, executor reads; per-slot seqlock),
-//             plus the atomics below, each documented with its direction.
+// One goal, two lifecycles. handle_accepted() opens the session goal before
+// activate_goal() publishes the action goal, and compute() steps the session
+// only while the action goal is active, so the session starts its goal on the
+// cycle that first sees the action goal. The ends the session decides (cancel,
+// success, goal_timeout_sec, a dead stream) are finished here with
+// finish_goal_rt(). A deactivation ends the session goal from the controller's
+// on_deactivate(), and GoalPhase's finisher aborts the action goal.
 class VLAActionServer : public BaseActionServer<VLAAction, TaskTrajectory>
 {
 public:
@@ -87,6 +82,9 @@ public:
     // hold the server weakly too, and once it is gone do nothing (the service
     // answers success = false).
     void init() override;
+    // False when the session refused the parameters init() built (ERROR
+    // logged): the controller's configure fails rather than run on defaults.
+    bool configured() const { return configured_; }
 
     rclcpp_action::GoalResponse handle_goal(
         const rclcpp_action::GoalUUID & uuid,
@@ -124,12 +122,18 @@ public:
     // is refused with an ERROR and the clamp stays off.
     void set_joint_window(const Vector7d & lower, const Vector7d & upper);
 
-    // Empties the anchor ring, so a chunk observed before this activation gets
-    // the inexact fallback anchor rather than a reference from the previous
-    // activation. From the controller's on_activate(), after its activity is
-    // marked active: compute() is not running then, and process_vla_action()
-    // looks nothing up without an active goal of this activation.
-    void reset_history() { history_.reset(); }
+    // Session::activate(): empties the anchor history, so a chunk observed
+    // before this activation gets the inexact fallback anchor rather than a
+    // reference from the previous activation, and clears the timeline, the
+    // telemetry and the seq order. From the controller's on_activate(), BEFORE
+    // its activity is marked active: compute() is not running then, and no goal
+    // can be accepted while the session resets.
+    void reset_for_activation() { session_.activate(); }
+
+    // Ends the session goal, so chunks stop counting with the activation; the
+    // action goal is aborted by GoalPhase's finisher (kReasonDeactivated). From
+    // the controller's on_deactivate(), after its activity is marked inactive.
+    void end_goal_on_deactivation();
 
 protected:
     // `reason` must be a string literal: this runs on the control thread.
@@ -137,13 +141,18 @@ protected:
     void on_goal_finished(GoalPhase terminal) override;
 
 private:
+    // The session's HostCommand over commanded_now() and *_des. In the .cpp.
+    class Seeds;
+
     // ---- executor side -----------------------------------------------------
     void process_vla_action(const cho_interfaces::msg::ActionChunk::SharedPtr msg);
     // Convert one message into a core Chunk. Returns false when a field cannot be
-    // parsed; `reason` is filled for the log and the telemetry counter.
+    // parsed; `reason` is filled for the log. chunk.t_obs is the stamp, NaN when
+    // the chunk has none; the session decides which time it is played at
+    // (chunk_time_source).
     bool build_chunk(
-        const cho_interfaces::msg::ActionChunk & msg, double arrival,
-        cho_vla_core::Chunk & chunk, std::string & reason);
+        const cho_interfaces::msg::ActionChunk & msg,
+        cho_vla_core::Chunk & chunk, std::string & reason) const;
     // Gripper sends and telemetry publication, both of which must not happen on
     // the control loop.
     // Contains non_rt_tick_impl(): a throw out of a timer callback is
@@ -155,11 +164,12 @@ private:
 
     // ---- RT side -----------------------------------------------------------
     // Hold target while a goal is active and its reference has not started yet
-    // (no chunk, or a hold before the first one). Latched from the reference the
-    // controller is already commanding rather than read live: in velocity and
-    // effort modes the *_ref fields track the MEASURED state, so holding to them
-    // directly would chase gravity sag instead of arresting it. A hold after the
-    // reference has run is the limiter's come_to_rest() instead; see compute().
+    // (no chunk, or a hold before the first one): the session's kWaiting.
+    // Latched from the reference the controller is already commanding rather
+    // than read live: in velocity and effort modes the *_ref fields track the
+    // MEASURED state, so holding to them directly would chase gravity sag
+    // instead of arresting it. A hold after the reference has run is the
+    // limiter's come_to_rest() instead (kStopping); see compute().
     void latch_hold(const State & state);
     void apply_hold(State & state);
     // The limiter's seed when a goal's chunks switch action space into
@@ -178,49 +188,13 @@ private:
     //     J_arm_world otherwise.
     void commanded_now(const State & state, cho_vla_core::Reference & seed) const;
 
-    // ---- core objects ------------------------------------------------------
-    cho_vla_core::ActionBuffer buffer_;               // executor
-    cho_vla_core::ValidationLimits limits_;           // executor, configure-time
-    cho_vla_core::ReferenceHistory history_ {2048};   // RT writes, executor reads
-    cho_vla_core::ReferenceLimiter limiter_;          // RT
-    cho_vla_core::StreamWatchdog watchdog_;           // RT
-    cho_vla_core::GripperDispatch gripper_dispatch_;  // RT
-
-    realtime_tools::RealtimeBuffer<cho_vla_core::Timeline> timeline_buffer_;
-
-    // Executor-owned copy of the last chunk's final waypoint, used to seed the
-    // cross-chunk EMA. A readFromRT() here would violate RealtimeBuffer's
-    // single-RT-reader contract by swapping the pointer out from under the
-    // control loop -- the same trap the previous implementation documented.
-
-    // ---- executor -> RT ----------------------------------------------------
-    // Bumped once per ACCEPTED chunk, i.e. one that admitted at least one
-    // waypoint to the timeline. The watchdog lives on the RT side, so it cannot
-    // be poked directly from the subscription callback; RT compares this
-    // against its own last-seen count and calls note_chunk() itself. Rejected
-    // chunks, and chunks already past on arrival, deliberately do not bump it: a
-    // bridge stuck emitting those must not keep the watchdog happy while
-    // nothing drives the arm.
-    std::atomic<std::uint64_t> accepted_count_ {0};
-    std::uint64_t rt_seen_accepted_ {0};
-
-    // ---- RT -> executor ----------------------------------------------------
-    // 0 none, 1 grasp, 2 open. Written by RT, consumed by non_rt_tick(): an
-    // rclcpp_action async_send_goal() must never run on the control loop.
-    std::atomic<int> pending_gripper_ {0};
-    // Set when the gripper server refuses a goal (it settles for ~1 s after a
-    // result). Consumed by RT to undo the optimistic latch so the next matching
-    // sample retries instead of the request being dropped until the value
-    // crosses again.
-    std::atomic<bool> gripper_rejected_ {false};
-
-    std::atomic<double> rt_playback_stamp_ {0.0};
-    std::atomic<double> rt_remaining_horizon_ {0.0};
-    std::atomic<int> rt_stream_state_ {0};
+    // ---- session -----------------------------------------------------------
+    cho_vla_core::Session session_;
+    bool configured_ {false};
+    // Executor: the session goal of the action goal in flight, for a cancel.
+    cho_vla_core::GoalId goal_ {0};
 
     // ---- telemetry ---------------------------------------------------------
-    cho_vla_core::Telemetry telemetry_ {};            // executor
-    std::atomic<bool> anchor_inexact_ {false};
     rclcpp_lifecycle::LifecyclePublisher<cho_interfaces::msg::VlaTelemetry>::SharedPtr
         telemetry_pub_;
     double telemetry_period_ {0.1};
@@ -237,46 +211,26 @@ private:
         const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void trigger_bt_completion();
-    std::atomic<bool> task_success_flag_ {false};
 
     // ---- parameters --------------------------------------------------------
-    // "arrival" reproduces the pre-v2 behaviour: playback restarts at the instant
-    // a chunk lands. "observation" uses ActionChunk.header.stamp, which only
-    // works if the bridge echoes the controller's own clock (see the message
-    // doc). Default is arrival, because an unsynchronised bridge clock would
-    // otherwise place every waypoint in the wrong epoch; the observation window
-    // does not change that: a stamp from another clock is refused by it or,
-    // inside it, anchors the chunk at the wrong instant (cho_vla_core DESIGN.md,
-    // Time alignment).
-    std::string chunk_time_source_ {"arrival"};
     // "<robot_type>_joint", used to resolve ActionChunk.joint_names into the
     // canonical column order. Franka joints are fr3_joint1..7.
     std::string robot_joint_prefix_ {"fr3_joint"};
-    double ema_factor_ {0.2};
-    double goal_timeout_sec_ {0.0};
-    double stream_timeout_sec_ {0.0};
-    double hold_timeout_sec_ {0.0};
     // Configure-time; see set_joint_window().
     Vector7d joint_window_lower_ {Vector7d::Zero()};
     Vector7d joint_window_upper_ {Vector7d::Zero()};
     bool joint_window_set_ {false};
 
-    // RT-only. Telemetry reads the atomic copy: the executor thread publishing
-    // it while the control loop rewrites a std::string was a data race.
+    // ---- RT only -----------------------------------------------------------
     cho_vla_core::ActionSpace active_action_space_ {cho_vla_core::ActionSpace::kTask};
-    std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};
     Vector6d twist_des_ {Vector6d::Zero()};
     // Configure-time; called on the RT thread.
     ArmKinematics arm_kinematics_;
-
-    // RT-only hold state. hold_pose_ / hold_joints_ are where the hold stands:
-    // latched by latch_hold(), or each held cycle's come_to_rest() output.
+    // Where the hold stands: latched by latch_hold(), or each held cycle's
+    // come_to_rest() output.
     bool hold_latched_ {false};
     pinocchio::SE3 hold_pose_ {pinocchio::SE3::Identity()};
     Vector7d hold_joints_ {Vector7d::Zero()};
-    bool limiter_seeded_ {false};
-    // RT-only: the previous compute() call's time; see the space-switch seed.
-    double previous_compute_time_ {std::numeric_limits<double>::quiet_NaN()};
 };
 
 } // namespace franka

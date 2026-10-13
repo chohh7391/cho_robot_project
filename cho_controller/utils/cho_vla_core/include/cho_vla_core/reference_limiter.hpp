@@ -170,7 +170,8 @@ public:
   // Seed AT REST from what the host is currently commanding, so the first
   // limited cycle is continuous: pose and joints from `reference`, every rate and
   // acceleration zero (its twist and joint_velocity are not read). For a change
-  // of source while the arm is held: goal start, or a resume out of hold.
+  // of source while the arm is held: goal start, or a resume out of a hold
+  // the host made without come_to_rest().
   //
   // With clamp_joint_window the joints are clamped into [joint_lower,
   // joint_upper], where every joint cycle's output lies; a joint inside it is

@@ -102,6 +102,8 @@ What each package is, and where its own documentation is. `extern/` holds the pi
   ([DESIGN.md, Package layout](cho_controller/cho_controller_openarm_mit/DESIGN.md#package-layout)).
 - `utils/cho_vla_core` — the VLA action-chunk pipeline, free of ROS, hosted by Franka's `vla_controller` (through
   its `VLAActionServer`) and OpenArm's `VlaController` ([DESIGN.md](cho_controller/utils/cho_vla_core/DESIGN.md)).
+  Both hosts use `cho_vla_core::Session` (chunk ingest, the per-cycle reference, the goal's lifetime, the telemetry
+  values) and keep only their ROS adapter and control law ([DESIGN.md, Session](cho_controller/utils/cho_vla_core/DESIGN.md#session)).
 
 **cho_hardware/** — the OpenArm MIT `ros2_control` side ([protocol](docs/openarm_mit_contract_v1.md);
 the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))

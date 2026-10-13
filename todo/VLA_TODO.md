@@ -261,7 +261,7 @@ splice·워치독·NaN 드롭·per_step 적분을 수만 케이스 돌릴 수 �
 ```
 std_msgs/Header header      # stamp = t_obs. 브릿지 wall-clock이 아니라 관측에 쓴 joint state 메시지의 stamp를
                             # 그대로 에코(컨트롤러 클럭 도메인, §2a-a). 0이면 도착 시각 폴백 = 현재 동작
-uint64 seq                  # 브릿지 단조 증가. 0이면 서버가 도착 순서로 부여
+uint64 seq                  # 브릿지 단조 증가. 0이 아니면 그 goal에서 마지막으로 받아들인 seq 이하인 청크는 stale_seq로 거부(goal마다 처음부터). 0은 검사 없이 도착 순서
 string action_space         # "joint" | "task"
 string relative_mode        # "absolute" | "from_anchor" | "per_step". 비어 있으면 relative 플래그로 폴백
 bool relative               # 하위호환. relative_mode가 비어 있을 때만 참조
@@ -368,7 +368,7 @@ float32[] gripper_actions   # binary: 부호(<0 close, >0 open). continuous: 개
 1. 관측에 쓴 joint state 메시지의 `header.stamp`를 `ActionChunk.header.stamp`에 **그대로 복사**한다. 브릿지의
    `now()`도, 추론이 끝난 시각도 아니다. 컨트롤러 클럭을 에코하는 것이라 PC 간 시각 동기가 필요 없다(§2a-a).
 2. `control_dt`를 명시한다. 정책 설정의 fps/주기에서 가져온다.
-3. `seq`를 단조 증가시킨다. 재추론으로 이전 청크를 덮을 때도 증가.
+3. `seq`를 단조 증가시킨다. 재추론으로 이전 청크를 덮을 때도 증가. 컨트롤러는 그 goal에서 마지막으로 받아들인 seq 이하인 청크(0 제외)를 `stale_seq`로 거부한다. 브릿지가 재시작해 seq가 되돌아가면 그 값을 넘을 때까지 거부된다.
 4. 조인트 순서가 로봇 기본 순서와 다르면 `joint_names[]`를 채운다.
 5. 상대/절대·그리퍼 모드를 **명시**한다(`relative_mode`, `gripper_mode`, 상대 task 청크는 `relative_frame`도). 폴백에 의존하지 않는다.
 6. 정책 서버가 죽거나 멈추면 발행을 멈춘다. 마지막 청크를 반복 발행하지 않는다 — 워치독이 그걸 감지해야 한다.

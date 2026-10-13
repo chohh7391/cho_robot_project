@@ -106,15 +106,15 @@ struct VlaControllerTestAccess
   }
   static int stream_state(const VlaController & controller)
   {
-    return controller.rt_stream_state_.load();
+    return static_cast<int>(controller.session_.telemetry().stream_state);
   }
   static std::uint64_t accepted(const VlaController & controller)
   {
-    return controller.telemetry_.chunks_accepted;
+    return controller.session_.telemetry().chunks_accepted;
   }
   static std::uint64_t rejected(const VlaController & controller)
   {
-    return controller.telemetry_.chunks_rejected;
+    return controller.session_.telemetry().chunks_rejected;
   }
   static double reference_offset_limit(const VlaController & controller, std::size_t joint)
   {
@@ -2738,4 +2738,68 @@ TEST_F(StreamFixture, AC6_APositiveControlDtChunkIsStillAccepted)
   publish(joint_chunk(0.2, 8, 0.05), 40);
   EXPECT_EQ(Access::accepted(*controller), 1u);
   EXPECT_EQ(Access::rejected(*controller), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry stamps (VLA session, AC6). last_chunk_stamp and playback_stamp are
+// ROS time (the node clock), not seconds since activation, so a bridge that
+// sets its RTC from them reads the same clock as the chunk headers.
+
+// Arrival-timed: last_chunk_stamp is the arrival instant and playback_stamp a
+// recent cycle, both on the clock client_node reads.
+TEST_F(StreamFixture, AC6_TelemetryStampsAreRosTime)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_telemetry();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const double before = client_node->now().seconds();
+  publish(joint_chunk(0.2, 20), 40);
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {
+      return t.chunks_accepted >= 1 && t.playback_stamp > 0.0 && t.stream_state == "running";
+    }));
+  const auto t = telemetry();
+  const double after = client_node->now().seconds();
+  const double header = rclcpp::Time(t.header.stamp).seconds();
+  EXPECT_GE(t.last_chunk_stamp, before - 0.01);
+  EXPECT_LE(t.last_chunk_stamp, after + 0.01);
+  EXPECT_GE(t.playback_stamp, before - 0.01);
+  EXPECT_LE(t.playback_stamp, header + 0.01);
+  EXPECT_LE(header - t.playback_stamp, 0.05);
+}
+
+// Observation-timed: last_chunk_stamp is the chunk's own stamp, as sent.
+TEST_F(ObservationFixture, AC6_TheObservationStampComesBackAsSent)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_telemetry();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const auto message = stamped(long_chunk(), 0.3);
+  const double stamp = rclcpp::Time(message.header.stamp).seconds();
+  publish(message, 40);
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_accepted >= 1;}));
+  const auto t = telemetry();
+  EXPECT_NEAR(t.last_chunk_stamp, stamp, 2e-3);
+  EXPECT_NEAR(t.last_chunk_latency, 0.3, 0.1);
+}
+
+// Before any chunk of this goal there is no stamp: 0, as on the Franka host.
+TEST_F(StreamFixture, AC6_AnUnsetStampIsZero)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_telemetry();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.stream_state == "waiting_first_chunk";}));
+  EXPECT_EQ(telemetry().last_chunk_stamp, 0.0);
 }
