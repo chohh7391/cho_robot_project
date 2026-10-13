@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include <Eigen/Core>
 
@@ -98,11 +99,22 @@ public:
 // arm.
 inline constexpr double kHeldCommandDrift = 1e-6;
 
-// Call from on_deactivate of every controller that writes position commands,
-// before the interfaces are released: records what each "position" command
-// interface holds and the joint position it holds it at. Interfaces of any other
-// kind are skipped, so a base class can call it for every controller it serves.
-// `measured` is aligned with the first measured.size() command interfaces.
+namespace detail
+{
+// The index in `joints` of the joint a command interface belongs to (its prefix
+// name, "<joint>" in "<joint>/<kind>"), or joints.size() for none.
+template<typename Interface>
+std::size_t joint_index(const Interface & interface, const std::vector<std::string> & joints)
+{
+  const auto & prefix = interface.get_prefix_name();
+  return static_cast<std::size_t>(std::find(joints.begin(), joints.end(), prefix) - joints.begin());
+}
+}  // namespace detail
+
+// Records what each "position" command interface holds and the joint position it
+// holds it at; other kinds are skipped. Pairs interface i with measured(i), which
+// is right only for one interface per joint in joint order. The base controllers
+// call release_on_deactivate() instead.
 template<typename CommandInterfaces, typename MeasuredT>
 void release_held_command(
   const CommandInterfaces & command_interfaces, const Eigen::MatrixBase<MeasuredT> & measured)
@@ -113,6 +125,45 @@ void release_held_command(
     if (interface.get_interface_name() == "position") {
       HeldCommandLedger::record(
         interface.get_name(), interface.get_value(), measured(static_cast<Eigen::Index>(i)));
+    }
+  }
+}
+
+// What an arm base controller's on_deactivate does for every controller it
+// serves, while the interfaces are still claimed. Per command interface of a
+// joint in `joints`:
+//   - "velocity": set to 0. The interface keeps its last value after the
+//     release, and the hardware or simulator keeps moving the joint at it.
+//   - "position": left as it is (it is the hold the next position controller
+//     seeds from) and recorded in the HeldCommandLedger with its joint's
+//     measured position, for live_held_command().
+//   - anything else (effort): untouched.
+// Interfaces are paired with joints by prefix name, so any number of interfaces
+// per joint, in any order, is paired right (OpenArm's MIT hardware has position,
+// velocity and effort per joint); interfaces of other joints are left alone.
+// measured(j) is the position of joints[j]. A joint past the end of `measured`
+// (an empty one when the state could not be read) still has its velocity
+// zeroed, and gets no record.
+//
+// The interfaces need get_name(), get_prefix_name(), get_interface_name(),
+// get_value() and set_value() (hardware_interface::LoanedCommandInterface).
+template<typename CommandInterfaces, typename MeasuredT>
+void release_on_deactivate(
+  CommandInterfaces && command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured)
+{
+  const auto measured_size = static_cast<std::size_t>(measured.size());
+  for (auto & interface : command_interfaces) {
+    const std::size_t j = detail::joint_index(interface, joints);
+    if (j >= joints.size()) {
+      continue;
+    }
+    const auto & kind = interface.get_interface_name();
+    if (kind == "velocity") {
+      interface.set_value(0.0);
+    } else if (kind == "position" && j < measured_size) {
+      HeldCommandLedger::record(
+        interface.get_name(), interface.get_value(), measured(static_cast<Eigen::Index>(j)));
     }
   }
 }
@@ -135,6 +186,8 @@ void release_held_command(
 // The interfaces need get_name(), get_interface_name() and get_value()
 // (hardware_interface::LoanedCommandInterface). Call it in on_activate, before
 // the first update: the hardware's read() in between is what moves the arm.
+// This one pairs interface i with measured(i); the overload below pairs them by
+// joint name, as release_on_deactivate() does.
 template<typename CommandInterfaces, typename MeasuredT>
 Eigen::VectorXd live_held_command(
   const CommandInterfaces & command_interfaces, const Eigen::MatrixBase<MeasuredT> & measured,
@@ -155,6 +208,51 @@ Eigen::VectorXd live_held_command(
     }
   }
   return held_command(command_interfaces, measured, band);
+}
+
+// live_held_command() with each joints[j] paired with its own "position"
+// interface by prefix name and with measured(j), whatever other interfaces there
+// are and in whatever order. The same rules, all or nothing: the held commands,
+// in joint order, when every joint has a position interface whose value was not
+// left before the joint moved (kHeldCommandDrift) and is finite and within
+// `band` of the joint; otherwise the measurement. `measured` has joints.size()
+// entries (else the measurement is returned). The interfaces also need
+// get_prefix_name(); call it in on_activate, as the other.
+template<typename CommandInterfaces, typename MeasuredT>
+Eigen::VectorXd live_held_command(
+  const CommandInterfaces & command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured, double band = 0.05)
+{
+  if (static_cast<std::size_t>(measured.size()) != joints.size()) {
+    return measured;
+  }
+  Eigen::VectorXd held(measured.size());
+  for (std::size_t j = 0; j < joints.size(); ++j) {
+    const auto i = static_cast<Eigen::Index>(j);
+    bool paired = false;
+    for (const auto & interface : command_interfaces) {
+      if (interface.get_interface_name() != "position" || interface.get_prefix_name() != joints[j]) {
+        continue;
+      }
+      const double value = interface.get_value();
+      HeldCommandLedger::Release release{};
+      if (HeldCommandLedger::find(interface.get_name(), release) && release.command == value &&
+        !(std::abs(measured(i) - release.measured) <= kHeldCommandDrift))
+      {
+        return measured;
+      }
+      if (!std::isfinite(value) || std::abs(value - measured(i)) > band) {
+        return measured;
+      }
+      held(i) = value;
+      paired = true;
+      break;
+    }
+    if (!paired) {
+      return measured;
+    }
+  }
+  return held;
 }
 
 }  // namespace cho_controller_base

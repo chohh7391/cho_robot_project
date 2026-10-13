@@ -213,12 +213,14 @@ CallbackReturn URBaseController::on_activate(const rclcpp_lifecycle::State & /*p
 CallbackReturn URBaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
     activity_.deactivated();
-    // What this controller leaves on the position interfaces, and where the arm
-    // is now, so the next one can tell a live hold from a stale command
+    // Velocity commands to 0; position commands recorded with where the arm is
+    // now, so the next controller can tell a live hold from a stale command
     // (cho_controller_base::live_held_command). Interfaces are still claimed here.
     if (state_interfaces_.size() >= static_cast<size_t>(2 * num_dof_)) {
         update_joint_states();
-        cho_controller_base::release_held_command(command_interfaces_, state_.q.head(num_dof_));
+        cho_controller_base::release_on_deactivate(command_interfaces_, joint_names_, state_.q.head(num_dof_));
+    } else {
+        cho_controller_base::release_on_deactivate(command_interfaces_, joint_names_, Eigen::VectorXd());
     }
     return CallbackReturn::SUCCESS;
 }
@@ -322,7 +324,7 @@ void URBaseController::publish_controller_state(const rclcpp::Time & stamp)
 
 Eigen::VectorXd URBaseController::held_command_position() const
 {
-    return cho_controller_base::live_held_command(command_interfaces_, state_.q.head(num_dof_));
+    return cho_controller_base::live_held_command(command_interfaces_, joint_names_, state_.q.head(num_dof_));
 }
 
 cho_controller::common::trajectory::JointMotionLimits URBaseController::joint_motion_limits()

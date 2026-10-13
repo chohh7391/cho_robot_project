@@ -117,7 +117,7 @@ controller_interface::return_type TaskSpaceIKController::update(
         cho_controller_base::JointStep delta_q =
             cho_controller_base::dls_step(ik_J_.leftCols(num_dof_), error, lambda_);
         if (!error.allFinite() || !delta_q.allFinite()) {
-            action_server_->abort_active_goal("non-finite IK step; holding the last command");
+            action_server_->abort_active_goal(state_, "non-finite IK step; holding the last command");
             running = false;
         } else {
             // Bound the per-cycle step as a whole, so a saturated step keeps its

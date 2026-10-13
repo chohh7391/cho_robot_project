@@ -83,7 +83,9 @@ What each package is, and where its own documentation is. `extern/` holds the pi
 - `cho_controller_base` — robot-independent: `GoalPhaseActionServer` and the `JointSpaceServer` / `TaskSpaceServer`
   every arm serves ([goal_phase_action_server.hpp](cho_controller/cho_controller_base/include/cho_controller_base/goal_phase_action_server.hpp)),
   DLS IK, and the held-command ledger `libcho_controller_base_ledger.so`
-  ([held_command.hpp](cho_controller/cho_controller_base/include/cho_controller_base/held_command.hpp)).
+  ([held_command.hpp](cho_controller/cho_controller_base/include/cho_controller_base/held_command.hpp)). Every arm
+  base lets go through `release_on_deactivate()` (velocity commands to 0, position commands recorded) and seeds a
+  position controller with `live_held_command()`.
   `testing/controller_manager_harness.hpp` steps a controller_manager on mock hardware (each arm's `test_reactivation`).
 - `cho_controller_franka` — FR3: 13 plugins ([cho_controller_franka.xml](cho_controller/cho_controller_franka/cho_controller_franka.xml)),
   `VLAController` and the Franka hand's `GripperController` among them

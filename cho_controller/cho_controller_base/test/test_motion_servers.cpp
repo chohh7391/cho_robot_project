@@ -99,6 +99,10 @@ protected:
     executor_.add_node(node_->get_node_base_interface());
     executor_.add_node(client_node_);
     spinner_ = std::thread([this]() {executor_.spin();});
+    // A cancel() that comes before spin() has started is lost and join() hangs.
+    for (int i = 0; !executor_.is_spinning() && i < 5000; ++i) {
+      std::this_thread::sleep_for(1ms);
+    }
     ASSERT_TRUE(client_->wait_for_action_server(5s));
   }
 
@@ -269,7 +273,7 @@ TEST_F(TaskServerTest, AGoalMustBeInTheFrameItsModeIsDefinedIn) {
     auto handle = send(task_goal(0.1, false, 1.0, base));
     ASSERT_NE(handle, nullptr) << base;
     step(0.0);
-    EXPECT_TRUE(server_->abort_active_goal("done"));
+    EXPECT_TRUE(server_->abort_active_goal(state_, "done"));
     result_of(handle);
   }
   EXPECT_NE(send(task_goal(0.1, true, 1.0, "tcp")), nullptr);
@@ -313,11 +317,36 @@ TEST_F(TaskServerTest, AControllerAbortCarriesItsReason) {
   auto handle = send(task_goal(0.1, false));
   ASSERT_NE(handle, nullptr);
   step(0.0);
-  EXPECT_TRUE(server_->abort_active_goal(std::string("workspace floor guard: tool below the bench")));
+  EXPECT_TRUE(server_->abort_active_goal(state_, "workspace floor guard: tool below the bench"));
   const auto result = result_of(handle);
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
   EXPECT_EQ(result.result->message, "workspace floor guard: tool below the bench");
-  EXPECT_FALSE(server_->abort_active_goal("no goal"));
+  EXPECT_FALSE(server_->abort_active_goal(state_, "no goal"));
+}
+
+TEST_F(TaskServerTest, AC6_AControllerAbortLeavesTheHoldAtTheArm) {
+  // Like a cancel, an abort from the controller (a guard tripping) must leave the
+  // hold H_ee_init at the measured pose, not at the goal's start or its target:
+  // the controller holds H_ee_init as soon as the goal is over.
+  const pinocchio::SE3 start(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.5, 0.0, 0.3));
+  state_.H_ee = start;
+  auto handle = send(task_goal(0.2, true));
+  ASSERT_NE(handle, nullptr);
+  step(0.0);
+  ASSERT_TRUE(state_.H_ee_init.isApprox(start));
+  ASSERT_TRUE(state_.H_ee_ref.translation().isApprox(Eigen::Vector3d(0.7, 0.0, 0.3)));
+  const pinocchio::SE3 moved(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.58, 0.0, 0.3));
+  state_.H_ee = moved;
+  EXPECT_TRUE(server_->abort_active_goal(state_, "guard tripped"));
+  // Set by the call itself, on the control thread, not by a later cycle.
+  EXPECT_TRUE(state_.H_ee_init.isApprox(moved));
+  EXPECT_FALSE(state_.H_ee_init.isApprox(start));
+  EXPECT_FALSE(state_.H_ee_init.isApprox(state_.H_ee_ref));
+  const auto result = result_of(handle);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_FALSE(result.result->is_completed);
+  EXPECT_EQ(result.result->message, "guard tripped");
+  EXPECT_TRUE(state_.H_ee_init.isApprox(moved));
 }
 
 TEST_F(TaskServerTest, ALongAbortReasonArrivesWhole) {
@@ -326,7 +355,7 @@ TEST_F(TaskServerTest, ALongAbortReasonArrivesWhole) {
   ASSERT_NE(handle, nullptr);
   step(0.0);
   const std::string reason(450, 'r');
-  EXPECT_TRUE(server_->abort_active_goal(reason));
+  EXPECT_TRUE(server_->abort_active_goal(state_, reason.c_str()));
   EXPECT_EQ(result_of(handle).result->message, reason);
 }
 

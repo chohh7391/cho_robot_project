@@ -105,16 +105,6 @@ CallbackReturn TaskSpaceVelocityController::on_activate(
   return CallbackReturn::SUCCESS;
 }
 
-CallbackReturn TaskSpaceVelocityController::on_deactivate(const rclcpp_lifecycle::State & previous_state)
-{
-  // A velocity interface keeps its last value after the controller lets go, and a
-  // simulator integrates it: leave the arm commanded to rest, not to keep moving.
-  for (auto & command : command_interfaces_) {
-    command.set_value(0.0);
-  }
-  return FrankaBaseController::on_deactivate(previous_state);
-}
-
 controller_interface::return_type TaskSpaceVelocityController::update(
   const rclcpp::Time& time,
   const rclcpp::Duration& period)

@@ -162,6 +162,7 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     }
 
     robot_type_ = cho_controller::franka::getRobotNameFromDescription(robot_description_, get_node()->get_logger());
+    arm_joints_ = arm_joint_names();
 
     robot_ = std::make_shared<RobotWrapper>(robot_description_, true, false);
     model_ = robot_->model();
@@ -326,13 +327,17 @@ CallbackReturn FrankaBaseController::on_activate(
 CallbackReturn FrankaBaseController::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   activity_.deactivated();
-  // What a position controller leaves on its interfaces, and where the arm is
-  // now, so the next one can tell a live hold from a stale command
-  // (cho_controller_base::live_held_command). Interfaces are still claimed
-  // here; command interfaces of any other kind are skipped.
+  // What every controller here owes when it lets go, while its interfaces are
+  // still claimed (cho_controller_base::release_on_deactivate): a velocity
+  // command goes to 0, a position command stays as the hold and is recorded with
+  // where the arm is now, so the next position controller can tell a live hold
+  // from a stale one (live_held_command); an effort command is left as it is.
+  // Without a readable state the velocities are still zeroed, nothing recorded.
   if (state_interfaces_in_order()) {
     update_joint_states();
-    cho_controller_base::release_held_command(command_interfaces_, state_.q_arm);
+    cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, state_.q_arm);
+  } else {
+    cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, Eigen::VectorXd());
   }
   return CallbackReturn::SUCCESS;
 }
@@ -476,7 +481,7 @@ Vector7d FrankaBaseController::held_command_position() const
     // left before the arm moved, which covers the switches this package makes
     // (effort/velocity <-> position). A value left by a controller from
     // elsewhere is judged by the band alone.
-    return cho_controller_base::live_held_command(command_interfaces_, state_.q_arm_init);
+    return cho_controller_base::live_held_command(command_interfaces_, arm_joints_, state_.q_arm_init);
 }
 
 double FrankaBaseController::nominal_period(const rclcpp::Duration & period)

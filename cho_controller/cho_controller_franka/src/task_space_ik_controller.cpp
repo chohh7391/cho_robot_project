@@ -124,7 +124,8 @@ controller_interface::return_type TaskSpaceIKController::update(
   // Run the open-loop IK ONLY while a goal is active. When idle, FREEZE q_ref_
   // (hold the last reference). Re-solving toward a measured-derived hold pose would
   // (a) feed encoder noise into the command and (b) jump at the goal start/end
-  // transitions (the action server resets H_ee_init to the measured pose).
+  // transitions (the action server sets H_ee_init to the measured pose at a goal's
+  // start and at every ending but a deactivation).
   bool running = action_server_ && action_server_->is_running();
   if (running) {
     // Sample the trajectory on the jitter-free clock (fixed nominal cadence -- 1 ms

@@ -89,10 +89,12 @@ inline bool task_goal_frame_allowed(
 //
 // Success: a second past the trajectory's duration with both errors under the
 // thresholds. Abort: 2 s past it, the planner rejecting the goal, or the
-// controller calling abort_active_goal(). Every ending leaves H_ee_init at the
-// measured pose, which is what the controllers hold when idle -- otherwise a
-// cancel would step the arm back to where this goal started. compute() returns
-// true while the goal supplies a reference this cycle.
+// controller calling abort_active_goal(). Every one of these endings, and a
+// cancel, leaves H_ee_init at the measured pose H_ee, which is what the
+// controllers hold when idle -- otherwise a cancel would step the arm back to
+// where this goal started. An ending by deactivation leaves the state alone; the
+// controller latches H_ee_init again in on_activate. compute() returns true
+// while the goal supplies a reference this cycle.
 template<typename StateT, typename TrajectoryT>
 class TaskSpaceServer
   : public GoalPhaseActionServer<cho_interfaces::action::TaskSpace, StateT, TrajectoryT>
@@ -203,19 +205,24 @@ public:
     return true;
   }
 
-  // For a controller that refuses to continue the goal (a guard tripping). Safe
-  // on the control thread: the reason is copied into a fixed buffer. False when
-  // no goal is active.
-  bool abort_active_goal(const char * reason)
+  // For a controller that refuses to continue the goal (a guard tripping), on the
+  // control thread with the state compute() is given: like every other ending it
+  // sets state.H_ee_init to the measured pose state.H_ee. The reason is copied
+  // into a fixed buffer. False, and the state untouched, when no goal is active.
+  bool abort_active_goal(StateT & state, const char * reason)
   {
     if (!this->rt_active()) {
       return false;
     }
+    state.H_ee_init = state.H_ee;
     std::snprintf(reason_, sizeof(reason_), "%s", reason);
     this->finish_from_rt(GoalPhase::kFinishAborted, reason_);
     return true;
   }
-  bool abort_active_goal(const std::string & reason) {return abort_active_goal(reason.c_str());}
+  bool abort_active_goal(StateT & state, const std::string & reason)
+  {
+    return abort_active_goal(state, reason.c_str());
+  }
 
 protected:
   // Once per goal, on the control thread, before the trajectory is seeded.

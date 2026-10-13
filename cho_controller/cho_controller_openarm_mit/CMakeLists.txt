@@ -174,6 +174,16 @@ if(BUILD_TESTING)
   target_compile_definitions(test_task_space_return_to_zero PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
+  # The joint-space position/velocity/impedance controllers through the real
+  # controller_manager lifecycle on a mock arm (cho_controller_base's harness).
+  # Loads them through pluginlib, so it needs the package installed (colcon test
+  # does) but does not link them; the model is expanded from
+  # cho_description_openarm's xacro at run time.
+  ament_add_gtest(test_joint_space_reactivation test/test_joint_space_reactivation.cpp TIMEOUT 120)
+  ament_target_dependencies(test_joint_space_reactivation
+    ament_index_cpp cho_controller_base cho_interfaces controller_manager hardware_interface
+    rclcpp rclcpp_action)
+
   foreach(arm_side left right)
     ament_add_gtest(test_single_${arm_side}_controller_manager_action
       test/test_single_controller_manager_action.cpp)

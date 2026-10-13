@@ -82,6 +82,10 @@ class VLAActionServer : public BaseActionServer<VLAAction, TaskTrajectory>
 public:
     using BaseActionServer<VLAAction, TaskTrajectory>::BaseActionServer;
 
+    // On a server made with std::make_shared, as the base requires: the chunk
+    // subscription, success service, gripper response and non-RT timer it adds
+    // hold the server weakly too, and once it is gone do nothing (the service
+    // answers success = false).
     void init() override;
 
     rclcpp_action::GoalResponse handle_goal(

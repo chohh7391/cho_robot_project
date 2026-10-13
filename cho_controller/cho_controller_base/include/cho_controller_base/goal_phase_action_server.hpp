@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -124,8 +125,17 @@ inline constexpr const char * kReasonCanceled = "canceled on request";
 // and serve every arm; a robot's own servers/ header is a thin adapter over
 // them: which state field holds the measured joints, where a goal starts, and
 // the success-threshold defaults.
+//
+// Always made with std::make_shared, then init(): the action-server callbacks
+// and the finisher timer hold the server weakly. When a controller re-configure
+// replaces its server, the executor can still run the old one's callbacks for a
+// moment (it keeps the entities until its next wait); once the old server is
+// gone they do nothing -- a goal or a cancel is rejected -- instead of calling
+// into freed memory. A derived class's own callbacks do the same through
+// weak_self().
 template<typename ActionT, typename StateT, typename TrajectoryT = NoTrajectory>
 class GoalPhaseActionServer
+  : public std::enable_shared_from_this<GoalPhaseActionServer<ActionT, StateT, TrajectoryT>>
 {
 public:
   using GoalHandle = rclcpp_action::ServerGoalHandle<ActionT>;
@@ -141,14 +151,31 @@ public:
 
   virtual ~GoalPhaseActionServer() = default;
 
+  // Throws std::logic_error when the server is not owned by a std::shared_ptr:
+  // its callbacks would have nothing to hold it by.
   virtual void init()
   {
+    const std::weak_ptr<GoalPhaseActionServer> weak = this->weak_from_this();
+    if (weak.expired()) {
+      throw std::logic_error(
+        "[" + action_name_ + "] GoalPhaseActionServer::init() needs a server made with std::make_shared");
+    }
     action_server_ = rclcpp_action::create_server<ActionT>(
       node_,
       action_name_,
-      std::bind(&GoalPhaseActionServer::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&GoalPhaseActionServer::handle_cancel, this, std::placeholders::_1),
-      std::bind(&GoalPhaseActionServer::handle_accepted, this, std::placeholders::_1));
+      [weak](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const typename ActionT::Goal> goal) {
+        const auto self = weak.lock();
+        return self ? self->handle_goal(uuid, std::move(goal)) : rclcpp_action::GoalResponse::REJECT;
+      },
+      [weak](const std::shared_ptr<GoalHandle> goal_handle) {
+        const auto self = weak.lock();
+        return self ? self->handle_cancel(goal_handle) : rclcpp_action::CancelResponse::REJECT;
+      },
+      [weak](const std::shared_ptr<GoalHandle> goal_handle) {
+        if (const auto self = weak.lock()) {
+          self->handle_accepted(goal_handle);
+        }
+      });
 
     feedback_msg_ = std::make_shared<Feedback>();
     result_msg_ = std::make_shared<Result>();
@@ -156,7 +183,11 @@ public:
 
     // Non-RT finisher for the goal state machine (see GoalPhase above).
     finisher_timer_ = node_->create_wall_timer(
-      std::chrono::milliseconds(5), std::bind(&GoalPhaseActionServer::finisher_tick, this));
+      std::chrono::milliseconds(5), [weak]() {
+        if (const auto self = weak.lock()) {
+          self->finisher_tick();
+        }
+      });
 
     // control_mode is injected as a controller parameter ("position", "velocity"
     // or "effort"); declare_parameter picks up a launch-time override if present.
@@ -181,6 +212,16 @@ public:
   void attach_activity(const ControllerActivity * activity) {activity_ = activity;}
 
 protected:
+  // This server as `Derived`, held weakly: what a derived init() captures instead
+  // of `this` in the callbacks it registers, locking it in the callback and
+  // doing nothing when that fails. Call it after Base::init().
+  template<typename Derived>
+  std::weak_ptr<Derived> weak_self()
+  {
+    static_assert(std::is_base_of_v<GoalPhaseActionServer, Derived>, "weak_self<Derived>(): not a derived server");
+    return std::static_pointer_cast<Derived>(this->shared_from_this());
+  }
+
   // Fail-closed: a server whose controller has not attached its activity yet
   // (the action server exists from init(), before attach_activity()) admits
   // nothing, rather than accepting a goal no controller is there to run.

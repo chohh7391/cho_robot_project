@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include <pinocchio/spatial/explog.hpp>
@@ -187,10 +188,22 @@ void VLAActionServer::init()
     const auto success_service = node_->get_parameter("success_service").as_string();
     const auto gripper_action = node_->get_parameter("gripper_action").as_string();
 
+    // Every callback registered here holds the server weakly, as the base's do
+    // (GoalPhaseActionServer): after a re-configure has replaced the server, a
+    // callback the executor still runs for the old one does nothing.
+    const std::weak_ptr<VLAActionServer> weak = weak_self<VLAActionServer>();
+
     success_service_ = node_->create_service<std_srvs::srv::Trigger>(
         success_service,
-        std::bind(&VLAActionServer::handle_success_trigger, this,
-                  std::placeholders::_1, std::placeholders::_2));
+        [weak](const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+            if (const auto self = weak.lock()) {
+                self->handle_success_trigger(request, response);
+                return;
+            }
+            response->success = false;
+            response->message = "this VLA action server has been replaced; call again";
+        });
 
     // Served by the behaviour tree's completion waiter, next to the action:
     // /<controller>/vla/notify_completion.
@@ -210,16 +223,21 @@ void VLAActionServer::init()
     vla_action_sub_ = node_->create_subscription<cho_interfaces::msg::ActionChunk>(
         chunk_topic,
         rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
-        std::bind(&VLAActionServer::process_vla_action, this, std::placeholders::_1));
+        [weak](const cho_interfaces::msg::ActionChunk::SharedPtr msg) {
+            if (const auto self = weak.lock()) {
+                self->process_vla_action(msg);
+            }
+        });
 
     gripper_client_ = rclcpp_action::create_client<GripperAction>(node_, gripper_action);
     gripper_goal_options_.goal_response_callback =
-        [this](const std::shared_ptr<rclcpp_action::ClientGoalHandle<GripperAction>> & handle) {
-            if (!handle) {
-                RCLCPP_WARN(node_->get_logger(),
+        [weak](const std::shared_ptr<rclcpp_action::ClientGoalHandle<GripperAction>> & handle) {
+            const auto self = weak.lock();
+            if (self && !handle) {
+                RCLCPP_WARN(self->node_->get_logger(),
                     "[%s] Gripper goal rejected (server still settling from a previous "
-                    "result); will retry on the next crossing.", action_name_.c_str());
-                gripper_rejected_.store(true);
+                    "result); will retry on the next crossing.", self->action_name_.c_str());
+                self->gripper_rejected_.store(true);
             }
         };
     if (!gripper_client_->wait_for_action_server(std::chrono::seconds(1))) {
@@ -229,7 +247,11 @@ void VLAActionServer::init()
     }
 
     non_rt_timer_ = node_->create_wall_timer(
-        std::chrono::milliseconds(5), std::bind(&VLAActionServer::non_rt_tick, this));
+        std::chrono::milliseconds(5), [weak]() {
+            if (const auto self = weak.lock()) {
+                self->non_rt_tick();
+            }
+        });
 }
 
 rclcpp_action::GoalResponse VLAActionServer::handle_goal(

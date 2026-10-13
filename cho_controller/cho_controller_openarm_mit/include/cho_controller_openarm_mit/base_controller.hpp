@@ -128,6 +128,14 @@ protected:
     controller_interface::InterfaceConfiguration
     arm_command_interface_configuration(const std::string & interface) const;
 
+    // Where a position controller starts its command on activation: what the
+    // previous controller left on this arm's position interfaces while that is
+    // still a live hold, else the measured position
+    // (cho_controller_base::live_held_command, paired by joint name). Call it
+    // from on_activate, after OpenArmBaseController::on_activate and before the
+    // first update.
+    Eigen::VectorXd held_command_position() const;
+
     // Send one cycle's command. On MIT hardware each of these also fills the
     // other two thirds of the packet; see the .cpp for why that is mandatory.
     void write_arm_torque(const Eigen::VectorXd & torque);

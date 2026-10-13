@@ -156,10 +156,10 @@ public:
     void clamp_to_joint_limits(Vector7d & q) const;
 
     // Position a fresh open-loop reference should seed from on controller activation.
-    // Prefers whatever the PREVIOUS controller left on the shared position command
-    // interface (this call assumes num_dof_ position-type command interfaces, indexed
-    // 0..num_dof_-1 in joint order) while it is still a live hold of this arm; falls
-    // back to the measured position on a cold start and on a stale command
+    // Prefers whatever the PREVIOUS controller left on each arm joint's position
+    // command interface (paired with the joint by name) while it is still a live hold
+    // of this arm; falls back to the measured position on a cold start, on a stale
+    // command, and for a controller without position interfaces
     // (cho_controller_base::live_held_command). Call it from on_activate, before
     // the hardware's next read(). See base_controller.cpp for why.
     Vector7d held_command_position() const;
@@ -186,6 +186,9 @@ protected:
 
     std::string robot_type_;
     std::string robot_description_;
+    // arm_joint_names(), resolved once in on_configure: on_deactivate and
+    // held_command_position() pair the command interfaces with the joints by it.
+    std::vector<std::string> arm_joints_;
 
     std::string bringup_type_;
 

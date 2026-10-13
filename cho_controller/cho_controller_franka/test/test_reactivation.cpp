@@ -49,6 +49,7 @@
 #include <rcutils/logging.h>
 
 #include "cho_controller_base/goal_phase_action_server.hpp"
+#include "cho_controller_base/held_command.hpp"
 #include "cho_controller_base/testing/controller_manager_harness.hpp"
 #include "cho_interfaces/action/gripper.hpp"
 #include "cho_interfaces/action/joint_space.hpp"
@@ -498,6 +499,93 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("kd_joint", Doubles(7, 40.0)),
         rclcpp::Parameter("use_nullspace_posture", true),
         rclcpp::Parameter("nullspace_posture_weight", 1.0e-3)}},
+    Case{"task_space_ik_controller", Mode::kPosition, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025)}},
+    Case{"task_space_velocity_controller", Mode::kVelocity, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 1.0e-3),
+        rclcpp::Parameter("kp_joint", Doubles(7, 20.0)),
+        rclcpp::Parameter("max_joint_vel", 1.0)}}),
+  [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
+
+// AC2, AC3 (S7): what a controller leaves on its command interfaces when it is
+// switched out in the middle of a goal. Every Franka arm base releases the same
+// way (cho_controller_base::release_on_deactivate): a velocity command is 0, a
+// position command stays where it was and is recorded in the ledger together with
+// the measured position, and nothing is written to an interface the controller
+// does not hold. The mock joints copy a command into the state of the same name on
+// the next read, so one period after the switch the states ARE the commands.
+// The expectations come from the interface semantics, not from a controller.
+class Release : public Reactivation
+{
+protected:
+  template<typename Action>
+  void run_release()
+  {
+    const auto & c = GetParam();
+    const auto interface = interface_of(c.mode);
+    auto client = rclcpp_action::create_client<Action>(
+      harness_->client_node(),
+      "/franka_reactivation/" + std::string(c.name) + (c.task_space ? "/task_space" : "/joint_space"));
+    ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+
+    harness_->cycle(50);
+    const Doubles hold = harness_->states(kJoints, interface);
+    auto handle = send<Action>(client);
+    ASSERT_NE(handle, nullptr) << "goal rejected";
+    harness_->cycle(500);
+    const Doubles moving = harness_->states(kJoints, interface);
+    ASSERT_GT(max_abs_difference(moving, hold), moved_threshold(c.mode))
+      << "the goal never moved the command, so releasing it proves nothing";
+
+    ASSERT_TRUE(harness_->switch_controllers({}, {c.name}));
+    harness_->cycle(1, /*spin=*/false);
+
+    if (c.mode == Mode::kVelocity) {
+      // The command left on a velocity interface is zero: on a real drive it is
+      // a rate, and a rate left behind is a runaway.
+      EXPECT_LT(max_abs_difference(harness_->states(kJoints, "velocity"), Doubles(7, 0.0)), 1e-12)
+        << c.name << " left a non-zero velocity command when it was released";
+      // Releasing a velocity controller writes no position.
+      EXPECT_LT(max_abs_difference(harness_->states(kJoints, "position"), kHome), 1e-12)
+        << c.name << " wrote a position command when it was released";
+      for (const auto & joint : kJoints) {
+        cho_controller_base::HeldCommandLedger::Release record{};
+        EXPECT_FALSE(cho_controller_base::HeldCommandLedger::find(joint + "/position", record))
+          << c.name << " recorded a position hold for " << joint << " it never held";
+      }
+      harness_->cycle(100);
+      EXPECT_LT(max_abs_difference(harness_->states(kJoints, "velocity"), Doubles(7, 0.0)), 1e-12)
+        << "the velocity command came back after the release";
+    } else {
+      // A position command stays where it was left, and the ledger knows where
+      // the arm was when it was left there.
+      const Doubles left = harness_->states(kJoints, "position");
+      for (std::size_t i = 0; i < kJoints.size(); ++i) {
+        cho_controller_base::HeldCommandLedger::Release record{};
+        ASSERT_TRUE(cho_controller_base::HeldCommandLedger::find(kJoints[i] + "/position", record))
+          << c.name << " recorded no hold for " << kJoints[i];
+        EXPECT_NEAR(record.command, left[i], 1e-12) << kJoints[i] << ": recorded command is not what was left";
+        EXPECT_NEAR(record.measured, left[i], 1e-2) << kJoints[i] << ": recorded measurement is not near the hold";
+      }
+    }
+  }
+};
+
+TEST_P(Release, AC2_AC3_AControllerSwitchedOutMidGoalLeavesASafeCommand)
+{
+  if (GetParam().task_space) {
+    run_release<TaskSpace>();
+  } else {
+    run_release<JointSpace>();
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Franka, Release, ::testing::Values(
+    Case{"joint_space_position_controller", Mode::kPosition, false, {}},
+    Case{"joint_space_velocity_controller", Mode::kVelocity, false, {
+        rclcpp::Parameter("kp_joint", Doubles(7, 20.0)),
+        rclcpp::Parameter("max_joint_vel", 1.0)}},
     Case{"task_space_ik_controller", Mode::kPosition, true, {
         rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025)}},
     Case{"task_space_velocity_controller", Mode::kVelocity, true, {
@@ -958,6 +1046,66 @@ TEST_F(VlaStream, AC3_AnUnknownRelativeFrameIsRefusedInEverySpaceAndMovesNothing
       << kind.what << " with relative_frame '" << kind.valid_frame << "' was refused too: "
       << telemetry_.last_reject << " -- so the test chunk is malformed, not just its frame";
   }
+}
+
+// AC3 (S7): the VLA host in velocity mode, released while a chunk is playing. The
+// command it leaves on the velocity interfaces is zero, not the last rate. The
+// mock joints do not move under a velocity command here, so the reference runs
+// away from the measurement and the commanded rate stands at max_joint_vel while
+// the chunk plays; the states read back what was commanded.
+class VlaVelocity : public VlaStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("control_mode", "velocity"),
+      rclcpp::Parameter("kp_joint_vel", Doubles(7, 10.0)),
+      rclcpp::Parameter("max_joint_vel", 1.0)};
+  }
+
+  Doubles rates() {return harness_->states(kJoints, "velocity");}
+};
+
+TEST_F(VlaVelocity, AC3_S7_AVelocityModeVlaReleasedInMotionLeavesZeroVelocity)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  ASSERT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-9) << "an idle hold commands a velocity";
+
+  Doubles offset(7, 0.0);
+  offset[6] = 0.3;
+  publish("joint", "from_anchor", "", "", std::vector<Doubles>(20, offset), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+  ASSERT_TRUE(cycle_until([this] {return std::abs(rates()[6]) > 0.05;}, 500))
+    << "the chunk never produced a velocity command, so releasing it proves nothing";
+
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  harness_->cycle(1, /*spin=*/false);
+  EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
+    << "released in motion, the VLA host left a velocity command behind";
+  harness_->cycle(100);
+  EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
+    << "the velocity command came back after the release";
+}
+
+// The same release with a task-space chunk playing.
+TEST_F(VlaVelocity, AC3_S7_ATaskChunkInMotionIsReleasedToZeroVelocityToo)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  const Pose at_hold = fr3_tcp(harness_->states(kJoints, "position"));
+  publish("task", "absolute", "", "quaternion",
+    std::vector<Doubles>(20, pose_row(add(at_hold.p, Vec3{0.0, 0.05, 0.0}), at_hold.R)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+  ASSERT_TRUE(cycle_until([this] {return max_abs_difference(rates(), Doubles(7, 0.0)) > 0.05;}, 500))
+    << "the chunk never produced a velocity command, so releasing it proves nothing";
+
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  harness_->cycle(1, /*spin=*/false);
+  EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
+    << "released in motion, the VLA host left a velocity command behind";
 }
 
 // AC8, AC11, AC18 (C3, C4, C6): within one goal, joint chunks give way to task

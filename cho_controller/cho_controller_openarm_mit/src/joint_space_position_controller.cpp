@@ -50,9 +50,12 @@ CallbackReturn JointSpacePositionController::on_activate(
     if (OpenArmBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
         return CallbackReturn::FAILURE;
     }
-    state_.q_arm_des = state_.q_arm_init;
-    state_.q_arm_ref = state_.q_arm_init;
-    last_cmd_ = state_.q_arm_init;
+    // Continue from what the previous controller left commanded while that is a
+    // live hold: seeding from the measurement steps the command by the holding
+    // tracking error on the first cycle (see held_command_position()).
+    last_cmd_ = held_command_position();
+    state_.q_arm_des = last_cmd_;
+    state_.q_arm_ref = last_cmd_;
     traj_clock_ = 0.0;
     prev_running_ = false;
     return CallbackReturn::SUCCESS;

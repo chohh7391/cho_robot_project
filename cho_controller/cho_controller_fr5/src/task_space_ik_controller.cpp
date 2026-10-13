@@ -114,7 +114,7 @@ controller_interface::return_type TaskSpaceIKController::update(
     const bool running = action_server_ && action_server_->is_running();
     if (running) {
         const auto abort_and_hold = [this](const std::string & reason) {
-            action_server_->abort_active_goal(reason);
+            action_server_->abort_active_goal(state_, reason);
             prev_running_ = false;
             floor_recovery_active_ = false;
             state_.q_des = q_ref_;
@@ -130,7 +130,7 @@ controller_interface::return_type TaskSpaceIKController::update(
         q_full.head(num_dof_) = q_ref_;
         if (!q_ref_.allFinite()) {
             action_server_->abort_active_goal(
-                "non-finite open-loop reference; refusing to command it");
+                state_, "non-finite open-loop reference; refusing to command it");
             prev_running_ = false;
             floor_recovery_active_ = false;
             return controller_interface::return_type::ERROR;
@@ -238,7 +238,7 @@ controller_interface::return_type TaskSpaceIKController::update(
                        << recovery_maximum_orientation_error_ << " rad. Command a "
                           "directly upward recovery or switch to "
                           "joint-space control and run `home 1`.";
-                action_server_->abort_active_goal(reason.str());
+                action_server_->abort_active_goal(state_, reason.str());
                 floor_recovery_active_ = false;
                 prev_running_ = false;
                 state_.q_des = q_ref_;
@@ -346,7 +346,7 @@ controller_interface::return_type TaskSpaceIKController::update(
                            << minimum_tool_height_ << " m). Holding the last safe "
                               "command; use joint-space `home 1` to recover.";
                 }
-                action_server_->abort_active_goal(reason.str());
+                action_server_->abort_active_goal(state_, reason.str());
                 floor_recovery_active_ = false;
             } else if (floor_recovery_active_ &&
                        candidate_margin < floor_recovery_high_water_) {

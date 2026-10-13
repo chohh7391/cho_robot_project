@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "cho_controller_openarm_mit/base_controller.hpp"
+#include "cho_controller_base/held_command.hpp"
 #include "cho_controller_common/trajectory/motion_limits_params.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -360,7 +362,25 @@ CallbackReturn OpenArmBaseController::on_activate(const rclcpp_lifecycle::State 
 CallbackReturn OpenArmBaseController::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
     activity_.deactivated();
+    // Velocity commands to 0; position commands recorded with where the arm is
+    // now, so the next position controller can tell a live hold from a stale
+    // command (cho_controller_base::live_held_command); effort is left as it is.
+    // Paired by joint name, which also covers the MIT layout's three interfaces
+    // per joint: its position command stays the hold, never 0. The interfaces
+    // are still claimed here.
+    const auto claimed = static_cast<std::size_t>(2 * num_dof_ + (has_gripper_ ? 2 : 0));
+    if (state_interfaces_.size() >= claimed) {
+        update_joint_states();
+        cho_controller_base::release_on_deactivate(command_interfaces_, joint_names_, state_.q_arm);
+    } else {
+        cho_controller_base::release_on_deactivate(command_interfaces_, joint_names_, Eigen::VectorXd());
+    }
     return CallbackReturn::SUCCESS;
+}
+
+Eigen::VectorXd OpenArmBaseController::held_command_position() const
+{
+    return cho_controller_base::live_held_command(command_interfaces_, joint_names_, state_.q_arm);
 }
 
 controller_interface::return_type OpenArmBaseController::update(
