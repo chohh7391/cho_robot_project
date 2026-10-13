@@ -53,9 +53,10 @@ jobs:
           ament_xmllint $(find . -name package.xml -not -path './extern/*')
 
       # Runs each package's own test_flake8.py / test_pep257.py so CI and
-      # `colcon test` stay in agreement about the configured style. Every Python
-      # package that ships those tests is listed; a package added without one
-      # is not linted until it gets them.
+      # `colcon test` stay in agreement about the configured style. Every
+      # ament_python package that ships a test_flake8.py is listed; a package
+      # added without one is not linted until it gets one. The ament_cmake
+      # packages' flake8 runs in their colcon test (ci.yml).
       - name: flake8 + pep257 (Python packages)
         shell: bash
         run: |
@@ -63,8 +64,10 @@ jobs:
           source /opt/ros/humble/setup.bash
           for pkg in \
               cho_bringup/cho_bringup_common \
-              cho_task_manager \
-              cho_perception/cho_object_pose; do
+              cho_control_tools \
+              cho_perception/cho_object_pose \
+              cho_robot_config \
+              cho_task_manager; do
             echo "::group::${pkg}"
             # ls fails when one of the two is absent; keep the one that exists.
             tests=$(cd "${pkg}" && ls test/test_flake8.py test/test_pep257.py 2>/dev/null || true)

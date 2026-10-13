@@ -500,22 +500,29 @@ void OpenArmBaseController::write_arm_velocity(const Eigen::VectorXd & velocity)
 
 double OpenArmBaseController::nominal_period(const rclcpp::Duration & period)
 {
+    // The per-cycle period for the controllers in this library that advance
+    // their own trajectory clock or integrate an open-loop reference. Such code
+    // calls this, never 1.0 / get_update_rate(), a literal dt, or
+    // period.seconds() directly. (The MIT drive-protocol controllers do not
+    // derive from this class: DirectControllerBase accumulates the measured
+    // period itself, and the FJT pair samples by the update time.)
+    //
     // get_update_rate() reports the controller's OWN rate, which is 0 whenever it
     // inherits the controller_manager's - and none of this project's configs set
-    // a per-controller update_rate, so it is 0 in every bringup. Falling back to
-    // a hardcoded 1 kHz was therefore only ever correct for MuJoCo, which embeds
-    // the controller_manager and runs it at 1000 Hz. Under Isaac the
-    // controller_manager runs at 250 Hz, so a 1 ms nominal advanced the
-    // trajectory clock at a QUARTER of sim time and every goal took four times
-    // its requested duration - which looks exactly like the arm tracking slowly
-    // against a weak drive, not like a clock bug.
+    // a per-controller update_rate, so it is 0 in every bringup. The manager's
+    // rate differs per bringup (config/<env>/controllers*.yaml), so a literal dt
+    // is right only where it happens to match: 1 ms under a 250 Hz manager
+    // advances the trajectory clock at a QUARTER of sim time and stretches every
+    // goal fourfold, which looks like the arm tracking slowly against a weak
+    // drive, not like a clock bug.
     //
     // The measured period is used to estimate the true rate rather than to
     // advance the clock directly: it jitters by up to 2x, and parameterising a
     // position trajectory by it makes each cycle's command step - and so the
-    // velocity the actuator infers from it - jitter in proportion. Seeded from
-    // the first sane cycle so the estimate is right from the first goal, then
-    // smoothed.
+    // velocity the actuator infers from it - jitter in proportion; it is exactly
+    // 0 on a cycle that saw no new state, where a difference divided by it is
+    // NaN. Seeded from the first sane cycle so the estimate is right from the
+    // first goal, then smoothed; 1 ms until that cycle.
     const unsigned int rate = get_update_rate();
     if (rate > 0) {
         return 1.0 / rate;

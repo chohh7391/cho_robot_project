@@ -6,9 +6,10 @@
     ros__parameters:
       # Must equal the safety profile update_rate_hz and the
       # mit_expected_update_rate_hz launch argument; the hardware refuses
-      # to configure when they disagree. Fits the CAN bus only because the
-      # per-cycle 0xCC state query was removed - with it, 750 Hz needs
-      # about 101% of a 1 Mbps CAN FD bus.
+      # to configure when they disagree. 750 Hz fits the CAN bus with the launch
+      # default mit_state_from_command_reply:=true (state from the reply to the
+      # MIT command frame, no per-cycle 0xCC query: about 50% of a 1 Mbps CAN FD
+      # bus); with the query (:=false) it needs about 101%.
       update_rate: 750
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
@@ -600,7 +601,8 @@
       max_task_ang_vel: 0.5
       max_task_lin_acc: 0.4
       max_joint_ref_acc: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      # The real MIT adapter has no finger transport.
+      # This controller owns no finger interface; a hand is driven by
+      # gripper_controller (hand:=true), so gripper_actions are ignored.
       enable_gripper: false
 
   # VLA reference source, DERIVED from the commissioned TaskSpace block
@@ -793,7 +795,8 @@
       max_task_ang_vel: 0.5
       max_task_lin_acc: 0.4
       max_joint_ref_acc: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      # The real MIT adapter has no finger transport.
+      # This controller owns no finger interface; a hand is driven by
+      # gripper_controller (hand:=true), so gripper_actions are ignored.
       enable_gripper: false
 
   left_gripper_controller:

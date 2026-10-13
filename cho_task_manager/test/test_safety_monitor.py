@@ -206,7 +206,7 @@ def test_force_within_the_limit_keeps_running():
 
 def test_force_magnitude_trips_regardless_of_direction():
     """Magnitudes are rotation invariant, which is why no frame transform is
-    needed here -- a per-axis limit would need R_tcp_ft.
+    needed here -- a per-axis limit would need R_tcp_ft (cho_sensor/bota_ft_sensor/README.md, Frames).
     """
     for direction in ((60.0, 0.0, 0.0), (0.0, -60.0, 0.0), (36.0, 36.0, 36.0)):
         monitor = _arm(_monitor(max_force_n=50.0), force=direction)

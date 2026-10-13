@@ -1,6 +1,8 @@
 # cho_realsense
 
-An Intel RealSense D435. Camera only — detection lives in `cho_object_pose`.
+An Intel RealSense D435. Camera only — detection lives in `cho_object_pose`. The
+launch includes the stock `realsense2_camera` `rs_launch.py` and hands it
+`config/d435.yaml` through its own `config_file` argument.
 
 ```bash
 ros2 launch cho_realsense d435.launch.py
@@ -34,10 +36,12 @@ picks one for you: intrinsics change with resolution.
 
 ## Frames
 
-The driver publishes `camera_link` down to the optical frames. Supply exactly
-one transform, into `camera_link`. Do not also model the optical frames with
-`realsense2_description` — two publishers for one static transform resolve
-intermittently and without an error.
+The driver publishes `camera_link` down to the optical frames, and the launch
+publishes no camera-to-robot transform: supply exactly one, into `camera_link`
+([Mounting the camera](../../docs/apriltag_perception.md#mounting-the-camera)).
+`realsense2_description` models the optical frames too; do not include it as
+well — two publishers for one static transform resolve intermittently and
+without an error.
 
 ## Parameters are worth checking, not guessing
 

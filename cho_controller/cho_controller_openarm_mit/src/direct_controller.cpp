@@ -610,10 +610,11 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
 {
   publish_protocol_snapshot();
   if(state_==State::INACTIVE||state_==State::SAFE_STOPPED)return controller_interface::return_type::OK;
-  // Trajectory time is controller-local rather than ROS/wall time. MuJoCo's
-  // /clock can pause or jump during GUI reset; a fixed accumulated period keeps
-  // q_des/dq_des continuous and is the same contract used by Cho's impedance
-  // action controllers.
+  // Trajectory time is controller-local rather than ROS/wall time, so a /clock
+  // that pauses or jumps (MuJoCo GUI reset) cannot step q_des/dq_des. It
+  // accumulates the measured period, and only a finite one in (0, 0.1) s: a
+  // zero, negative, non-finite or longer period advances neither this clock
+  // nor the return-to-zero and hand-off timers below. TaskSpace does the same.
   const double dt = period.seconds();
   if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) action_control_time_ += dt;
   // Unconditional: the offset must stay valid even on a cycle whose dt was

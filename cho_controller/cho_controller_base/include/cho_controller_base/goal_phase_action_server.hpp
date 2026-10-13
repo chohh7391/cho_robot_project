@@ -28,13 +28,15 @@
 namespace cho_controller_base
 {
 
-// The owning controller's lifecycle, as its action servers see it. The
-// controller calls activated() from on_activate and deactivated() from
-// on_deactivate. A server remembers the activation count a goal was accepted
-// under, so a goal can never outlive that activation: while the controller is
-// inactive its update() (and so compute()) never runs, and a goal left active
-// would otherwise hang until re-activation and then resume toward its old target
-// from its old start time.
+// The owning controller's lifecycle, as its action servers see it. Every base
+// controller owns one, calls activated() from on_activate and deactivated() from
+// on_deactivate, and attaches its servers to it (attach_activity()): goals are
+// rejected while it is inactive, and an active goal is aborted, with the reason
+// in the result's message, when it is deactivated. A server remembers the
+// activation count a goal was accepted under, so a goal can never outlive that
+// activation: while the controller is inactive its update() (and so compute())
+// never runs, and a goal left active would otherwise hang until re-activation
+// and then resume toward its old target from its old start time.
 class ControllerActivity
 {
 public:
@@ -71,9 +73,10 @@ struct NoTrajectory
 //                              write the reason, then publish the terminal
 //                              phase, so exactly one ending wins and its reason
 //                              is visible to whoever sees that phase)
-//   kFinish* -> kIdle         (non-RT finisher timer: performs the actual
-//                              succeed()/abort()/canceled() calls and releases
-//                              the goal handle)
+//   kFinish* -> kIdle         (non-RT finisher timer, every 5 ms: performs the
+//                              actual succeed()/abort()/canceled() calls and
+//                              releases the goal handle; it also publishes the
+//                              progress feedback)
 //
 // The RT compute() must never touch the goal handle or any rclcpp_action API:
 // those take internal mutexes, allocate and serialize messages, any of which can
@@ -116,7 +119,11 @@ inline constexpr const char * kReasonReactivated =
 inline constexpr const char * kReasonCanceled = "canceled on request";
 
 // Template over the action, the controller's state struct (what compute() reads
-// and writes), and the trajectory type the server plays.
+// and writes), and the trajectory type the server plays. JointSpaceServer and
+// TaskSpaceServer (joint_space_server.hpp, task_space_server.hpp) build on it
+// and serve every arm; a robot's own servers/ header is a thin adapter over
+// them: which state field holds the measured joints, where a goal starts, and
+// the success-threshold defaults.
 template<typename ActionT, typename StateT, typename TrajectoryT = NoTrajectory>
 class GoalPhaseActionServer
 {

@@ -34,7 +34,9 @@ namespace cho_controller_base
 // hardware session can leave zeros or a stale command there, which is why the
 // held value is used only within `band` [rad] of the measurement on every joint:
 // a live hold differs by the tracking error (< ~0.02 rad), zeros and stale values
-// sit far outside 0.05.
+// sit far outside 0.05. ur_robot_driver resets its position commands to the
+// measurement on every position-mode start, so on a real UR the held value is
+// the measurement.
 //
 // The band alone cannot tell a live hold from a stale command that happens to
 // be close; live_held_command() below adds the rule that can. Controllers use

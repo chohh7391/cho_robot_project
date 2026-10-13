@@ -257,11 +257,11 @@ limitations under the License.
     </xacro:macro>
 
     <!-- Only finger_joint1 is actuated. finger_joint2 is a URDF <mimic> of it
-         (and a MuJoCo equality constraint), so it carries no interfaces. The
-         new real MIT adapter intentionally owns exactly seven arm motors; it
-         has no gripper transport yet, therefore real_mit_hardware never adds
-         a finger interface to that SystemInterface. The hand geometry remains
-         in the URDF for visualization. -->
+         (and a MuJoCo equality constraint), so it carries no interfaces. On
+         the real MIT adapter (hand:=true) finger_joint1 is the arm
+         component's eighth motor, with position and max_effort command
+         interfaces (configure_joint, gripper:=true); see
+         cho_hardware_openarm_mit_real/README.md, Gripper. -->
     <xacro:macro name="one_hand_joints" params="prefix mit_selected:=true">
       <xacro:if value="${hand}">
         <!-- A real bimanual arm this bringup did not select is a state-only

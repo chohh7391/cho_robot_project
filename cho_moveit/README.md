@@ -28,47 +28,27 @@ this stack.
 
 ## Actions
 
-The bridge serves `JointSpace` and `TaskSpace` the way a controller does
-(`cho_interfaces/CONTRACT.md`): as `~/joint_space` and `~/task_space` under its
-own node, which every launch here names `<robot>[_<profile>]_moveit_action_bridge`
-(`cho_robot_config.moveit_bridge_node()`), e.g. `/fr5_moveit_action_bridge/joint_space`
-or `/openarm_left_moveit_action_bridge/task_space`. It refuses to start under any
-other name, since the registry's action preferences -- what every client binds to --
-name it that way.
+The bridge serves `JointSpace` and `TaskSpace` the way a controller does, as
+`~/joint_space` and `~/task_space` under its own node, which every launch here names
+`<robot>[_<profile>]_moveit_action_bridge` (`cho_robot_config.moveit_bridge_node()`),
+e.g. `/fr5_moveit_action_bridge/joint_space` or
+`/openarm_left_moveit_action_bridge/task_space`. The action names, accepted frames,
+goal rejections, `duration_sec` (a minimum, by uniform slow-down of the plan) and the
+cancel through move_group's `trajectory_execution_event` are specified in
+[CONTRACT.md](../cho_interfaces/CONTRACT.md#names),
+[Frames](../cho_interfaces/CONTRACT.md#frames) and
+[The MoveIt bridge](../cho_interfaces/CONTRACT.md#the-moveit-bridge).
 
-Goals follow the contract:
+Other bridge parameters: `planning_time_sec` (5 s, the planning budget; never taken from
+the goal) and `execute_trajectory_action` (`/execute_trajectory`). Verified in FR5
+MuJoCo: a cancel stops the arm within 0.25 s.
 
-- **`duration_sec` is the motion's minimum length**, as for a controller. The bridge
-  plans plan-only (`MoveGroup`), with a planning budget of its own
-  (`planning_time_sec`, default 5 s), then, if MoveIt's time parameterization made the
-  plan shorter than `duration_sec`, slows it uniformly -- times scaled up, velocities
-  and accelerations down -- and executes it through move_group's `ExecuteTrajectory`
-  (`execute_trajectory_action`, default `/execute_trajectory`). It never speeds a plan
-  up. Until this change `duration_sec` was spent as the planning budget (clamped to
-  1-10 s) and the motion took whatever MoveIt's scaling gave it.
-- Joints may be named; a target with the wrong number of positions, or a non-finite
-  one, is **rejected** when it arrives rather than accepted and then aborted, as is a
-  pose with a non-finite value or a zero quaternion, a `duration_sec` over
-  `MAX_GOAL_DURATION_SEC` (3600 s), a home goal while home is disabled, a relative
-  goal while TF has no `world_frame -> ee_link`, and any goal while nothing
-  subscribes to move_group's `trajectory_execution_event` (no way to stop it).
-- A `PoseStamped`'s `frame_id`, absolute: empty, the planning frame (`world_frame`,
-  the registry's `model.base_frame`), or the registry's `model.arm_base_link` while TF
-  has it at the planning frame (checked when the goal arrives). Relative: empty or the
-  EE link. Any other frame is rejected, not transformed. Clients stamp
-  `cho_robot_config.task_goal_frame()`, which is one of these on every robot here.
-- A relative goal is composed against TF's `world_frame -> ee_link`, so `world_frame`
-  must be in TF. It is on every bringup in the table above: the FR5, UR5e and OpenArm
-  descriptions are rooted at `world`, and so is the Franka **Gazebo** description --
-  the real, MuJoCo and Isaac FR3 descriptions are rooted at `base` and have no
-  `world`, and none of them has a MoveIt entry point. One that is added needs a
-  `world` in TF first.
-
-Only the execution can move the arm. A cancel stops it by publishing `"stop"` on
-move_group's `trajectory_execution_event` (Humble ignores the action cancel; see
-CONTRACT.md, Cancel). Only an execution that reports no terminal state (transport
-failure, no result, nothing within 10 s of the stop) latches the bridge's fault. A
-planning failure aborts the goal and leaves the bridge usable.
+A relative goal is composed against TF's `world_frame -> ee_link`, so `world_frame`
+must be in TF. It is on every bringup in the table above: the FR5, UR5e and OpenArm
+descriptions are rooted at `world`, and so is the Franka **Gazebo** description --
+the real, MuJoCo and Isaac FR3 descriptions are rooted at `base` and have no
+`world`, and none of them has a MoveIt entry point. One that is added needs a
+`world` in TF first.
 
 ## Bimanual OpenArm
 
@@ -93,9 +73,9 @@ ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py \
   bimanual:=true arm:=both mujoco_mit_prototype:=true
 ```
 
-This selects the one 14-axis `bimanual_follow_joint_trajectory_mit_controller`,
-which owns the paired transaction used for collision-aware bimanual planning and
-is mutually exclusive with the independent direct MIT controllers.
+This selects the one 14-axis `bimanual_follow_joint_trajectory_mit_controller`, which
+is mutually exclusive with the independent direct MIT controllers
+([direct vs FJT](../docs/controllers_and_bringup.md#openarm-mit-direct-vs-fjt)).
 
 Other robot/backend combinations are not implemented yet. Non-Gazebo UR/Franka
 MoveIt must not be inferred from these configurations.

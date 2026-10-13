@@ -21,7 +21,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # type compiles it at -O0. Not -Ofast: it implies -ffinite-math-only, which folds
 # isfinite()/isnan() to constants and lets the dense solver's `objective ==
 # infinity` infeasibility test compile away, so an infeasible QP can come back
-# OPTIMAL. In MuJoCo the task-space QP took the same ~10 us per cycle either way.
+# OPTIMAL; Ruckig's templates rely on isnan()/isinf() the same way. In MuJoCo the
+# task-space QP took the same ~10 us per cycle either way. test_point_to_point
+# (FiniteMathGuard) fails if this library is built with finite-math. The trap in
+# general: cho_vla_core/DESIGN.md, "Finite math".
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()

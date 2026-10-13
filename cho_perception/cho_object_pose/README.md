@@ -37,16 +37,12 @@ TaskSpaceActionBehavior(name='Reach_Cube', target_pose_key='grasp_pose', ...)
 
 ## Why this node does not know where the camera is
 
-It asks TF for `base ← tag_<id>` and lets TF compose whatever chain lies between. The mount
-only decides where one link of that chain comes from:
-
-| Mount | Provide the camera→robot transform by |
-|---|---|
-| Wrist bracket (eye-in-hand) | a camera link in the robot URDF |
-| Tripod (eye-to-hand) | one `static_transform_publisher` from the robot base |
-
-Either way this node, its config and its tests are unchanged. The mount can therefore be
-decided — and the hand-eye calibration done — after everything here is working.
+It asks TF for `base ← tag_<id>` and lets TF compose whatever chain lies between. Where
+the camera→robot transform comes from (a URDF link for a wrist bracket, one
+`static_transform_publisher` for a tripod) is the bench's business, in
+[Mounting the camera](../../docs/apriltag_perception.md#mounting-the-camera): this node, its
+config and its tests are unchanged either way. The mount can therefore be decided — and the
+hand-eye calibration done — after everything here is working.
 
 ## What it gates on, and why
 
@@ -145,7 +141,8 @@ The division that matters is which parameters follow the job and which follow th
 | tag id, printed **tag size**, grasp offset, output topic | the task's table — the detector is started from it |
 | the object's display `shape` — size, origin, colour | the task's table: it is the same object the offsets are about |
 | `min_samples`, `min_cameras`, `max_position_spread_m` — how closely repeats must agree | the task (a coarse pick tolerates what an insertion does not) |
-| tag family, `decimate`, `max_hamming`, `min_decision_margin`, `min_edge_px` | here (they follow from intrinsics and the lens, not the job) |
+| tag family, `decimate`, `max_hamming` | here, `config/apriltag_36h11.yaml` (the detector; its own `tag.ids` / `tag.sizes` are the standalone default only) |
+| `min_decision_margin` (35), `min_edge_px` (25) | here, the node's parameters (they follow from intrinsics and the lens, not the job) |
 | how many cameras there are and where their detections come out | here, `config/cameras.yaml` — bench topology, not job knowledge |
 | `base_frame` | neither — read from `cho_robot_config`, so it cannot drift from what the action server assumes |
 
@@ -185,7 +182,7 @@ camera's own systematic **range** error, and that is a different problem:
 | --- | --- |
 | `intersect` *(default)* | each camera contributes the **ray** it saw the tag along, and the pose is the point closest to all of them. Keeps what each camera knows and discards what it does not. Needs `optical_frame`. |
 | `inverse_distance` | weight by 1/d², average the translations, SLERP the rotations — the published rule, kept so it can be **run and measured** rather than argued about. |
-| `median` | the component-wise median across every camera. What this package did before either existed. |
+| `median` | the component-wise median across every camera. |
 
 A weighted mean is a convex combination: it stays on the segment between the two
 estimates, and the crossing point is not on it. That is why these are different
@@ -223,9 +220,9 @@ anyone asks:
            rs_right: rejected: decision_margin 21.4 < 35.0 [margin 21, edge 29px] (0.03s ago)
 ```
 
-Each camera still needs its own transform into the robot — one
-`static_transform_publisher` per camera, into that camera's own root frame. This
-node never names any of them.
+Each camera still needs its own transform into the robot, into that camera's own root
+frame ([Where the cameras are](../../docs/apriltag_perception.md#where-the-cameras-are)).
+This node never names any of them.
 
 ## One camera can override another
 
@@ -356,11 +353,9 @@ The meshes come from the vendors' description packages
 `cho_realsense` and `cho_oak`. Without one installed rviz logs that it cannot
 load the resource and draws nothing; everything else keeps working.
 
-> **The depthai driver publishes its own `/robot_description`.** Beside a robot
-> bringup that is a second publisher on one topic: rviz's RobotModel keeps
-> whichever arrived last, so the arm disappears and a camera body shows up in
-> its place, with no error anywhere. `cho_oak`'s launch remaps it to
-> `/<name>/robot_description` for exactly this reason.
+The depthai driver's own `/robot_description` is remapped away by `cho_oak`'s launch
+([cho_oak](../../cho_sensor/cho_oak/README.md#frames)); without that the camera body replaces
+the arm in rviz's RobotModel.
 
 ### Keeping what was found on screen
 
@@ -372,7 +367,7 @@ Start once and leave it up across task runs. The pose node belongs to the task
 launch and goes when the tree finishes, and its markers expire a second after
 the last detection. `object_marker_memory` republishes them with no lifetime:
 full strength for `hold_sec` (3 s) after the last detection, then dimming over
-`fade_sec` (5 s) to `floor_alpha` (25%) of the object's own alpha, where it
+`fade_sec` (5 s) to `floor_alpha_fraction` (0.25) of the object's own alpha, where it
 stays; the label gains its age once stale. `forget_sec` drops it entirely
 (0, the default, never does).
 
@@ -437,6 +432,8 @@ camera stale while it is publishing poses. The node says so out loud when it hap
 | `mock_publisher.py` | A fixed pose on the output topic, for wiring tasks without hardware |
 | `fake_scene.py` | The simulated bench: scene parsing, the field-of-view cone, the line-of-sight occlusion test, apparent tag size. No ROS |
 | `fake_detections.py` | The ROS adapter for it — TF in, detections and tag frames out, so `node.py` runs for real without a camera |
+| `memory.py` | How a remembered detection ages (hold, fade, floor). No ROS |
+| `marker_memory.py` | The ROS adapter for it: `object_marker_memory` republishes the markers with no lifetime and draws the lines of sight |
 
 The split is the same one `cho_vla_core` uses, for the same reason: the part worth testing
 does not need a robot.

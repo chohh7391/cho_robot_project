@@ -291,9 +291,9 @@ controller_interface::CallbackReturn VlaController::on_configure(
 
   if (!enable_gripper_) {
     RCLCPP_INFO(get_node()->get_logger(),
-      "enable_gripper is false: ActionChunk.gripper_actions will be ignored. The real "
-      "OpenArm MIT adapter has no finger transport, so this is correct there; a "
-      "simulation bringup with a hand can turn it on.");
+      "enable_gripper is false: ActionChunk.gripper_actions will be ignored. This "
+      "controller owns no finger interface; a hand is driven by cho_controller_gripper, "
+      "and with enable_gripper true the gripper edges are only logged.");
   }
 
   RCLCPP_INFO(get_node()->get_logger(),
@@ -516,9 +516,9 @@ void VlaController::vla_non_rt_tick_impl()
 
   const int pending = pending_gripper_.exchange(0);
   if (pending != 0 && enable_gripper_) {
-    // Placeholder for a future finger transport: the real MIT adapter has none,
-    // and a simulation bringup routes the hand through the robot-independent
-    // gripper controller rather than through this producer's 39 interfaces.
+    // This producer owns no finger interface (its 39 are the arm's); a hand is
+    // driven by the robot-independent cho_controller_gripper on its own
+    // interfaces, so a requested edge can only be logged here.
     RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
       "Gripper command %s requested by the policy, but this controller owns no finger "
       "interface; wire cho_controller_gripper in the bringup instead.",

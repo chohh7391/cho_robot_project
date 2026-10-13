@@ -242,19 +242,19 @@ def generate_launch_description():
                     'posture before joint stiffness is ramped to zero.')
         # One profile for the whole session, whichever phases it contains. The
         # two real profiles differ in only three fields - kp_max, kd_max and
-        # kp_slew_per_s - and the first two are incidental: they carry
-        # upstream's canonical homing gains, which assume kp = 70. This project
-        # homes at startup_kp = 3, so the conservative ceilings hold it
-        # comfortably, and the phases already have separate gain parameters
-        # (startup_kp/startup_kd against kp/kd).
+        # kp_slew_per_s - and both carry upstream's homing ceilings
+        # (return_to_zero_kp_max/kd_max, [70, ...]), which validate the
+        # return_to_zero gains set below. kp_max/kd_max are the per-joint TASK
+        # ceilings the adapter enforces on every emitted tuple and the
+        # controller validates its kp/kd against; the return-to-zero profile's
+        # are the homing gains, so it rejects the controllers' kd of 5 on
+        # joints 1-4 at configure and is not selected.
         #
-        # Selecting the return-to-zero profile whenever return_to_zero was true
-        # therefore bought nothing and cost a great deal: it validated the TASK
-        # gains against ceilings sized for homing, so a Cartesian kd of 5 was
-        # rejected at configure with 'joint 1 gains/torque limit exceed safety
-        # profile' - the same wall three separate times in commissioning. The
-        # remaining difference, a 350/s rather than 10/s kp slew, only matters
-        # for homing gains far larger than this project uses.
+        # With return_to_zero the homing gains (startup_kp/startup_kd, or
+        # return_to_zero_kp/kd below) ramp up from the controller's own gains at
+        # kp_slew_per_s (10/s here, 350/s in the return-to-zero profile) and are
+        # clamped at this profile's kp_max/kd_max, so homing is weaker than the
+        # [70, ...] target on every joint whose task ceiling is lower.
         profile = 'real_conservative_commissioning'
         robot_description = robot_description_for(profile)
         robot_state_publisher = Node(

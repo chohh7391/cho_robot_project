@@ -35,9 +35,12 @@ double resolve(const double requested, const double fallback, const double ceili
   return std::clamp(value, 0.0, ceiling);
 }
 
+// The measured period, capped at 0.1 s. A zero or non-finite period is a cycle
+// in which no time passed: it returns 0, so the width ramp, the stall dwell and
+// the goal and publish timers stay where they are.
 double bounded_dt(const double dt)
 {
-  return (std::isfinite(dt) && dt > 0.0) ? std::min(dt, 0.1) : 1e-3;
+  return (std::isfinite(dt) && dt > 0.0) ? std::min(dt, 0.1) : 0.0;
 }
 }  // namespace
 
@@ -302,6 +305,11 @@ double GripperController::measure_width_rate(const double width, const double dt
 {
   if (has_velocity_state_) {
     return mapping_.to_width_rate(state_interfaces_[velocity_state_index_].get_value());
+  }
+  // No time passed: keep the last rate and the sample it was taken from, so the
+  // next difference spans the whole interval.
+  if (dt <= 0.0) {
+    return measured_speed_;
   }
   const double rate = has_last_measured_ ? (width - last_measured_width_) / dt : 0.0;
   last_measured_width_ = width;

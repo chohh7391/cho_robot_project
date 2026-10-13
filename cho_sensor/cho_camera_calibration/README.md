@@ -1,7 +1,8 @@
 # cho_camera_calibration
 
 The calibration target, the procedure, and the resulting `camera_info` files.
-`config/cameras.yaml` says which camera each file belongs to.
+`config/cameras.yaml` lists each camera with its model, both serial numbers
+(`serial` and `usb_serial`), firmware and the files that belong to it.
 
 ## Target
 
@@ -48,7 +49,8 @@ infra1, not colour — colour is rolling shutter, infra1 is rectified on device.
 > result has nowhere to go. A D435 calibration is useful only once a
 > `camera_info` relay exists. Not built.
 
-OAK-D needs none of this: see `cho_oak`.
+`depthai_ros_driver` and `v4l2_camera` both accept a calibration, unlike the
+D435. OAK-D needs none of this: see `cho_oak`.
 
 ## Collecting samples
 

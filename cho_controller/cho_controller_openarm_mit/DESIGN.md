@@ -1,26 +1,52 @@
 # OpenArm MIT controller boundary
 
 This package produces controller commands only. It does not connect CAN, MuJoCo,
-Isaac Sim, or an actuator; those are hardware-adapter responsibilities.
+Isaac Sim, or an actuator; those are hardware-adapter responsibilities. The command protocol is
+[docs/openarm_mit_contract_v1.md](../../docs/openarm_mit_contract_v1.md); which instance each
+bringup spawns is [docs/controllers_and_bringup.md](../../docs/controllers_and_bringup.md).
+
+## Package layout
+
+One package, two controller families in two libraries; the namespace says which is which. Every
+plugin lookup name is `cho_controller_openarm_mit/<Class>` (`controller_plugins.xml`).
+
+| Library | Namespace | Classes | Links `cho_controller_common` |
+| --- | --- | --- | --- |
+| `cho_controller_openarm_shared` | `cho_controller::openarm` | `EEStateBroadcaster`, `JointSpaceImpedanceController`, `JointSpacePositionController`, `JointSpaceVelocityController` (all `OpenArmBaseController`) | yes |
+| `cho_controller_openarm_mit` | `cho_controller_openarm_mit` | the MIT drive-protocol producers: `DirectControllerBase` and its `JointPosition`/`JointVelocity`/`JointImpedance`/`DirectTorque`/`DampedTorque`/`CompensatedTorque` controllers, `JointImpedanceActionController`, `TaskSpaceImpedanceController`, `VlaController`; `BimanualFollowJointTrajectoryController` and `SingleArmFollowJointTrajectoryController` | no |
+
+The `cho_controller::openarm` classes use dynamic-size Eigen and name-based Pinocchio indexing, so one
+class serves the single arm and either arm of the bimanual torso. They speak position/velocity/effort,
+not the MIT protocol. `ee_state_broadcaster` is spawned by every MIT config too: the MIT producers
+have no broadcaster of their own and publish no `~/controller_state` or `~/ee_state`
+([cho_interfaces/CONTRACT.md](../../cho_interfaces/CONTRACT.md) lists what they serve).
+
+## Direct and FollowJointTrajectory producers
 
 Ownership has two mutually exclusive modes:
 
 - `DIRECT_INDEPENDENT`: either arm may be acquired/released independently. Each arm has its own
-  generation, lease age, acknowledgement, and fault latch.
+  generation, lease age, acknowledgement, and fault latch. The direct producers
+  (`DirectControllerBase` and everything derived from it) and `SingleArmFollowJointTrajectoryController`
+  run in this mode, each claiming one arm's 39 command and reading its 19 state interfaces.
 - `MOVEIT_PAIRED`: both complete arms are owned together. A write requires equal generations and
-  validates both snapshots before either acknowledgement is committed.
+  validates both snapshots before either acknowledgement is committed. Only
+  `BimanualFollowJointTrajectoryController` runs in this mode.
 
-The prototype controller exports `~/follow_joint_trajectory`, which resolves under the controller
-node to the standard controller-scoped action name and uses
-`control_msgs/action/FollowJointTrajectory`. It claims 79 command interfaces: 7 joints times 5 MIT
-fields plus 4 protocol fields for each arm, plus the exclusive
-`openarm_bimanual/mit_pair_ownership` command token (79 total). It reads both arms' measured
+`SingleArmFollowJointTrajectoryController` is `BimanualFollowJointTrajectoryController(paired=false)`:
+the same implementation claiming one arm, so MoveIt can drive one arm of the torso. The paired
+controller exports `~/follow_joint_trajectory`, which resolves under the controller node to the
+standard controller-scoped action name and uses `control_msgs/action/FollowJointTrajectory`. It
+claims 79 command interfaces: 7 joints times 5 MIT fields plus 4 protocol fields for each arm, plus
+the exclusive `openarm_bimanual/mit_pair_ownership` command token. It reads both arms' measured
 position/velocity and protocol state plus `openarm_bimanual/mit_pair_stop_ready` (39 state claims).
 Two independent seven-axis direct producers never claim this token, so aggregating their arm claims
-cannot impersonate the paired MoveIt transaction. A complete permutation of the 14 joint names is reordered once into the canonical
-`openarm_left_joint1..7, openarm_right_joint1..7` order; partial and duplicate lists are rejected.
+cannot impersonate the paired MoveIt transaction; do not activate a direct producer and the paired
+controller together. A complete permutation of the 14 joint names is reordered once into the
+canonical `openarm_left_joint1..7, openarm_right_joint1..7` order; partial and duplicate lists are
+rejected.
 
-The update-driven producer seeds both arms from measured state and waits for equal hardware
+The update-driven FJT producer seeds both arms from measured state and waits for equal hardware
 acknowledgements before accepting a goal. It uses cubic Hermite position/velocity sampling when
 endpoint velocities are supplied (and linear interpolation otherwise), and writes all tuple
 fields before the paired commit generation, refreshes the bounded lease, reports feedback, and uses
@@ -30,26 +56,39 @@ time tolerance are honored.
 Cancel and replacement-goal preemption enter `SAFE_REQUESTED` without blocking a ROS or lifecycle
 callback. It writes a common newer `mit_safe_request_generation` last to both arms, so hardware owns
 the measured SAFE submission. Only an equal `safe_ack_generation`, SAFE status, and pair stop-ready
-state completes the old action; replacement
-goals then repeat measured seeding and ack-before-ramp. Missing ack, session change, INVALID,
-DISABLED or FAULT produces a bounded abort/error. A normal lifecycle stop first calls the
-`~/request_safe_stop` service until it reports SAFE acknowledged, then deactivation returns SUCCESS
-immediately. Service completion additionally requires the hardware-owned pair stop-ready state,
-which is true only for equal, nonzero SAFE acknowledgements on both arms. Direct deactivation also returns immediately and relies on the hardware's controller-switch rule,
-`cho_openarm_mit_core::SwitchGate` (the same in the real, MuJoCo and test backends): the hardware
-puts the arm in measured SAFE itself and discards the outgoing producer's last unacknowledged commit
-at `perform_command_mode_switch()`; lifecycle callbacks never wait or request a retry. Explicit
-safe-request transitions used for cancel/preempt are recoverable in the same session; a transport
-fault requires the hardware to be reactivated. This package still has no CAN,
-MuJoCo, Isaac, or other actuator connection.
+state completes the old action; replacement goals then repeat measured seeding and ack-before-ramp.
+Missing ack, session change, INVALID, DISABLED or FAULT produces a bounded abort/error. A normal
+lifecycle stop first calls the `~/request_safe_stop` service until it reports SAFE acknowledged, then
+deactivation returns SUCCESS immediately. Service completion additionally requires the
+hardware-owned pair stop-ready state, which is true only for equal, nonzero SAFE acknowledgements on
+both arms. Direct deactivation also returns immediately and relies on the hardware's
+controller-switch rule
+([SwitchGate](../../cho_hardware/cho_openarm_mit_core/DESIGN.md#switchgate)); lifecycle callbacks
+never wait or request a retry. Explicit safe-request transitions used for cancel/preempt are
+recoverable in the same session; a transport fault requires the hardware to be reactivated.
+
+The FollowJointTrajectory producers carry `tau_ff = 0` by design (no model; see the contract's
+producer section): switched in after a producer that supported the arm, their seed drops the hold's
+gravity torque onto the safe-gain spring. They run in the MuJoCo prototype only; the real bringup
+does not offer them.
 
 ## Single-arm TaskSpace MIT impedance
 
 `TaskSpaceImpedanceController` is the direct single-arm Cartesian path. It claims the same 39
 MIT command interfaces and exposes `/task_space_impedance_mit_controller/task_space`
-as `cho_interfaces/action/TaskSpace`; it is not MoveIt and has no raw tuple topic. Its primary
-The impedance is evaluated **inside the drive** (`drive_side_impedance`, the default). The Cartesian
-error becomes a joint reference offset `q_des = q + J^+ (x_des ominus x)` (damped least squares,
+as `cho_interfaces/action/TaskSpace`; it is not MoveIt and has no raw tuple topic.
+`drive_side_impedance` selects one of two laws; the parameter defaults to `true`, and
+`task_space_impedance_controller.hpp` documents it next to the member.
+
+| Config | `drive_side_impedance` |
+| --- | --- |
+| MuJoCo `controllers_mit.yaml`, `controllers_mit_direct_bimanual.yaml` | `true` |
+| real single arm `controllers_mit.yaml` | `true` |
+| real bimanual `controllers_mit_bimanual.yaml` | `false` |
+| real launch `gravity_compensation:=true` (overrides the YAML) | `false`, with `kp = 0` |
+
+**Drive-side law (`true`).** The impedance is evaluated inside the drive. The Cartesian error becomes
+a joint reference offset `q_des = q + J^+ (x_des ominus x)` (damped least squares,
 `task_velocity_reference_damping`), the MIT `kp`/`kd` fields carry fixed per-joint gains, and the
 motor closes `kp*(q_des - q) + kd*(dq_des - dq)` in its own current loop. `tau_ff` is left to the
 terms the drive cannot know about: `tau_ff = nle + tau_null + tau_limit`. `dq_des = J^+ v_des`,
@@ -58,37 +97,35 @@ of braking it; the null space sees `-kd*dq` because `J^+` has no null-space comp
 stiffness comes from `nullspace_posture` through `tau_ff` when enabled.
 
 The gains are FIXED, not scheduled from `diag(J^T Kx J)` per pose, and only that diagonal is
-representable at all. Two reasons, both structural. The profile slews `kp` at 10/s while the mapped
-stiffness moves 3.4x across the workspace on joint 1, so a scheduled gain would only chase its own
-reference; and the drive takes one scalar per joint, so routing the off-diagonal remainder through
-`tau_ff` would put a fraction of the stiffness back on the delayed path this design exists to leave.
-They are sized as the largest `kp` each joint can still damp to zeta = 0.7 at its worst-case inertia,
-because the MIT packet caps `kd` at 5 (`dm_motor_control.cpp:136`): `kp_i = (kd_i/1.4)^2 / M_ii,p95`,
-then clipped by the profile ceiling. On the real arm that is `[32, 30, 50, 49, 15, 10, 5]`, which
-guarantees at least 86 N/m of Cartesian stiffness anywhere in the workspace.
+representable at all. The profile slews `kp` at 10/s while the mapped stiffness moves 3.4x across
+the workspace on joint 1, so a scheduled gain would only chase its own reference; and the drive takes
+one scalar per joint, so routing the off-diagonal remainder through `tau_ff` would put a fraction of
+the stiffness back on the delayed path. They are sized as the largest `kp` each joint can still damp
+to zeta = 0.7 at its worst-case inertia, because the MIT packet caps `kd` at 5
+(`dm_motor_control.cpp:136`): `kp_i = (kd_i/1.4)^2 / M_ii,p95`, then clipped by the profile ceiling.
+In the real single-arm config that is `[32, 30, 50, 49, 15, 10, 5]`, at least 86 N/m of Cartesian
+stiffness anywhere in the workspace.
 
 `max_reference_offset` bounds `|q_des - q|` per joint and is **the only bound on the impedance
 torque**: `torque_limit` clamps the effort field alone, and the drive adds `kp*(q_des - q)`
 downstream of anything this controller can clamp. Unset, it derives as `0.5 * torque_limit / kp`, so
 tracking error can claim at most half the torque budget and gravity keeps the rest.
 
-`kp_task`, `kd_task` and `max_task_wrench` apply **only when `drive_side_impedance: false`**. They are
-the `Kx`, `Dx` and wrench bound of the legacy law below; under the default drive-side law they never
-reach the commanded torque, and `kp_task`/`kd_task` survive there only inside the diagnostic that
-back-computes an equivalent wrench so `peak_wrench` keeps one meaning across both laws. Both shipped
-configs enable `drive_side_impedance` and still carry populated `kp_task`/`kd_task`, so `on_configure`
-emits a warning naming the three inert keys rather than failing, and a runtime `kp_task`/`kd_task` set
-is **rejected** while the mode is on: an accepted set that does nothing is invisible, a rejected one is
-not. The Cartesian stiffness in that mode is the per-joint drive `kp` (only `diag(J^T Kx J)` is
-representable per joint), bounded by `max_reference_offset`.
+`kp_task`, `kd_task` and `max_task_wrench` apply **only to the legacy law**. Under the drive-side law
+they never reach the commanded torque, and `kp_task`/`kd_task` survive only inside the diagnostic that
+back-computes an equivalent wrench so `peak_wrench` keeps one meaning across both laws. A config that
+runs `true` with populated `kp_task`/`kd_task` gets an `on_configure` warning naming the three inert
+keys, and a runtime `kp_task`/`kd_task` set is **rejected** while the mode is on. The Cartesian
+stiffness in that mode is the per-joint drive `kp`, bounded by `max_reference_offset`.
 
-`drive_side_impedance: false` restores the historical law, `tau_ff = J^T(Kx*e + Dx*(v_des - J*dq)) +
-tau_null + tau_limit + nle` with measured `q_des` and zero joint `kp`, which closes the Cartesian loop
-across a 200 Hz controller cycle plus CAN transport. It is kept as a fallback and is covered by
-`LegacyTauFfLawStillConfiguresWithZeroJointGains`. Note that MuJoCo does not distinguish the two: the
-simulator has no CAN transport and the measured difference between the laws there is under a
-millimetre of overshoot even at a 200 Hz controller rate, so the sim can confirm the drive-side law is
-functional and stable but cannot confirm that it removes the ringing seen on hardware.
+**Legacy law (`false`).** `tau_ff = J^T(Kx*e + Dx*(v_des - J*dq)) + tau_null + tau_limit + nle` with
+measured `q_des`, zero joint `kp` (`TRACKING_DAMPED_TORQUE`) and the configured `kd` as actuator-side
+damping, which closes the Cartesian loop across one controller cycle (750 Hz on the real arm) plus
+CAN transport. `kp_task`/`kd_task` are runtime-settable there; `max_task_wrench` is configure-time.
+`LegacyTauFfLawStillConfiguresWithZeroJointGains` covers it. MuJoCo does not distinguish the two
+laws: the simulator has no CAN transport and the measured difference between them there is under a
+millimetre of overshoot even at a 200 Hz controller rate, so the sim can confirm the drive-side law
+is functional and stable but not that it removes the ringing seen on hardware.
 
 Only the model feed-forward `nle` is rate-limited by the profile `tau_ff_slew_per_s`, tracked from
 the value actually emitted so saturation cannot wind the tracker up. The Cartesian PD, null-space and
@@ -98,7 +135,7 @@ phase lag proportional to error amplitude and is a limit-cycle source. Reference
 smooth by shaping the reference instead. A canceled goal and an unreachable timed-out goal both
 release the Cartesian reference to the measured pose with a cubic blend over `release_duration`, and a
 new goal starts from whatever reference is currently commanded, so neither boundary steps the `Kx`
-error. Cancel therefore no longer requests SAFE and the action server stays available; only
+error. Cancel does not request SAFE and the action server stays available; only
 FK/dynamics/capacity failure requests SAFE.
 
 The 7-DoF arm under a 6-DoF task has a one-dimensional null space. With `use_nullspace_posture` the
@@ -115,32 +152,34 @@ re-checked before one does.
 `q_ref` is `nullspace_posture` when given, otherwise the joint configuration latched when Cartesian
 control begins. A one-sided spring `joint_limit_stiffness` acts only inside `joint_limit_margin` of the
 profile position window, on measured `q`, because the profile window itself validates only `q_des`,
-which the Cartesian modes fill with measured position.
+which the legacy law fills with measured position.
 
-After the return-to-zero handoff, idle retains the last commanded Cartesian reference and uses the
-same zero-velocity task impedance plus `nle`. A successful action keeps its terminal reference.
+### Start-up
 
-For the MuJoCo prototype this controller first performs its own measured-state cubic startup ramp
-to the explicit non-singular `home 1` posture. The action server remains unavailable until the
-profile-bounded joint impedance plus `nle` ramp has settled; an unsafe ramp rate, non-finite state,
-or missed settle deadline requests SAFE and never releases TaskSpace goals. This is controller-local
-and does not alter the global MuJoCo initial state or named task motions.
+After the MIT session seed is acknowledged the controller has one joint-space initialization path,
+`return_to_zero` (default `false`, in MuJoCo and on the real launch):
 
-Relative and absolute goals use the same Cartesian trajectory law without a
-separate workspace/displacement admission cap. FK/dynamics/capacity failure
-aborts and requests SAFE.
+- `return_to_zero: false`: it latches the measured TCP pose and is ready at once, holding that pose
+  under its law (Cartesian idle).
+- `return_to_zero: true`: one cubic joint-space phase to nominal zero (joint 4 at `0.001 rad`, its
+  hard stop being 0) over `return_to_zero_duration` with `startup_kp`/`startup_kd` as homing gains,
+  ramped from the controller's gains at the profile's `kp_slew_per_s`/`kd_slew_per_s` and capped at
+  its per-joint `kp_max`/`kd_max` (a warning names each capped joint). A peak velocity above the
+  profile's command velocity at the start, or no convergence within `return_to_zero_tolerance` by the
+  duration + 2 s, requests SAFE. After convergence the gains ramp, at the same slew, to what the law
+  holds (`kp` under the drive-side law, 0 under the legacy law; `kd` in both), then the TCP pose is
+  latched. TaskSpace goals are rejected until then.
 
-The hardware SAFE hold that these requests reach keeps the per-joint profile safe-hold gains and, as
-`tau_ff`, the joint torque the motors were measured applying when it was latched (see
-`cho_openarm_mit_core::ArmConsumer`), because an MIT motor has no gravity model of its own and a hold
-with `tau_ff = 0` would let the arm fall. Not this producer's last `tau_ff`: under the drive-side law
-part of the support is in the `kp*(q_des - q)` spring, which the safe gains do not reproduce. The
-effort command interfaces read that torque while the arm holds, and the next producer seeds from it.
+`startup_posture` is declared but unused; `startup_duration`/`startup_tolerance` are replaced by the
+`return_to_zero_*` values. Idle retains the last commanded Cartesian reference and uses the same
+zero-velocity task impedance plus `nle`; a successful action keeps its terminal reference. Relative
+and absolute goals use the same Cartesian trajectory law without a separate workspace/displacement
+admission cap.
 
-The FollowJointTrajectory producers carry `tau_ff = 0` by design (no model; see
-`docs/openarm_mit_contract_v1.md`): switched in after a producer that supported the arm, their seed
-drops the hold's gravity torque onto the safe-gain spring. They run in the MuJoCo prototype only; the
-real bringup does not offer them until they have a gravity term.
+The hardware SAFE hold that a SAFE request reaches keeps the per-joint profile safe-hold gains and,
+as `tau_ff`, the measured joint torque, not this producer's last `tau_ff`
+([SAFE hold](../../cho_hardware/cho_openarm_mit_core/DESIGN.md#safe-hold)). The effort command
+interfaces read that torque while the arm holds, and the next producer seeds from it.
 
 ## Action contract of the direct and TaskSpace producers
 
@@ -150,15 +189,14 @@ action. (The FollowJointTrajectory controllers keep FollowJointTrajectory's sema
 relies on: a new goal preempts the running one through a SAFE handshake.)
 
 - **One goal at a time.** A goal arriving while another is held -- running, or finished on the
-  control thread but not yet delivered -- is rejected; it never replaces the running one. Nothing in
-  the repository relied on replacement (the task trees and the operator tools wait for each result).
+  control thread but not yet delivered -- is rejected; it never replaces the running one.
 - **`duration_sec` is a minimum.** JointSpace: when a goal starts, its duration is stretched to the
   shortest cubic whose peak velocity `1.5*|dq|/T` stays inside the profile's command velocity on
-  every joint, the bound the consumer validates `dq_des` against; a faster request used to be
-  rejected. TaskSpace: stretched to 0.25 s (formerly a rejection floor) and to the duration at which
-  the cubic's peak twist, mapped through the start pose's damped pseudo-inverse, keeps `dq_des` inside
-  the command velocity -- the bound `joint_velocity_reference()` clamps at. That estimate is first
-  order: it uses the Jacobian where the goal starts, not along the path.
+  every joint, the bound the consumer validates `dq_des` against. TaskSpace: stretched to 0.25 s and
+  to the duration at which the cubic's peak twist, mapped through the start pose's damped
+  pseudo-inverse, keeps `dq_des` inside the command velocity -- the bound
+  `joint_velocity_reference()` clamps at. That estimate is first order: it uses the Jacobian where
+  the goal starts, not along the path.
 - **Every result that is not a success says why** in `message`: canceled on request, a SAFE stop,
   a SAFE the controller requested itself, a fault, the timeout 2 s after the motion, a failed
   computation, or deactivation.
@@ -167,8 +205,7 @@ relies on: a new goal preempts the running one through a SAFE handshake.)
   check), a fault (`protocol_ok()` false: the hardware went SAFE on its own -- a controller switch,
   lease expiry, a rejected commit -- or the session changed), and deactivation. From that moment the
   goal API rejects, the running goal ends with the reason, and the non-RT tick aborts every goal still
-  held, including one accepted in the instant the API closed. Goals used to end only on an operator's
-  stop; after any other SAFE they hung without a result.
+  held, including one accepted in the instant the API closed.
 - **FAULT is left by a new activation** (deactivate, then activate; no handshake needed). It re-runs
   the activation reset and re-seeds at the measured pose through the hardware's switch rule, and
   only drives where the hardware holds the arm in SAFE. There is no in-place `clear_fault`; see
@@ -179,5 +216,13 @@ relies on: a new goal preempts the running one through a SAFE handshake.)
   (`protocol_snapshot_`, `measured_snapshot_`): a deactivation releases the loans on the control
   thread while the executor may be mid-callback.
 - **Deactivation without the handshake returns SUCCESS** (with a warning): every MIT backend's switch
-  rule puts the arm in SAFE itself. It used to return ERROR, which did not stop the switch and left
-  the controller finalized, to be reloaded.
+  rule puts the arm in SAFE itself.
+
+## Control time
+
+`DirectControllerBase::update()` and `TaskSpaceImpedanceController::update()` keep a controller-local
+clock (`action_control_time_`) and the start-up and hand-off timers by adding the measured `period`
+only when it is finite and in `(0, 0.1)` s; a zero, negative, non-finite or longer period advances
+none of them. The model feed-forward slew and the Cartesian idle-release blend of
+`TaskSpaceImpedanceController` and `VlaController` instead take `bounded_dt()`
+(`task_space_impedance_controller.cpp`), which floors the step at `1e-4` s and has no upper bound.

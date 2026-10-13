@@ -18,6 +18,13 @@ project(cho_bringup_openarm)
 find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
+  # Only flake8 is linted here, with the rules in .flake8 (120 columns, the
+  # optional plugins' rules pinned off). ament_lint_auto would add pep257 at
+  # ROS's default D213, which this project's relaxed pep257 does not follow.
+  # package.xml is linted repo-wide by the ament_xmllint step in
+  # .github/workflows/lint.yml.
+  find_package(ament_cmake_flake8 REQUIRED)
+  ament_flake8(CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/.flake8")
   find_package(ament_cmake_pytest REQUIRED)
   # A user-local anyio plugin targets a newer pytest than ROS 2 Humble ships.
   # Keep package tests deterministic and limited to explicitly requested tests.

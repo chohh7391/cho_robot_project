@@ -12,19 +12,28 @@ splicing, watchdog transitions, per-step integration and NaN rejection be tested
 with plain gtest instead of a `controller_manager` fixture.
 
 It is a separate package rather than a module inside `cho_controller_common`
-because `cho_controller_openarm_mit` does not depend on `cho_controller_common`;
-taking that dependency to reach the pipeline would pull eiquadprog and the
-TSID-derived solver stack into a package whose whole design is a minimal
-producer. (A second reason held until 2026-10-04: that package compiled with
-`-Ofast`, which implies `-ffinite-math-only` and folds `std::isfinite()` to
-`true`, so a validator built there would silently pass exactly what it exists
-to reject.)
+because that package depends on `rclcpp`, and the no-ROS boundary above is a
+property of a whole `package.xml`. Both controller packages that host the
+pipeline depend on `cho_controller_common` as well; in
+`cho_controller_openarm_mit` only the `cho_controller::openarm` library (base
+controller, EE state broadcaster, joint-space controllers) links it, and the MIT
+drive-protocol library links this package without it.
 
-This package still compiles with an explicit `-fno-finite-math-only`, which
-beats `-Ofast` regardless of flag order (measured), so it survives a parent scope
-or toolchain file adding one. `test_finite_math_guard` guards that flag rather
+## Finite math
+
+No package here compiles with `-Ofast`. It implies `-ffinite-math-only`, which
+folds `std::isfinite()` / `std::isnan()` to constants: measured on g++ 11.4, an
+`-Ofast` build reports a NaN-carrying vector as all-finite, with no warning.
+
+This package compiles with an explicit `-fno-finite-math-only`, which beats
+`-Ofast` regardless of flag order (measured), so it survives a parent scope or
+toolchain file adding one. `test_finite_math_guard` guards that flag rather
 than the optimisation level: verified to fail with the line removed under
 `-Ofast`, and to pass with it present even when `-Ofast` is appended after it.
+
+`cho_controller_common` builds Release (`-O3`); its
+[CMakeLists.txt](../../cho_controller_common/CMakeLists.txt) says what
+finite-math would break there and which test catches it.
 
 ## Threading
 

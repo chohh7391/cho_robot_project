@@ -481,22 +481,26 @@ Vector7d FrankaBaseController::held_command_position() const
 
 double FrankaBaseController::nominal_period(const rclcpp::Duration & period)
 {
+  // The per-cycle period for every controller here that advances its own
+  // trajectory clock or integrates an open-loop reference. Such code calls this,
+  // never 1.0 / get_update_rate(), a literal dt, or period.seconds() directly.
+  //
   // get_update_rate() reports the controller's OWN rate, which is 0 whenever it
   // inherits the controller_manager's - and no config in this repository sets a
-  // per-controller update_rate, so it is 0 in every bringup. Falling back to a
-  // hardcoded 1 kHz was therefore only correct where the controller_manager also
-  // runs at 1000 Hz: the MuJoCo, Gazebo and real bringups. The Isaac bringup runs
-  // it at 250 Hz to match the physics rate, so a 1 ms nominal advanced the
-  // trajectory clock at a quarter of sim time and every goal took four times its
-  // requested duration - measured 17.0 s for a 4 s joint-space goal. It does not
-  // look like a clock bug from the outside: the arm just creeps toward the target
-  // and aborts, exactly as if the drive were too soft to hold against gravity.
+  // per-controller update_rate, so it is 0 in every bringup. The manager's rate
+  // differs per bringup (config/<env>/controllers.yaml; Isaac's equals the
+  // physics rate), so a literal dt is right only where it happens to match:
+  // 1 ms under a 250 Hz manager advances the trajectory clock at a quarter of sim
+  // time and stretches every goal fourfold. From the outside that looks like a
+  // drive too soft to hold against gravity, not like a clock bug.
   //
   // The measured period is used to ESTIMATE the rate, not to advance the clock
   // directly: it jitters by up to 2x, and parameterising a position trajectory by
   // it makes each cycle's command step - and so the velocity the actuator infers
-  // from it - jitter in proportion. Seeded from the first sane cycle so the
-  // estimate is right from the first goal, then smoothed.
+  // from it - jitter in proportion; it is exactly 0 on a cycle that saw no new
+  // state, where a difference divided by it is NaN. Seeded from the first sane
+  // cycle so the estimate is right from the first goal, then smoothed; 1 ms until
+  // that cycle.
   const unsigned int rate = get_update_rate();
   if (rate > 0) {
     return 1.0 / rate;

@@ -67,8 +67,10 @@ namespace cho_controller_openarm_mit
 // (drive_side_impedance: false, the real bimanual config) the base class sends
 // TRACKING_DAMPED_TORQUE: kp = 0 and q_des pinned to the measurement, with the
 // Cartesian law in tau_ff. A joint reference has nothing to close its position
-// loop there, so build_chunk() REFUSES joint chunks under that law and the
-// controller takes task chunks only (on_configure says so once).
+// loop there, so build_chunk() REFUSES joint chunks under that law (telemetry
+// last_reject = action_space_not_accepted) and the controller takes task chunks
+// only (on_configure says so once). The MuJoCo configs and the real single-arm
+// config run drive_side_impedance: true; the joint path has only run in MuJoCo.
 //
 // MIT-specific hazards this has to respect, none of which apply to the Franka
 // host:
@@ -80,18 +82,27 @@ namespace cho_controller_openarm_mit
 //     quiet stream is a hold, never a missed write.
 //  2. max_reference_offset is the ONLY bound on the impedance torque: the drive
 //     adds kp*(q_des - q) downstream of anything this controller can clamp, and
-//     torque_limit only clamps the tau_ff field. on_configure therefore REQUIRES
-//     it here rather than accepting the derived default -- an unbounded reference
-//     offset driven by untrusted policy output is not a defensible default.
-//  3. A stream timeout must NOT request SAFE. The hardware SAFE hold keeps the
-//     last accepted tau_ff and the profile safe-hold gains, but dropping into it
+//     torque_limit only clamps the tau_ff field. Under drive_side_impedance
+//     on_configure therefore REQUIRES it (7 finite positive values) rather than
+//     accepting the derived default -- an unbounded reference offset driven by
+//     untrusted policy output is not a defensible default. Under the legacy law
+//     it bounds nothing and is not required; max_task_wrench and torque_limit
+//     bound that law, and the base class validates max_task_wrench as six
+//     positive values in either mode. on_configure also refuses a
+//     stream_timeout_sec that is not finite and > 0: without the stream
+//     watchdog a dead policy leaves a mid-motion reference held forever.
+//  3. A stream timeout must NOT request SAFE. The hardware SAFE hold holds the
+//     measured pose with the measured joint torque as tau_ff at the profile's
+//     safe-hold gains (cho_openarm_mit_core::ArmConsumer), but dropping into it
 //     mid-task on a policy hiccup is worse than holding: the inherited idle
 //     release blends the reference to the measured pose over release_duration and
 //     the goal aborts normally. Only FK/dynamics/capacity failure requests SAFE,
 //     exactly as in the base class.
-//  4. The real MIT adapter has no finger transport, so gripper_actions are
-//     ignored with one warning rather than dispatched to a server that is not
-//     there. `enable_gripper` gates it; sim bringups may turn it on.
+//  4. This controller owns no finger interface. gripper_actions are ignored
+//     unless `enable_gripper` (false in every shipped config), and then their
+//     edges are only logged. A hand is driven by cho_controller_gripper's
+//     GripperController on its own interfaces (on the real adapter, hand:=true:
+//     an eighth motor on the arm's CAN socket).
 class VlaController final : public TaskSpaceImpedanceController
 {
 public:

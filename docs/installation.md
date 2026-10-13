@@ -87,11 +87,11 @@ the pinned `extern/openarm_can` and `extern/openarm_ros2` submodules instead of
 modifying vendor code.
 
 Isaac Sim additionally needs the USD asset built once per variant — see
-`cho_description_openarm/usd/README.md`. The assets are generated and gitignored.
+[cho_description_openarm/usd/README.md](../cho_description/cho_description_openarm/usd/README.md).
+The assets are generated and gitignored.
 
-> Real OpenArm MIT bringup is commissioning-only and physically untested.
-> Invoking it starts the selected hardware component; see the required
-> commissioning procedure in [OpenArm real bringup](openarm_real_bringup.md).
+> Real OpenArm MIT bringup is at the commissioning stage and starts the selected
+> hardware component: [OpenArm real bringup](openarm_real_bringup.md).
 
 ## Build
 

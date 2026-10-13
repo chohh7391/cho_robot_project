@@ -14,13 +14,16 @@ sudo tailscale up   # login with the same account
 tailscale ip -4     # check each PC's IP
 ```
 
-Set `_DDS_SERVER_IP` in `dds/dds_mode.sh` to PC1's Tailscale IP.
+Put PC1's Tailscale IP in both places that name the server: `_DDS_SERVER_IP` in
+`dds/dds_mode.sh` (server mode) and the `<address>` of `dds/super_client.xml`
+(client mode, which does not read `_DDS_SERVER_IP`).
 
 ## Daily usage
 
 Every terminal picks a DDS mode by sourcing `dds/dds_mode.sh`. Terminals only see
 each other within the same mode family: `local`↔`local`, `server`↔`client`
-(a `local` terminal never talks to the others).
+(a `local` terminal never talks to the others). Every mode sets
+`ROS_DOMAIN_ID=25` (`_DDS_DOMAIN`).
 
 1. Discovery server (PC1, keep this terminal running):
 
@@ -44,7 +47,8 @@ source ~/ros2_ws/install/setup.bash
 ros2 run cho_control_tools debug_action_client   # or: ros2 topic list, rqt, rviz ...
 ```
 
-Client mode loads `dds/super_client.xml` (Fast DDS `SUPER_CLIENT`), so graph
+Server mode sets `ROS_DISCOVERY_SERVER` to PC1; client mode unsets it and loads
+`dds/super_client.xml` (Fast DDS `SUPER_CLIENT`) instead, so graph
 introspection — `ros2 topic list`, action-server auto-discovery — works over the
 discovery server (a plain discovery-server client only learns about endpoints
 matching its own readers/writers, so graph queries come back empty).

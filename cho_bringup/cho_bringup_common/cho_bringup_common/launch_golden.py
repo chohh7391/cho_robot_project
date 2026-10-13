@@ -29,7 +29,9 @@ What it does:
     its RViz condition are part of a bringup's output), other includes are
     only listed;
   * prints every Node / ExecuteProcess / include / environment action with its
-    evaluated parameters, and what launch logs while doing so;
+    evaluated parameters, and what launch logs while doing so; spawner
+    arguments are sorted by option, except the -p/--param-file files, which
+    keep the launch's order (Humble loads them in order, the last one wins);
   * feeds every registered event handler the events it waits for - process
     start, exit with 0 and with 1, the output markers - and prints what each
     would start;

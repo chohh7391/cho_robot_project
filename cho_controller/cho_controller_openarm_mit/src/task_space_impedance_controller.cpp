@@ -72,7 +72,10 @@ bool valid_gravity_joint_scale(const std::vector<double> & values)
 // goal was rejected; duration_sec is a minimum, so it is now a stretch.
 constexpr double kMinimumTaskDurationSec = 0.25;
 
-// Slew and blend steps must never see a zero, negative or non-finite period.
+// The step the model feed-forward slew and the idle-release blend advance by:
+// the measured period, floored at 1e-4 s (also for a zero, negative or
+// non-finite one) and not capped. The controller clock and the start-up and
+// hand-off timers do not use it; see update().
 double bounded_dt(const double dt)
 {
   return (std::isfinite(dt) && dt > 0.0) ? std::max(dt, 1e-4) : 1e-4;
@@ -508,8 +511,9 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
     return CallbackReturn::ERROR;
   }
   // This controller has exactly one joint-space initialization path:
-  // return_to_zero. Opting out means holding the measured Cartesian pose in
-  // direct-torque mode, not running a second YAML startup posture.
+  // return_to_zero. Opting out means latching the measured Cartesian pose and
+  // holding it under the configured law; the `startup_posture` parameter is
+  // not read.
   if (return_to_zero_) {
     startup_duration_ = return_to_zero_duration_;
     startup_tolerance_ = return_to_zero_tolerance_;
@@ -580,12 +584,12 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
   }
   // Dead-parameter warning, last so it is the final thing configure says.
   //
-  // Both shipped configs enable drive_side_impedance AND carry populated
-  // kp_task/kd_task (the real YAML keeps a long staged tuning history for
-  // kp_task), so this cannot be an error without making them fail to configure.
-  // It is a warning that names the inert keys explicitly, because the failure
-  // mode is silence: an operator sweeps kp_task, sees the arm not respond, and
-  // concludes the arm is stiff rather than that the knob is disconnected.
+  // The configs that run drive_side_impedance (MuJoCo, real single arm) also
+  // carry populated kp_task/kd_task, so this cannot be an error without making
+  // them fail to configure. It is a warning that names the inert keys
+  // explicitly, because the failure mode is silence: an operator sweeps
+  // kp_task, sees the arm not respond, and concludes the arm is stiff rather
+  // than that the knob is disconnected.
   if (drive_side_impedance_) {
     const auto nonzero = [](const std::vector<double> & v) {
         return std::any_of(v.begin(), v.end(), [](double x) {return x != 0.0;});
@@ -1091,8 +1095,8 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   if (drive_side_impedance_) {
     // The drive owns the impedance. q_des carries the Cartesian error as a
     // joint offset and the fixed kp/kd close the loop inside the current loop,
-    // so neither the 200 Hz controller period nor CAN transport sits inside
-    // it. tau_ff is left to the terms the drive cannot know about: the model
+    // so neither the controller cycle (750 Hz on the real arm) nor CAN
+    // transport sits inside it. tau_ff is left to the terms the drive cannot know about: the model
     // term, the null-space posture and the joint-limit spring.
     //
     // Only diag(J^T Kx J) is representable as a per-joint scalar. The
@@ -1305,6 +1309,9 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
 {
   publish_protocol_snapshot();
   if (state_ == State::INACTIVE || state_ == State::SAFE_STOPPED) return controller_interface::return_type::OK;
+  // Controller-local clock, as in DirectControllerBase::update(): only a finite
+  // measured period in (0, 0.1) s advances it, and the start-up and hand-off
+  // timers below use the same filter.
   const double dt = period.seconds(); if (std::isfinite(dt) && dt > 0.0 && dt < 0.1) action_control_time_ += dt;
   // Unconditional: the offset must stay valid even on a cycle whose dt was
   // rejected above, or a chunk arriving on that cycle converts against a
@@ -1368,22 +1375,19 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
         if (return_to_zero_) {
           ramped_return_to_zero_gains(startup_kp_, startup_kd_, startup_elapsed_,
             return_to_zero_handoff_source_kp_, return_to_zero_handoff_source_kd_);
-          // The Cartesian controller's post-RTZ mode carries the task law in
-          // tau_ff with zero MIT stiffness, so ramp kp continuously to zero.
-          // kd instead ramps to the controller's own `kd`, which the damped
-          // Cartesian mode keeps applying: dropping it to zero here and back
-          // to `kd` at the mode boundary would be a discontinuity, and would
-          // leave the arm's null space undamped in between.
+          // Ramp kp continuously to the stiffness the task law holds: `kp`
+          // under drive-side impedance, zero under the legacy tau_ff law.
+          // kd ramps to the controller's own `kd`, which both laws keep
+          // applying: dropping it to zero here and back to `kd` at the mode
+          // boundary would be a discontinuity, and would leave the arm's null
+          // space undamped in between.
           return_to_zero_handoff_duration_ = 0.0;
           const auto handoff_kd = current_kd();
           for (std::size_t i = 0; i < 7; ++i) {
-            // Distance to the gains the task law will actually hold at, not to
-            // zero. Zero was the old target, when Cartesian control ran on
-            // tau_ff with kp = 0; under drive-side impedance the target is kp_
-            // itself, and sizing the window for the shorter trip would end the
-            // handoff with kp part-way there and then step it the rest of the
-            // way - defeating kp_slew_per_s, which is the whole point of the
-            // ramp.
+            // Distance to the gains the task law will actually hold at. Sizing
+            // the window for a shorter trip would end the handoff with kp
+            // part-way there and then step it the rest of the way - defeating
+            // kp_slew_per_s, which is the whole point of the ramp.
             const double kp_target = drive_side_impedance_ ? kp_[i] : 0.0;
             return_to_zero_handoff_duration_ = std::max(
               return_to_zero_handoff_duration_,

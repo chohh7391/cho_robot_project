@@ -19,11 +19,15 @@ in its own interpreter - nothing is started; see that module for what is
 printed and how it is made machine-independent - and must match
 launch_golden/expected/<package>/<launch stem>/<case>.txt exactly.
 
+Every installed launch file of a listed bringup needs a case, and every
+installed cho_bringup_<robot> package needs an entry, or this test fails.
+
 A bringup package that is not installed is skipped, with the reason from
 cases.yaml, unless CHO_LAUNCH_GOLDEN_REQUIRE lists it. CI builds all four
 bringups (their hardware and Franka source-only dependencies skipped, see
 .github/workflows/ci.yml) and requires them, so every case runs there as it
-does locally with the whole workspace built.
+does locally with the whole workspace built; the two Franka packages a launch
+looks up by path are empty stand-ins there (tools/ci/stub_ament_packages.sh).
 
 When a launch change is intended, regenerate and review:
 

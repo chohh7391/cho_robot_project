@@ -61,9 +61,11 @@ struct SafetyProfile
   std::size_t lease_default{0}, lease_cap{0}, refresh_cycles{0}, watchdog_ms{0}, stale_cycles{0};
 };
 
-// Strict, fail-closed loader. profile_name must be explicit. The only loadable
-// REAL profile is the commissioning envelope; callers must still impose their
-// own explicit runtime acknowledgements before opening a transport.
+// Strict, fail-closed loader. profile_name must be explicit. The loadable REAL
+// profiles are the two commissioning envelopes, real_conservative_commissioning
+// and real_return_to_zero_commissioning; real_conservative_unapproved is always
+// rejected. Callers must still impose their own explicit runtime
+// acknowledgements before opening a transport.
 //
 // `arm_side` selects which mount's joint-position window is loaded: "single"
 // (or "") for the one-arm mount, "left"/"right" for the bimanual torso, whose

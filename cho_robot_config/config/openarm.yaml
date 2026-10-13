@@ -34,9 +34,10 @@ controllers:
   direct_joint: joint_space_position_controller
   direct_task: task_space_impedance_mit_controller
   moveit_trajectory: joint_trajectory_controller
-  # cho_controller_gripper/GripperController, spawned by every simulation
-  # bringup with hand:=true. The real MIT adapter has no finger transport yet,
-  # so a real bringup exposes no gripper action.
+  # cho_controller_gripper/GripperController, spawned by every bringup with
+  # hand:=true: the simulations, and the real MIT bringup, where the adapter
+  # owns the finger as an eighth motor on the arm's CAN socket
+  # (cho_hardware_openarm_mit_real/README.md, Gripper).
   gripper: gripper_controller
   # cho_controller_openarm_mit/VlaController. Selected on the MuJoCo MIT
   # prototype path (mit_controller_name:=vla_mit_controller) and on the real

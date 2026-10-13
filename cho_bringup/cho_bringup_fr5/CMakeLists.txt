@@ -37,11 +37,13 @@ install(
 )
 
 if(BUILD_TESTING)
-  # No ament_lint_auto here, matching cho_bringup_openarm. It applies ROS's
-  # default style - 99 columns and pydocstyle's D213 - while CLAUDE.md declares
-  # this project's standard as 120 columns and relaxed pep257, so it was failing
-  # 13 times on code that is correct by the project's own rules. package.xml is
-  # still linted repo-wide by the ament_xmllint step in .github/workflows/lint.yml.
+  # Only flake8 is linted here, with the rules in .flake8 (120 columns, the
+  # optional plugins' rules pinned off). ament_lint_auto would add pep257 at
+  # ROS's default D213, which this project's relaxed pep257 does not follow.
+  # package.xml is linted repo-wide by the ament_xmllint step in
+  # .github/workflows/lint.yml.
+  find_package(ament_cmake_flake8 REQUIRED)
+  ament_flake8(CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/.flake8")
   find_package(ament_cmake_pytest REQUIRED)
   # A user-local anyio plugin targets a newer pytest than ROS 2 Humble ships.
   # Keep package tests deterministic and limited to explicitly requested tests.

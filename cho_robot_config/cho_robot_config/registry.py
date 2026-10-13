@@ -12,7 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Load and validate canonical per-robot metadata."""
+"""Load and validate canonical per-robot metadata.
+
+One registry document per robot, ``config/<robot_type>.yaml``; the schema is
+:func:`validate_robot_config`. Its sections:
+
+- ``model``: the arm's joints, ``base_frame``, ``arm_base_link``, ``ee_link``
+  and the TaskSpace goal frames (:func:`task_goal_frame`).
+- ``controllers``: the controller filling each role (``hold``,
+  ``direct_joint``, ``direct_task``, ``moveit_trajectory``, ``gripper``,
+  ``vla``); ``hold_by_control_mode``, the hold per bringup control mode
+  (:func:`hold_controllers_for_control_mode`); ``additional_arm``, arm
+  controllers with no role, which an exclusive switch must still take down.
+- ``moveit``; ``actions`` (``preferences``: per space, the action names a
+  client tries, the MoveIt bridge's first; ``gripper_command``); ``motions``;
+  ``compatibility``.
+- ``poses``: ``home`` (the operator presets ``'0'``-``'3'``), ``reach``,
+  ``home_safety`` (a preset's execution policy) and ``task_home``, where task
+  trees home: a ``home`` selector or a joint vector, read by
+  :func:`task_home_pose`.
+- ``profiles``: overlays for other builds of the robot (a bimanual torso).
+  :func:`load_robot_config` merges ``model``, ``controllers``, ``moveit``,
+  ``poses`` and ``motions`` key by key (a key the overlay names replaces the
+  base's whole value) and replaces ``actions`` and ``compatibility``, so a
+  profile restates every key whose names differ, ``hold_by_control_mode``
+  included.
+"""
 
 from copy import deepcopy
 import math

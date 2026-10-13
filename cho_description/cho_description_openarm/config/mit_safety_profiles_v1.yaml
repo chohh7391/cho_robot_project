@@ -35,12 +35,13 @@ profiles:
       # Keep the MIT command envelope identical to canonical OpenArm limits:
       # direct task DLS has no second, custom motion-speed profile.
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
-      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
-      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
-      # encoding range, not a mechanical rating. Treating the encoding range
-      # as a torque limit let every joint be commanded above its peak: the
-      # wrist by 43%, the shoulder by 35%.
+      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m. Every
+      # profile's physical_torque, tau_ff_magnitude and final_magnitude is this
+      # tuple (pinned by test/mit_contract_tests.py, and equal to the URDF
+      # effort limits). It is NOT the vendor library's MOTOR_LIMIT_PARAMS tMax
+      # tuple [54, 28, 10]: that is the MIT packet's fixed-point encoding
+      # range, not a mechanical rating, and 35% (shoulder) to 43% (wrist)
+      # above the peak.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains:
       kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
@@ -94,20 +95,16 @@ profiles:
       right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
-      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
-      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
-      # encoding range, not a mechanical rating. Treating the encoding range
-      # as a torque limit let every joint be commanded above its peak: the
-      # wrist by 43%, the shoulder by 35%.
+      # Manufacturer PEAK torque; see mujoco_sim_safe.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], return_to_zero_kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], return_to_zero_kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
     torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew, slew_reference: last_successfully_submitted_command}
     timing: {priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease, lease_default_cycles: null, lease_cap_cycles: null, producer_refresh_cycles: null, controller_write_watchdog_ms: null, state_stale_cycles: null, counters_advance_on: successful_consumer_write_cycle, bimanual_send_skew_us: null, bimanual_send_skew_gate: measure_before_enforcement, skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us}
     safe_transition: {normal_policy: measured_position_hold_uses_same_gain_and_torque_slew, fault_exception: immediate_transport_disable_no_slew}
   # This is deliberately a commissioning-only operating envelope, not a
-  # production approval. It is selected by an explicit real bringup invocation;
-  # the adapter validates this profile before creating vendor transport.
+  # production approval. bringup_real_robot.launch.py selects it, with or
+  # without return_to_zero; the adapter validates this profile before creating
+  # vendor transport.
   real_conservative_commissioning:
     status: commissioning_experiment_allowed
     backend: real
@@ -125,12 +122,7 @@ profiles:
       right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
-      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
-      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
-      # encoding range, not a mechanical rating. Treating the encoding range
-      # as a torque limit let every joint be commanded above its peak: the
-      # wrist by 43%, the shoulder by 35%.
+      # Manufacturer PEAK torque; see mujoco_sim_safe.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains:
       # Sized so every joint can still reach zeta = 0.7 THROUGH THE DRIVE, which
@@ -179,11 +171,10 @@ profiles:
       slew_reference: last_successfully_submitted_command
     timing:
       priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
-      # These are CYCLE counts, so they scale with update_rate_hz. The values
-      # below preserve the wall-clock timeouts the 200 Hz profile declared:
-      # lease 50 ms, cap 100 ms, producer refresh 25 ms, state stale 100 ms.
-      # Raising the rate without rescaling them would silently tighten every
-      # safety timeout by the same factor the rate went up.
+      # These are CYCLE counts, so they scale with update_rate_hz: at 750 Hz
+      # they are lease ~51 ms, cap 100 ms, producer refresh ~25 ms, state
+      # stale 100 ms. Changing the rate without rescaling them changes every
+      # safety timeout by the inverse factor.
       lease_default_cycles: 38
       lease_cap_cycles: 75
       producer_refresh_cycles: 19
@@ -196,13 +187,11 @@ profiles:
     safe_transition:
       normal_policy: measured_position_hold_uses_same_gain_and_torque_slew
       fault_exception: immediate_transport_disable_no_slew
-  # A deliberately narrow extension of the real commissioning envelope. It is
-  # selected by bringup_real_robot.launch.py when return_to_zero:=true. It permits upstream OpenArm's joint
-  # gains only during the controller-owned nominal-zero phase; the normal
-  # real controller YAML remains on its separate, derated gains afterwards.
-  # Torque magnitudes are the manufacturer peak ratings. Motion position/velocity limits match
-  # the canonical OpenArm profile; real bringup matches upstream's 200 steps at
-  # 10 ms per step (2 s total).
+  # A narrow variant of real_conservative_commissioning: it differs only in
+  # kp_max/kd_max (upstream OpenArm's homing gains) and kp_slew_per_s. The real
+  # adapter accepts it; bringup_real_robot.launch.py does not select it.
+  # Torque magnitudes are the manufacturer peak ratings. Motion
+  # position/velocity limits match the canonical OpenArm profile.
   real_return_to_zero_commissioning:
     status: commissioning_experiment_allowed
     backend: real
@@ -220,12 +209,7 @@ profiles:
       right_position_upper: [3.490659, 3.316125, 1.570796, 2.443461, 1.570796, 0.785398, 1.570796]
       physical_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
       command_velocity: [16.754666, 16.754666, 5.445426, 5.445426, 20.943946, 20.943946, 20.943946]
-      # Manufacturer PEAK torque: DM8009 40, DM4340 27, DM4310 7 N*m.
-      # These are deliberately NOT the vendor library's MOTOR_LIMIT_PARAMS
-      # tMax tuple [54, 28, 10], which is the MIT packet's fixed-point
-      # encoding range, not a mechanical rating. Treating the encoding range
-      # as a torque limit let every joint be commanded above its peak: the
-      # wrist by 43%, the shoulder by 35%.
+      # Manufacturer PEAK torque; see mujoco_sim_safe.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains:
       kp_max: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
@@ -256,11 +240,10 @@ profiles:
       slew_reference: last_successfully_submitted_command
     timing:
       priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
-      # These are CYCLE counts, so they scale with update_rate_hz. The values
-      # below preserve the wall-clock timeouts the 200 Hz profile declared:
-      # lease 50 ms, cap 100 ms, producer refresh 25 ms, state stale 100 ms.
-      # Raising the rate without rescaling them would silently tighten every
-      # safety timeout by the same factor the rate went up.
+      # These are CYCLE counts, so they scale with update_rate_hz: at 750 Hz
+      # they are lease ~51 ms, cap 100 ms, producer refresh ~25 ms, state
+      # stale 100 ms. Changing the rate without rescaling them changes every
+      # safety timeout by the inverse factor.
       lease_default_cycles: 38
       lease_cap_cycles: 75
       producer_refresh_cycles: 19

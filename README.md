@@ -20,11 +20,11 @@ cho_bringup/          Backend-specific launch and controller configuration
 cho_simulation/       Shared simulator backends (Isaac Sim runner, conversion, ROS helper nodes)
 cho_moveit/           MoveIt configuration and launch wrappers
 cho_robot_config/     Robot/controller/action metadata registry
-cho_sensor/           Sensor stacks (FT, scale, RealSense + AprilTag detector)
-cho_perception/       Detections turned into robot-frame targets
+cho_sensor/           Sensor stacks (Bota FT, RealSense D435, OAK-D Pro W, camera calibration)
+cho_perception/       AprilTag detections turned into robot-frame targets (cho_object_pose)
 cho_task_manager/     py_trees behaviors, tasks, and task-manager node
 cho_control_tools/    Manual action clients, VLA tools, and bag plotters
-cho_interfaces/       Project ROS messages and actions
+cho_interfaces/       Project ROS messages and actions (what clients may rely on: CONTRACT.md)
 ```
 
 `cho_task_manager` is not the manual-client package. Use
@@ -37,7 +37,7 @@ cho_interfaces/       Project ROS messages and actions
 | Franka | `cho_bringup_franka` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Validate the selected backend and mode before hardware use. |
 | UR5e | `cho_bringup_ur` | MuJoCo, Gazebo, Isaac Sim, and real-robot launch paths are provided. Real Robot/Robotiq setup has extra vendor-driver requirements. |
 | FAIRINO FR5 | `cho_bringup_fr5` | MuJoCo joint/task control is the verified path. Gazebo, Isaac Sim, and real launch/configuration paths require backend-specific validation. |
-| OpenArm | `cho_bringup_openarm` | MuJoCo legacy control and the opt-in MIT direct/paired paths are verified. A fail-closed, physically untested real MIT commissioning launch is also provided. |
+| OpenArm | `cho_bringup_openarm` | MuJoCo legacy control and the opt-in MIT direct/paired paths are verified. The real MIT bringup is at the commissioning stage: [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md). |
 
 Launch files follow the pattern:
 
@@ -52,39 +52,19 @@ it, and a copy-pasteable command per robot and backend.
 
 ## Manual control clients
 
-Robot-specific clients choose compatible active action servers automatically;
-normal operation does not require controller names or `use_task` / `use_joint`.
-Their implementations are grouped by robot under
-`cho_control_tools/cho_control_tools/clients/{fr5,openarm,franka,ur5e}/`; the
-public ROS commands remain stable.
-
 ```bash
 source ~/ros2_ws/install/setup.bash
 
-ros2 run cho_control_tools openarm_action_client
+ros2 run cho_control_tools openarm_action_client    # --arm left|right|both on the torso
 ros2 run cho_control_tools fr5_action_client
 ros2 run cho_control_tools franka_action_client
 ros2 run cho_control_tools ur5e_action_client
 ```
 
-OpenArm side selection is explicit only when needed:
-
-```bash
-ros2 run cho_control_tools openarm_action_client --arm left
-ros2 run cho_control_tools openarm_action_client --arm right
-ros2 run cho_control_tools openarm_action_client --arm both
-```
-
-Inside a robot client, use `home <0-3>`, `reach <0-3>`, `grasp <0|1>`,
-`status`, and `quit`. `reach` chooses an active task action server when one is
-available, otherwise the robot's registered joint-space preset.
-
-The configurable diagnostic shell remains available, but is not the normal
-operator interface:
-
-```bash
-ros2 run cho_control_tools debug_action_client --help
-```
+Each picks the robot's active action servers itself. Inside, use `home <0-3>`,
+`reach <0-3>`, `grasp <0|1>`, `status`, and `quit`. Endpoint selection, the
+OpenArm MIT `reach` probes and the debug shell are in
+[docs/action_clients.md](docs/action_clients.md).
 
 Additional tools:
 
@@ -95,22 +75,10 @@ ros2 run cho_control_tools plot_joint_pos_log --help
 ros2 run cho_control_tools plot_pose_log --help
 ```
 
-Detailed client behavior is in [docs/action_clients.md](docs/action_clients.md).
+## OpenArm MIT control
 
-## OpenArm MIT control in MuJoCo
-
-The normal OpenArm controllers and the MIT adapter are separate paths. The
-default bringup remains the legacy controller path; set
-`mujoco_mit_prototype:=true` only for the MIT prototype.
-
-[docs/controllers_and_bringup.md](docs/controllers_and_bringup.md) tabulates
-the two paths side by side, including direct-vs-FJT ownership and what each
-`mit_arm` value spawns.
-
-### Direct, independent seven-axis control
-
-Direct MIT joint/task controllers own one arm's 39 MIT command interfaces.
-For a single arm, for example:
+The OpenArm MuJoCo bringup runs the legacy controllers unless
+`mujoco_mit_prototype:=true`; the real bringup runs only the MIT controllers.
 
 ```bash
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
@@ -120,60 +88,11 @@ ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
 ros2 run cho_control_tools openarm_action_client
 ```
 
-For the bimanual torso, direct controllers remain independent: each owns one
-seven-axis arm and can receive a separate client/action goal. This path does
-not plan inter-arm collision avoidance.
-
-```bash
-ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
-  mujoco_mit_prototype:=true control_mode:=torque bimanual:=true \
-  mit_controller_name:=task_space_impedance_mit_controller \
-  mit_arm:=both_independent
-
-# Run in separate terminals.
-ros2 run cho_control_tools openarm_action_client --arm left
-ros2 run cho_control_tools openarm_action_client --arm right
-```
-
-`reach` targets in the robot registry are absolute world-frame poses, so a
-repeated selector is idempotent rather than a cumulative relative move. The
-direct MIT task endpoint is the one exception: it starts from the nominal-zero
-posture, where the absolute targets (which were resolved from the `home 1`
-posture) may be out of reach, so the operator client substitutes bounded
-relative TCP probes for selectors `0`-`2` on that endpoint only. **On the
-direct MIT task path, repeating `reach 0`-`reach 2` therefore accumulates
-displacement** (about 45 mm per `reach 0`); selector `3` stays absolute and
-idempotent. The client prints which contract is in force when it starts. Every
-other endpoint - MoveIt, non-MIT task, joint-space fallback - keeps the
-absolute registry presets. The controller first settles into its configured
-non-singular startup posture; a client may briefly retry a goal during that
-bounded startup window. See
-[docs/action_clients.md](docs/action_clients.md) for the probe values.
-
-### Paired fourteen-axis MoveIt control
-
-Use the paired MIT FollowJointTrajectory controller only through the OpenArm
-MoveIt wrapper. It owns both arms as one 14-axis transaction and reserves the
-pair-ownership token; this is the path for collision-aware bimanual planning.
-
-```bash
-ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py \
-  bimanual:=true arm:=both mujoco_mit_prototype:=true
-```
-
-Do not activate direct MIT controllers and the paired controller together.
-The hardware wrapper rejects incompatible claim/switch combinations.
-
-### Safety and real hardware
-
-- MIT tuple commands are bounded by the checked safety profile and final
-  hardware-side limiter.
-- SAFE/session/generation acknowledgement is required before controller
-  handoff or deactivation.
-- The MuJoCo profile is prototype-only. It is not a production approval.
-- OpenArm real MIT bringup is commissioning-only and physically untested. Its
-  invocation starts the selected hardware component; see
-  [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md).
+Direct (one controller per arm) versus the paired MoveIt FollowJointTrajectory
+controller, `mit_arm`, and the bimanual and MoveIt commands:
+[docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#openarm-mit-direct-vs-fjt).
+The MIT tuple, session and SAFE protocol:
+[docs/openarm_mit_contract_v1.md](docs/openarm_mit_contract_v1.md).
 
 ## FR5 MuJoCo quick start
 
@@ -202,13 +121,12 @@ ros2 control switch_controllers \
   --deactivate joint_space_position_controller
 ```
 
-For collision-aware planning, launch the FR5 MoveIt wrapper instead:
+For collision-aware planning, launch the FR5 MoveIt wrapper instead
+([cho_moveit/README.md](cho_moveit/README.md)):
 
 ```bash
 ros2 launch cho_bringup_fr5 bringup_mujoco_moveit.launch.py
 ```
-
-MoveIt plans with OMPL only, and needs nothing beyond the ROS distribution.
 
 `home 0` is a diagnostic/singular pose and is not appropriate for task-space
 motion near the floor.
@@ -222,49 +140,22 @@ ros2 launch cho_task_manager run_task_manager.launch.py \
   task:=pick_place robot_type:=franka use_sim_time:=true
 ```
 
-See [docs/tasks.md](docs/tasks.md) for task requirements and
-[docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup.
-
-`task:=trajectory_replay` replays a recorded joint trajectory on Franka, UR5e, FR5
-and OpenArm; with no `replay_trajectory` it plays the robot's bundled example
-(`cho_task_manager/config/replay/<robot>/`). Recording format and per-robot MuJoCo
-commands are in [docs/tasks.md](docs/tasks.md#trajectory-replay). The chemistry-bench
-application (vessel detection, occlusion recovery, perception-gated replay) is on the
-`auto_chem` branch.
+See [docs/tasks.md](docs/tasks.md) for task requirements, including
+[`task:=trajectory_replay`](docs/tasks.md#trajectory-replay) on every arm, and
+[docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup. The chemistry-bench
+application is on the `auto_chem` branch.
 
 VLA bridges send `cho_interfaces/ActionChunk` to `vla_controller` (Franka) or
-`vla_mit_controller` (OpenArm). Relative task chunks name their delta frame in
-`relative_frame`. See [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#vla-chunks).
-On the real bimanual OpenArm, `vla_mit_controller` takes task chunks only.
+`vla_mit_controller` (OpenArm): [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#vla-chunks).
 
-Controllers publish desired-versus-measured state on per-controller topics:
-
-```text
-/<controller>/controller_state   control_msgs/JointTrajectoryControllerState
-/<controller>/ee_state           cho_interfaces/PoseLog
-```
-
-Record with `ros2 bag record`, then use the plot commands above with
-`--path <DB3_PATH> --topic <topic>`.
+Controllers publish desired-versus-measured state on `/<controller>/controller_state`
+and `/<controller>/ee_state`; which ones do is in
+[cho_interfaces/CONTRACT.md](cho_interfaces/CONTRACT.md#state-topics). Record with
+`ros2 bag record`, then plot with `--path <DB3_PATH> --topic <topic>`.
 
 ## Targets detected at run time
 
-A task's motion target does not have to be written into the tree. An AprilTag can
-supply it: `cho_sensor/cho_realsense` runs the camera, `cho_object_pose` the
-detector and the pose gate, and
-`cho_perception/cho_object_pose` turns a detection into a `PoseStamped` in the
-robot's base frame that a behaviour tree latches and drives to.
-
-```bash
-ros2 launch cho_realsense d435.launch.py
-ros2 launch cho_object_pose apriltag.launch.py rviz:=true \
-  image_topic:=/camera/camera/infra1/image_rect_raw
-
-TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_reach.yaml
-ros2 launch cho_task_manager run_task_manager.launch.py task:=tag_reach object_pose_config:=$TABLE
-```
-
-Which tag marks which object stays with the task, not with the perception package,
-and a task that passes no `object_pose_config` starts no perception at all. Where
-the camera is mounted is one transform into `camera_link` and nothing downstream
-depends on it. See [docs/apriltag_perception.md](docs/apriltag_perception.md).
+A task's motion target can come from an AprilTag: `cho_perception/cho_object_pose`
+turns a detection into a `PoseStamped` in the robot's base frame that a behaviour
+tree latches and drives to. Cameras, commands and mounting:
+[docs/apriltag_perception.md](docs/apriltag_perception.md).

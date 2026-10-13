@@ -552,5 +552,5 @@ def _assert_vla_block_configures(params):
     # A bridge clock is a different time domain until it echoes the controller's
     # own stamp, so the default must stay 'arrival'.
     assert params['chunk_time_source'] == 'arrival'
-    # The real MIT adapter has no finger transport.
+    # The VLA controller claims no finger interface; the hand is cho_controller_gripper's.
     assert params['enable_gripper'] is False

@@ -11,11 +11,17 @@ Full license texts for vendored sources are in LICENSES/ or in the package.
 File headers. Every C++, Python and CMake source outside extern/ carries one,
 setup.py and CMakeLists.txt included, checked in CI (.github/workflows/lint.yml)
 by ament_copyright and, for CMakeLists.txt, tools/ci/check_copyright_headers.py:
-  - written here: "Copyright <year> Hyunho Cho" and the Apache-2.0 notice;
+  - written here: "Copyright <year> Hyunho Cho" and the Apache-2.0 notice.
+    `ament_copyright --add-missing "Hyunho Cho" apache2 <files>` adds it; for a
+    CMakeLists.txt, which ament_copyright never selects,
+    `tools/ci/check_copyright_headers.py --add-missing "Hyunho Cho" apache2 <path>`;
   - adapted from upstream: the upstream copyright line(s), then
     "Copyright <year> Hyunho Cho", the upstream license in full, and a
-    "Derived from ... see NOTICE" line;
-  - extern/ is never edited.
+    "Derived from ... see NOTICE" line (the TSID files in cho_controller_common
+    are the pattern), plus an entry below;
+  - extern/ is never edited. To build on a vendor's package, add it there as a
+    submodule and include or reference it (as bota_ft_sensor does with
+    bota_driver_example) rather than copying its files.
 A package whose files carry more than one license lists each in package.xml.
 
 

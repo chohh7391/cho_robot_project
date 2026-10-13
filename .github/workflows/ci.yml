@@ -33,6 +33,14 @@ defaults:
 # ROSDEP_SKIP_KEYS alone. That is why the four cho_moveit_* robot packages are
 # listed below (cho_task_manager exec_depends on all of them).
 #
+# Check a list change from the workspace root, in a shell that has sourced only
+# /opt/ros/humble:
+#   rosdep install --simulate --rosdistro humble --ignore-src --from-paths \
+#     $(colcon list --paths-only --packages-select <BUILD_PACKAGES>) \
+#     --skip-keys "<ROSDEP_SKIP_KEYS>"
+# That does not catch a missing NOT_BUILT_PACKAGES entry, and neither does a
+# local build when the package is already installed; the Build step here does.
+#
 # All four bringups and their MoveIt packages are here for cho_bringup_common's
 # launch golden test (test/test_launch_golden.py), which evaluates every launch
 # file and follows its cho_moveit_* includes; nothing is started, so the

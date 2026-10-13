@@ -99,7 +99,7 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
     ``max_force_n`` / ``max_torque_nm``
         Magnitude of the FT wrench. Magnitudes are rotation invariant, so
         nothing has to know where the sensor is mounted -- unlike a per-axis
-        limit, which would need the R_tcp_ft transform from CLAUDE.md.
+        limit, which would need the R_tcp_ft transform (cho_sensor/bota_ft_sensor/README.md, Frames).
     ``joint_limit_margin_rad``
         Distance from any monitored joint to the nearer of its URDF limits.
     ``min_manipulability``

@@ -38,7 +38,7 @@ namespace cho_controller_openarm_mit
 // planning.  The base class supplies the one-arm 39-interface MIT protocol.
 //
 // Not `final`: VlaController derives from it to reuse this exact producer --
-// the 39-interface claim, the session/ACK/lease/SAFE protocol, the startup ramp,
+// the 39-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero phase,
 // the drive-side impedance law, the null-space posture, the joint-limit spring
 // and the reference-offset bound -- and replaces only where q_des/dq_des come
 // from. That is the same relationship JointImpedanceActionController has to
@@ -232,15 +232,20 @@ protected:
   // costs one parameter set instead of a relaunch, which would re-home the arm
   // between every point. wrench_limit_ deliberately stays configure-time: it is
   // the last bound on how hard the arm can push and must not be raisable
-  // mid-session.
+  // mid-session. on_configure requires six finite positive max_task_wrench
+  // values in both modes, so every config of this class or VlaController
+  // carries it.
   std::array<std::atomic<double>, 6> kp_task_, kd_task_;
   std::array<double, 6> wrench_limit_{};
-  // Where the impedance is evaluated.  True puts it in the MIT drive: the
-  // Cartesian error rides q_des and the drive's fixed kp/kd close the loop at
-  // current-loop rate.  False keeps the historical law, which builds
-  // J^T (Kx e + Dx edot) into tau_ff and therefore closes the same loop across
-  // a 200 Hz controller cycle plus CAN transport - the phase lag that made the
-  // arm ring during commissioning.
+  // Where the impedance is evaluated (parameter drive_side_impedance, default
+  // true).  True puts it in the MIT drive: the Cartesian error rides q_des and
+  // the drive's fixed kp/kd close the loop at current-loop rate.  False is the
+  // legacy law: J^T (Kx e + Dx edot) in tau_ff with kp = 0 and q_des measured
+  // (TRACKING_DAMPED_TORQUE), which closes the same loop across one controller
+  // cycle (750 Hz on the real arm) plus CAN transport - the phase lag that made
+  // the arm ring on hardware.  The MuJoCo MIT configs and the real single-arm
+  // config run true; the real bimanual config runs false, and the real
+  // launch's gravity_compensation mode forces false with kp = 0.
   //
   // kp/kd are FIXED rather than scheduled from diag(J^T Kx J) per pose.  The
   // profile slews kp at 10/s while the mapped stiffness moves 3.4x across the
@@ -261,6 +266,9 @@ protected:
   // because that is the form the solve needs. See joint_reference_offset().
   std::array<double, 7> reference_offset_weight_inverse_{{1.0, 1.0, 1.0, 1.0,
                                                           1.0, 1.0, 1.0}};
+  // The return-to-zero phase, the only joint-space start-up: startup_posture_
+  // is the nominal-zero target (the `startup_posture` parameter is declared but
+  // not read) and startup_kp_/startup_kd_ its homing gains.
   std::array<double, 7> startup_posture_{}, startup_start_{}, startup_kp_{}, startup_kd_{};
   double startup_duration_{0.0};
   double startup_tolerance_{0.05};

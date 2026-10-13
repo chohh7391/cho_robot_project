@@ -73,7 +73,7 @@ target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 # since been removed.)
 #
 # Never compile with -Ofast: these carry isfinite() guards, which
-# -ffinite-math-only folds to true. See the CLAUDE.md note on that trap.
+# -ffinite-math-only folds to true. See cho_vla_core/DESIGN.md, "Finite math".
 set(OPENARM_SHARED_LIB cho_controller_openarm_shared)
 add_library(${OPENARM_SHARED_LIB} SHARED
   src/base_controller.cpp

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <atomic>
+#include <cmath>
 #include <chrono>
 #include <future>
 #include <memory>
@@ -46,6 +47,8 @@ struct GripperControllerTestAccess
   }
   static bool has_force_command(const GripperController & c) {return c.has_force_command_;}
   static double commanded_width(const GripperController & c) {return c.commanded_width_;}
+  static double goal_elapsed(const GripperController & c) {return c.goal_elapsed_;}
+  static double target_age(const GripperController & c) {return c.target_age_;}
   static double target_width(const GripperController & c) {return c.active_target_width_;}
   static double measured_width(const GripperController & c) {return c.measured_width();}
   static std::uint64_t active_goal(const GripperController & c)
@@ -224,6 +227,22 @@ protected:
       manager_->update(now, period);
       manager_->write(now, period);
       executor_->spin_some(std::chrono::milliseconds(0));
+    }
+  }
+
+  // One update with an arbitrary `period` handed to the controller, while the
+  // mock hardware still steps by a normal period so the measured width follows
+  // the command. This is how a cycle that saw no new state (period 0) or a
+  // stalled loop (a huge period) reaches the controller.
+  void step(const double period_seconds, const int count = 1)
+  {
+    const auto hardware_period = rclcpp::Duration::from_seconds(kPeriod);
+    const auto period = rclcpp::Duration::from_seconds(period_seconds);
+    for (int i = 0; i < count; ++i) {
+      const auto now = manager_->now();
+      manager_->read(now, hardware_period);
+      controller_->update(now, period);
+      manager_->write(now, hardware_period);
     }
   }
 
@@ -587,5 +606,126 @@ TEST_F(Fixture, ACancelForAGoalAcceptedThisPeriodIsNotLost)
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::CANCELED);
   cycle(100);
   EXPECT_NEAR(Access::measured_width(*controller_), before, 1e-9);
+}
+
+// AC3: the measured period is used, and a period of 0 (an update that saw no
+// new state) means no time has passed -- the open-loop reference and the
+// timers must not advance by an invented 1 ms.
+
+TEST_F(Fixture, AC3_ZeroOrNegativePeriodDoesNotAdvanceTheCommandedWidthOrTheGoalClock)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  const double start = Access::commanded_width(*controller_);
+  const auto id = Access::stage_goal(*controller_, /*grasp=*/false, /*width=*/0.0, /*speed=*/0.2);
+  ASSERT_NE(id, 0U);
+  for (const double period : {0.0, -0.001, -1.0}) {
+    step(period, 100);
+    EXPECT_EQ(Access::active_goal(*controller_), id) << "period " << period;
+    EXPECT_DOUBLE_EQ(Access::commanded_width(*controller_), start) << "period " << period;
+    EXPECT_DOUBLE_EQ(Access::position_command(*controller_), 0.0) << "period " << period;
+    EXPECT_DOUBLE_EQ(Access::goal_elapsed(*controller_), 0.0) << "period " << period;
+    EXPECT_DOUBLE_EQ(Access::target_age(*controller_), 0.0) << "period " << period;
+  }
+}
+
+TEST_F(Fixture, AC3_APositivePeriodAdvancesTheCommandedWidthAndTheGoalClockByThatPeriod)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  const double start = Access::commanded_width(*controller_);
+  const auto id = Access::stage_goal(*controller_, false, 0.0, 0.2);
+  ASSERT_NE(id, 0U);
+  step(0.0, 20);  // control: nothing yet
+  ASSERT_DOUBLE_EQ(Access::commanded_width(*controller_), start);
+  step(kPeriod, 10);
+  // 0.2 m/s for 10 ms is 2 mm of reference travel, 10 ms of goal time.
+  EXPECT_NEAR(Access::commanded_width(*controller_) - start, 0.002, 5e-4);
+  EXPECT_NEAR(Access::goal_elapsed(*controller_), 0.010, 1.5e-3);
+  EXPECT_EQ(Access::active_goal(*controller_), id);
+}
+
+TEST_F(Fixture, AC3_ZeroPeriodsInTheMiddleOfAMoveLeaveTheReferenceWhereItWas)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  Access::stage_goal(*controller_, false, 0.0, 0.2);
+  step(kPeriod, 20);
+  const double before = Access::commanded_width(*controller_);
+  const double elapsed_before = Access::goal_elapsed(*controller_);
+  ASSERT_GT(before, 0.0);
+  step(0.0, 500);
+  EXPECT_DOUBLE_EQ(Access::commanded_width(*controller_), before);
+  EXPECT_DOUBLE_EQ(Access::goal_elapsed(*controller_), elapsed_before);
+  EXPECT_TRUE(std::isfinite(Access::position_command(*controller_)));
+  step(kPeriod, 20);
+  EXPECT_GT(Access::commanded_width(*controller_), before);
+}
+
+TEST_F(Fixture, AC3_AZeroPeriodDoesNotMoveTheReferenceTowardAWidthStreamTarget)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  const double start = Access::commanded_width(*controller_);
+  Access::publish_width(*controller_, 0.05);
+  step(0.0, 200);
+  EXPECT_DOUBLE_EQ(Access::commanded_width(*controller_), start);
+  step(kPeriod, 100);
+  // default_speed 50 mm/s for 100 ms: about 5 mm, and not past the target.
+  EXPECT_GT(Access::commanded_width(*controller_), start + 0.003);
+  EXPECT_LE(Access::commanded_width(*controller_), 0.05 + 1e-9);
+}
+
+TEST_F(Fixture, AC3_AnOversizedPeriodStillAdvancesTheReferenceByAtMost100Ms)
+{
+  build();
+  ASSERT_TRUE(configure());
+  activate();
+  Access::stage_goal(*controller_, false, 0.0, 0.2);
+  step(kPeriod, 5);  // let the goal start
+  const double before = Access::commanded_width(*controller_);
+  const double elapsed_before = Access::goal_elapsed(*controller_);
+  step(10.0);
+  // 0.2 m/s for the 0.1 s cap is 20 mm; 10 s would be the whole stroke.
+  EXPECT_NEAR(Access::commanded_width(*controller_) - before, 0.020, 1e-6);
+  EXPECT_NEAR(Access::goal_elapsed(*controller_) - elapsed_before, 0.1, 1e-6);
+}
+
+TEST_F(Fixture, AC3_ZeroPeriodsDoNotRunDownTheGoalTimeout)
+{
+  build();
+  set_param("goal_timeout", 0.05);
+  ASSERT_TRUE(configure());
+  activate();
+  // 1 mm/s: far too slow to finish, so only the timeout can end this goal.
+  const auto id = Access::stage_goal(*controller_, false, 0.0, 0.001);
+  ASSERT_NE(id, 0U);
+  step(0.0, 3000);
+  EXPECT_EQ(Access::active_goal(*controller_), id)
+    << "3000 updates of zero time must not time out a 50 ms goal";
+  step(kPeriod, 200);  // 0.2 s of real time passes the 0.05 s timeout
+  EXPECT_EQ(Access::active_goal(*controller_), 0U);
+}
+
+TEST_F(Fixture, AC3_ZeroPeriodsDoNotLetTheStallGraceOrDwellElapse)
+{
+  build(/*with_force=*/false, /*bad_mapping=*/false, /*frozen=*/true, /*initial_joint=*/0.044);
+  set_param("command_is_setpoint", true);
+  set_param("stall_grace", 0.2);
+  set_param("stall_dwell", 0.05);
+  ASSERT_TRUE(configure());
+  activate();
+  const auto id = Access::stage_goal(*controller_, /*grasp=*/true, /*width=*/0.0, /*speed=*/0.05);
+  ASSERT_NE(id, 0U);
+  step(0.0, 3000);
+  EXPECT_EQ(Access::active_goal(*controller_), id)
+    << "no time passed, so the grace window cannot have ended and no stall can have landed";
+  EXPECT_DOUBLE_EQ(Access::target_age(*controller_), 0.0);
+  step(kPeriod, 400);  // 0.4 s: past grace + dwell, the stall now lands
+  EXPECT_EQ(Access::active_goal(*controller_), 0U);
 }
 }  // namespace

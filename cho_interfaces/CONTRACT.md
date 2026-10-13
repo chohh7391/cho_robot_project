@@ -20,7 +20,8 @@ so `joint_space_impedance_controller` serves
 `/joint_space_impedance_controller/joint_space`, and a bimanual build's
 `left_vla_mit_controller` serves `/left_vla_mit_controller/vla`. The MoveIt
 bridge, which is not a controller, follows the same rule under its own node,
-`<robot>[_<profile>]_moveit_action_bridge`.
+`<robot>[_<profile>]_moveit_action_bridge` (`cho_robot_config.moveit_bridge_node()`),
+and refuses to start under any other name.
 
 `cho_robot_config` names the controllers per robot and role; clients build the
 action name from the controller name and this table
@@ -54,6 +55,12 @@ expects. Running a robot under a namespace therefore needs the registry entry
   duration; a request faster than the limits allow takes as long as they
   require. The MoveIt bridge keeps the same meaning; see
   [The MoveIt bridge](#the-moveit-bridge).
+  The limits are the robot's MoveIt files: `joint_limits.yaml`
+  (`joint_limits.<joint>.*`) and, for task space, `pilz_cartesian_limits.yaml`,
+  which every bringup merges into its controllers' parameters
+  (`cho_robot_config.motion_limit_parameters()`). Without a `max_acceleration`
+  for every joint (or a Cartesian acceleration limit) a goal takes exactly its
+  requested duration, however short; the controller logs which applies.
 - A goal is rejected, never accepted and then ignored, when: the controller is
   inactive; another goal is active (one goal at a time); a value is non-finite;
   the duration is not positive; a joint target is outside the controller's
@@ -172,7 +179,8 @@ controller's goal, which holds the arm where it is, and ends the execution
 ABORTED with MoveIt error PREEMPTED. It also sends the cancel, which is what a
 MoveIt that honours it acts on (CANCELED), and it repeats the stop every
 0.25 s until the execution is terminal, since a stop that lands between the
-goal's acceptance and the start of execution is a no-op there. The bridge's
+goal's acceptance and the start of execution is a no-op there. In FR5 MuJoCo
+the arm stops within 0.25 s. The bridge's
 goal then ends **Canceled** on CANCELED or ABORTED/PREEMPTED, **Succeeded**
 if the trajectory finished before the stop took effect, and **Aborted** on any
 other execution failure. Only when the execution reports nothing within
@@ -203,12 +211,37 @@ Feedback (`percent_complete`) is published at up to 10 Hz.
 ## Real-time
 
 A controller's control loop never calls `rclcpp_action`: it records outcomes
-atomically and a non-real-time timer delivers them (`cho_controller_base`'s
-`GoalPhaseActionServer`).
+atomically and a 5 ms non-real-time timer delivers them (`cho_controller_base`'s
+`GoalPhaseActionServer`; the OpenArm MIT controllers run their own 5 ms timer).
 
 ## State topics
 
-Every arm controller publishes `~/controller_state`
-(`control_msgs/JointTrajectoryControllerState`) and `~/ee_state`
-(`cho_interfaces/PoseLog`, stamped, in its base frame). `/ee_state/pose` and
-`/ee_state/twist` come from the robot's `ee_state_broadcaster`.
+The arm controllers built on a robot base class -- `FrankaBaseController`,
+`FR5BaseController`, `URBaseController` and `OpenArmBaseController` (the OpenArm
+`joint_space_{impedance,position,velocity}_controller`) -- publish:
+
+| Topic | Type | Content |
+|---|---|---|
+| `~/controller_state` | `control_msgs/JointTrajectoryControllerState` | reference = desired, feedback = measured |
+| `~/ee_state` | `cho_interfaces/PoseLog` | reference / desired / current EE pose, stamped with the model's root frame |
+
+`ee_state_broadcaster` and the gripper controllers publish neither.
+
+The OpenArm MIT controllers (`cho_controller_openarm_mit`: `joint_*_mit_controller`,
+`task_space_impedance_mit_controller`, `vla_mit_controller` and the
+FollowJointTrajectory pair) publish neither. They offer instead:
+
+| Name | Kind | Served by |
+|---|---|---|
+| `~/request_safe_stop` | `std_srvs/Trigger` service | every MIT controller |
+| `~/protocol_status` | `std_srvs/Trigger` service | the direct ones (all but the FollowJointTrajectory pair) |
+| `~/task_diagnostics` | `std_srvs/Trigger` service | `task_space_impedance_mit_controller` |
+| `~/vla_telemetry` | `cho_interfaces/VlaTelemetry` topic | `vla_mit_controller` (Franka's `vla_controller` too) |
+
+The FollowJointTrajectory pair offers only `~/request_safe_stop` and its
+`~/follow_joint_trajectory` action.
+
+`ee_state_broadcaster` (Franka and OpenArm; FR5 and UR have none) publishes the
+`ee_name` frame's pose and twist on `/ee_state/pose` and `/ee_state/twist`, on a
+bimanual OpenArm one per arm on `/ee_state/<side>/pose` and `/ee_state/<side>/twist`.
+It is the EE state source on the OpenArm MIT path.

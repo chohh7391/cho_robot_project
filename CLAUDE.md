@@ -1,6 +1,10 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+It holds the rules an agent works by and a map of where each fact is written down: a code fact in the
+comment beside that code, the client contract in [cho_interfaces/CONTRACT.md](cho_interfaces/CONTRACT.md),
+a package's internals in its README.md or DESIGN.md, operating procedures in [docs/](docs/). Change a fact
+there, not here.
 
 ## Build & Test
 
@@ -18,555 +22,244 @@ colcon test --packages-select cho_task_manager cho_description_franka
 colcon test-result --verbose
 ```
 
-Python linting enforces max line length 120 (flake8), relaxed pep257. Test files must be named `test_*.py`.
-The rules are pycodestyle + pyflakes only: every package pins the optional flake8
-plugins' rules off (`extend-ignore = A,B90,C4,C81,CNL,D,I,Q` in its `setup.cfg`, or
-in a `.flake8` that its CMakeLists.txt hands to `ament_cmake_flake8`), because a ROS 2
-machine has `python3-flake8-{docstrings,quotes,import-order,...}` installed and the
-code was never written to them. CI installs those plugins too, so a package without
-the pin fails there exactly as it does locally. A new Python package copies the pin.
+Dependencies, simulators and the full build: [docs/installation.md](docs/installation.md). `git pull` does not
+check out a submodule added since the clone; `install_dependencies.bash` or `git submodule update --init
+--recursive` does ([installation.md, ROS Dependencies](docs/installation.md#ros-dependencies)).
 
-Every bringup launch file is covered by a golden test: cho_bringup_common's
-`test/test_launch_golden.py` evaluates each one for the argument sets in
-`test/launch_golden/cases.yaml` (walking OpaqueFunctions and event handlers with
-a real LaunchContext, starting nothing, Isaac and hardware stubbed) and compares
-against `test/launch_golden/expected/`. A launch change that is meant to change
-behaviour fails it until the expected files are regenerated and the diff reviewed:
+**Lint.** flake8 at 120 columns in every Python package, pycodestyle + pyflakes only, relaxed pep257; test files
+are named `test_*.py`. Each package pins the optional flake8 plugins' rules off
+(`extend-ignore = A,B90,C4,C81,CNL,D,I,Q`) in its `setup.cfg` or its `.flake8`, because ROS 2 machines and CI
+have those plugins installed. A new Python package copies the pin, as in
+[cho_robot_config/setup.cfg](cho_robot_config/setup.cfg) (ament_python, `test/test_flake8.py`) or
+[cho_bringup_fr5/.flake8](cho_bringup/cho_bringup_fr5/.flake8) (ament_cmake, `ament_flake8`).
 
-```bash
-colcon build --symlink-install --packages-select <changed bringup packages>
-source install/setup.bash
-cd src/cho_robot_project/cho_bringup/cho_bringup_common
-CHO_LAUNCH_GOLDEN_UPDATE=1 python3 -m pytest test/test_launch_golden.py
-git diff test/launch_golden/
-# One case by hand: python3 -m cho_bringup_common.launch_golden <pkg> <file> [name:=value ...]
-```
+**Launch goldens.** Every bringup launch file is compared, per argument set in
+`cho_bringup_common/test/launch_golden/cases.yaml`, against committed expected output. A launch change meant to
+change behaviour fails it until the expected files are regenerated and the diff reviewed; a new launch file or
+bringup needs cases. Procedure: [test_launch_golden.py](cho_bringup/cho_bringup_common/test/test_launch_golden.py);
+what is printed: [launch_golden.py](cho_bringup/cho_bringup_common/cho_bringup_common/launch_golden.py).
 
-A new launch file or bringup package needs cases there, or the test fails. The
-walk follows `cho_bringup_*` and `cho_moveit_*` includes (MoveIt's scene gate and
-RViz condition are part of a bringup's output), prints each node's parameters,
-the joints' origins and limits, every xacro run (Command and `xacro.process_file`)
-and spawner `-p` files in the order given (Humble: the last one wins). CI evaluates
-all four bringups: the workspace packages they exec_depend on but CI does not build
-(`NOT_BUILT_PACKAGES` in ci.yml) are ignored, and the Franka debs that do not exist
-are skipped (`ROSDEP_SKIP_KEYS`); the two Franka packages a launch looks up by path
-are empty stand-ins (`tools/ci/stub_ament_packages.sh`). Expected output never
-depends on where the workspace is installed: paths become tokens before anything is
-formatted.
-
-CI (`.github/workflows/ci.yml`) derives its rosdep paths from BUILD_PACKAGES, so
-every workspace package a listed package depends on, of any dependency type, must
-be listed too, or be named in NOT_BUILT_PACKAGES (colcon `--packages-ignore`, passed
-to the build and the test step) **and** in ROSDEP_SKIP_KEYS. Only a key that is not
-in the source tree at all (a Franka deb that was never published) goes in
-ROSDEP_SKIP_KEYS alone. Both are needed for a source-tree package that is not built:
-`rosdep --ignore-src` reports any workspace name outside `--from-paths` as an unknown
-key, and colcon refuses a workspace dependency that is neither selected nor
-installed. The `Test results` step fails when the summary says `0 tests`, so a build
-that stops before the suite cannot pass quietly. Check with `rosdep install
---simulate --rosdistro humble --ignore-src --from-paths $(colcon list --paths-only
---packages-select <BUILD_PACKAGES>) --skip-keys "<ROSDEP_SKIP_KEYS>"` in a shell that
-has sourced only /opt/ros/humble. That check does not catch a missing ignore, and a
-local build does not either when the package is already installed; the CI build step
-does.
-
-Submodules: `git pull` does not check out a submodule added since the clone
-(`extern/bota_driver_ros2_example` was). `install_dependencies.bash` checks out the
-missing ones (only those) before running rosdep; by hand, `git submodule update
---init --recursive`.
+**CI.** [ci.yml](.github/workflows/ci.yml) builds and tests `BUILD_PACKAGES`. Every workspace package a listed
+package depends on (any dependency type) is listed too, or named in both `NOT_BUILT_PACKAGES` and
+`ROSDEP_SKIP_KEYS`; a key not in the source tree at all goes in `ROSDEP_SKIP_KEYS` alone. Why, and the
+`rosdep --simulate` check for a list change: ci.yml's header comment. Style and headers: [lint.yml](.github/workflows/lint.yml).
 
 ## Launch
 
+`ros2 launch cho_bringup_<robot> bringup_<backend>_robot.launch.py`; `--show-args` lists the arguments. Every
+robot and backend, the selection arguments and which controller exists where:
+[docs/controllers_and_bringup.md](docs/controllers_and_bringup.md) ([Recipes](docs/controllers_and_bringup.md#recipes)).
+
 ```bash
-# Real robot (set IP in cho_bringup_franka/config/real/franka.config.yaml first)
+# Franka, real (robot IP in cho_bringup_franka/config/real/franka.config.yaml)
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
-
-# Simulation
-ros2 launch cho_bringup_franka bringup_gz_robot.launch.py control_mode:=position controller_name:=task_space_ik_controller
+# Franka, MuJoCo
 ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_qp_controller
-# Isaac Sim (build the USD once first: cho_description_franka/usd/README.md)
-ros2 launch cho_bringup_franka bringup_isaac_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
-ros2 launch cho_bringup_ur bringup_isaac_robot.launch.py controller_name:=task_space_ik_controller
-# OpenArm: simulation only. bimanual:=true for the two-arm torso; physics_engine
-# is physx (default) or newton - both verified for torque/position/velocity.
+# OpenArm, MuJoCo, legacy controllers (mujoco_mit_prototype:=true selects the MIT controllers)
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller
-ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller physics_engine:=newton bimanual:=true
-# Isaac: give it its own ROS_DOMAIN_ID if anything else on the machine simulates -
-# two /clock publishers make sim time jump backwards and every controller misbehaves.
-# If the requested controller fails to activate, the command gate stays closed and
-# Isaac holds the home pose with one ERROR line to show for it; for headless or
-# unattended runs pass shutdown_on_gate_failure:=true to end the launch instead.
-
-# VLA mode (requires control_mode set in controller config)
-ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
-# OpenArm VLA: verified in MuJoCo. The real bringup offers vla_mit_controller
-# (launch_utils.REAL_MIT_DIRECT_CONTROLLERS) for TASK chunks. With `drive_side_impedance:
-# false` (the real bimanual config) a joint chunk is rejected at ingest: the legacy law
-# sends kp = 0 with q_des pinned to the measurement, so no position loop closes. The
-# joint path (real single arm, `true`) has only ever run in MuJoCo.
-ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
-  mujoco_mit_prototype:=true control_mode:=torque mit_controller_name:=vla_mit_controller
-# End-to-end check against a running sim: streams chunks like a bridge would and
-# asserts what the arm and the telemetry actually did.
-ros2 run cho_control_tools vla_mit_probe
-
+# OpenArm, real hardware: MIT controllers only, commissioning stage
+ros2 launch cho_bringup_openarm bringup_real_robot.launch.py controller_name:=task_space_impedance_mit_controller can_interface:=can0
 # Behavior tree task
-ros2 launch cho_task_manager run_task_manager.launch.py task:=<task_name>
-# Replay a recording on the position trajectory controller (empty replay_trajectory = the
-# robot's example). Per-robot bringup commands: docs/tasks.md (Trajectory replay)
-ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=<franka|ur5e|fr5|openarm> task:=trajectory_replay use_sim_time:=true
-
-# Gazebo black screen fix
-export IGN_IP=127.0.0.1
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=<robot> task:=<task_name> use_sim_time:=true
 ```
 
-## Architecture
+- OpenArm runs in MuJoCo, Isaac Sim and on real hardware. The real bringup takes the controllers in
+  `launch_utils.REAL_MIT_DIRECT_CONTROLLERS` and is being commissioned:
+  [docs/openarm_real_bringup.md](docs/openarm_real_bringup.md).
+- Isaac Sim needs the robot's USD built once, and its own `ROS_DOMAIN_ID` when anything else on the machine
+  simulates: [Recipes](docs/controllers_and_bringup.md#recipes).
+- Tasks, including `task:=trajectory_replay`: [docs/tasks.md](docs/tasks.md). Two PCs: [docs/multi_pc.md](docs/multi_pc.md).
 
-### Package Map
+## Package Map
 
-```
-cho_controller/
-  cho_controller_common/     # Shared C++ math: Pinocchio FK/IK/dynamics, Eigen utilities
-  cho_controller_base/       # Robot-independent, header-only except one small
-                             # library: the RT-safe action server (GoalPhase), the
-                             # JointSpace/TaskSpace servers every arm serves, DLS IK
-                             # and held-command helpers. Robots keep only thin
-                             # adapters (state fields, defaults).
-                             # libcho_controller_base_ledger.so is the process-wide
-                             # record behind live_held_command(): every base records
-                             # what it leaves in on_deactivate (release_held_command),
-                             # and a position controller seeds from the command
-                             # interface only while that is still a live hold (the
-                             # joint has not moved more than 1 urad since); a value
-                             # from a controller outside this repo is judged by the
-                             # 0.05 rad band. ur_robot_driver resets position commands
-                             # to the measurement on every position-mode start.
-                             # testing/controller_manager_harness.hpp is test support:
-                             # a controller_manager on mock hardware that a test steps
-                             # one period at a time (each arm's test_reactivation).
-  cho_controller_franka/     # 12 ros2_control plugin controllers + action servers
-  utils/cho_vla_core/        # Robot-independent VLA action-chunk pipeline: chunk
-                             # validation, observation-time splicing, reference
-                             # sampling/limiting, stream watchdog, gripper edge
-                             # detection. NO ROS (rclcpp is not a dependency) and
-                             # no clock of its own - time is a plain double on the
-                             # host's control clock, so the whole pipeline is
-                             # gtest-able without a controller_manager fixture.
-                             # Consumed by cho_controller_franka's VLAActionServer
-                             # and cho_controller_openarm_mit's VlaController.
-                             # See its DESIGN.md.
+What each package is, and where its own documentation is. `extern/` holds the pinned vendor sources
+([extern/README.md](extern/README.md)); they are never edited.
 
-cho_interfaces/              # ROS2 msgs (ActionChunk, VlaTelemetry, PoseLog) and actions (JointSpace, TaskSpace, Gripper, VLA)
+**cho_controller/**
+- `cho_controller_common` — Pinocchio robot model, FK/IK/dynamics, Eigen math, TSID-derived tasks and QP solvers,
+  Ruckig point-to-point trajectories. Built Release `-O3`
+  ([CMakeLists.txt](cho_controller/cho_controller_common/CMakeLists.txt)).
+- `cho_controller_base` — robot-independent: `GoalPhaseActionServer` and the `JointSpaceServer` / `TaskSpaceServer`
+  every arm serves ([goal_phase_action_server.hpp](cho_controller/cho_controller_base/include/cho_controller_base/goal_phase_action_server.hpp)),
+  DLS IK, and the held-command ledger `libcho_controller_base_ledger.so`
+  ([held_command.hpp](cho_controller/cho_controller_base/include/cho_controller_base/held_command.hpp)).
+  `testing/controller_manager_harness.hpp` steps a controller_manager on mock hardware (each arm's `test_reactivation`).
+- `cho_controller_franka` — FR3: 13 plugins ([cho_controller_franka.xml](cho_controller/cho_controller_franka/cho_controller_franka.xml)),
+  `VLAController` and the Franka hand's `GripperController` among them
+  ([instances](docs/controllers_and_bringup.md#franka-fr3--cho_controller_franka)).
+- `cho_controller_fr5` — FAIRINO FR5: `JointSpacePositionController` and `TaskSpaceIKController` on `FR5BaseController`
+  ([instances](docs/controllers_and_bringup.md#fairino-fr5--cho_controller_fr5)).
+- `cho_controller_ur` — UR5e: `JointSpacePositionController` and `TaskSpaceIKController` on `URBaseController`
+  ([instances](docs/controllers_and_bringup.md#ur5e--cho_controller_ur)).
+- `cho_controller_gripper` — one `GripperController` for the UR, FR5 and OpenArm grippers: the `~/gripper` action and
+  a `~/width_command` topic, in metres of opening
+  ([gripper_controller.hpp](cho_controller/cho_controller_gripper/include/cho_controller_gripper/gripper_controller.hpp)).
+- `cho_controller_openarm_mit` — every OpenArm arm controller plugin, two families: `cho_controller::openarm` (joint-space
+  controllers, `ee_state_broadcaster`) and `cho_controller_openarm_mit` (the MIT drive-protocol producers)
+  ([DESIGN.md, Package layout](cho_controller/cho_controller_openarm_mit/DESIGN.md#package-layout)).
+- `utils/cho_vla_core` — the VLA action-chunk pipeline, free of ROS, hosted by Franka's `vla_controller` (through
+  its `VLAActionServer`) and OpenArm's `VlaController` ([DESIGN.md](cho_controller/utils/cho_vla_core/DESIGN.md)).
 
-cho_description/cho_description_franka/
-  robots/                    # Xacro entry points per robot variant
-  urdf/                      # Generated URDFs (fr3, fr3_with_ft_sensor, etc.)
-  xml/                       # MuJoCo scene XMLs
-  usd/                       # Isaac Sim USD assets (generated, gitignored; see usd/README.md)
-  config/                    # Payload YAML
+**cho_hardware/** — the OpenArm MIT `ros2_control` side ([protocol](docs/openarm_mit_contract_v1.md);
+the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))
+- `cho_openarm_mit_core` — the MIT tuple, session/lease/SAFE primitives, `SwitchGate`, safety-profile loading; no
+  plugin ([DESIGN.md](cho_hardware/cho_openarm_mit_core/DESIGN.md)).
+- `cho_hardware_openarm_mit_real` — `OpenArmMitRealSystem`, SocketCAN through the vendor `openarm_can`, one component
+  per arm, the hand with `hand:=true` ([README.md](cho_hardware/cho_hardware_openarm_mit_real/README.md)).
+- `cho_hardware_openarm_mit_mujoco` — `MitMujocoSystem` over `mujoco_ros2_control`: the per-arm safety limiter and
+  drive-protocol consumer the MuJoCo MIT bringup runs.
+- `cho_hardware_openarm_mit_test` — `FakeMitSystem`, a test-only fixture for the MIT contract.
 
-cho_bringup/cho_bringup_franka/
-  launch/                    # bringup_real/gazebo/mujoco/isaac_robot.launch.py
-  config/{real,gazebo,mujoco,isaac}/controllers.yaml  # Per-environment controller gains
-  config/real/franka.config.yaml               # Robot IP, gripper, FT sensor flags
+**cho_interfaces/** — messages `ActionChunk`, `VlaTelemetry`, `PoseLog`, `GripperState`, `ObjectVisibility`,
+`ObjectVisibilityArray`, `CameraVisibility`; actions `JointSpace`, `TaskSpace`, `Gripper`, `VisionLanguageAction`.
+What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 
-cho_bringup/cho_bringup_common/  # ament_python; what every bringup shares, imported as
-                                 # `from cho_bringup_common import ...`: the runtime
-                                 # param file (write_runtime_param_file + cleanup),
-                                 # spawners (create_controller_spawners), the Isaac
-                                 # start-up/gate order, search-path prepending, and
-                                 # load_package_utils() for a robot's own
-                                 # lib/<pkg>/utils/launch_utils.py. Robot-specific
-                                 # names and rules stay in those robot utils.
-                                 # Those utils/ dirs are installed with PATTERN
-                                 # EXCLUDEs, never FILES_MATCHING, which makes
-                                 # --symlink-install copy them (and go stale).
+**cho_description/**
+- `cho_description_franka` — FR3 xacro entry points (`robots/`), generated URDFs (`urdf/fr3`, `urdf/fr3_with_ft_sensor`),
+  MuJoCo XML, Isaac USD (generated, [usd/README.md](cho_description/cho_description_franka/usd/README.md)).
+- `cho_description_fr5` — FR5 URDF and MuJoCo scenes from the vendor bundle, with a hardware-switching `ros2_control` block.
+- `cho_description_ur` — UR description, upstream fork ([README.md](cho_description/cho_description_ur/README.md)).
+- `cho_description_openarm` — OpenArm v1.0, vendored fork: one xacro entry point for every backend
+  (`robots/openarm_v10/`), MuJoCo scenes per control mode, the MIT safety profiles
+  (`config/mit_safety_profiles_v1.yaml`), Isaac USD ([usd/README.md](cho_description/cho_description_openarm/usd/README.md));
+  `scripts/sync_mjcf_inertials.py` keeps the MJCF's inertials equal to the URDF's.
 
-cho_description/cho_description_openarm/   # enactic OpenArm v1.0, vendored fork
-  robots/openarm_v10/        # ONE xacro entry point for real/gazebo/mujoco/isaac/mock
-  xml/openarm_v10{,_bimanual}/   # MuJoCo scenes, one per control_mode
-  usd/                       # Isaac USD (generated, gitignored; see usd/README.md)
-  scripts/sync_mjcf_inertials.py  # keeps the MJCF's inertials/axes equal to the URDF
+**cho_bringup/**
+- `cho_bringup_common` — ament_python helpers every bringup imports (runtime parameter files, spawners, the Isaac
+  start-up and gate order, search paths, `load_package_utils()`) and the launch golden test. Robot-specific names
+  and rules stay in each robot's `utils/launch_utils.py`, installed with `PATTERN ... EXCLUDE`, never
+  `FILES_MATCHING` (under `--symlink-install` that copies them, and the copy goes stale).
+- `cho_bringup_franka`, `cho_bringup_ur`, `cho_bringup_fr5`, `cho_bringup_openarm` — `launch/bringup_<backend>_robot`
+  (and `_moveit`) files, `config/<backend>/controllers*.yaml`, `config/isaac/robot_profile*.json` (the robot's Isaac
+  physics); Franka also `config/payload.yaml` and `config/real/franka.config.yaml` (robot IP, gripper).
+  Which backends each has: [launch matrix](docs/controllers_and_bringup.md#bringup-launch-matrix).
 
-cho_controller/cho_controller_openarm_mit/  # every OpenArm controller plugin
-  # Two families in one package, and the namespaces say which is which.
-  #
-  # namespace cho_controller::openarm - ee_state_broadcaster + joint_space
-  # impedance/position/velocity, merged in from the former
-  # cho_controller_openarm. Dynamic-size Eigen and name-based Pinocchio
-  # indexing, so one class serves both the single arm and either arm of the
-  # bimanual torso. ee_state_broadcaster is NOT optional for the MIT path:
-  # every MIT config spawns it, the MIT controllers have no broadcaster of
-  # their own, and the Inverse3 teleop bridge takes its observation from the
-  # /ee_state/<side>/pose it publishes.
-  #
-  # namespace cho_controller_openarm_mit - the MIT drive-protocol controllers:
-  # joint position/impedance, task-space impedance, VLA, and the FJT pair.
-  #
-  # Plugin lookup names all carry the cho_controller_openarm_mit/ prefix; the
-  # four merged ones were renamed from cho_controller_openarm/ when the
-  # packages joined, and every config moved with them.
+**cho_simulation/cho_simulation_isaac/** — the Isaac runner and URDF-to-USD converter (`isaac/`, run under
+`isaacsim/python.sh`, not ROS) and the ROS-side `scripts/isaac_command_gate.py`, `scripts/isaac_ft_sensor.py`.
 
-cho_bringup/cho_bringup_openarm/          # mujoco + isaac only (no real hardware yet)
-  config/{mujoco,isaac}/controllers{,_bimanual}.yaml
-  config/isaac/robot_profile{,_bimanual}.json  # OpenArm-owned Isaac physics
-  utils/launch_utils.py      # per_arm() prefixes controller names on a bimanual build
+**cho_moveit/** — `cho_moveit_common` (the MoveIt action bridge) and one planning configuration per robot
+([README.md](cho_moveit/README.md)); the bridge's contract: [CONTRACT.md](cho_interfaces/CONTRACT.md#the-moveit-bridge).
 
-cho_simulation/cho_simulation_isaac/   # Shared by every robot's Isaac bringup
-  isaac/run_isaac_sim.py     # Isaac standalone runner (runs under isaacsim/python.sh, NOT ROS)
-  isaac/convert_urdf_to_usd.py  # URDF -> USD, also under isaacsim/python.sh
-  scripts/                   # ROS-side helpers: isaac_command_gate.py, isaac_ft_sensor.py
+**cho_robot_config/** — the per-robot registry, `config/<robot>.yaml`; its schema is the docstring of
+[registry.py](cho_robot_config/cho_robot_config/registry.py). Also `controller_action_name()`,
+`task_goal_frame()`, `motion_limit_parameters()`.
 
-cho_bringup/cho_bringup_<robot>/config/isaac/
-  robot_profile.json         # Robot-owned Isaac physics: joints, home, armature, drive gains
+**cho_task_manager/** — the py_trees task manager: `behaviors/`, `subtrees/`, `tasks/<robot>/` (dispatched by
+`build_task_tree()`), recordings in `config/replay/<robot>/` ([README.md](cho_task_manager/config/replay/README.md)).
+Reference: [docs/tasks.md](docs/tasks.md). The chemistry-bench application is on the `auto_chem` branch.
 
-cho_task_manager/
-  cho_task_manager/
-    behaviors/               # py_trees leaf nodes: action/, service/
-    tasks/                   # Behavior trees, split per robot: franka/ (pick_and_place, forge), ur/ (pick_and_place, multi_move); __init__.py dispatches by robot_type via build_task_tree()
-                             # trajectory_replay: ONE tree for franka, ur5e, fr5 and openarm in
-                             # tasks/trajectory_replay.py; tasks/<robot>/trajectory_replay.py holds only that
-                             # robot's ReplayDefaults and factory.
-    config/replay/<robot>/   # Recordings, one folder per robot (franka, ur, fr5, openarm):
-                             # <name>_waypoints.csv + <name>_meta.json; example_* is what
-                             # trajectory_replay plays when replay_trajectory is empty. README.md there.
-                             # The chemistry-bench application (glassware meshes, vessel detection,
-                             # occlusion sweeps, perception-gated replay) is on the `auto_chem` branch.
-    task_manager_node.py     # ROS2 node that runs the selected tree
-    utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
+**cho_control_tools/** — interactive action clients, VLA tools (`vla_action_client`, `vla_mit_probe`) and bag
+plotters ([docs/action_clients.md](docs/action_clients.md)).
 
-tools/                       # Not a package. build_openarm_vendor.sh; ci/: the
-                             # Franka stand-ins for the launch golden test
-                             # (stub_ament_packages.sh) and the CMakeLists.txt
-                             # header check (check_copyright_headers.py).
+**cho_sensor/** (grouping directory)
+- `bota_ft_sensor` — Bota FT launch over the Bota driver in `extern/` ([README.md](cho_sensor/bota_ft_sensor/README.md)).
+- `cho_realsense` — D435 over the stock `rs_launch.py`; no detection, no camera-to-robot transform
+  ([README.md](cho_sensor/cho_realsense/README.md)).
+- `cho_oak` — OAK-D Pro W over the stock depthai launch ([README.md](cho_sensor/cho_oak/README.md)).
+- `cho_camera_calibration` — target, procedure, per-camera `camera_info` files and `cameras.yaml`
+  ([README.md](cho_sensor/cho_camera_calibration/README.md)).
 
-cho_robot_config/
-  config/*.yaml              # Per-robot registry: controller/action roles,
-                             # controllers.additional_arm (arm controllers with
-                             # no role, which an exclusive switch must still take
-                             # down), poses.home (operator presets) and
-                             # poses.task_home (where task trees home; a home
-                             # selector or a vector, read by task_home_pose()).
+**cho_perception/cho_object_pose/** — AprilTag `tag_<id>` TF and decode quality to a gated `PoseStamped` in the
+robot's base frame, multi-camera fusion, `/perception/object_visibility`
+([README.md](cho_perception/cho_object_pose/README.md)); operating it: [docs/apriltag_perception.md](docs/apriltag_perception.md).
 
-cho_control_tools/
-  cho_control_tools/         # Interactive clients, VLA tools, and bag plotters
+**tools/** — not a package: `build_openarm_vendor.sh`; `ci/stub_ament_packages.sh` (the Franka stand-ins for the
+golden test in CI) and `ci/check_copyright_headers.py`. **dds/** — the Fast DDS modes of
+[docs/multi_pc.md](docs/multi_pc.md).
 
-cho_sensor/                  # Sensor stacks; grouping directory, not a package
-  bota_ft_sensor/            # Bota FT driver launch for the arms here. Uses Bota's own
-                             # bota_driver (extern/bota_driver_ros2) and, for its default
-                             # config, bota_driver_example (extern/bota_driver_ros2_example)
-                             # instead of copies; only what differs lives here.
-  cho_realsense/             # D435 only. Includes the stock rs_launch.py and hands
-                             # it our config_file, bota-style. No detection, and
-                             # deliberately NO camera->robot transform.
-                             # Two identical D435s are connected: set serial_no.
-  cho_oak/                   # OAK-D Pro W, over the stock depthai camera.launch.py.
-                             # RGBSTEREO so the GLOBAL-SHUTTER mono pair is published
-                             # (the default RGBD gives depth instead), and the IR dot
-                             # projector off or its pattern breaks tag decoding.
-                             # Mono comes out unrectified -- detector needs rectify.
-  cho_camera_calibration/    # Checkerboard target, procedure, and per-camera
-                             # camera_info files + cameras.yaml (model, both serial
-                             # numbers, firmware). Intrinsics belong to a stream
-                             # PROFILE, not a camera. NOTE: realsense2_camera has no
-                             # camera_info_url and no set_camera_info, so a D435
-                             # calibration cannot be fed back without a relay node
-                             # that does not exist yet; depthai and v4l2_camera both
-                             # accept one.
+## Controllers
 
-cho_perception/              # Perception that knows a robot; grouping directory
-  cho_object_pose/           # tag_<id> TF + decode quality -> a gated PoseStamped in
-                             # the robot's base frame, which PoseTargetBehavior
-                             # latches. geometry.py is ROS-free and holds everything
-                             # worth testing; node.py is the tf2 adapter. See its
-                             # README, and docs/apriltag_perception.md.
-                             #
-                             # cameras.yaml carries a per-camera `priority`. Equal
-                             # priorities are FUSED (median); a higher one REPLACES
-                             # the lower ones' samples for the objects it can see --
-                             # a 200 mm close-up and a 1 m wide view are not two
-                             # measurements of one quantity. The override is decided
-                             # by what is in the aggregation window, so it clears
-                             # itself after window_sec with no lifetime of its own,
-                             # and min_cameras is NOT applied to an object while it
-                             # is in force (requiring consensus and declaring one
-                             # camera authoritative are contradictory). visibility.py
-                             # holds that rule, ROS-free.
-                             #
-                             # /perception/object_visibility
-                             # (cho_interfaces/ObjectVisibilityArray) publishes what
-                             # every camera can see of every object -- the reasons
-                             # the node always logged, in a form a behaviour tree can
-                             # branch on, with each camera's decision_margin and
-                             # edge_px. The occlusion recovery task that consumed it is on
-                             # the `auto_chem` branch.
+- Each controller package registers its plugins in its own XML (`cho_controller_<robot>.xml`,
+  `cho_controller_gripper.xml`, OpenArm's `controller_plugins.xml`). Which instance runs on which backend:
+  [controllers_and_bringup.md](docs/controllers_and_bringup.md#controllers-per-robot); the config's
+  `controller_manager` section is the authority.
+- Arm controllers derive from their robot's base class (`FrankaBaseController`, `FR5BaseController`,
+  `URBaseController`, `OpenArmBaseController`: the Pinocchio model, realtime state, the `~/controller_state` and
+  `~/ee_state` publishers) and override `update()`. The OpenArm MIT producers derive from `DirectControllerBase` or
+  are the FollowJointTrajectory pair ([DESIGN.md](cho_controller/cho_controller_openarm_mit/DESIGN.md)).
+- What every controller serves and a client may rely on (action names, goals, frames, `duration_sec` as a minimum,
+  outcomes, state topics): [CONTRACT.md](cho_interfaces/CONTRACT.md). Python builds action names with
+  `controller_action_name()` and goal frames with `task_goal_frame()`, never by hand.
+- The JointSpace/TaskSpace servers are `cho_controller_base`'s; a robot's `servers/` code is an adapter, and the
+  control thread never calls `rclcpp_action`. They time a goal from the Ruckig trajectory's `getDuration()`, never
+  from the goal's `duration_sec`
+  ([trajectory_euclidian.hpp](cho_controller/cho_controller_common/include/cho_controller_common/trajectory/trajectory_euclidian.hpp)).
+- Which chunks OpenArm's `VlaController` accepts, and the parameters it requires at configure time:
+  its class comment ([vla_controller.hpp](cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/vla_controller.hpp)).
+- New or reworked controller parameters are declared with `generate_parameter_library` (the pattern:
+  [task_space_ik_controller_parameters.yaml](cho_controller/cho_controller_fr5/src/task_space_ik_controller_parameters.yaml)):
+  per-parameter ranges in the YAML, checks that relate parameters in code. Under Humble `ros2 param describe` shows
+  no constraints (the controller_manager declares the overrides first), but every set is still validated. The other
+  controllers declare by hand; convert them when they are next reworked.
 
-extern/
-  franka_ros2/               # Official Franka ROS2 driver (do not edit)
-  mujoco_ros2_control/       # MuJoCo hardware interface (do not edit)
-```
+## Control period
 
-### Controller Plugin Architecture
+Code that advances its own trajectory clock or integrates an open-loop reference takes the period from its base
+class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`): never
+`1 / get_update_rate()` (0 here, no config sets a per-controller rate), a literal `dt`, or the raw `period`
+(jitters, and is 0 on a cycle with no new state). Audit a new controller for all three forms (`get_update_rate`,
+a literal such as `dt = 0.001`, `period.seconds()`); a search for one misses the others. The reasons are in the
+`nominal_period()` comment of [cho_controller_franka/src/base_controller.cpp](cho_controller/cho_controller_franka/src/base_controller.cpp).
 
-Controllers are `ros2_control` plugins registered in `cho_controller_franka.xml`. Each inherits from `BaseController` (Pinocchio robot model, gravity compensation, realtime state) and overrides `update()`.
+Exceptions, with no `nominal_period()`:
+- `cho_controller_gripper` uses the measured period capped at 0.1 s; a zero or non-finite period advances nothing
+  (`bounded_dt()`, [gripper_controller.cpp](cho_controller/cho_controller_gripper/src/gripper_controller.cpp)).
+- OpenArm MIT: `DirectControllerBase` and `TaskSpaceImpedanceController` add the measured period to their clock and
+  timers only when it is in (0, 0.1 s); their feed-forward slew and idle-release blend take `bounded_dt()` (floor
+  1e-4 s); the FollowJointTrajectory pair samples by update time
+  ([DESIGN.md, Control time](cho_controller/cho_controller_openarm_mit/DESIGN.md#control-time)).
 
-Key controllers:
-- `task_space_qp_controller` — operational-space QP with contact-aware force control
-- `task_space_impedance_controller` — impedance control in Cartesian space
-- `joint_space_qp_controller` — joint-level QP controller
-- `vla_controller` — receives `ActionChunk` from VLA inference and streams joint/task commands.
-  The chunk semantics live in `cho_vla_core`; this controller keeps only the three
-  control laws (effort / position / velocity) and its `VLAActionServer` is a thin
-  ROS adapter over that core. OpenArm's equivalent is
-  `cho_controller_openarm_mit/VlaController`, which derives from
-  `TaskSpaceImpedanceController` and overrides `write_task_target()` alone, so
-  the MIT session/ACK/lease/SAFE protocol is inherited unchanged. Which action
-  spaces it takes depends on the config's law: with `drive_side_impedance: true`
-  (MuJoCo, real single arm) both run drive-side impedance; with `false` (the real
-  bimanual config) it takes TASK chunks only and rejects a joint chunk at ingest
-  (telemetry `last_reject` = `action_space_not_accepted`); the class comment in
-  `vla_controller.hpp` states this in full. Two invariants there that the base
-  class does NOT enforce and the VLA path makes mandatory at configure time:
-  `max_reference_offset` (the only bound on `kp*(q_des - q)`, which the drive
-  applies downstream of `torque_limit`) and `stream_timeout_sec > 0`.
-  `max_task_wrench` is inert under `drive_side_impedance` but is still validated
-  as six positive values, so every controller config derived from that base needs
-  it.
-- `ee_state_broadcaster` — publishes `/ee_state/pose` and `/ee_state/twist` (Cartesian state used by Python tasks)
+A command write that a divide or an unbounded solve can reach has an `allFinite()` guard before it, like
+`clip_torque()`: zero on a velocity interface, hold the previous command on a position interface.
 
-Each arm controller publishes its state on **per-controller namespaced topics** (`BaseController`):
-`/<controller>/controller_state` (`control_msgs/JointTrajectoryControllerState`, reference=desired / feedback=current)
-and `/<controller>/ee_state` (`cho_interfaces/PoseLog`, Cartesian). These replaced the old global `/log/joint_pos` and `/log/ee_pose`. Plot via `ros2 run cho_control_tools plot_joint_pos_log --topic <t>` / `ros2 run cho_control_tools plot_pose_log --topic <t>`.
+No package compiles with `-Ofast`: it folds `isfinite()` / `isnan()` to constants
+([cho_vla_core/DESIGN.md, Finite math](cho_controller/utils/cho_vla_core/DESIGN.md#finite-math)).
 
-New or reworked controller parameters are declared with `generate_parameter_library`
-(the pattern: `cho_controller_fr5/src/task_space_ik_controller_parameters.yaml`):
-per-parameter ranges go in the YAML, checks that relate parameters stay in code. Under
-Humble the controller_manager declares parameters from the YAML overrides before the
-listener does, so `ros2 param describe` shows no constraints, but every set is still
-validated (an out-of-range `ros2 param set` is refused). The other controllers still
-declare by hand; convert them when they are next reworked.
+## Task trees
 
-Action servers (`src/servers/`) wrap controllers to expose `cho_interfaces` action goals over ROS2.
-What every controller serves and a client may rely on is written down in
-`cho_interfaces/CONTRACT.md`: actions are relative to the controller's node
-(`/<controller>/joint_space`, `/task_space`, `/gripper`, `/vla`; the old
-`/controller_action_server/<controller>` namespace is gone), goals take
-`duration_sec`, JointSpace goals may name their joints, and a
-TaskSpace goal is a `PoseStamped` that must be in the model's root frame (absolute) or
-the EE frame (relative) -- controllers never transform, they reject. Python builds
-every name through `controller_action_name(controller, kind)`, never by hand: the rule
-lives in `cho_robot_config` (which validates `actions.preferences` against it),
-`cho_task_manager/utils/controller_names.py` wraps it, and
-`cho_control_tools/action_names.py` is the operator clients' registry-free copy. The
-MoveIt bridge serves `~/joint_space` / `~/task_space` too, under the node name
-`cho_robot_config.moveit_bridge_node()` gives (`<robot>[_<profile>]_moveit_action_bridge`),
-and refuses to start under any other. Those names are absolute, so a ROS namespace is
-NOT transparent (CONTRACT.md, Names).
+[docs/tasks.md](docs/tasks.md) is the reference. When writing a tree:
+- Robot facts come from the registry (`robot_config` roles, poses, holds): the action leaves and
+  `VLACompletionWaiterBehavior` have no default controller, an exclusive switch without `robot_config` raises, and
+  `ControllerNames` is Franka's names only.
+- The standard root is `guarded_mission()` (a failure ends on the hold controller); shared fragments are in
+  `cho_task_manager/subtrees/`.
+- Waits use `behaviors/wait.WaitBehavior` (node clock), never `py_trees.timers.Timer`; node-clock deadlines go
+  through `utils/clock.py`.
+- A blackboard key that may be unwritten is read with `utils/blackboard.read_if_set()`.
 
-Clients name and stamp their goals from the registry: JointSpace targets carry the
-profile's `model.joints` (`arm_joint_names()`; per-arm prefixed on a bimanual build),
-and TaskSpace goals `cho_robot_config.task_goal_frame(config, relative)` --
-`model.absolute_goal_frame` / `model.relative_goal_frame`, `''` where undeclared.
-`model.arm_base_link` is NOT the absolute goal frame everywhere (OpenArm bimanual arms'
-`link0` is off the torso root; the trees there say `world`).
-`cho_task_manager/test/test_goal_frames.py` expands every bringup's description with
-its xacro mappings and proves each absolute goal frame is a `root_frames()` member. The
-MoveIt bridge keeps `duration_sec` a minimum: plan-only, then the plan is slowed
-uniformly to `duration_sec` (never sped up) and executed via `ExecuteTrajectory`; its
-planning budget is its own `planning_time_sec`. Humble's move_group (2.5.x) accepts an
-`ExecuteTrajectory` cancel and ignores it, and answers it only after the trajectory has
-ended, so the bridge cancels by publishing `"stop"` on move_group's
-`trajectory_execution_event` (repeated until terminal; CANCELED or ABORTED/PREEMPTED
-count as a cancel). It refuses goals while nothing subscribes to that topic, and
-publishes stop on SIGINT/SIGTERM with an execution in flight. Verified in FR5 MuJoCo:
-the arm stops within 0.25 s.
+## Frames
 
-The JointSpace and TaskSpace servers themselves are shared: `cho_controller_base`'s
-`JointSpaceServer` / `TaskSpaceServer` over `GoalPhaseActionServer`, with each robot
-supplying only an adapter (which state field is the measured joints, where a goal
-starts, success-tolerance defaults). The control thread never touches `rclcpp_action`:
-`compute()` only stores atomics, and a 5 ms non-RT timer makes the terminal calls and
-publishes progress feedback. Every base controller owns a `ControllerActivity` that
-its `on_activate`/`on_deactivate` update and its servers are attached to
-(`attach_activity`): goals are REJECTED while the controller is inactive, and a goal
-is ABORTED, with the reason in the result's `message`, when its controller is
-deactivated -- it used to stay active with no result and block every later goal.
+- TaskSpace goal frames, `ee_name`, and what `/ee_state/pose` carries:
+  [CONTRACT.md, Frames](cho_interfaces/CONTRACT.md#frames) and [State topics](cho_interfaces/CONTRACT.md#state-topics).
+- `ActionChunk.relative_frame` (`base` is the model's root frame, not the arm's `arm_base_link`):
+  [ActionChunk.msg](cho_interfaces/msg/ActionChunk.msg).
+- The FR3 FT sensor's mounting and its rotation to the TCP and world frames:
+  [bota_ft_sensor README, Frames](cho_sensor/bota_ft_sensor/README.md#frames).
 
-Their point-to-point motion is `cho_controller_common`'s `TrajectoryEuclidianRuckig` /
-`TrajectorySE3Ruckig`: Ruckig's fastest motion within the robot's limits, slowed
-uniformly to the goal's `duration_sec`. The duration is therefore a minimum, and a goal
-faster than the limits allow takes longer; the servers time success and timeout from
-`trajectory_->getDuration()`, never from the goal's `duration_sec`. The limits are the
-robot's MoveIt files, not a controllers.yaml: `joint_limits.yaml` (ros2_control's
-`joint_limits.<joint>.*` schema) and, if present, `pilz_cartesian_limits.yaml`, which
-each bringup's runtime-params helper merges in through
-`cho_robot_config.motion_limit_parameters()`. A joint with no `max_acceleration`
-leaves its goals exactly as long as requested; the controller logs which applies.
+## Multi-PC Setup
 
-**Controllers that advance their own trajectory clock or integrate an open-loop
-reference** (`joint_space_position`, `joint_space_velocity`, `task_space_velocity`,
-`task_space_ik`, `vla_controller` in its position/velocity modes) must take the
-per-cycle period from `nominal_period(period)`, never from `1 / get_update_rate()`,
-never from a hardcoded constant, and never from the raw measured period.
-`get_update_rate()` returns 0 whenever a controller inherits the controller_manager's
-rate, which is every controller here — no config sets a per-controller `update_rate`.
-The old `: 0.001` fallback was silently correct only at a 1 kHz controller_manager
-(MuJoCo); at Isaac's 250 Hz it stretched every goal 4x, which looks like a weak drive
-rather than a clock bug. Fixed in both `FrankaBaseController` and
-`OpenArmBaseController`.
-
-Two variants of the same bug hid from the `get_update_rate()` sweep and were fixed
-separately (2026-09-08), so grep for all three forms when auditing a new controller:
-
-- a **literal** `const double dt = 0.001` (`task_space_ik_controller`), which no
-  search for `get_update_rate` finds;
-- the **raw measured period** (`vla_controller`'s position/velocity reference
-  integrator). Besides the jitter this feeds into the commanded rate, `period` is
-  exactly 0 on any cycle that saw no new state — which the Isaac config documents as
-  routine when `update_rate` and the `/clock` rate disagree — so
-  `(q_ref - q_ref_prev) / period` produced NaN, and `std::clamp` propagates NaN
-  rather than sanitizing it.
-
-Because of that last point, every command write that can be reached by a divide or an
-unbounded solve now carries an `allFinite()` guard before it, in the style of
-`clip_torque()`: zero on a velocity interface, hold the previous command on a position
-interface.
-
-### Task Manager / Behavior Tree Flow
-
-`task_manager_node.py` instantiates a py_trees tree from `tasks/<task>.py`. Leaf behaviors in `behaviors/action/` (JointSpace, TaskSpace, Gripper) send goals to the controller action servers. `behaviors/service/` handles controller switching via `controller_manager`. The VLA flow adds `vla_controller` activation and a `VLACompletionWaiterBehavior`.
-
-Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
-
-- `home_subtree()` — the switch → go-home → open-gripper block four trees used to
-  carry their own copy of. It takes `robot_config`, which is what makes the
-  exclusive switch derive its deactivate list from the robot's own registry entry,
-  and opens that robot's own `robot_config['gripper']`. The pose comes from
-  `home_joint_state(robot_config)`, i.e. the registry's `poses.task_home`.
-- `guarded_mission()` — the standard root, `OneShot -> Selector(mission, safe abort)`.
-  A failing leaf used to propagate straight to the root and shut the node down with
-  the last-driven controller still active. Now the abort branch runs first: it
-  switches to the hold controller and verifies with `list_controllers` that the
-  switch took, because the exclusive switch path is BEST_EFFORT and activating a
-  controller the bringup never loaded leaves `result.ok` true. `Inverter(FailureIsSuccess(...))`
-  keeps the root reporting FAILURE, so a successful abort is never mistaken for a
-  successful mission.
-- `tare_ft_children()` — FT tare plus its settle wait, spliced ahead of the home
-  block by the contact-rich forge tasks.
-
-Robot facts are never written into the task manager. The action leaves
-and `VLACompletionWaiterBehavior` have no default controller (a tree passes the
-robot config's role), an exclusive switch without `robot_config` raises, and
-`ControllerNames` is Franka's names only, kept for the Franka trees and pinned to
-`franka.yaml` by `test_controller_names`. Waits use `behaviors/wait.WaitBehavior`
-(node clock, so sim time under `use_sim_time`), never `py_trees.timers.Timer`,
-which counts wall time.
-
-Motion targets can come from the blackboard instead of being fixed at tree-build
-time. `TaskSpaceActionBehavior(target_pose_key=...)` / `JointSpaceActionBehavior(target_joints_key=...)`
-resolve the target in `initialise()`, which py_trees calls immediately before the
-goal is sent; exactly one of literal / key is required. `behaviors/topic/pose_target.py`
-(`PoseTargetBehavior`) is the producer side — it latches a `PoseStamped` off a
-topic into a key. Namespaces live in `utils/blackboard.py` (`/task` for motion
-targets, `/mit_tuning` for the tuning task's measurements) so producer and consumer
-cannot drift. Nothing transforms frames, so `PoseTargetBehavior.required_frame`
-has no default and a pose from another frame is rejected rather than driven to.
-
-Note for any blackboard read: py_trees raises `KeyError` for a registered but
-unwritten key, and `getattr(board, key, None)` does **not** absorb it — that
-KeyError escapes `update()` and takes the node down. Use
-`utils/blackboard.read_if_set()`.
-
-`BaseActionBehavior.terminate()` cancels a goal that may still be running for EVERY
-status, not only INVALID: one already accepted at once, one still awaiting acceptance
-when it is accepted (a tree can fail on the tick after a leaf sent its goal). The leaf
-records the cancels it still owes (`cancels_outstanding()`), and
-`task_manager_node.shutdown_task_manager()` spins, at most 1 s, until none is left --
-also when the tree ended SUCCESS/FAILURE -- with Ctrl-C/SIGTERM held from before
-`tree.stop()` to the end of that flush (an interrupt that lands before the handlers
-are in place restarts the stop-and-flush).
-Every deadline a behaviour takes on the node clock -- goal timeouts, waits,
-dwells, latch windows, outage clocks -- goes through `utils/clock.py`: none
-is set while the clock reads 0 (sim time before the first /clock), so it starts from
-the first real reading instead of being missed the moment /clock arrives.
-
-`guarded_mission(..., monitor=...)` adds a watchdog branch beside the mission via
-`subtrees/watched_mission()`: `Parallel(SuccessOnSelected([mission]))` with
-`behaviors/topic/safety_monitor.py`'s `SafetyMonitorBehavior`. It must be a
-Parallel, not a decorator — py_trees invalidates the sibling branch on a trip, so
-the running action leaf gets `terminate(INVALID)` and `BaseActionBehavior` cancels
-its goal there; a decorator returning FAILURE would leave the goal running. The
-guards are FT wrench magnitude, joint-limit proximity, and two Jacobian indices —
-`sqrt(det(J Jᵀ))` (Yoshikawa; **not** `det(J)`, which does not exist for the 7-DOF
-arms) and `sigma_min(J)`, both from the `LOCAL_WORLD_ALIGNED` Jacobian, never
-`WORLD`. Every guard is off unless its threshold is given, staleness counts as a
-trip (the arming window waits only for a first sample of each input and for the
-description; an input seen and then quiet trips at once), and thresholds are commissioning values: `report_period_sec` logs the
-measured numbers to set them from. These are supervisory at the 100 ms tick rate,
-not a replacement for the 1 kHz `clip_torque()` / `clip_position()` guards.
-
-Which controller can hold the arm is `control_mode`-dependent — the description
-exports one command interface per joint, so the position hold is not loaded in a
-torque bringup. `cho_robot_config` carries `controllers.hold_by_control_mode` per
-robot and per profile (a bimanual profile must restate it: `controllers` is merged
-key-by-key, so it would otherwise inherit unprefixed names `per_arm()` never
-spawns). Each task declares the mode it is written for; `control_mode:=` on the
-launch overrides it, and an undeclared mode raises at tree-build time.
-
-### The `-Ofast` / `isfinite()` trap
-
-`-Ofast` implies `-ffinite-math-only`, which folds `std::isfinite()` / `isnan()`
-to constants. Measured on g++ 11.4: an `-Ofast` build reports a NaN-carrying
-vector as all-finite, with no warning. **No package here uses `-Ofast`, and none
-should**: `cho_controller_common` used it until 2026-10-04, where it also allowed
-the dense QP solver's `objective == infinity` infeasibility test to be compiled
-away. It is now Release (`-O3`), and the task-space QP measured the same in
-MuJoCo (about 10 us per solve either way).
-
-`cho_vla_core` still pins `-fno-finite-math-only` explicitly, which beats `-Ofast`
-regardless of flag order (also measured), and `test_finite_math_guard` fails the
-build if that flag is ever removed. `cho_controller_common`'s
-`test_point_to_point` fails if the library is built with finite-math (Ruckig's
-templates rely on `isnan()`/`isinf()`).
-
-### Frame Conventions
-
-- EE pose published on `/ee_state/pose` is **fr3_hand_tcp** frame (tip of gripper).
-- FT sensor is mounted between `fr3_link8` and `fr3_hand`. Transform from FT sensor local frame to TCP frame: `R_tcp_ft = Rx(π) × Rz(-π/4)` (derived from URDF joints `flange_to_ft_sensor` and `fr3_hand_joint`).
-- When using real FT sensor data: rotate from FT local frame to world using `q_ft_to_world = quat_mul(ee_quat, q_ft_to_tcp)`.
-- `ActionChunk.relative_frame: "base"` is the controller model's ROOT frame, i.e. the registry's
-  `model.absolute_goal_frame` (Franka `fr3_link0`, OpenArm `world`), not the arm's `arm_base_link`: on the
-  OpenArm bimanual torso each arm's `link0` is rotated -90/+90 deg about x against `world`, so a bridge
-  rotates deltas recorded in an arm-base frame first. `header.frame_id` is not read. Details in `ActionChunk.msg`.
-
-### Multi-PC Setup
-
-Use FastDDS discovery server on PC2 and set `ROS_DISCOVERY_SERVER=<PC2_IP>:11811` on both machines before launching.
+Two PCs over Tailscale and a Fast DDS discovery server on PC1; every terminal sources `dds/dds_mode.sh`:
+[docs/multi_pc.md](docs/multi_pc.md).
 
 ## Naming Conventions
 
-- C++: namespaces match package names, controller classes in `snake_case` matching plugin names.
-- ROS link/joint/topic/controller names are stable — configs and tests depend on them. Do not rename without updating all YAMLs and launch files.
+- C++ classes are PascalCase (`TaskSpaceQPController`); source files are snake_case.
+- Plugin names are `<package>/<Class>` (`cho_controller_franka/TaskSpaceQPController`), registered in the package's
+  plugin XML. Controller instance names in the YAML configs and launch files are snake_case
+  (`task_space_qp_controller`).
+- Namespaces: `cho_controller::franka`, `::fr5`, `::ur`, `::openarm` (OpenArm's joint-space family) and `::common`
+  (`cho_controller_common`); everywhere else the package name: the MIT family in `cho_controller_openarm_mit`,
+  `cho_controller_gripper`, `cho_controller_base`, `cho_vla_core` and the `cho_hardware/` packages.
+- ROS link/joint/topic/controller names are stable — configs and tests depend on them. Do not rename without
+  updating all YAMLs and launch files.
 - Launch args and xacro properties: `snake_case`.
-- Python: `setup.cfg` enforces flake8 max-line 120.
+- Python: flake8 at 120 columns (see Build & Test).
 
 ## File Headers
 
-Every C++, Python and CMake source outside `extern/` starts with a copyright and
-license header that `ament_copyright` recognises, `setup.py` and `CMakeLists.txt`
-included; the Lint workflow checks the whole tree. `ament_copyright` never selects a
-`CMakeLists.txt` (and would comment one with `//`), so `tools/ci/check_copyright_headers.py`
-checks those with its parser. NOTICE ("File headers") is the rule:
-
-- Written here: `ament_copyright --add-missing "Hyunho Cho" apache2 <files>` adds it;
-  for a CMakeLists.txt, `tools/ci/check_copyright_headers.py --add-missing "Hyunho Cho" apache2 <path>`.
-- Adapted from upstream: the upstream copyright line(s), then `Copyright <year> Hyunho Cho`,
-  the upstream license in full, and a `Derived from ... see NOTICE` line (the TSID
-  files in `cho_controller_common` are the pattern). Add a NOTICE entry.
-- A package whose files carry more than one license lists each in `package.xml`.
-- Never edit `extern/`. To build on a vendor's package, add it there as a submodule
-  and include or reference it (as `bota_ft_sensor` does with Bota's example) rather
-  than copying its files.
+Every C++, Python and CMake source outside `extern/` starts with a copyright and license header that the Lint
+workflow checks; how to add one, and the form for code adapted from upstream: [NOTICE](NOTICE) ("File headers").
+Never edit `extern/`: build on a vendor's package by adding it there as a submodule and including or referencing it.
 
 ## Build Alias
 we set alias related to build below.

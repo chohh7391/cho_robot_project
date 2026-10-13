@@ -1,8 +1,8 @@
 # Tasks (Behavior Tree / Task Manager)
 
-The task manager builds a py_trees behavior tree and dispatches it by `robot_type`,
-so Franka and UR implementations are fully separated under
-`cho_task_manager/tasks/franka/` and `cho_task_manager/tasks/ur/`.
+The task manager builds a py_trees behavior tree and dispatches it by `robot_type`
+(`build_task_tree()`), so each robot's trees are separate, under
+`cho_task_manager/tasks/{franka,fr5,ur,openarm}/`.
 Controller roles per robot are read from `cho_robot_config/config/<robot>.yaml`
 (single source of truth), and so is everything else a tree needs to know about
 the robot:
@@ -15,9 +15,16 @@ the robot:
   passes the robot config's role (`robot_config['joint_space']`, `['gripper']`,
   `['vla']`, ...). `home_subtree()` opens `robot_config['gripper']`, so an OpenArm
   arm profile opens its own `left_`/`right_` gripper.
-- **Exclusive switches** need `robot_config`: the controllers they take down are the
-  registry entry's roles, per-mode holds, `controllers.additional_arm` (the Franka
-  arm controllers that hold no role) and direct action endpoints.
+- **Exclusive switches** need `robot_config` (one without it raises): the controllers
+  they take down are the registry entry's roles, per-mode holds,
+  `controllers.additional_arm` (the Franka arm controllers that hold no role) and
+  direct action endpoints. `ControllerNames` is Franka's names only, kept for the
+  Franka trees and pinned to `franka.yaml` by `test_controller_names`.
+- **Shared fragments** live in `cho_task_manager/subtrees/`, not copied per task:
+  `home_subtree(robot_config)` (switch → go home → open the robot's own gripper),
+  `guarded_mission()` (the standard root, below) and `tare_ft_children()` (FT tare
+  plus its settle wait, spliced ahead of the home block by the contact-rich forge
+  tasks).
 - **Joint limits** for a replay: position limits come from the running
   `/robot_description`, read by the same Pinocchio reader as the safety monitor (a
   segment is refused until it has arrived); velocity limits from
@@ -29,7 +36,7 @@ and so shortens every settle when a simulator runs slower than real time.
 
 ## Run
 
-Bring the robot up first (see the Bringup section in the top-level README with the
+Bring the robot up first (see [Recipes](controllers_and_bringup.md#recipes), with the
 `control_mode` the task requires), then:
 
 ```bash
@@ -46,6 +53,8 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 | `use_sim_time` | `false` | set `true` when running against a simulator |
 | `object_pose_config` | *(empty)* | task-owned object table; empty starts no perception node at all |
 | `object_pose_cameras_config` | *(empty)* | camera table to fuse (`cho_object_pose/config/cameras.yaml`); empty runs the single-camera path — one detector on `/detections`, unprefixed `tag_<id>` frames |
+| `object_pose_min_samples`, `object_pose_max_spread_m`, `object_pose_min_cameras`, `object_pose_fusion_mode` | `5`, `0.01`, `1`, `intersect` | forwarded to `cho_object_pose` ([gates and fusion](../cho_perception/cho_object_pose/README.md#several-cameras)) |
+| `probe_translation`, `probe_duration`, `probe_return` | zeros (task default), `0.0`, `true` | probe of `mit_task_tuning`: TCP-local delta [m], duration [s] (at least 0.25 when set), and whether the reverse probe runs |
 | `debug_tree` | `true` | print the unicode tree on every tick |
 | `print_tree` | `true` | print the final tree snapshot when the task finishes |
 
@@ -57,15 +66,18 @@ Running a task against the wrong bringup fails at the first controller switch wi
 Every task root is `OneShot -> Selector(mission, safe abort)`. A leaf that fails
 takes the mission branch down, and the selector then runs the abort branch, which
 switches the arm onto its hold controller and verifies with `list_controllers`
-that the switch actually took. The root still reports FAILURE afterwards — the
-abort is not a success. Without it a failed mission left whichever controller it
-was last driving active, with nothing holding the arm.
+that the switch actually took: the exclusive switch is BEST_EFFORT, so activating a
+controller the bringup never loaded still returns ok. The root still reports
+FAILURE afterwards (`Inverter(FailureIsSuccess(...))`) — the abort is not a
+success.
 
 Which controller can hold the arm depends on the bringup's `control_mode`: the
 description exports exactly one command interface per joint, so the position
 hold is not even loaded in a torque bringup. Each task declares the mode it is
 written for, and `cho_robot_config/config/<robot>.yaml` maps mode to hold
-controller under `controllers.hold_by_control_mode`. Pass `control_mode:=` to
+controller under `controllers.hold_by_control_mode` (a bimanual profile restates it:
+`controllers` merges per key, and the inherited single-arm names are ones
+`per_arm()` never spawns). Pass `control_mode:=` to
 override the task's assumption; asking for a mode the robot declares no hold for
 fails at tree-build time with the declared modes listed, rather than issuing a
 switch that cannot succeed.
@@ -85,7 +97,14 @@ no one knew at build time. `JointSpaceActionBehavior` has the same
 
 `PoseTargetBehavior` is the producer: it latches the next `geometry_msgs/PoseStamped`
 published on a topic into a blackboard key. Both sides default to the `/task`
-namespace, so a detector and a motion only have to agree on the key name.
+namespace, so a detector and a motion only have to agree on the key name. The
+namespaces live in `utils/blackboard.py` (`/task` for motion targets, `/mit_tuning`
+for the tuning task's measurements).
+
+A blackboard read of a key that may be unwritten uses `utils/blackboard.read_if_set()`:
+py_trees raises `KeyError` for a registered but unwritten key, `getattr(board, key,
+None)` does not absorb it, and the `KeyError` would escape `update()` and take the
+node down.
 
 ```python
 from cho_task_manager.behaviors.topic import PoseTargetBehavior
@@ -113,35 +132,20 @@ check and warns on every sample.
 
 Literal goals are stamped and named from the registry, never by hand:
 `goal_frame(robot_config, relative)` (`cho_task_manager.utils.controller_names`)
-is the profile's `model.absolute_goal_frame` / `model.relative_goal_frame`, which
-`test/test_goal_frames.py` proves against every bringup's description, and
+returns the profile's `model.absolute_goal_frame` / `model.relative_goal_frame`, and
 `JointSpaceActionBehavior(joint_names=arm_joint_names(robot_config))` names the
-target with the profile's `model.joints`. Note that `model.arm_base_link` is not
-the absolute goal frame everywhere: on the OpenArm bimanual profiles each arm's
-`link0` is offset from the torso the controllers' model is rooted at, so their
-goals say `world`.
-
-A relative goal stamped `''` (every single-arm profile: the registry declares no
-`relative_goal_frame` there) is composed in the EE frame of whichever server
-takes it: a controller's `ee_name` (`ee_frame` on the OpenArm MIT task
-controller), or the MoveIt bridge's `ee_link`, which is the registry's
-`model.ee_link`. With their default arguments every bringup gives the task
-controllers that same frame, and `test/test_goal_frames.py` checks it against the
-launch goldens and the controllers files. A launch argument can still move the
-controllers off it: Franka's `ee_name:=fr3_link7|fr3_link8|fr3_hand`, and any
-string on the FR5 and UR bringups. Under such an override the same relative goal
-is a different motion on a controller than on the bridge -- on Franka,
-`fr3_link8` is 0.138 m short of `fr3_hand_tcp` and turned 45 degrees about z --
-so run task trees, and any client that may pick either server, with the default
-`ee_name`.
+target with the profile's `model.joints`. Which frame each robot gets, and what an
+empty relative frame means on a controller versus the MoveIt bridge, is in
+[CONTRACT.md, Frames](../cho_interfaces/CONTRACT.md#frames); run task trees with the
+default `ee_name`, so the two servers agree.
 
 `best_effort=True` is needed for a publisher using sensor-data QoS — including
 `/ee_state/pose`, which makes "record where the arm is now, come back to exactly
 here later" a use of the same two behaviours with no extra code.
 
 A target that is unset or the wrong message type fails that one behaviour with a
-log line naming the blackboard path; it does not raise out of the tick. No shipped
-task uses these yet — the trees here all have fixed waypoints.
+log line naming the blackboard path; it does not raise out of the tick. `tag_reach`
+is the shipped task that uses these; the other trees have fixed waypoints.
 
 ## Watching the arm while a mission runs
 
@@ -241,6 +245,24 @@ and a monitor that receives nothing is worse than none.
 No shipped task enables it yet: the thresholds above are measured from the
 description, not from a run on the hardware with its actual payload.
 
+## Cancelling, shutdown and the clock
+
+`BaseActionBehavior.terminate()` cancels a goal that may still be running for every
+status, not only INVALID: one already accepted at once, one still awaiting
+acceptance when it is accepted (a tree can fail on the tick after a leaf sent its
+goal). The leaf records the cancels it still owes (`cancels_outstanding()`), and
+`task_manager_node.shutdown_task_manager()` spins, at most 1 s
+(`CANCEL_FLUSH_SEC`), until none is left — also when the tree ended SUCCESS or
+FAILURE — with Ctrl-C/SIGTERM held from before `tree.stop()` to the end of that
+flush (an interrupt that lands before the handlers are in place restarts the
+stop-and-flush).
+
+Every deadline a behaviour takes on the node clock — goal timeouts, waits, dwells,
+latch windows, outage clocks — goes through `utils/clock.py`: none is set while
+the clock reads 0 (sim time before the first `/clock`), so it starts from the first
+real reading instead of being missed the moment `/clock` arrives
+(`test/test_clock_deadlines.py` pins every leaf to it).
+
 ## Franka tasks
 
 | task | what it does | required bringup |
@@ -292,13 +314,15 @@ Every FR5 bringup is `control_mode:=position`, which is also the only mode
 | task | what it does | required bringup |
 | --- | --- | --- |
 | `controller_check_torque` | smoke check: switches to the joint impedance controller and drives a small motion through its action server | `control_mode:=torque` |
+| `mit_task_tuning` | repeatable gain-tuning run: baseline diagnostics, one bounded Cartesian probe, the diagnostics it produced, the reverse probe; no abort branch | the MIT prototype bringup with `controller_name:=task_space_impedance_mit_controller` ([real bringup](openarm_real_bringup.md#task-space-tuning)) |
 | `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | MuJoCo: `control_mode:=position controller_name:=joint_space_position_controller`. Real: no trajectory controller |
 
-The torque smoke check and `trajectory_replay` are wired so far, both only for the **single-arm** build.
-There is no `openarm_bimanual` robot config, so a bimanual torso is driven by sending
-action goals directly (see the OpenArm bringup section in the top-level README).
-Other position/velocity task trees and the gripper/task-space roles are still open — see
-`todo/OPENARM_TODO.md`.
+`controller_check_torque` and `mit_task_tuning` drive one arm: `arm:=single`, or `left` / `right`
+on the bimanual torso, run once per arm (the 14-joint `both` profile is refused).
+`trajectory_replay` runs on the single-arm profile only. The torso as a whole has no
+task tree; it is driven by sending action goals directly (see
+[Recipes](controllers_and_bringup.md#recipes)). Other position/velocity task trees
+and the gripper/task-space roles are still open — see `todo/OPENARM_TODO.md`.
 
 ## Trajectory replay
 

@@ -6,9 +6,10 @@
     ros__parameters:
       # Must equal the safety profile update_rate_hz and the
       # mit_expected_update_rate_hz launch argument; the hardware refuses
-      # to configure when they disagree. Fits the CAN bus only because the
-      # per-cycle 0xCC state query was removed - with it, 750 Hz needs
-      # about 101% of a 1 Mbps CAN FD bus.
+      # to configure when they disagree. 750 Hz fits the CAN bus with the launch
+      # default mit_state_from_command_reply:=true (state from the reply to the
+      # MIT command frame, no per-cycle 0xCC query: about 50% of a 1 Mbps CAN FD
+      # bus); with the query (:=false) it needs about 101%.
       update_rate: 750
       joint_state_broadcaster:
         type: joint_state_broadcaster/JointStateBroadcaster
@@ -55,9 +56,10 @@
       kd: [0.40, 0.40, 0.30, 0.30, 0.10, 0.10, 0.08]
       torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
 
-  # Task space uses the existing action endpoint but retains an explicit
-  # startup posture. It remains inactive unless selected; physical validation
-  # of this automatic seed has not been performed.
+  # Task space serves the existing /task_space action endpoint and remains
+  # inactive unless selected. With return_to_zero its start-up target is the
+  # nominal-zero posture; without it the measured Cartesian pose is latched
+  # (the startup_posture parameter is not read).
   task_space_impedance_mit_controller:
     ros__parameters:
       arm: single
@@ -118,7 +120,7 @@
       # throughout Cartesian control as actuator-side joint damping, which is
       # the only damping the arm's null space receives - J^T*Dx*J reaches just
       # the range space of the Jacobian. It is also evaluated inside the motor
-      # rather than across the 200 Hz CAN cycle, so it does not pay the
+      # rather than across the 750 Hz CAN cycle, so it does not pay the
       # transport delay that caps `kd_task`.
       # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
       # not a posture spring underneath a tau_ff law. Sized as the largest kp
@@ -220,9 +222,9 @@
   # DERIVED from task_space_impedance_mit_controller above rather than written by
   # hand: every value in it was identified on hardware -- the per-joint friction
   # levels walked up by hand, the 0.85 friction scale, the 1.25 gravity scale on
-  # joint 7, the 15 s startup ramp. A hand-copied block lost all of them once
-  # already. Only the keys below the marker differ, and they are all tighter than
-  # the TaskSpace path, not looser.
+  # joint 7. A hand-copied block lost all of them once already. Only the keys
+  # below the marker differ, and they are all tighter than the TaskSpace path,
+  # not looser.
   vla_mit_controller:
     ros__parameters:
       arm: single
@@ -283,7 +285,7 @@
       # throughout Cartesian control as actuator-side joint damping, which is
       # the only damping the arm's null space receives - J^T*Dx*J reaches just
       # the range space of the Jacobian. It is also evaluated inside the motor
-      # rather than across the 200 Hz CAN cycle, so it does not pay the
+      # rather than across the 750 Hz CAN cycle, so it does not pay the
       # transport delay that caps `kd_task`.
       # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
       # not a posture spring underneath a tau_ff law. Sized as the largest kp
@@ -427,7 +429,8 @@
       max_task_ang_vel: 0.5
       max_task_lin_acc: 0.4
       max_joint_ref_acc: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      # The real MIT adapter has no finger transport.
+      # This controller owns no finger interface; a hand is driven by
+      # gripper_controller (hand:=true), so gripper_actions are ignored.
       enable_gripper: false
 
   gripper_controller:

@@ -317,11 +317,21 @@ void FR5BaseController::compute_arm_kinematics(
 
 double FR5BaseController::nominal_period(const rclcpp::Duration & period)
 {
-    // get_update_rate() is 0 whenever a controller inherits the controller_manager's
-    // rate (every bringup here sets no per-controller update_rate). The measured
-    // period jitters (and is 0 on a cycle with no new state, huge after a clock jump),
-    // so it is only used to ESTIMATE the nominal rate, then smoothed - never fed
-    // straight into a self-advanced trajectory clock.
+    // The per-cycle period for every controller here that advances its own
+    // trajectory clock or integrates an open-loop reference. Such code calls this,
+    // never 1.0 / get_update_rate(), a literal dt, or period.seconds() directly.
+    //
+    // get_update_rate() is the controller's OWN rate, 0 whenever it inherits the
+    // controller_manager's - and no config here sets a per-controller update_rate,
+    // so it is 0 in every bringup. The manager's rate differs per bringup
+    // (config/<env>/controllers.yaml), so a literal dt is right only where it
+    // happens to match; a wrong one advances the trajectory clock at the wrong
+    // rate and stretches or shortens every goal by the ratio.
+    //
+    // The measured period jitters (and is 0 on a cycle with no new state, where a
+    // difference divided by it is NaN, and huge after a clock jump), so it is only
+    // used to ESTIMATE the nominal rate, then smoothed - never fed straight into a
+    // self-advanced trajectory clock. 1 ms until the first sane cycle.
     const unsigned int rate = get_update_rate();
     if (rate > 0) {
         return 1.0 / rate;

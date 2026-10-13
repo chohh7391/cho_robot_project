@@ -29,8 +29,9 @@ import time
 from cho_control_tools.action_names import controller_action_name
 
 
-# Direct MIT task control begins from nominal zero by default.  Selectors 0--2
-# are bounded TCP-frame probes. Quaternion order is x, y, z, w.
+# Direct MIT task control starts at nominal zero only with return_to_zero:=true;
+# by default the controller latches the measured pose.  Selectors 0--2 are
+# bounded TCP-frame probes. Quaternion order is x, y, z, w.
 _OPENARM_MIT_NOMINAL_ZERO_RELATIVE_REACH = {
     # +X translation, preserving tool orientation as the baseline probe.
     '0': ((0.045, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
@@ -68,8 +69,11 @@ class RobotActionShell:
     def __init__(self, robot_type: str, arm: str = 'single', *,
                  robot_config_loader=None, home_pose_policy_loader=None,
                  shell_factory=None):
-        # The MIT task controller's home-1 ramp is expected to finish within
-        # this window. It bounds automatic handling to launch-time only.
+        # The MIT task controller rejects task goals until its start-up is done
+        # (the return_to_zero phase and gain hand-off with return_to_zero:=true,
+        # the session handshake alone otherwise). A rejected goal is retried for
+        # this long after the client starts, so automatic handling is
+        # launch-time only.
         self._openarm_task_startup_deadline = time.monotonic() + 15.0
         control_space = 'joint' if arm == 'both' else 'task'
         base = shell_factory or _control_suite_shell()
@@ -105,7 +109,7 @@ class RobotActionShell:
         self._install_openarm_task_startup_retry()
 
     def _install_openarm_task_startup_retry(self):
-        """Apply the direct-MIT zero-start contract and retry launch-time rejection."""
+        """Replace the direct-MIT task presets and retry launch-time rejection."""
         shell = self._shell
         mit_task_endpoints = {
             controller_action_name(f'{prefix}task_space_impedance_mit_controller', 'task')
@@ -116,10 +120,10 @@ class RobotActionShell:
             return
 
         # Keep the ordinary metadata untouched for MoveIt/non-MIT task
-        # endpoints. Only the direct MIT endpoint starts from nominal zero, so
-        # only it replaces its presets with these operator goals. The registry
-        # targets are absolute and idempotent; these are not, so the operator
-        # is told rather than left to read the source.
+        # endpoints. Only the direct MIT endpoint replaces its presets with
+        # these operator goals. The registry targets are absolute and
+        # idempotent; these are not, so the operator is told rather than left
+        # to read the source.
         motions = getattr(shell, 'robot_config', {}).get('motions')
         if isinstance(motions, dict):
             print('Direct MIT task control: reach 0-2 are relative TCP probes '
