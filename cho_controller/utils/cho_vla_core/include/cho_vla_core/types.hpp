@@ -49,16 +49,98 @@ enum class ActionSpace : std::uint8_t {kJoint, kTask};
 //   kFromAnchor - each value is a total offset from the observation-time anchor
 //                 (the historical `relative: true` behaviour).
 //   kPerStep    - each value is an increment over the previous waypoint, so the
-//                 chunk integrates from the anchor (OpenVLA-OFT LIBERO EE
-//                 deltas; pi0 DROID joint velocity after the bridge multiplies
-//                 by control_dt).
+//                 chunk integrates from the anchor. Two stacks are meant for
+//                 it, and neither emits metres and radians; the bridge converts
+//                 (ActionChunk.msg has the full prescription -- read from public
+//                 sources, so confirm it in the version bridged):
+//                   - OpenVLA-OFT LIBERO: the 7-D action is the INPUT of
+//                     robosuite's OSC_POSE controller, which clips it to
+//                     [-1, 1] and scales it by 0.05 m (3 position values) and
+//                     0.5 rad (3 rotation values, an axis-angle vector). The
+//                     bridge clips and scales and sends rotation_type
+//                     "axis_angle" with relative_frame "base". That stack
+//                     re-anchors every step on the measured pose; kPerStep
+//                     accumulates on the previous waypoint, so the chunk
+//                     reproduces the targets it commanded, not the motion it
+//                     realized.
+//                   - pi0 DROID: joint velocity is a normalised v in [-1, 1],
+//                     which DROID turns into a joint delta of 0.2 * v rad per
+//                     15 Hz step (not v * control_dt, a third of that), so the
+//                     bridge sends dq_k = 0.2 * clip(v_k, -1, 1) [rad].
+//
+// In TASK space both relative modes also depend on the frame the delta is
+// expressed in: see RelativeFrame. LIBERO's OSC_POSE applies the delta in the
+// world axes, which are the robot base axes in LIBERO -- the position plus the
+// delta, the delta rotation on the LEFT -- so a LIBERO bridge sends
+// relative_frame "base". Read in the default "ee" frame those deltas would move
+// a tool-down arm (R ~ diag(1, -1, -1)) the wrong way in y and z and invert its
+// pitch and yaw.
 enum class RelativeMode : std::uint8_t {kAbsolute, kFromAnchor, kPerStep};
+
+// Frame a RELATIVE TASK-space delta (translation dp, rotation dR) is expressed
+// in. Joint chunks and kAbsolute chunks ignore it.
+//
+//   kEe   - the body frame of the pose the delta is applied to (the pre-v3
+//           behaviour, and the default), i.e. the host's EE frame (Franka's
+//           ee_name, OpenArm's ee_frame), whose axes need not be those of the
+//           EE frame a dataset was recorded in:
+//             kFromAnchor  p = p_a + R_a * dp,        R = R_a * dR
+//             kPerStep     T_k = T_{k-1} * dT_k
+//   kBase - the model root frame (LIBERO's deltas, sent by an OpenVLA-OFT
+//           bridge; see RelativeMode):
+//             kFromAnchor  p = p_a + dp,              R = dR * R_a
+//             kPerStep     p_k = p_{k-1} + dp_k,      R_k = dR_k * R_{k-1}
+//
+// (p_a, R_a) is Anchor::pose, T_0 = Anchor::pose, positions are in metres in the
+// model root frame. kBase rotates about root-ALIGNED axes through the tool
+// point; it is not dT * T_a, which would also swing the position about the root
+// origin.
+//
+// The model root is the root frame of the model the receiving controller
+// computes Anchor::pose in (the registry's model.absolute_goal_frame), which is
+// not always the arm's own base link:
+//   Franka               fr3_link0.
+//   OpenArm single arm   world; its axes are openarm_link0's only while the
+//                        bringup's base_rpy is zero (its default).
+//   OpenArm bimanual     world, the torso, for each arm's controller. Each arm's
+//                        link0 is rotated relative to it (by default -90 deg
+//                        about x for the left arm and +90 deg about x for the
+//                        right, xacro left/right_arm_base_rpy), so deltas
+//                        recorded in an arm-base frame must be rotated by the
+//                        bridge into world axes first.
+enum class RelativeFrame : std::uint8_t {kEe, kBase};
 
 // kBinary keeps the historical sign convention (< 0 close, > 0 open) and is what
 // OpenVLA-OFT LIBERO emits. kContinuous is an opening ratio in [0, 1] and is
 // what every other stack emits.
 enum class GripperMode : std::uint8_t {kBinary, kContinuous};
 
+// Encodings of a task waypoint's rotation block. decode_rotation() fixes one
+// convention per encoding, and a stack that uses another is converted in its
+// BRIDGE -- the decoder never guesses which one it was sent:
+//
+//   kEuler      3 values (a, b, c) [rad]: R = Rx(a) * Ry(b) * Rz(c), intrinsic
+//               X-Y-Z (scipy from_euler("XYZ", ...)). This is NOT the extrinsic
+//               R = Rz(c) * Ry(b) * Rx(a) of scipy's lower-case "xyz" or of ROS
+//               / URDF roll-pitch-yaw; the two differ unless at most one angle
+//               is nonzero. A stack in degrees or in another order converts.
+//   kAxisAngle  3 values: the rotation vector, angle * unit axis [rad]. A zero
+//               vector is "no rotation".
+//   kQuaternion 4 values (x, y, z, w), scalar LAST (ROS geometry_msgs, scipy
+//               as_quat()). Need not be unit length: it is normalised here. A
+//               scalar-first stack (MuJoCo, Isaac Lab) reorders.
+//   kRotation6D 6 values (c0, c1): the first two COLUMNS of R, column 0 first,
+//               i.e. (R00, R10, R20, R01, R11, R21). Decoded by Gram-Schmidt:
+//               col0 = c0 / |c0|, col1 = normalised(c1 - (col0 . c1) col0),
+//               col2 = col0 x col1. A stack that flattens the first two ROWS
+//               decodes here as R^T, and reordering its six numbers is not
+//               enough (they lack R20 and R21). Its bridge builds R the way the
+//               stack does -- orthonormalise the rows first (row0 normalised,
+//               row1 made orthogonal to row0 and normalised), then
+//               row2 = row0 x row1 -- and sends the first two columns of that
+//               R. A raw network output is not orthonormal; skipping the first
+//               step and crossing the raw rows gives a different R than the
+//               stack's own, because this decoder orthogonalises columns.
 enum class RotationType : std::uint8_t {kEuler, kAxisAngle, kQuaternion, kRotation6D};
 
 // Why a chunk was refused. Reported per chunk so the host can count causes
@@ -68,10 +150,19 @@ enum class Reject : std::uint8_t
   kNone, kChunkSize, kControlDt, kRotationType, kSizeMismatch, kVelocitySize,
   kGripperSize, kNonFinite, kJointOrder, kJointWindow, kWorkspace, kDegenerateRotation,
   kStaleSeq, kNonFiniteStamp,
-  // A string-valued field (action_space, relative_mode, gripper_mode) that the
-  // host could not parse. Distinct from kRotationType so telemetry does not
-  // report every unparseable field as a rotation problem.
-  kUnparseableField
+  // A string-valued field (action_space, relative_mode, relative_frame,
+  // gripper_mode) that the host could not parse. Distinct from kRotationType so
+  // telemetry does not report every unparseable field as a rotation problem.
+  // validate() also returns it for an out-of-range RelativeFrame, which only a
+  // host that bypassed parse_relative_frame() can produce.
+  kUnparseableField,
+  // The chunk is well-formed, but this host, as configured, does not accept its
+  // action space (the OpenArm VlaController under drive_side_impedance: false
+  // takes task chunks only). The host sets it; validate() never does. Distinct
+  // from kUnparseableField, which says the message is wrong: no fix to the
+  // chunk's contents gets this one accepted -- the controller's configuration
+  // or the bridge's choice of action space has to change.
+  kActionSpaceNotAccepted
 };
 const char * reject_name(Reject reject);
 
@@ -89,6 +180,11 @@ const char * reject_name(Reject reject);
 bool parse_action_space(const std::string & text, ActionSpace & out);
 // Empty string falls back to the legacy bool: false -> kAbsolute, true -> kFromAnchor.
 bool parse_relative_mode(const std::string & text, bool legacy_relative, RelativeMode & out);
+// Empty string keeps the pre-v3 behaviour (kEe); "ee" -> kEe, "base" -> kBase.
+// Anything else returns false with `out` untouched. Warning about an empty value
+// on a relative task chunk is the host's job: a parser has no logger, and an
+// empty value is legal.
+bool parse_relative_frame(const std::string & text, RelativeFrame & out);
 // Empty string keeps the historical default (kBinary).
 bool parse_gripper_mode(const std::string & text, GripperMode & out);
 // No empty-string default: a task-space chunk with no rotation_type is a bridge
@@ -106,8 +202,10 @@ std::size_t task_waypoint_dim(RotationType rotation);
 // current orientation" for corrupt input. Values are assumed already checked
 // finite by the validator; this only rejects what finiteness cannot catch.
 //
-// Quaternion order is (x, y, z, w), matching the existing Franka pipeline and
-// the ROS geometry_msgs convention.
+// The conventions are the ones listed at RotationType, in short: euler (a, b, c)
+// [rad] -> Rx(a) * Ry(b) * Rz(c); axis_angle = rotation vector [rad];
+// quaternion (x, y, z, w), matching the existing Franka pipeline and ROS
+// geometry_msgs; rotation6d = the first two COLUMNS of R.
 bool decode_rotation(const double * values, RotationType rotation, Eigen::Matrix3d & out);
 
 // ---------------------------------------------------------------------------
@@ -164,9 +262,10 @@ struct Reference
   bool valid {false};
 };
 
-// Host-neutral mirror of cho_interfaces/msg/ActionChunk (v2). Raw arrays are kept
-// as received: every size and finiteness check lives in the validator, so the
-// fragile parsing is inside the tested core rather than in each host's adapter.
+// Host-neutral mirror of cho_interfaces/msg/ActionChunk (v3: v2 plus
+// relative_frame). Raw arrays are kept as received: every size and finiteness
+// check lives in the validator, so the fragile parsing is inside the tested core
+// rather than in each host's adapter.
 struct Chunk
 {
   // Observation time on the host's control clock. The bridge must echo the stamp
@@ -177,6 +276,9 @@ struct Chunk
   std::uint64_t seq {0};
   ActionSpace space {ActionSpace::kTask};
   RelativeMode relative {RelativeMode::kAbsolute};
+  // Read only for a TASK chunk with kFromAnchor or kPerStep; see RelativeFrame.
+  // The default kEe is the pre-v3 composition.
+  RelativeFrame relative_frame {RelativeFrame::kEe};
   RotationType rotation {RotationType::kQuaternion};
   GripperMode gripper_mode {GripperMode::kBinary};
   int chunk_size {0};

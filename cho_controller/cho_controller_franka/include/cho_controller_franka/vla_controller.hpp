@@ -55,11 +55,18 @@ private:
 
     // Position and velocity: both drive the same open-loop joint reference q_ref_
     // and differ only in the output stage.
-    void write_open_loop(cho_vla_core::ActionSpace space, bool vla_running, double dt);
+    void write_open_loop(
+        cho_vla_core::ActionSpace space, bool vla_running, const Vector6d & twist_des, double dt);
 
     // One differential-IK step of q_ref_ toward state_.H_ee_des, evaluated at the
-    // REFERENCE configuration.
-    Vector7d task_step(double dt);
+    // REFERENCE configuration, with the reference twist (world-aligned) as
+    // feed-forward.
+    Vector7d task_step(const Vector6d & twist_des, double dt);
+
+    // VLAActionServer::ArmKinematics: the EE pose and LOCAL_WORLD_ALIGNED
+    // Jacobian at the given arm joints, the rest of the configuration measured.
+    void arm_kinematics_world(
+        const Vector7d & joints, pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian);
 
     // Bound a per-cycle reference step at max_joint_vel_ (no-op when <= 0).
     Vector7d clamp_step(const Vector7d & step, double dt) const;

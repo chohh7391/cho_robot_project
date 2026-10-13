@@ -27,7 +27,7 @@
 - 외부 계약(이 저장소 안): 토픽 `/vla/action/ee_pose`(`ActionChunk`, KeepLast(1) best-effort),
   액션 `/vla_controller/vla`(`VisionLanguageAction`, 컨트롤러 노드의 `~/vla`), 서비스
   `/vla/trigger_success`(성공 GUI·BT waiter가 호출), 클라이언트 `/vla_controller/vla/notify_completion`(BT).
-  `cho_control_tools/vla/action_client.py`는 from_anchor 상대 원궤적 테스터.
+  `cho_control_tools/vla/action_client.py`는 from_anchor 상대 원궤적 테스터(`relative_frame: base`로 보낸다).
 - `cho_robot_config/config/openarm.yaml`: `controllers.vla: null`, 레지스트리 role에 `vla` 있음.
 - LeRobot 로컬 체크아웃 `~/lerobot` (2026-02-27, `8fff0fde`). `src/lerobot/async_inference/` 5개 파일 1482줄을
   읽고 §2a를 썼다. 블로그(`docs/source/async.mdx`)가 아니라 코드 기준.
@@ -216,7 +216,7 @@ System 2  VLM/VLA (7~15 Hz)  ──chunk──▶  실행기 / System 1 (50~200 
 
 ```
 cho_interfaces
-  ActionChunk v2 ─ header.stamp = t_obs, seq, relative_mode, joint_names[], gripper_mode, arm_velocities[] (§4)
+  ActionChunk v3 ─ header.stamp = t_obs, seq, relative_mode, relative_frame, joint_names[], gripper_mode, arm_velocities[] (§4)
 
 cho_controller_common/vla            ◀ 로봇 무관. rclcpp 없이 컴파일(시간은 double, 청크는 내부 POD)
   ChunkValidator     크기·finite·rotation_type·control_dt>0·joint 윈도우·워크스페이스 박스 → 드롭 + 카운터
@@ -247,7 +247,13 @@ splice·워치독·NaN 드롭·per_step 적분을 수만 케이스 돌릴 수 �
 
 ---
 
-## 4. `ActionChunk` v2와 정책별 매핑
+## 4. `ActionChunk` v3(= v2 + `relative_frame`)와 정책별 매핑
+
+버전 기록: **v2** = `seq`, `relative_mode`, `joint_names[]`, `arm_velocities[]`, `gripper_mode`, `header.stamp`을 t_obs로 읽음(§7b 3단계).
+**v3** = `relative_frame` 추가(상대 task 델타의 합성 프레임, 2026-10). v2·v3 모두 필드를 메시지 **중간**에 넣었다.
+호환 범위: 소스 호환이다(비어 있는 새 필드 = 이전 동작이라, 다시 빌드한 브릿지가 지금 보내는 값은 그대로 해석된다).
+와이어 호환은 아니다(CDR 배치가 바뀌므로 옛 정의로 빌드된 브릿지와 새 컨트롤러가 짝이 되는지, 뒤 필드를 밀려 읽는지는
+확인하지 않았다). 그래서 **모든 브릿지를 새 `cho_interfaces`로 다시 빌드**한다(§5). `ActionChunk.msg` 머리에 같은 기록이 있다.
 
 ### 필드
 
@@ -258,6 +264,8 @@ uint64 seq                  # 브릿지 단조 증가. 0이면 서버가 도착 
 string action_space         # "joint" | "task"
 string relative_mode        # "absolute" | "from_anchor" | "per_step". 비어 있으면 relative 플래그로 폴백
 bool relative               # 하위호환. relative_mode가 비어 있을 때만 참조
+string relative_frame       # "ee" | "base". 상대 task 델타의 합성 프레임. 비어 있으면 "ee" = 현재 동작. 모르는 값은 거부.
+                            # joint 공간과 absolute 에서는 무시
 string rotation_type        # euler | axis_angle | rotation6d | quaternion (task 전용)
 string[] joint_names        # 비어 있으면 robot_config 기본 순서. 채워지면 재배열+검증(누락·중복 거부)
 int32 chunk_size
@@ -268,44 +276,100 @@ string gripper_mode         # "binary" | "continuous". 비어 있으면 binary =
 float32[] gripper_actions   # binary: 부호(<0 close, >0 open). continuous: 개방률 [0,1]
 ```
 
-기존 필드는 그대로, 새 필드는 빈 값이 현재 동작이다. **현재 정책 브릿지는 깨지지 않는다.** 단, ④⑤의 이득은
+기존 필드는 그대로, 새 필드는 빈 값이 현재 동작이다. **다시 빌드한 브릿지는 그대로 동작한다**(소스 호환; 위 v3 기록 참고). 단, ④⑤의 이득은
 브릿지가 `header.stamp`를 t_obs로 채울 때만 나온다(§5).
 
 ### 정책 스택별 매핑
 
 문헌·공개 코드 기준. 브릿지 작성 시 **사용 중인 버전에서 재확인** — 체크포인트마다 액션 공간이 다르다.
 
-| 스택 | 전송 | 액션 규약 (대표 임베디먼트) | `action_space` | `relative_mode` | `gripper_mode` | 호라이즌/주기 |
-|---|---|---|---|---|---|---|
-| **openpi** (π0/π0.5) | websocket + msgpack, `actions [H, D]` | ALOHA: 절대 joint pos 14(그리퍼 포함). DROID: joint **velocity** 7 + 그리퍼 pos 1 | joint | ALOHA `absolute`; DROID `per_step`(브릿지가 v·dt로 변환) | continuous | H=50 @ 50 Hz(ALOHA); DROID 15 Hz, `open_loop_horizon`으로 일부만 실행 후 재추론 |
-| **Isaac-GR00T** (N1/N1.5) | ZMQ, `action.<group>` dict | 임베디먼트별 modality config. 보통 절대 joint pos, 그룹별 배열(left_arm/right_arm/hands) | joint | `absolute` | continuous | H=16 @ 데이터셋 fps(~20 Hz) |
-| **OpenVLA-OFT** | HTTP JSON (`json_numpy`) | LIBERO: EE 델타 6(xyz + euler rpy) + 그리퍼 1, **스텝별 델타**. ALOHA: 절대 joint 14 | task / joint | LIBERO `per_step`; ALOHA `absolute` | LIBERO **binary**; ALOHA continuous | LIBERO K=8, ALOHA K=25, 청크 개루프 실행 후 재추론 |
-| **LeRobot** (ACT/DP/SmolVLA/π0) | gRPC async(`PolicyServer`/`RobotClient`) 또는 동기 | 절대 joint pos + 그리퍼 조인트 | joint | `absolute` | continuous | ACT 100(ensembling m=0.01), DP 16/실행 8, SmolVLA 50; async는 timestep 정렬·`aggregate_fn` |
+| 스택 | 전송 | 액션 규약 (대표 임베디먼트) | `action_space` | `relative_mode` | `relative_frame` | `gripper_mode` | 호라이즌/주기 |
+|---|---|---|---|---|---|---|---|
+| **openpi** (π0/π0.5) | websocket + msgpack, `actions [H, D]` | ALOHA: 절대 joint pos 14(그리퍼 포함). DROID: joint **velocity** 7 + 그리퍼 pos 1 | joint | ALOHA `absolute`; DROID `per_step`(브릿지가 Δq = 0.2·v [rad]로 변환) | — | continuous | H=50 @ 50 Hz(ALOHA); DROID 15 Hz, `open_loop_horizon`으로 일부만 실행 후 재추론 |
+| **Isaac-GR00T** (N1/N1.5) | ZMQ, `action.<group>` dict | 임베디먼트별 modality config. 보통 절대 joint pos, 그룹별 배열(left_arm/right_arm/hands) | joint | `absolute` | — | continuous | H=16 @ 데이터셋 fps(~20 Hz) |
+| **OpenVLA-OFT** | HTTP JSON (`json_numpy`) | LIBERO: EE 델타 6(xyz + **axis-angle**) + 그리퍼 1, **스텝별 델타**, 값은 robosuite OSC_POSE의 **입력 [−1, 1]**(브릿지가 위치 ×0.05 m, 회전 ×0.5 rad로 스케일하고 `rotation_type: axis_angle`). ALOHA: 절대 joint 14 | task / joint | LIBERO `per_step`; ALOHA `absolute` | LIBERO `base`; ALOHA — | LIBERO **binary**; ALOHA continuous | LIBERO K=8, ALOHA K=25, 청크 개루프 실행 후 재추론 |
+| **LeRobot** (ACT/DP/SmolVLA/π0) | gRPC async(`PolicyServer`/`RobotClient`) 또는 동기 | 절대 joint pos + 그리퍼 조인트 | joint | `absolute` | — | continuous | ACT 100(ensembling m=0.01), DP 16/실행 8, SmolVLA 50; async는 timestep 정렬·`aggregate_fn` |
 
 읽는 법:
 
 - `joint_names[]`는 **GR00T의 그룹 출력**과 **LeRobot의 모터 순서**를 이 저장소의 `robot_config` 순서로 정렬해 주는 필드다.
   브릿지가 매핑을 안 하고 이름만 붙여 보내면 서버가 재배열한다.
 - `per_step`은 **OpenVLA-OFT LIBERO(EE)**와 **π0 DROID(joint velocity)** 둘을 위한 것이다. 서버가 관측시각 앵커
-  `ref(t_obs)`에서 누적 적분한다. joint velocity는 브릿지가 `Δq_k = v_k·control_dt`로 바꿔 보낸다 — 서버에 velocity
-  action_space를 하나 더 두지 않는다(같은 정보, 표현만 다름).
+  `ref(t_obs)`에서 누적 적분한다. DROID의 joint velocity `v`는 [−1, 1]로 정규화된 값이고 DROID는 스텝(15 Hz)마다
+  `Δq = 0.2·v` [rad]로 바꾼다(`max_joint_delta`). 브릿지가 `Δq_k = 0.2·clip(v_k, −1, 1)`로 보낸다 — `v_k·control_dt`로 곱하면
+  DROID가 하는 것의 1/3 크기다. 서버에 velocity action_space를 하나 더 두지 않는다(같은 정보, 표현만 다름).
+- LIBERO의 7차원 액션은 robosuite `OSC_POSE` 제어기의 **입력**이다(미터·라디안이 아니다). 제어기가 [−1, 1]로 자르고 위치 ×0.05 m,
+  회전 ×0.5 rad를 곱하며, 회전 3개는 **axis-angle**이다(OpenVLA의 OXE 설정이 붙인 "Roll-Pitch-Yaw" 이름표는 값이 쓰이는 방식과
+  다르다). 그래서 `rotation_type`은 `euler`가 아니라 `axis_angle`이다. 출처와 확인 방법은 아래 "외부 규약 출처".
+- `relative_frame`은 **task 공간의 상대 델타**에만 쓴다(표의 `—`는 joint 공간이라 읽지 않는다는 뜻). `ee`(비어 있어도 같음)는
+  앵커 body 프레임 `p = p_a + R_a·Δp, R = R_a·ΔR`, `base`는 모델 루트 프레임 `p = p_a + Δp, R = ΔR·R_a`다. `per_step`은 같은 식을
+  단계마다 이전 웨이포인트에 적용한다. **OpenVLA-OFT LIBERO의 EE 델타는 base 프레임 규약**이라 `base`로 보내야 하고, 비워 두면
+  `ee`로 합성돼 툴이 아래를 볼 때 y·z 가 뒤집힌다(앵커 `R_a = Rx(π)`이면 `R_a·(Δx, Δy, Δz) = (Δx, −Δy, −Δz)`).
+- `base`의 **구체 프레임**은 받는 컨트롤러 모델의 루트 프레임이다(레지스트리 `model.absolute_goal_frame`). 팔의 `arm_base_link`와
+  같다고 가정하지 않는다.
+
+  | 로봇 | `base` = | 비고 |
+  |---|---|---|
+  | Franka | `fr3_link0` | |
+  | OpenArm 단일 팔 | `world` | 축이 `openarm_link0`과 같은 것은 bringup의 `base_rpy`가 0일 때(기본)뿐 |
+  | OpenArm 양팔 | 몸통 `world` | 각 팔 `link0`은 `world`에 대해 기본 왼팔 `Rx(−π/2)`, 오른팔 `Rx(+π/2)`(xacro `left/right_arm_base_rpy`). 팔 베이스 기준으로 기록된 델타는 브릿지가 `R_world←link0`로 돌려서 보낸다 |
+
+  `header.frame_id`는 어느 호스트도 읽지 않는다(프레임을 고르지 못한다).
+- `rotation_type`은 스택마다 규약이 다르다(정확한 식은 `ActionChunk.msg`): `euler` = `Rx(a)·Ry(b)·Rz(c)`(내재 X-Y-Z, ROS RPY 아님),
+  `rotation6d` = `R`의 첫 두 **열**. 행 규약 6D(pytorch3d `matrix_to_rotation_6d`, GR00T N1.7 `pose.py`)는 첫 두 **행**이라
+  그대로 보내면 `Rᵀ`로 읽힌다. 그 스택의 브릿지는 **행을 먼저 정규직교화**(row0 정규화, row1을 row0에 직교화·정규화)한 뒤
+  `row2 = row0 × row1`로 `R`을 만들고 그 첫 두 열을 보낸다. 날 행으로 `row2`를 만들어 열을 보내면 이 디코더가 열 기준으로
+  다시 직교화하므로 스택 자신의 디코드와 다른 회전이 나온다(성분마다 σ = 0.05 잡음에서 중앙값 0.037 rad, p95 0.106 rad 어긋남을
+  scipy로 재현했다).
 - **ensembling 기본 OFF.** ACT에만 켠다. π0/SmolVLA/GR00T(flow-matching·diffusion)는 splice + 블렌드.
 - `binary` 그리퍼는 OpenVLA-OFT LIBERO만 남는다. 나머지는 연속 개방률을 `cho_controller_gripper` 폭[m]으로 매핑.
 - 네 스택 **모두 전송 계층에 wall-clock 타임스탬프가 없다**(LeRobot async는 정수 timestep 에코). t_obs는 **브릿지가**
   관측에 쓴 joint state의 stamp를 에코해 넣는다(§5). 브릿지 자기 시각이 아니다.
 
+
+### 외부 규약 출처 (2026-10 리뷰가 공개 소스에서 읽은 것)
+
+위 표와 `ActionChunk.msg`의 LIBERO·DROID·6D 문장은 아래를 근거로 한다. **브리지를 쓸 때 사용하는 체크포인트와 버전에서 다시 확인한다.**
+
+- robosuite v1.4.1 `controllers/config/osc_pose.json`: `input_max 1`, `input_min -1`, `output_max [0.05, 0.05, 0.05, 0.5, 0.5, 0.5]`,
+  `control_delta true`. `controllers/base_controller.py::scale_action`은 입력을 `[input_min, input_max]`로 자른 뒤
+  `output_max` 비율로 곱한다. `utils/control_utils.py::set_goal_orientation`의 델타 인자는 axis-angle이고
+  `goal = exp(delta) · current`(왼쪽 곱), `set_goal_position`은 `current + delta`다. `controllers/osc.py::set_goal`은 이 델타를
+  **매 스텝 측정 자세**에 더한다(직전 목표가 아니라). 여기서 `per_step`의 "직전 웨이포인트에 누적"은 이 제어기 동작을 그대로
+  옮긴 것이 아니라는 점을 알아 둔다.
+- LIBERO `libero/libero/envs/env_wrapper.py`: 기본 `controller="OSC_POSE"`, `control_freq=20`. `bddl_base_domain.py`는 로봇 베이스
+  위치만 놓고(`set_base_xpos`) 방향은 주지 않으므로 robosuite world 축 = 로봇 베이스 축이다.
+- OpenVLA-OFT `experiments/robot/libero/run_libero_eval.py::process_action`은 그리퍼만 손보고(`normalize_gripper_action`,
+  `invert_gripper_action`) 나머지 6개를 `env.step(action.tolist())`로 넘긴다. `prismatic/vla/datasets/rlds/oxe/configs.py`는 LIBERO를
+  `ActionEncoding.EEF_POS`("EEF Delta XYZ (3) + Roll-Pitch-Yaw (3) + Gripper")로 적었지만 값은 위 경로로 axis-angle로 쓰인다.
+  HF `moojink/openvla-7b-oft-finetuned-libero-spatial/dataset_statistics.json`의 위치 `max = 0.9375`(미터가 아니라 정규화값),
+  회전 `max`가 0.20·0.34·0.375(모두 ±1 안)인 것이 이를 뒷받침한다.
+- DROID `droid/robot_ik/robot_ik_solver.py`: `relative_max_joint_delta = [0.2]*7`, `max_joint_delta = 0.2`, `control_hz = 15`,
+  `joint_velocity_to_delta(v) = v · max_joint_delta`(`max|v| > 1`이면 먼저 전체를 그 값으로 나눔). `droid/franka/robot.py::create_action_dict`
+  의 `joint_velocity` 분기가 그 델타를 측정 관절에 더한다. openpi `examples/droid/main.py`: `action_space="joint_velocity"`,
+  `np.clip(action, -1, 1)`, `DROID_CONTROL_FREQUENCY = 15`.
+- 6D: pytorch3d `transforms/rotation_conversions.py`의 `matrix_to_rotation_6d`는 행렬의 첫 두 행이고 `rotation_6d_to_matrix`는
+  `F.normalize`와 Gram-Schmidt 뒤 `(b1, b2, b3)`를 행으로 쌓는다. GR00T N1.7(로컬 `~/vla/RoboTwin/XPolicyLab/policy/GR00T_N17/gr00t_n17`)의
+  `gr00t/data/state_action/pose.py::_rot6d_to_matrix`는 "first two rows"를 받아 첫 행을 정규화하고 둘째 행을 Gram-Schmidt한다.
+- 계산으로 재현한 것(scipy): `R.from_euler('XYZ', r)`과 `R.from_rotvec(r)`의 차이는 `r = (0.5, 0.5, 0)`에서 0.123 rad,
+  `(0.3, 0.3, 0)`에서 0.045 rad, `(0.1, 0.1, 0)`에서 0.005 rad다. 그래서 LIBERO 회전을 `euler`로 보내면 안 된다.
+- 확인하지 못한 것: LIBERO sim에서 실제 OSC의 스텝당 추종률(이 머신에 robosuite·LIBERO 없음), `per_step` 적분 경로가 학습 때
+  제어기 응답과 얼마나 다른지(리뷰가 단위질량 모형으로 약 3.7배라 추정했으나 모형 값이라 여기에 적지 않는다), openpi LIBERO
+  체크포인트(π0/π0.5 LIBERO)가 위 OSC 규약과 같은지, 사용자의 GR00T 버전(표는 N1/N1.5, 로컬은 N1.7).
+
 ---
 
 ## 5. 브릿지 계약 (이 저장소 밖 코드가 지켜야 할 것)
 
-브릿지 = 정책 서버(websocket/ZMQ/HTTP/gRPC)와 ROS 사이의 노드. 스택마다 하나, 출력은 전부 `ActionChunk` v2.
+브릿지 = 정책 서버(websocket/ZMQ/HTTP/gRPC)와 ROS 사이의 노드. 스택마다 하나, 출력은 전부 `ActionChunk` v3.
+**0.** 새 `cho_interfaces`로 브릿지를 다시 빌드한다. v2·v3는 필드를 메시지 중간에 넣어 와이어 호환이 아니다(§4 버전 기록).
 
 1. 관측에 쓴 joint state 메시지의 `header.stamp`를 `ActionChunk.header.stamp`에 **그대로 복사**한다. 브릿지의
    `now()`도, 추론이 끝난 시각도 아니다. 컨트롤러 클럭을 에코하는 것이라 PC 간 시각 동기가 필요 없다(§2a-a).
 2. `control_dt`를 명시한다. 정책 설정의 fps/주기에서 가져온다.
 3. `seq`를 단조 증가시킨다. 재추론으로 이전 청크를 덮을 때도 증가.
 4. 조인트 순서가 로봇 기본 순서와 다르면 `joint_names[]`를 채운다.
-5. 상대/절대·그리퍼 모드를 **명시**한다(`relative_mode`, `gripper_mode`). 폴백에 의존하지 않는다.
+5. 상대/절대·그리퍼 모드를 **명시**한다(`relative_mode`, `gripper_mode`, 상대 task 청크는 `relative_frame`도). 폴백에 의존하지 않는다.
 6. 정책 서버가 죽거나 멈추면 발행을 멈춘다. 마지막 청크를 반복 발행하지 않는다 — 워치독이 그걸 감지해야 한다.
 8. 관측 송신 시점은 텔레메트리의 `remaining_horizon_sec / chunk_duration ≤ g`로 정한다(LeRobot `chunk_size_threshold`,
    0.5~0.6 권장). 매 틱 보내는 것(g→1)도, 다 소진되고 보내는 것(g→0, 동기 추론)도 아니다.
@@ -463,8 +527,11 @@ RT(`sample_timeline`·limiter·watchdog·gripper edge, 할당 없음), 공유(`R
 ### 3단계 — 메시지
 
 `ActionChunk` v2: `seq`, `relative_mode`, `joint_names[]`, `arm_velocities[]`, `gripper_mode` 추가.
-기존 필드 유지, 새 필드는 빈 값이 현재 동작이라 **브릿지가 깨지지 않는다.** `header.stamp` 의미를
-"관측에 쓴 joint state의 stamp를 그대로 에코"로 문서화했다.
+기존 필드 유지, 새 필드는 빈 값이 현재 동작이라 **다시 빌드한 브릿지는 그대로 동작한다**(소스 호환; 필드를 메시지 중간에 넣었으므로
+와이어 호환은 아니다, §4 버전 기록). `header.stamp` 의미를 "관측에 쓴 joint state의 stamp를 그대로 에코"로 문서화했다.
+
+`ActionChunk` v3 (2026-10): `relative_frame` 추가(`bool relative` 바로 뒤). 값은 `"ee"`(기본, 비면 같음) | `"base"`(모델 루트 프레임),
+상대 task 델타의 합성만 바꾼다. 같은 호환 범위(소스 호환, 재빌드 필요), 모르는 값은 거부.
 
 `VisionLanguageAction` v2: `task`(언어 지시문 — 없어서 BT가 지시를 말할 수 없었다), `stream_timeout`,
 결과에 `string message`(TaskSpace/JointSpace엔 있는데 VLA만 없었다), 피드백을 한 번도 발행되지 않던
@@ -480,6 +547,8 @@ RT(`sample_timeline`·limiter·watchdog·gripper edge, 할당 없음), 공유(`R
 `uses_task_space_action()` 신설(두 서버가 같은 39 인터페이스를 몰지 못하게).
 
 **두 action space 모두 impedance** — 이 드라이브가 할 수 있는 유일한 것이다.
+(2026-10 정정: `drive_side_impedance: true`일 때만 그렇다. `false`(실물 양팔 설정)는 레거시 법칙이라 `kp = 0`, `q_des` = 측정값이고
+joint 기준을 닫을 위치 루프가 없다. 그래서 그 설정에서는 task 청크만 받고 joint 청크는 `action_space_not_accepted`로 거부한다.)
 
 | | q_des | dq_des | tau_ff |
 |---|---|---|---|

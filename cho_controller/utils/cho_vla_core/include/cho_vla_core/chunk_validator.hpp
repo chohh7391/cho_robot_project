@@ -59,8 +59,9 @@ struct ValidationLimits
 };
 
 // Structural checks only: chunk_size, control_dt, array sizes, finiteness of
-// every element, joint_order really being a permutation, and seq monotonicity.
-// Nothing here needs the anchor.
+// every element, joint_order really being a permutation, seq monotonicity, and
+// the rotation_type and relative_frame enums being in range (kUnparseableField
+// for the latter, in every space). Nothing here needs the anchor.
 Reject validate(const Chunk & chunk, const ValidationLimits & limits);
 
 // Resolve `chunk` against `anchor` into absolute waypoints on the host clock.
@@ -69,6 +70,15 @@ Reject validate(const Chunk & chunk, const ValidationLimits & limits);
 // stack we bridge uses: waypoint 0 is the action for the observation instant, so
 // the waypoints already consumed during inference are the ones the buffer drops
 // as a past prefix rather than replaying.
+//
+// Relative TASK waypoints compose in chunk.relative_frame (see RelativeFrame),
+// with (p_a, R_a) = anchor.pose:
+//   kEe   kFromAnchor  p = p_a + R_a * dp,     R = R_a * dR
+//         kPerStep     T_k = T_{k-1} * dT_k
+//   kBase kFromAnchor  p = p_a + dp,           R = dR * R_a
+//         kPerStep     p_k = p_{k-1} + dp_k,   R_k = dR_k * R_{k-1}
+// Both per-step chains start at T_0 = anchor.pose. Joint chunks and kAbsolute
+// chunks do not read relative_frame.
 //
 // Assumes `validate` has already passed; it re-runs no structural check. Returns
 // kJointWindow / kWorkspace / kDegenerateRotation for the checks that can only be

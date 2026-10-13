@@ -80,6 +80,9 @@ controller_interface::CallbackReturn VlaController::on_init()
   auto_declare<double>("max_task_lin_vel", 0.25);
   auto_declare<double>("max_task_ang_vel", 1.5);
   auto_declare<double>("max_task_lin_acc", 1.0);
+  // [rad/s^2] on the emitted angular velocity; 0 (the default) leaves rotation
+  // with the velocity clamp alone. See cho_vla_core::ReferenceLimiter.
+  auto_declare<double>("max_task_ang_acc", 0.0);
   auto_declare<std::vector<double>>("chunk_workspace_min", std::vector<double>{});
   auto_declare<std::vector<double>>("chunk_workspace_max", std::vector<double>{});
   return CallbackReturn::SUCCESS;
@@ -147,12 +150,28 @@ controller_interface::CallbackReturn VlaController::on_configure(
         "which the drive applies downstream of torque_limit");
       return CallbackReturn::ERROR;
     }
+  } else {
+    // Said at launch rather than first at the first refused chunk: a bringup
+    // that means to stream joint chunks here should find out before a policy
+    // is pointed at it.
+    RCLCPP_WARN(get_node()->get_logger(),
+      "drive_side_impedance is false: this controller accepts TASK chunks only and "
+      "rejects joint chunks. The legacy law sends kp = 0 with q_des pinned to the "
+      "measurement, so nothing would close a joint position loop.");
   }
 
   cho_vla_core::ReferenceLimiter::Params limiter;
   limiter.max_linear_velocity = get_node()->get_parameter("max_task_lin_vel").as_double();
   limiter.max_angular_velocity = get_node()->get_parameter("max_task_ang_vel").as_double();
   limiter.max_linear_acceleration = get_node()->get_parameter("max_task_lin_acc").as_double();
+  const double max_task_ang_acc = get_node()->get_parameter("max_task_ang_acc").as_double();
+  if (!std::isfinite(max_task_ang_acc) || max_task_ang_acc < 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "max_task_ang_acc must be finite and >= 0 rad/s^2 (got %g); 0 turns the bound off",
+      max_task_ang_acc);
+    return CallbackReturn::ERROR;
+  }
+  limiter.max_angular_acceleration = max_task_ang_acc;
   const auto ref_vel = get_node()->get_parameter("max_joint_ref_vel").as_double_array();
   const auto ref_acc = get_node()->get_parameter("max_joint_ref_acc").as_double_array();
   const auto ref_jerk = get_node()->get_parameter("max_joint_ref_jerk").as_double_array();
@@ -279,10 +298,13 @@ controller_interface::CallbackReturn VlaController::on_configure(
 
   RCLCPP_INFO(get_node()->get_logger(),
     "VLA MIT reference source ready: chunk_topic=%s time_source=%s stream_timeout=%.3f "
-    "hold_timeout=%.3f blend=%.3f interpolation=%s ema=%.3f. Both action spaces are "
-    "impedance.",
+    "hold_timeout=%.3f blend=%.3f interpolation=%s ema=%.3f max_task_ang_acc=%g. %s",
     chunk_topic_.c_str(), chunk_time_source_.c_str(), stream_timeout_sec_,
-    hold_timeout_sec_, buffer.blend_duration, interpolation.c_str(), ema_factor_);
+    hold_timeout_sec_, buffer.blend_duration, interpolation.c_str(), ema_factor_,
+    max_task_ang_acc,
+    drive_side_impedance_
+      ? "Both action spaces are impedance."
+      : "Legacy law: task space only.");
   return CallbackReturn::SUCCESS;
 }
 
@@ -310,6 +332,10 @@ controller_interface::CallbackReturn VlaController::on_activate(
   limiter_seeded_ = false;
   releasing_on_hold_ = false;
   limiter_resume_pending_ = false;
+  // task_q_ref_'s rate counterpart; the base class has just set task_q_ref_ to
+  // the measurement, at rest.
+  commanded_dq_des_.fill(0.0);
+  previous_control_time_ = std::numeric_limits<double>::quiet_NaN();
   gripper_dispatch_.reset();
   return CallbackReturn::SUCCESS;
 }
@@ -552,29 +578,61 @@ void VlaController::vla_non_rt_tick_impl()
 // Chunk ingest (executor)
 // ---------------------------------------------------------------------------
 
-bool VlaController::build_chunk(
+cho_vla_core::Reject VlaController::build_chunk(
   const cho_interfaces::msg::ActionChunk & message, const double arrival,
   cho_vla_core::Chunk & chunk, std::string & reason)
 {
   if (!cho_vla_core::parse_action_space(message.action_space, chunk.space)) {
-    reason = "action_space '" + message.action_space + "'";
-    return false;
+    reason = "unparseable action_space '" + message.action_space + "'";
+    return cho_vla_core::Reject::kUnparseableField;
+  }
+  // Fail-closed on the law, not only on the message. The legacy law
+  // (TRACKING_DAMPED_TORQUE) sends zero joint stiffness with q_des pinned to the
+  // measurement, so an accepted joint chunk would be taken and then do nothing
+  // a position loop could see -- silently. Switching that law to IMPEDANCE
+  // would not help: the configs that run it carry kp = 0. Reported as its own
+  // reason, not as an unparseable field: the chunk is well-formed, and no fix
+  // to its contents gets it accepted here.
+  if (chunk.space == cho_vla_core::ActionSpace::kJoint && !drive_side_impedance_) {
+    reason = "joint chunks need drive_side_impedance: true (the legacy law sends "
+      "kp = 0 with q_des pinned to the measurement, so nothing closes the "
+      "position loop)";
+    return cho_vla_core::Reject::kActionSpaceNotAccepted;
   }
   if (!cho_vla_core::parse_relative_mode(
       message.relative_mode, message.relative, chunk.relative))
   {
-    reason = "relative_mode '" + message.relative_mode + "'";
-    return false;
+    reason = "unparseable relative_mode '" + message.relative_mode + "'";
+    return cho_vla_core::Reject::kUnparseableField;
+  }
+  // Parsed in every space, so an unknown value is refused even where it would
+  // not be read: a bridge that sends one has a bug worth surfacing.
+  if (!cho_vla_core::parse_relative_frame(message.relative_frame, chunk.relative_frame)) {
+    reason = "unparseable relative_frame '" + message.relative_frame + "'";
+    return cho_vla_core::Reject::kUnparseableField;
   }
   if (!cho_vla_core::parse_gripper_mode(message.gripper_mode, chunk.gripper_mode)) {
-    reason = "gripper_mode '" + message.gripper_mode + "'";
-    return false;
+    reason = "unparseable gripper_mode '" + message.gripper_mode + "'";
+    return cho_vla_core::Reject::kUnparseableField;
   }
   if (chunk.space == cho_vla_core::ActionSpace::kTask &&
     !cho_vla_core::parse_rotation_type(message.rotation_type, chunk.rotation))
   {
-    reason = "rotation_type '" + message.rotation_type + "'";
-    return false;
+    reason = "unparseable rotation_type '" + message.rotation_type + "'";
+    return cho_vla_core::Reject::kUnparseableField;
+  }
+  if (chunk.space == cho_vla_core::ActionSpace::kTask &&
+    chunk.relative != cho_vla_core::RelativeMode::kAbsolute &&
+    message.relative_frame.empty())
+  {
+    // Accepted as before the field existed, so the external bridges keep
+    // working after a rebuild; but "ee" is only the historical reading, and a
+    // base-frame delta (robosuite OSC, OpenVLA-OFT LIBERO) read that way moves a
+    // tool-down arm the wrong way in y and z.
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
+      "Relative task chunk with an empty ActionChunk.relative_frame: composing it in "
+      "the \"ee\" frame (the pre-v3 behaviour). Bridges should set relative_frame to "
+      "\"ee\" or \"base\" explicitly.");
   }
 
   const bool use_observation =
@@ -622,7 +680,7 @@ bool VlaController::build_chunk(
       }
     }
   }
-  return true;
+  return cho_vla_core::Reject::kNone;
 }
 
 void VlaController::on_action_chunk(
@@ -637,11 +695,12 @@ void VlaController::on_action_chunk(
 
   cho_vla_core::Chunk chunk;
   std::string reason;
-  if (!build_chunk(*message, arrival, chunk, reason)) {
+  const cho_vla_core::Reject refused = build_chunk(*message, arrival, chunk, reason);
+  if (refused != cho_vla_core::Reject::kNone) {
     ++telemetry_.chunks_rejected;
-    telemetry_.last_reject = cho_vla_core::Reject::kUnparseableField;
+    telemetry_.last_reject = refused;
     RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
-      "VLA chunk rejected: unparseable %s.", reason.c_str());
+      "VLA chunk rejected: %s.", reason.c_str());
     return;
   }
 
@@ -710,11 +769,13 @@ bool VlaController::write_joint_reference_target(
     // into torque, so it is bounded here exactly as the Cartesian path bounds
     // its own J^+ offset. Without this a policy could ask for a step of any
     // size and the drive would apply kp times it.
-    // Under the legacy law the base derives this from kp, which is zero there,
-    // so the bound would clamp every offset to zero and the joint reference
-    // would never leave measured position. Fall back to the profile position
-    // window's own span in that case: the emitted q_des is still clamped to the
-    // window by clamp_command_positions() downstream.
+    // A non-positive bound only arises from a kp-derived default under the
+    // legacy law, and that law never gets here: build_chunk() refuses joint
+    // chunks there, because its TRACKING_DAMPED_TORQUE mode replaces q_des with
+    // the measurement and sends kp = 0 whatever is written below. Under
+    // drive-side impedance on_configure requires the bound explicitly. The
+    // window-span fallback is kept as a defensive value only; the emitted q_des
+    // is clamped to the window by clamp_command_positions() downstream.
     const double bound = (reference_offset_limit_[joint] > 0.0)
       ? reference_offset_limit_[joint]
       : (position_upper_[joint] - position_lower_[joint]);
@@ -736,16 +797,77 @@ bool VlaController::write_joint_reference_target(
   return true;
 }
 
+void VlaController::note_commanded_joints(const DirectMitTarget & target)
+{
+  // Without this the Cartesian paths left task_q_ref_ wherever the last joint
+  // chunk or the startup ramp had put it, so a goal that went task -> joint
+  // seeded the joint limiter from that stale value and q_des leapt toward it,
+  // and a relative joint chunk anchored during task control was anchored there.
+  const auto q = measured();
+  for (std::size_t joint = 0; joint < 7; ++joint) {
+    // The q_des the drive receives: clamp_command_positions() puts it in the
+    // profile window, which is the limiter's joint window. The Cartesian law's
+    // q + J^+ e is not bounded by it.
+    const double position = drive_side_impedance_ ? target.position[joint] : q[joint];
+    task_q_ref_[joint] = std::clamp(position, position_lower_[joint], position_upper_[joint]);
+    task_q_reference_observed_[joint].store(task_q_ref_[joint], std::memory_order_release);
+    // IMPEDANCE and TRACKING_DAMPED_TORQUE both send target.velocity as the
+    // MIT dq_des unchanged: the joint path's clamped reference rate, J^+ v_des
+    // on the Cartesian ones. Where the window pins q_des, the part of it that
+    // points out of the window is dropped: the pinned q_des does not move that
+    // way.
+    double rate = target.velocity[joint];
+    if (position < position_lower_[joint]) {
+      rate = std::max(rate, 0.0);
+    } else if (position > position_upper_[joint]) {
+      rate = std::min(rate, 0.0);
+    }
+    commanded_dq_des_[joint] = rate;
+  }
+}
+
+void VlaController::seed_limiter_from_command(
+  const cho_vla_core::Reference & reference, const double seed_time)
+{
+  cho_vla_core::Reference seed = reference;
+  Vector7 rate;
+  for (std::size_t joint = 0; joint < 7; ++joint) {
+    const auto index = static_cast<Eigen::Index>(joint);
+    seed.joints(index) = task_q_ref_[joint];
+    seed.joint_velocity(index) = commanded_dq_des_[joint];
+    rate(index) = commanded_dq_des_[joint];
+  }
+  // A switch to joint space does not read the task side (the next joint cycle
+  // resets its rate state), so it keeps the last commanded Cartesian reference
+  // with a zero twist.
+  seed.pose = idle_pose_valid_ ? idle_pose_ : reference.pose;
+  seed.twist.setZero();
+  if (reference.space == cho_vla_core::ActionSpace::kTask) {
+    Jacobian jacobian;
+    pinocchio::SE3 pose;
+    if (task_pose_and_jacobian(task_q_ref_, pose, jacobian)) {
+      seed.pose = pose;
+      seed.twist = jacobian * rate;
+    }
+  }
+  limiter_.seed_with_rates(seed, seed_time);
+}
+
 bool VlaController::write_task_target(
   const double control_time, const double dt, DirectMitTarget & target)
 {
   task_compute_failed_ = false;
   task_capacity_rejected_ = false;
+  // When the target task_q_ref_ and commanded_dq_des_ hold was commanded: the
+  // previous call, which every path below ends by recording.
+  const double previous_control_time = previous_control_time_;
+  previous_control_time_ = control_time;
 
   // Anchor ring: fed every ACTIVE cycle so a chunk arriving at any point has
   // history behind it. The commanded Cartesian reference is idle_pose_ (the
   // inherited "what we are currently commanding" field), and the joint reference
-  // is the MIT q_des the drive is holding.
+  // is the MIT q_des the drive is holding (task_q_ref_, which
+  // note_commanded_joints() keeps current on every path below).
   Vector7 anchor_joints;
   for (std::size_t joint = 0; joint < 7; ++joint) {
     anchor_joints(static_cast<Eigen::Index>(joint)) = task_q_ref_[joint];
@@ -805,6 +927,7 @@ bool VlaController::write_task_target(
         task_compute_failed_ = true;
         return false;
       }
+      note_commanded_joints(target);
       return true;
     };
 
@@ -836,6 +959,7 @@ bool VlaController::write_task_target(
       task_compute_failed_ = true;
       return false;
     }
+    note_commanded_joints(target);
     return true;
   }
 
@@ -899,6 +1023,22 @@ bool VlaController::write_task_target(
   // idle_pose_ makes the resume continuous with what the arm is actually
   // holding. hold_timeout_sec 3.0 over stream_timeout_sec 0.2 means a real
   // bringup passes through here whenever three chunks in a row are dropped.
+  //
+  // Both seed at rest: the arm is being held.
+  //
+  // And every switch of action space inside one goal, which is not a hold: the
+  // arm may be moving. The limiter runs on the active space only, so its state
+  // in the other one is whatever the old chunks' waypoints carried there --
+  // their observation-time anchor. A goal that went joint -> task restarted the
+  // task reference from that anchor pose (and task -> joint from the anchor
+  // joints), and q_des leapt back toward it by up to max_reference_offset. The
+  // seed is what the last cycle COMMANDED, with its rate: q_des and dq_des, and
+  // for task space their forward kinematics and J * dq_des (see
+  // seed_limiter_from_command()). Not idle_pose_, which the joint path keeps on
+  // the MEASURED pose: seeded there, the first task cycle commanded q_des = q
+  // and dropped the drive-side offset q_des - q in one cycle. Not at rest
+  // either: a moving reference's dq_des fell to zero in one cycle, the in-motor
+  // kd braking the arm, and re-accelerated at max_task_lin_acc.
   if (!limiter_seeded_ || limiter_resume_pending_) {
     cho_vla_core::Reference seed = reference;
     seed.pose = idle_pose_valid_ ? idle_pose_ : reference.pose;
@@ -908,21 +1048,27 @@ bool VlaController::write_task_target(
     limiter_.seed(seed, control_time);
     limiter_seeded_ = true;
     limiter_resume_pending_ = false;
+  } else if (reference.space != limiter_space_) {
+    // Dated when it was commanded, so this cycle advances from it at the seeded
+    // rate. Seeded at control_time, the switch cycle would emit the seed itself
+    // and a moving q_des would stand still for one cycle.
+    const bool dated =
+      std::isfinite(previous_control_time) && previous_control_time < control_time;
+    seed_limiter_from_command(reference, dated ? previous_control_time : control_time);
   }
+  limiter_space_ = reference.space;
   limiter_.apply(control_time, reference);
 
   bool ok = false;
   if (reference.space == cho_vla_core::ActionSpace::kJoint) {
     ok = write_joint_reference_target(reference, dt, target);
     if (ok) {
-      for (std::size_t joint = 0; joint < 7; ++joint) {
-        task_q_ref_[joint] = target.position[joint];
-        task_q_reference_observed_[joint].store(
-          task_q_ref_[joint], std::memory_order_release);
-      }
-      // Keep the Cartesian reference tracking the joint path, so a mid-goal
-      // switch to task space (or the release on hold) starts from the pose the
-      // arm is actually at rather than from a stale one.
+      note_commanded_joints(target);
+      // Keep the Cartesian reference tracking the joint path, so the release on
+      // hold starts from the pose the arm is actually at rather than from a
+      // stale one, and the anchor ring's pose stays on it. A mid-goal switch to
+      // task space does not read it: it seeds from FK of the commanded joints
+      // (seed_limiter_from_command()).
       Jacobian jacobian;
       pinocchio::SE3 pose;
       if (task_pose_and_jacobian(measured(), pose, jacobian)) {
@@ -935,6 +1081,7 @@ bool VlaController::write_task_target(
     if (ok) {
       idle_pose_ = reference.pose;
       idle_pose_valid_ = true;
+      note_commanded_joints(target);
     }
   }
   if (!ok) {

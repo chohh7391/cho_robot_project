@@ -14,8 +14,10 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -60,6 +62,13 @@ namespace cho_controller_openarm_mit
 //          joint velocity clamped to the profile command velocity, fixed kp/kd,
 //          tau_ff = nle. Simpler than the task path: no Jacobian, no
 //          pseudo-inverse, no singularity to handle.
+//
+// That holds under drive_side_impedance: true only. Under the legacy law
+// (drive_side_impedance: false, the real bimanual config) the base class sends
+// TRACKING_DAMPED_TORQUE: kp = 0 and q_des pinned to the measurement, with the
+// Cartesian law in tau_ff. A joint reference has nothing to close its position
+// loop there, so build_chunk() REFUSES joint chunks under that law and the
+// controller takes task chunks only (on_configure says so once).
 //
 // MIT-specific hazards this has to respect, none of which apply to the Franka
 // host:
@@ -132,7 +141,11 @@ private:
   void vla_non_rt_tick();
   void vla_non_rt_tick_impl();
   void on_action_chunk(const cho_interfaces::msg::ActionChunk::SharedPtr message);
-  bool build_chunk(
+  // kNone, or why `message` cannot become a chunk here, for the telemetry's
+  // last_reject: kUnparseableField for a string field it cannot parse,
+  // kActionSpaceNotAccepted for a well-formed joint chunk under the legacy law.
+  // `reason` carries the detail for the log.
+  cho_vla_core::Reject build_chunk(
     const cho_interfaces::msg::ActionChunk & message, double arrival,
     cho_vla_core::Chunk & chunk, std::string & reason);
   static const char * terminal_reason(std::uint8_t reason);
@@ -142,6 +155,30 @@ private:
   // becomes the MIT q_des/dq_des directly, with nle as the only feed-forward.
   bool write_joint_reference_target(
     const cho_vla_core::Reference & reference, double dt, DirectMitTarget & target);
+  // Records the joint position `target` commands in task_q_ref_, whichever path
+  // wrote it: target.position under drive-side impedance (the joint path, and
+  // q + J^+ e on the Cartesian one), the measurement under the legacy law, whose
+  // TRACKING_DAMPED_TORQUE mode pins q_des there -- clamped into the profile
+  // window as clamp_command_positions() clamps it for the drive. And the joint
+  // rate it commands in commanded_dq_des_: target.velocity, which both modes put
+  // in the MIT tuple's velocity field as they stand (map_direct_mit_command()),
+  // less any part pointing out of the window at a joint the clamp pinned.
+  // Called after every target this controller writes, so the two are always
+  // "the q_des and dq_des being commanded", inside the limiter's joint window
+  // -- the anchor ring's joint field and every limiter seed read task_q_ref_,
+  // the space-switch seed both.
+  void note_commanded_joints(const DirectMitTarget & target);
+  // Seeds the limiter for a reference that has switched action space within a
+  // goal, from what the last cycle commanded and how fast (seed_with_rates()):
+  // joints = task_q_ref_ and joint_velocity = commanded_dq_des_ in either
+  // direction, and for a switch to task space pose = FK(task_q_ref_) and
+  // twist = J(task_q_ref_) * commanded_dq_des_ (LOCAL_WORLD_ALIGNED, the
+  // limiter's linear-then-world-aligned-angular convention). Not the
+  // measurement: the drive is pushing q toward q_des, and seeding from q drops
+  // that offset in one cycle. If that forward kinematics fails, the task side
+  // falls back to idle_pose_ at rest. `seed_time` is when that was commanded,
+  // the previous cycle's control_time (write_task_target()).
+  void seed_limiter_from_command(const cho_vla_core::Reference & reference, double seed_time);
   void finish_vla(std::uint64_t id, VlaTerminal terminal, std::uint8_t reason);
 
   // ---- core objects ------------------------------------------------------
@@ -194,6 +231,18 @@ private:
   // from releasing_on_hold_, which a new chunk clears before the cycle knows
   // whether a reference could be sampled.
   bool limiter_resume_pending_ {false};
+  // Action space of the reference the limiter last ran on. A sampled reference
+  // in the other space (a chunk switched space inside one goal) re-seeds the
+  // limiter from the commanded q_des and dq_des (seed_limiter_from_command()),
+  // whose state in the new space would otherwise be whatever the old chunks
+  // carried there.
+  cho_vla_core::ActionSpace limiter_space_ {cho_vla_core::ActionSpace::kTask};
+  // The MIT dq_des of the last target this controller wrote; see
+  // note_commanded_joints(). task_q_ref_ is its position counterpart.
+  std::array<double, 7> commanded_dq_des_ {};
+  // control_time of the previous write_task_target() call, when task_q_ref_ and
+  // commanded_dq_des_ were commanded. NaN until the first call after activation.
+  double previous_control_time_ {std::numeric_limits<double>::quiet_NaN()};
   // Written by the control loop, read by the telemetry timer: atomic, because
   // a std::string shared that way was a data race.
   std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};

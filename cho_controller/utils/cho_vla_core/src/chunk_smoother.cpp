@@ -16,6 +16,18 @@
 
 namespace cho_vla_core
 {
+namespace
+{
+// Slack on "the series still holds time t", for times built by adding a
+// control_dt to an observation stamp and subtracting it again.
+constexpr double kHeldTimeTolerance = 1e-9;
+
+bool holds(const std::vector<Waypoint> & series, const double t)
+{
+  return t >= series.front().t - kHeldTimeTolerance;
+}
+}  // namespace
+
 void apply_ema(
   std::vector<Waypoint> & waypoints, const double factor, const Waypoint * seed)
 {
@@ -48,10 +60,19 @@ bool ema_seed(
   const double control_dt, Waypoint & seed)
 {
   if (incoming.empty() || timeline.waypoints.empty() || timeline.space != space) {return false;}
+  const double t = incoming.front().t - control_dt;
+  // Only a time the timeline still holds (see the header): the waypoints, and
+  // the blend's outgoing trajectory wherever sample_timeline() reads it. Not
+  // holding it fails closed -- this chunk is simply not chained. A NaN `t`
+  // fails the first test.
+  if (!holds(timeline.waypoints, t)) {return false;}
+  if (t < timeline.blend_end && !timeline.previous.empty() && !holds(timeline.previous, t)) {
+    return false;
+  }
   Reference reference;
-  if (!sample_timeline(timeline, incoming.front().t - control_dt, reference)) {return false;}
+  if (!sample_timeline(timeline, t, reference)) {return false;}
   seed = Waypoint{};
-  seed.t = incoming.front().t - control_dt;
+  seed.t = t;
   seed.joints = reference.joints;
   seed.pose = reference.pose;
   seed.joint_velocity = reference.joint_velocity;

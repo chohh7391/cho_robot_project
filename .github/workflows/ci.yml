@@ -23,17 +23,23 @@ defaults:
 # libfranka in CI - deferred, tracked separately.
 #
 # Every workspace package a listed package depends on (any dependency type) must
-# be listed too, or named in ROSDEP_SKIP_KEYS: `rosdep install --ignore-src`
-# treats only the packages under --from-paths as source and fails on any other
-# workspace name as an unknown key. That is why cho_moveit_fr5 is here
+# be listed too, or be named in NOT_BUILT_PACKAGES (colcon --packages-ignore)
+# AND in ROSDEP_SKIP_KEYS. Both, because they are two different checks:
+# `rosdep install --ignore-src` treats only the packages under --from-paths as
+# source and fails on any other workspace name as an unknown key (that is what
+# ROSDEP_SKIP_KEYS answers), while colcon refuses a workspace dependency that is
+# neither selected nor installed (that is what --packages-ignore answers). A
+# key that is not in the source tree at all (franka_hardware, ...) needs
+# ROSDEP_SKIP_KEYS alone. That is why cho_moveit_fr5 is listed below
 # (cho_task_manager exec_depends on it).
 #
 # All four bringups and their MoveIt packages are here for cho_bringup_common's
 # launch golden test (test/test_launch_golden.py), which evaluates every launch
 # file and follows its cho_moveit_* includes; nothing is started, so the
-# bringups' exec_depends on the packages above are skipped (ROSDEP_SKIP_KEYS)
-# rather than built, and the two Franka packages the launch files look up by
-# path are registered as empty stand-ins (tools/ci/stub_ament_packages.sh).
+# bringups' exec_depends on the packages above are ignored (NOT_BUILT_PACKAGES
+# and ROSDEP_SKIP_KEYS) rather than built, and the two Franka packages the
+# launch files look up by path are registered as empty stand-ins
+# (tools/ci/stub_ament_packages.sh).
 env:
   BUILD_PACKAGES: >-
     cho_interfaces
@@ -67,9 +73,19 @@ env:
     cho_object_pose
     cho_realsense
     cho_oak
+  # In the source tree but not built here (Franka's source-only deps, real
+  # hardware). Ignored, not just skipped by rosdep: colcon refuses a workspace
+  # dependency that is neither selected nor installed. Passed to both
+  # `colcon build` and `colcon test` as --packages-ignore, and repeated in
+  # ROSDEP_SKIP_KEYS below, where rosdep still sees them as unknown keys.
+  NOT_BUILT_PACKAGES: >-
+    cho_controller_franka
+    cho_hardware_openarm_mit_mujoco
+    cho_hardware_openarm_mit_real
   # Dependencies of BUILD_PACKAGES that are not installed here; see above.
-  # Workspace packages left out of BUILD_PACKAGES, then Franka keys whose debs
-  # do not exist.
+  # The NOT_BUILT_PACKAGES names (rosdep --ignore-src reports a workspace name
+  # outside --from-paths as an unknown key), then the Franka keys whose debs do
+  # not exist. Those are not in the source tree, so nothing else names them.
   ROSDEP_SKIP_KEYS: >-
     cho_controller_franka
     cho_hardware_openarm_mit_mujoco
@@ -169,7 +185,8 @@ jobs:
           source /opt/ros/humble/setup.bash
           colcon build --symlink-install \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
-            --packages-select ${{ env.BUILD_PACKAGES }}
+            --packages-select ${{ env.BUILD_PACKAGES }} \
+            --packages-ignore ${{ env.NOT_BUILT_PACKAGES }}
 
       - name: Test
         shell: bash
@@ -186,12 +203,22 @@ jobs:
           export AMENT_PREFIX_PATH="${stubs}:${AMENT_PREFIX_PATH}"
           colcon test \
             --packages-select ${{ env.TEST_PACKAGES }} \
+            --packages-ignore ${{ env.NOT_BUILT_PACKAGES }} \
             --return-code-on-test-failure
 
+      # A run that tested nothing must not look like a pass: the Test step is
+      # skipped when Build fails, and a build that selects no tests reports
+      # "Summary: 0 tests". Either is an outage of the whole suite.
       - name: Test results
         if: always()
         shell: bash
-        run: colcon test-result --verbose
+        run: |
+          set -o pipefail
+          colcon test-result --verbose | tee "${RUNNER_TEMP:-/tmp}/test_result.txt"
+          summary=$(tail -n 1 "${RUNNER_TEMP:-/tmp}/test_result.txt")
+          case "$summary" in
+            "Summary: 0 tests"*) echo "::error::no test ran"; exit 1 ;;
+          esac
 
       - name: Upload test results
         if: failure()

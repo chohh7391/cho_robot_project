@@ -17,6 +17,9 @@
 #include <cmath>
 #include <vector>
 
+#include <pinocchio/spatial/explog.hpp>
+
+#include "cho_controller_base/kinematics.hpp"
 #include "cho_controller_franka/servers/vla_action_server.hpp"
 
 namespace cho_controller {
@@ -49,6 +52,19 @@ void VLAActionServer::init()
     limiter.max_linear_velocity = declare_or_get_double("max_task_lin_vel", 0.25);
     limiter.max_angular_velocity = declare_or_get_double("max_task_ang_vel", 1.5);
     limiter.max_linear_acceleration = declare_or_get_double("max_task_lin_acc", 1.0);
+    // [rad/s^2]. The emitted angular velocity changes by at most this much per
+    // second. 0 = off: rotation keeps the velocity clamp alone and a step in the
+    // sampled angular rate passes through unshaped, which the position/velocity
+    // task IK (rate feed-forward) then follows. See cho_vla_core::ReferenceLimiter.
+    constexpr double kDefaultMaxTaskAngAcc = 10.0;
+    double max_task_ang_acc = declare_or_get_double("max_task_ang_acc", kDefaultMaxTaskAngAcc);
+    if (!(std::isfinite(max_task_ang_acc) && max_task_ang_acc >= 0.0)) {
+        RCLCPP_WARN(node_->get_logger(),
+            "max_task_ang_acc %g is not a finite value >= 0; using the default %g",
+            max_task_ang_acc, kDefaultMaxTaskAngAcc);
+        max_task_ang_acc = kDefaultMaxTaskAngAcc;
+    }
+    limiter.max_angular_acceleration = max_task_ang_acc;
     limiter.max_joint_velocity.setConstant(declare_or_get_double("max_joint_ref_vel", 1.0));
     limiter.max_joint_acceleration.setConstant(declare_or_get_double("max_joint_ref_acc", 4.0));
     // Both velocity and acceleration are bounded here, so every joint is planned
@@ -309,6 +325,26 @@ bool VLAActionServer::build_chunk(
         reason = "rotation_type '" + msg.rotation_type + "'";
         return false;
     }
+    // Parsed in every space, although only a relative TASK chunk composes in it:
+    // a frame this host does not know is refused rather than guessed, and a
+    // joint or absolute chunk naming one comes from a bridge that is wrong about
+    // what it sends.
+    if (!cho_vla_core::parse_relative_frame(msg.relative_frame, chunk.relative_frame)) {
+        reason = "relative_frame '" + msg.relative_frame + "'";
+        return false;
+    }
+    if (msg.relative_frame.empty() &&
+        chunk.space == cho_vla_core::ActionSpace::kTask &&
+        chunk.relative != cho_vla_core::RelativeMode::kAbsolute)
+    {
+        // Accepted, so the four bridges written before the field existed keep
+        // working after a rebuild -- but "ee" is a guess about their deltas that
+        // a base-frame stack (OpenVLA-OFT LIBERO) would get mirrored.
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+            "Relative task chunk with ActionChunk.relative_frame unset: composing its "
+            "deltas in the EE frame (the pre-v3 behaviour). Bridges should set "
+            "relative_frame to \"ee\" or \"base\" explicitly.");
+    }
 
     // Observation time. With chunk_time_source 'arrival' the chunk is placed at
     // the instant it landed, which is the pre-v2 behaviour; the stamp is ignored
@@ -539,6 +575,71 @@ void VLAActionServer::apply_hold(State & state)
     state.q_arm_des = hold_joints_;
 }
 
+void VLAActionServer::commanded_now(const State & state, cho_vla_core::Reference & seed) const
+{
+    // J_arm_world is LOCAL_WORLD_ALIGNED at the measured configuration, computed
+    // this cycle by FrankaBaseController::update() before compute(): the linear
+    // velocity of the EE origin, then the angular one, both in world axes --
+    // Reference::twist's convention.
+    const Eigen::Matrix<double, 6, 7> & jacobian = state.J_arm_world;
+    const bool to_task = seed.space == cho_vla_core::ActionSpace::kTask;
+
+    // Rates: what the reference moved at last cycle in the space being left,
+    // and that rate carried into the space being entered through the Jacobian.
+    // compute() wrote both fields last cycle and zeroes both while holding, so a
+    // switch out of a hold starts at rest.
+    if (to_task) {
+        seed.joint_velocity = state.v_arm_des;
+        seed.twist = jacobian * state.v_arm_des;
+    } else {
+        seed.twist = twist_des_;
+        seed.joint_velocity = cho_controller_base::dls_step(jacobian, twist_des_, kVlaDlsLambda);
+    }
+
+    if (is_position_mode() || is_velocity_mode()) {
+        // The open-loop modes command q_ref_, and VLAController writes it and
+        // FK(q_ref_) to the *_ref fields AFTER this call (position mode: the
+        // command clip_position() let through). Here they are therefore what the
+        // interfaces were given last cycle, i.e. what is commanded until this
+        // cycle's step -- in both representations, whichever space was running.
+        seed.pose = state.H_ee_ref;
+        seed.joints = state.q_arm_ref;
+        return;
+    }
+
+    // Effort: the law springs from the measurement to *_des, and the stretch is
+    // what the arm is being pushed with. Seeding from the measurement would drop
+    // that stretch to zero for a cycle (the full spring force, against gravity
+    // sag or a contact) and let the new space's spring build it up again. Kept,
+    // the stretch is sprung on by the new law's own gains, so the torque still
+    // changes by however much those differ. *_des is current only in the space
+    // that was running, so the other half is derived from it here.
+    if (to_task) {
+        seed.joints = state.q_arm_des;
+        if (arm_kinematics_) {
+            // FK(q_arm_des) from the controller's model, and the rate through
+            // the Jacobian there rather than at the measurement.
+            Eigen::Matrix<double, 6, 7> jacobian_des;
+            arm_kinematics_(state.q_arm_des, seed.pose, jacobian_des);
+            seed.twist = jacobian_des * state.v_arm_des;
+        } else {
+            // No model to evaluate it with: the measured pose, which drops the
+            // stretch for a cycle.
+            seed.pose = state.H_ee;
+        }
+    } else {
+        // The joints H_ee_des asks for: one damped least-squares step from the
+        // measurement, on the error the effort task law springs on (world-aligned,
+        // as in VLAController::write_effort).
+        Vector6d error;
+        error.head<3>() = state.H_ee_des.translation() - state.H_ee.translation();
+        error.tail<3>() = pinocchio::log3(
+            Eigen::Matrix3d(state.H_ee_des.rotation() * state.H_ee.rotation().transpose()));
+        seed.pose = state.H_ee_des;
+        seed.joints = state.q_arm + cho_controller_base::dls_step(jacobian, error, kVlaDlsLambda);
+    }
+}
+
 void VLAActionServer::finish_goal_rt(GoalPhase terminal, State & state, const char * reason)
 {
     // Latch the idle-hold anchors at the terminal pose; the controller's idle
@@ -560,6 +661,10 @@ void VLAActionServer::on_goal_finished(GoalPhase terminal)
 bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
     const double now = current_time.seconds();
+    // The previous call's time: when what state's *_ref and *_des fields and
+    // twist_des_ hold now was commanded. compute() runs on every cycle.
+    const double previous_now = previous_compute_time_;
+    previous_compute_time_ = now;
 
     // Feed the anchor ring every cycle, goal or no goal: a chunk arriving in the
     // first cycles of a goal still needs history behind it. That holds only
@@ -591,8 +696,11 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         return false;
     }
     if (task_success_flag_.exchange(false)) {
+        // The controller runs this cycle on it: the arm where it is, at rest.
         state.H_ee_des = state.H_ee;
         state.q_arm_des = state.q_arm;
+        state.v_arm_des.setZero();
+        twist_des_.setZero();
         finish_goal_rt(GoalPhase::kFinishSucceeded, state);
         return true;
     }
@@ -645,10 +753,17 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 
     const bool resuming = hold_latched_;
     hold_latched_ = false;
+    // A chunk in the other action space replaced the timeline (ActionBuffer
+    // clears it on a space change), and this is the first cycle sampling it.
+    // Compared against the space the controller ran last cycle -- also across a
+    // hold, during which active_action_space_ keeps the space being held -- and
+    // only within a goal: limiter_seeded_ is false until its first reference.
+    const bool space_switched =
+        limiter_seeded_ && reference.space != active_action_space_;
     active_action_space_ = reference.space;
     rt_action_space_.store(static_cast<int>(reference.space));
 
-    if (!limiter_seeded_ || resuming) {
+    if (!limiter_seeded_ || resuming || space_switched) {
         // Goal start, and every resume out of hold -- ReferenceLimiter's contract
         // asks for both. Seeding only at goal start left the limiter's clock at
         // the last cycle before the hold, so the first cycle after it planned
@@ -656,10 +771,35 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
         // 0.12 rad in one 1 ms cycle. The OpenArm host already re-seeds here.
         // Seed from what the controller is already commanding, so the first
         // limited cycle is continuous.
+        //
+        // A space switch inside the goal re-seeds too, from a different source.
+        // Unseeded, the limiter starts the new space from the value it last
+        // emitted in that representation, and while the other space ran that
+        // value was the running chunks' anchor, carried through unlimited:
+        // joint chunks carry the pose they were observed at (H_ee_des), task
+        // chunks the joints (q_arm_des). On mock hardware in position mode, a
+        // joint chunk that moved joint 1 by 0.3 rad, then a task chunk asking
+        // the arm to stay where it was, pulled it 0.15 rad back first. The
+        // same stale values sit in *_des and in a hold latched from them, so
+        // the switch seeds from what is commanded now instead, and -- the arm
+        // may be moving -- at the rate it is commanded to move: seeded at rest,
+        // the new space's reference would stop for a cycle and accelerate
+        // again, the arm falling behind meanwhile. See commanded_now().
         cho_vla_core::Reference seed = reference;
-        seed.pose = state.H_ee_des;
-        seed.joints = state.q_arm_des;
-        limiter_.seed(seed, now);
+        if (space_switched) {
+            commanded_now(state, seed);
+            // Dated when it was commanded, the previous cycle, so this cycle
+            // advances from it at the seeded rate like any other. Seeded at
+            // `now`, the switch cycle emits the seed itself: a moving reference
+            // stands still for one cycle, a 300 rad/s^2 notch in a position
+            // command at 0.3 rad/s.
+            const bool dated = std::isfinite(previous_now) && previous_now < now;
+            limiter_.seed_with_rates(seed, dated ? previous_now : now);
+        } else {
+            seed.pose = state.H_ee_des;
+            seed.joints = state.q_arm_des;
+            limiter_.seed(seed, now);
+        }
         limiter_seeded_ = true;
     }
     limiter_.apply(now, reference);

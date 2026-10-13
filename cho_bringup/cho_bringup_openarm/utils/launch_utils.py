@@ -65,13 +65,17 @@ MIT_DIRECT_CONTROLLERS = frozenset({
 })
 MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
 MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
-# vla_mit_controller is offered here only for its TASK action space. Its
-# Cartesian path is TaskSpaceImpedanceController's own
-# write_cartesian_torque_target() unchanged -- the controller derives from it and
-# overrides only where x_des/v_des come from -- so what runs on hardware is the
-# commissioned law fed by a chunk stream. Its JOINT action space is new code that
-# has only ever run in MuJoCo, and it additionally omits the joint-limit spring
-# the Cartesian path carries, so do not send joint chunks to a real arm.
+# vla_mit_controller is offered here for TASK chunks. Its Cartesian path is
+# TaskSpaceImpedanceController's own write_cartesian_torque_target() unchanged --
+# the controller derives from it and overrides only where x_des/v_des come from
+# -- so what runs on hardware is the commissioned law fed by a chunk stream.
+# Joint chunks depend on the config's law. controllers_mit_bimanual.yaml runs
+# drive_side_impedance: false, which sends kp = 0 with q_des pinned to the
+# measurement, so the controller rejects joint chunks at ingest there.
+# controllers_mit.yaml (single arm) runs drive-side impedance and accepts them,
+# but that path has only ever run in MuJoCo and omits the joint-limit spring the
+# Cartesian path carries: do not send joint chunks to a real arm before it is
+# commissioned.
 REAL_MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',

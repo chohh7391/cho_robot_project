@@ -47,19 +47,28 @@ walk follows `cho_bringup_*` and `cho_moveit_*` includes (MoveIt's scene gate an
 RViz condition are part of a bringup's output), prints each node's parameters,
 the joints' origins and limits, every xacro run (Command and `xacro.process_file`)
 and spawner `-p` files in the order given (Humble: the last one wins). CI evaluates
-all four bringups: their hardware and Franka source-only dependencies are skipped
-(`ROSDEP_SKIP_KEYS` in ci.yml) and the two Franka packages a launch looks up by path
+all four bringups: the workspace packages they exec_depend on but CI does not build
+(`NOT_BUILT_PACKAGES` in ci.yml) are ignored, and the Franka debs that do not exist
+are skipped (`ROSDEP_SKIP_KEYS`); the two Franka packages a launch looks up by path
 are empty stand-ins (`tools/ci/stub_ament_packages.sh`). Expected output never
 depends on where the workspace is installed: paths become tokens before anything is
 formatted.
 
 CI (`.github/workflows/ci.yml`) derives its rosdep paths from BUILD_PACKAGES, so
 every workspace package a listed package depends on, of any dependency type, must
-be listed too or named in ROSDEP_SKIP_KEYS - `rosdep --ignore-src` reports any other
-workspace name as an unknown key. Check with `rosdep install --simulate --rosdistro
-humble --ignore-src --from-paths $(colcon list --paths-only --packages-select
-<BUILD_PACKAGES>) --skip-keys "<ROSDEP_SKIP_KEYS>"` in a shell that has sourced only
-/opt/ros/humble.
+be listed too, or be named in NOT_BUILT_PACKAGES (colcon `--packages-ignore`, passed
+to the build and the test step) **and** in ROSDEP_SKIP_KEYS. Only a key that is not
+in the source tree at all (a Franka deb that was never published) goes in
+ROSDEP_SKIP_KEYS alone. Both are needed for a source-tree package that is not built:
+`rosdep --ignore-src` reports any workspace name outside `--from-paths` as an unknown
+key, and colcon refuses a workspace dependency that is neither selected nor
+installed. The `Test results` step fails when the summary says `0 tests`, so a build
+that stops before the suite cannot pass quietly. Check with `rosdep install
+--simulate --rosdistro humble --ignore-src --from-paths $(colcon list --paths-only
+--packages-select <BUILD_PACKAGES>) --skip-keys "<ROSDEP_SKIP_KEYS>"` in a shell that
+has sourced only /opt/ros/humble. That check does not catch a missing ignore, and a
+local build does not either when the package is already installed; the CI build step
+does.
 
 Submodules: `git pull` does not check out a submodule added since the clone
 (`extern/bota_driver_ros2_example` was). `install_dependencies.bash` checks out the
@@ -90,8 +99,11 @@ ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torq
 
 # VLA mode (requires control_mode set in controller config)
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
-# OpenArm VLA: the MIT prototype path only. Verified in MuJoCo; the real bringup
-# deliberately does not offer it (see launch_utils.REAL_MIT_DIRECT_CONTROLLERS).
+# OpenArm VLA: verified in MuJoCo. The real bringup offers vla_mit_controller
+# (launch_utils.REAL_MIT_DIRECT_CONTROLLERS) for TASK chunks. With `drive_side_impedance:
+# false` (the real bimanual config) a joint chunk is rejected at ingest: the legacy law
+# sends kp = 0 with q_des pinned to the measurement, so no position loop closes. The
+# joint path (real single arm, `true`) has only ever run in MuJoCo.
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py \
   mujoco_mit_prototype:=true control_mode:=torque mit_controller_name:=vla_mit_controller
 # End-to-end check against a running sim: streams chunks like a bridge would and
@@ -317,9 +329,13 @@ Key controllers:
   ROS adapter over that core. OpenArm's equivalent is
   `cho_controller_openarm_mit/VlaController`, which derives from
   `TaskSpaceImpedanceController` and overrides `write_task_target()` alone, so
-  both action spaces run drive-side impedance and the MIT session/ACK/lease/SAFE
-  protocol is inherited unchanged. Two invariants there that the base class does
-  NOT enforce and the VLA path makes mandatory at configure time:
+  the MIT session/ACK/lease/SAFE protocol is inherited unchanged. Which action
+  spaces it takes depends on the config's law: with `drive_side_impedance: true`
+  (MuJoCo, real single arm) both run drive-side impedance; with `false` (the real
+  bimanual config) it takes TASK chunks only and rejects a joint chunk at ingest
+  (telemetry `last_reject` = `action_space_not_accepted`); the class comment in
+  `vla_controller.hpp` states this in full. Two invariants there that the base
+  class does NOT enforce and the VLA path makes mandatory at configure time:
   `max_reference_offset` (the only bound on `kp*(q_des - q)`, which the drive
   applies downstream of `torque_limit`) and `stream_timeout_sec > 0`.
   `max_task_wrench` is inert under `drive_side_impedance` but is still validated
@@ -527,6 +543,10 @@ templates rely on `isnan()`/`isinf()`).
 - EE pose published on `/ee_state/pose` is **fr3_hand_tcp** frame (tip of gripper).
 - FT sensor is mounted between `fr3_link8` and `fr3_hand`. Transform from FT sensor local frame to TCP frame: `R_tcp_ft = Rx(π) × Rz(-π/4)` (derived from URDF joints `flange_to_ft_sensor` and `fr3_hand_joint`).
 - When using real FT sensor data: rotate from FT local frame to world using `q_ft_to_world = quat_mul(ee_quat, q_ft_to_tcp)`.
+- `ActionChunk.relative_frame: "base"` is the controller model's ROOT frame, i.e. the registry's
+  `model.absolute_goal_frame` (Franka `fr3_link0`, OpenArm `world`), not the arm's `arm_base_link`: on the
+  OpenArm bimanual torso each arm's `link0` is rotated -90/+90 deg about x against `world`, so a bridge
+  rotates deltas recorded in an arm-base frame first. `header.frame_id` is not read. Details in `ActionChunk.msg`.
 
 ### Multi-PC Setup
 

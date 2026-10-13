@@ -14,6 +14,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -136,9 +139,9 @@ TEST(ActionBuffer, AWaypointDueExactlyNowIsAdmittedNotDropped) {
 }
 
 TEST(ActionBuffer, SpliceReplacesTheOverlapAndKeepsTheEarlierPrefix) {
-  // Linear, so the value at 1.05 is exactly the old ramp's. A cubic bends that
-  // segment toward the jump into the new chunk; CubicStaysBetweenItsWaypoints-
-  // AcrossAHardSplice covers that case.
+  // Linear, so the value between old waypoints is exactly the old ramp's. A
+  // cubic bends the segment before the jump toward the new chunk;
+  // PchipStaysBetweenItsWaypointsAcrossAHardSplice covers that case.
   ActionBuffer::Params params;
   params.interpolation = Interpolation::kLinear;
   ActionBuffer buffer(params);
@@ -150,9 +153,11 @@ TEST(ActionBuffer, SpliceReplacesTheOverlapAndKeepsTheEarlierPrefix) {
   buffer.splice(joint_ramp(1.15, 0.1, 3, 100.0, 0.0), ActionSpace::kJoint, 1.15, 0.1);
 
   Reference reference;
-  // Before the new chunk starts, the old waypoints still drive.
-  ASSERT_TRUE(buffer.sample(1.05, reference));
-  EXPECT_NEAR(reference.joints(0), 0.5, 1e-9);
+  // Before the new chunk starts, the old waypoints still drive -- as far back as
+  // the origin of the segment the splice instant is in (1.1). What lies before
+  // that is pruned (AC6), so 1.05 is no longer on the old ramp.
+  ASSERT_TRUE(buffer.sample(1.1, reference));
+  EXPECT_NEAR(reference.joints(0), 1.0, 1e-9);
   // After it, only the new ones.
   ASSERT_TRUE(buffer.sample(1.2, reference));
   EXPECT_NEAR(reference.joints(0), 100.0, 1e-9);
@@ -493,20 +498,24 @@ TEST(ActionBuffer, PchipNeverOvershootsAWaypoint) {
 }
 
 TEST(ActionBuffer, PchipStaysBetweenItsWaypointsAcrossAHardSplice) {
-  // The SpliceReplaces case, cubic: the segment before a 99-unit jump into the
+  // The SpliceReplaces case, cubic: the segment before a 98-unit jump into the
   // new chunk bends toward it but must stay inside its own two waypoints and
   // keep rising, rather than dipping first the way an unlimited tangent would.
+  // The new chunk is planned from 1.25 and spliced at 1.12, so that segment
+  // (1.1 -> 1.2) is the one playing: splice() keeps nothing older than the
+  // origin of the segment `now` is in (AC6), so it has to be checked from `now`.
   ActionBuffer::Params params;
   params.interpolation = Interpolation::kPchip;
   ActionBuffer buffer(params);
   buffer.splice(joint_ramp(1.0, 0.1, 5, 0.0, 1.0), ActionSpace::kJoint, 0.9, 0.1);
-  buffer.splice(joint_ramp(1.15, 0.1, 3, 100.0, 0.0), ActionSpace::kJoint, 1.15, 0.1);
+  buffer.splice(joint_ramp(1.25, 0.1, 3, 100.0, 0.0), ActionSpace::kJoint, 1.12, 0.1);
 
-  double previous = sampled_joint(buffer, 1.0);
-  for (double t = 1.001; t <= 1.1; t += 0.001) {
+  double previous = sampled_joint(buffer, 1.12);
+  for (double t = 1.121; t <= 1.2; t += 0.001) {
     const double value = sampled_joint(buffer, t);
     EXPECT_GE(value, previous - 1e-12) << "t=" << t;
-    EXPECT_LE(value, 1.0 + 1e-12) << "t=" << t;
+    EXPECT_GE(value, 1.0 - 1e-12) << "t=" << t;
+    EXPECT_LE(value, 2.0 + 1e-12) << "t=" << t;
     previous = value;
   }
 }
@@ -731,12 +740,468 @@ TEST(ActionBuffer, AChunkTooShortForTheSplineFallsBackToPchip) {
 TEST(ActionBuffer, ALaterChunkDoesNotReshapeTheOneBeforeIt) {
   // Slopes are a property of the chunk a waypoint came in with. The segment
   // still playing from the old chunk must keep its shape when a new chunk
-  // splices in behind it.
+  // splices in behind it. The new chunk is planned from 1.25 and spliced at
+  // 1.12, so the old segment 1.1 -> 1.2 is the one playing: splice() keeps
+  // nothing older than the origin of the segment `now` is in (AC6), so the
+  // segment to check has to be at or after `now`.
   ActionBuffer buffer;
   buffer.splice(joint_series(1.0, 0.1, {0.0, 0.2, 0.3, 0.5, 0.8, 0.9}), ActionSpace::kJoint,
     0.9, 0.1);
-  const double before = sampled_joint(buffer, 1.05);
-  buffer.splice(joint_ramp(1.15, 0.1, 6, 50.0, 1.0), ActionSpace::kJoint, 1.15, 0.1);
-  EXPECT_NEAR(sampled_joint(buffer, 1.05), before, 1e-12);
+  const double at_splice = sampled_joint(buffer, 1.12);
+  const double before = sampled_joint(buffer, 1.15);
+  buffer.splice(joint_ramp(1.25, 0.1, 6, 50.0, 1.0), ActionSpace::kJoint, 1.12, 0.1);
+  EXPECT_NEAR(sampled_joint(buffer, 1.12), at_splice, 1e-12);
+  EXPECT_NEAR(sampled_joint(buffer, 1.15), before, 1e-12);
+}
+
+// ================================================ AC5: splice inside a blend ==
+//
+// A splice that lands inside the blend window of an earlier one must leave the
+// reference where it was at that instant: position to 1e-9, and for the two
+// cubics the rate to 1e-6. Before, the outgoing timeline was overwritten with
+// the pre-blend one, so the blend restarted and the reference stepped by
+// (1 - w(T/tau)) of the change -- for chunks every T = 1/15 s, 0.2099 of it at
+// tau = 0.1 s and 0.7901 at tau = 0.2 s (review 20261007-212552, S5).
+
+constexpr Interpolation kEveryInterpolation[] = {
+  Interpolation::kLinear, Interpolation::kPchip, Interpolation::kSpline};
+
+std::string interpolation_name(const Interpolation mode)
+{
+  switch (mode) {
+    case Interpolation::kLinear:
+      return "linear";
+    case Interpolation::kPchip:
+      return "pchip";
+    case Interpolation::kSpline:
+      return "spline";
+  }
+  return "unknown";
+}
+
+double rotation_distance(const Eigen::Matrix3d & a, const Eigen::Matrix3d & b)
+{
+  return pinocchio::log3(Eigen::Matrix3d(a.transpose() * b)).norm();
+}
+
+std::vector<Waypoint> task_constant(
+  const double t0, const double dt, const int steps, const SE3 & pose)
+{
+  std::vector<Waypoint> out;
+  for (int step = 0; step < steps; ++step) {
+    Waypoint waypoint;
+    waypoint.t = t0 + dt * step;
+    waypoint.pose = pose;
+    out.push_back(waypoint);
+  }
+  return out;
+}
+
+// Splices `incoming` at `t_s` and returns how far that moved sample(t_s), or an
+// empty string if it did not: position to 1e-9 and, for the two cubics, rate to
+// 1e-6. Nothing to compare against when the buffer was empty.
+std::string splice_and_measure_step(
+  ActionBuffer & buffer, const std::vector<Waypoint> & incoming, const ActionSpace space,
+  const double t_s, const double control_dt)
+{
+  Reference before;
+  const bool had_reference = buffer.sample(t_s, before);
+  buffer.splice(incoming, space, t_s, control_dt);
+  Reference after;
+  if (!buffer.sample(t_s, after)) {
+    return "nothing to sample after the splice";
+  }
+  if (!had_reference) {
+    return "";
+  }
+  const bool cubic = buffer.params().interpolation != Interpolation::kLinear;
+  double position = 0.0;
+  double rotation = 0.0;
+  double rate = 0.0;
+  if (space == ActionSpace::kJoint) {
+    position = (after.joints - before.joints).cwiseAbs().maxCoeff();
+    rate = (after.joint_velocity - before.joint_velocity).cwiseAbs().maxCoeff();
+  } else {
+    position = (after.pose.translation() - before.pose.translation()).norm();
+    rotation = rotation_distance(before.pose.rotation(), after.pose.rotation());
+    rate = (after.twist - before.twist).cwiseAbs().maxCoeff();
+  }
+  if (position <= 1e-9 && rotation <= 1e-9 && (!cubic || rate <= 1e-6)) {
+    return "";
+  }
+  std::ostringstream out;
+  out << std::setprecision(4) << "position step " << position << ", rotation step " << rotation
+      << ", rate step " << rate << (cubic ? "" : " (rate not checked: linear)");
+  return out.str();
+}
+
+// What a host does: chunk k is spliced at exactly t_start + k * period (between
+// two control ticks) and the reference is sampled every millisecond from t_start
+// to t_end. A splice that moves sample(t_s) fails the test once, with the first
+// such splice and how many there were; the 1 kHz samples come back in order.
+std::vector<Reference> play_at_1khz(
+  ActionBuffer & buffer, const std::vector<std::vector<Waypoint>> & chunks,
+  const ActionSpace space, const double t_start, const double period, const double control_dt,
+  const double t_end)
+{
+  std::vector<Reference> samples;
+  std::size_t next = 0;
+  std::size_t stepped = 0;
+  std::string first_step;
+  for (int tick = 0;; ++tick) {
+    const double now = t_start + 1e-3 * tick;
+    if (now > t_end) {
+      break;
+    }
+    while (next < chunks.size() && t_start + period * static_cast<double>(next) <= now) {
+      const double t_s = t_start + period * static_cast<double>(next);
+      const std::string step =
+        splice_and_measure_step(buffer, chunks[next], space, t_s, control_dt);
+      if (!step.empty() && stepped++ == 0) {
+        first_step =
+          "splice " + std::to_string(next) + " at t=" + std::to_string(t_s) + ": " + step;
+      }
+      ++next;
+    }
+    Reference reference;
+    EXPECT_TRUE(buffer.sample(now, reference)) << "t=" << now;
+    samples.push_back(reference);
+  }
+  EXPECT_EQ(next, chunks.size());
+  EXPECT_EQ(stepped, 0u) << "of " << chunks.size() << " splices; the first was " << first_step;
+  return samples;
+}
+
+double largest_joint_step(const std::vector<Reference> & samples)
+{
+  double largest = 0.0;
+  for (std::size_t i = 1; i < samples.size(); ++i) {
+    largest = std::max(largest, std::abs(samples[i].joints(0) - samples[i - 1].joints(0)));
+  }
+  return largest;
+}
+
+TEST(ActionBuffer, AC5_ASpliceInsideABlendWindowDoesNotStepTheJointReference) {
+  // The review's reproduction: A(0) -> B(1) -> C(1), one splice every T = 1/15 s,
+  // each chunk a single value on a 1/30 s grid stamped at its splice instant. C
+  // lands inside B's blend window for both tau (T < tau).
+  constexpr double kPeriod = 1.0 / 15.0;
+  constexpr double kGrid = 1.0 / 30.0;
+  constexpr double kStart = 1.0;
+  const std::vector<double> values {0.0, 1.0, 1.0};
+  for (const double tau : {0.1, 0.2}) {
+    for (const Interpolation mode : kEveryInterpolation) {
+      SCOPED_TRACE("tau=" + std::to_string(tau) + " " + interpolation_name(mode));
+      ActionBuffer::Params params;
+      params.blend_duration = tau;
+      params.interpolation = mode;
+      ActionBuffer buffer(params);
+      std::vector<std::vector<Waypoint>> chunks;
+      for (std::size_t k = 0; k < values.size(); ++k) {
+        chunks.push_back(
+          joint_ramp(kStart + kPeriod * static_cast<double>(k), kGrid, 30, values[k], 0.0));
+      }
+      const double end = kStart + 2.0 * kPeriod + tau + 0.1;
+      const auto samples =
+        play_at_1khz(buffer, chunks, ActionSpace::kJoint, kStart, kPeriod, kGrid, end);
+      // One min-jerk blend of the unit change peaks at 1.875 / tau per second:
+      // 0.019 per millisecond at tau = 0.1, 0.009 at 0.2. Two overlapping ones stay
+      // well under 0.05 -- against restart steps of 0.21 and 0.79.
+      EXPECT_LT(largest_joint_step(samples), 0.05);
+      // And it still arrives where C asks.
+      EXPECT_NEAR(samples.back().joints(0), 1.0, 1e-9);
+    }
+  }
+}
+
+TEST(ActionBuffer, AC5_ASpliceInsideABlendWindowDoesNotStepThePose) {
+  // The same A -> B -> C(= B) in task space, with B moved and turned away from A.
+  constexpr double kPeriod = 1.0 / 15.0;
+  constexpr double kGrid = 1.0 / 30.0;
+  constexpr double kStart = 1.0;
+  constexpr double kAngle = 0.6;
+  const SE3 a(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.3, 0.0, 0.4));
+  const SE3 b(
+    pinocchio::exp3(Eigen::Vector3d(1.0, 2.0, -1.0).normalized() * kAngle),
+    Eigen::Vector3d(0.4, -0.05, 0.42));
+  const double distance = (b.translation() - a.translation()).norm();
+  for (const double tau : {0.1, 0.2}) {
+    for (const Interpolation mode : kEveryInterpolation) {
+      SCOPED_TRACE("tau=" + std::to_string(tau) + " " + interpolation_name(mode));
+      ActionBuffer::Params params;
+      params.blend_duration = tau;
+      params.interpolation = mode;
+      ActionBuffer buffer(params);
+      const std::vector<std::vector<Waypoint>> chunks {
+        task_constant(kStart, kGrid, 30, a),
+        task_constant(kStart + kPeriod, kGrid, 30, b),
+        task_constant(kStart + 2.0 * kPeriod, kGrid, 30, b)};
+      const double end = kStart + 2.0 * kPeriod + tau + 0.1;
+      const auto samples =
+        play_at_1khz(buffer, chunks, ActionSpace::kTask, kStart, kPeriod, kGrid, end);
+      double largest_translation = 0.0;
+      double largest_rotation = 0.0;
+      for (std::size_t i = 1; i < samples.size(); ++i) {
+        largest_translation = std::max(
+          largest_translation,
+          (samples[i].pose.translation() - samples[i - 1].pose.translation()).norm());
+        largest_rotation = std::max(
+          largest_rotation,
+          rotation_distance(samples[i].pose.rotation(), samples[i - 1].pose.rotation()));
+      }
+      EXPECT_LT(largest_translation, 0.05 * distance);
+      EXPECT_LT(largest_rotation, 0.05 * kAngle);
+      EXPECT_NEAR((samples.back().pose.translation() - b.translation()).norm(), 0.0, 1e-9);
+      EXPECT_NEAR(rotation_distance(samples.back().pose.rotation(), b.rotation()), 0.0, 1e-9);
+    }
+  }
+}
+
+TEST(ActionBuffer, AC5_EverySpliceOfAStreamIsSeamlessWhileBlendsOverlap) {
+  // A stream of chunks every 1/15 s that disagree with one another about the same
+  // instants, each observed 40 ms before it is spliced. At tau = 0.2 s three
+  // blends are in flight at every splice: the nested case A -> B -> C does not
+  // reach.
+  constexpr double kPeriod = 1.0 / 15.0;
+  constexpr double kGrid = 1.0 / 30.0;
+  constexpr double kLatency = 0.04;
+  constexpr double kStart = 1.0;
+  constexpr int kChunks = 30;
+  const auto path = [](const double t) {return 0.4 * std::sin(M_PI * t);};
+  const auto disagreement = [](const int k) {return 0.05 * std::sin(2.3 * k);};
+  const Eigen::Vector3d axis = Eigen::Vector3d(0.2, -1.0, 0.5).normalized();
+
+  std::vector<std::vector<Waypoint>> joint_chunks;
+  std::vector<std::vector<Waypoint>> task_chunks;
+  for (int k = 0; k < kChunks; ++k) {
+    std::vector<Waypoint> joint_chunk;
+    std::vector<Waypoint> task_chunk;
+    for (int j = 0; j < 30; ++j) {
+      Waypoint waypoint;
+      waypoint.t = kStart + kPeriod * k - kLatency + kGrid * j;
+      const double value = path(waypoint.t) + disagreement(k);
+      waypoint.joints.setConstant(value);
+      joint_chunk.push_back(waypoint);
+      waypoint.joints.setZero();
+      waypoint.pose = SE3(
+        pinocchio::exp3(axis * value), Eigen::Vector3d(0.3 + 0.2 * value, -0.1 * value, 0.4));
+      task_chunk.push_back(waypoint);
+    }
+    joint_chunks.push_back(joint_chunk);
+    task_chunks.push_back(task_chunk);
+  }
+
+  const double end = kStart + kPeriod * (kChunks - 1) + 0.3;
+  for (const double tau : {0.1, 0.2}) {
+    for (const Interpolation mode : kEveryInterpolation) {
+      SCOPED_TRACE("tau=" + std::to_string(tau) + " " + interpolation_name(mode));
+      ActionBuffer::Params params;
+      params.blend_duration = tau;
+      params.interpolation = mode;
+
+      ActionBuffer joints(params);
+      const auto joint_samples =
+        play_at_1khz(joints, joint_chunks, ActionSpace::kJoint, kStart, kPeriod, kGrid, end);
+      // The path moves at most 0.0013 per millisecond and successive chunks
+      // disagree by up to 0.09, which a hard splice steps by. Blending each
+      // splice from exactly what was being emitted peaks at 0.0029 per
+      // millisecond (tau 0.1) and 0.0020 (tau 0.2); the restarting blend reached
+      // 0.021. The bound leaves room for an outgoing timeline that only
+      // approximates the emitted blend between its waypoints.
+      EXPECT_LT(largest_joint_step(joint_samples), 0.015);
+      for (const Reference & sample : joint_samples) {
+        ASSERT_TRUE(sample.joints.allFinite());
+        ASSERT_TRUE(sample.joint_velocity.allFinite());
+      }
+
+      ActionBuffer task(params);
+      const auto task_samples =
+        play_at_1khz(task, task_chunks, ActionSpace::kTask, kStart, kPeriod, kGrid, end);
+      for (const Reference & sample : task_samples) {
+        ASSERT_TRUE(sample.pose.toHomogeneousMatrix().allFinite());
+        ASSERT_TRUE(sample.twist.allFinite());
+      }
+    }
+  }
+}
+
+// ========================================= AC6: splice keeps no stale prefix ==
+//
+// splice() keeps, of the waypoints already buffered, those still due (t >= now)
+// and the last one before now -- the origin of the segment `now` is in -- and
+// nothing older; `previous` likewise. Before, every waypoint ahead of the new
+// chunk was kept, so the timeline grew by the past part of every chunk (about
+// 36k waypoints after 10 minutes at 15 Hz) and each splice copied all of it.
+
+std::size_t count_before(const std::vector<Waypoint> & waypoints, const double now)
+{
+  return static_cast<std::size_t>(std::count_if(
+           waypoints.begin(), waypoints.end(),
+           [now](const Waypoint & waypoint) {return waypoint.t < now;}));
+}
+
+TEST(ActionBuffer, AC6_ASpliceKeepsOnlyTheLastPastWaypointAsTheSegmentOrigin) {
+  ActionBuffer::Params params;
+  params.interpolation = Interpolation::kLinear;
+  ActionBuffer buffer(params);
+  // 1.0 .. 1.9, joint 0 = 0 .. 9.
+  buffer.splice(joint_ramp(1.0, 0.1, 10, 0.0, 1.0), ActionSpace::kJoint, 1.0, 0.1);
+  // At 1.55, a chunk planned from 1.58: 100 .. 104 on 1.58 .. 1.98.
+  buffer.splice(joint_ramp(1.58, 0.1, 5, 100.0, 1.0), ActionSpace::kJoint, 1.55, 0.1);
+
+  // 1.0 .. 1.4 are gone; 1.5 stays, as the origin of the segment 1.55 is in.
+  const auto & waypoints = buffer.timeline().waypoints;
+  EXPECT_EQ(buffer.size(), 6u);
+  EXPECT_NEAR(waypoints.front().t, 1.5, 1e-12);
+  EXPECT_NEAR(waypoints.front().joints(0), 5.0, 1e-12);
+  EXPECT_EQ(count_before(waypoints, 1.55), 1u);
+
+  // From now on the reference is what it was with the old prefix in place: the
+  // 1.5 -> 1.58 segment, then the new chunk.
+  EXPECT_NEAR(sampled_joint(buffer, 1.55), 5.0 + 95.0 * 0.05 / 0.08, 1e-9);
+  EXPECT_NEAR(sampled_joint(buffer, 1.56), 5.0 + 95.0 * 0.06 / 0.08, 1e-9);
+  EXPECT_NEAR(sampled_joint(buffer, 1.58), 100.0, 1e-9);
+  EXPECT_NEAR(sampled_joint(buffer, 1.63), 100.5, 1e-9);
+  EXPECT_NEAR(sampled_joint(buffer, 1.98), 104.0, 1e-9);
+}
+
+TEST(ActionBuffer, AC6_TheOutgoingTimelineIsPrunedTheSameWay) {
+  ActionBuffer::Params params;
+  params.blend_duration = 0.2;
+  ActionBuffer buffer(params);
+  buffer.splice(joint_ramp(1.0, 0.1, 10, 0.0, 1.0), ActionSpace::kJoint, 1.0, 0.1);
+
+  // Outside any blend window: `previous` is the first chunk as of 1.55.
+  buffer.splice(joint_ramp(1.55, 0.1, 10, 50.0, 0.0), ActionSpace::kJoint, 1.55, 0.1);
+  EXPECT_LE(count_before(buffer.timeline().previous, 1.55), 1u);
+  EXPECT_LE(count_before(buffer.timeline().waypoints, 1.55), 1u);
+  EXPECT_LE(buffer.timeline().previous.size(), 12u);
+  EXPECT_LE(buffer.size(), 12u);
+
+  // Inside that blend window.
+  buffer.splice(joint_ramp(1.62, 0.1, 10, 20.0, 0.0), ActionSpace::kJoint, 1.62, 0.1);
+  EXPECT_LE(count_before(buffer.timeline().previous, 1.62), 1u);
+  EXPECT_LE(count_before(buffer.timeline().waypoints, 1.62), 1u);
+  EXPECT_LE(buffer.timeline().previous.size(), 12u);
+  EXPECT_LE(buffer.size(), 12u);
+}
+
+TEST(ActionBuffer, AC6_TenMinutesAt15HzKeepsTheTimelineAChunkLong) {
+  // 15 Hz x 600 s = 9000 splices of 16-waypoint chunks. Chunk grid, latency and
+  // blend vary per case; a jitter of up to 8 ms on the observation time keeps
+  // successive chunk grids from ever coinciding.
+  constexpr std::size_t kChunkSize = 16;
+  constexpr double kPeriod = 1.0 / 15.0;
+  constexpr int kSplices = 9000;
+  struct Case
+  {
+    double grid;
+    double latency;
+    double blend;
+    Interpolation mode;
+  };
+  const Case cases[] = {
+    {1.0 / 15.0, 0.09, 0.1, Interpolation::kSpline},
+    {1.0 / 50.0, 0.0, 0.2, Interpolation::kPchip},
+    {1.0 / 15.0, 0.09, 0.0, Interpolation::kLinear},
+  };
+  for (const Case & c : cases) {
+    SCOPED_TRACE(
+      "grid=" + std::to_string(c.grid) + " latency=" + std::to_string(c.latency) +
+      " blend=" + std::to_string(c.blend) + " " + interpolation_name(c.mode));
+    ActionBuffer::Params params;
+    params.blend_duration = c.blend;
+    params.interpolation = c.mode;
+    ActionBuffer buffer(params);
+
+    std::vector<Waypoint> last_chunk;
+    double now = 0.0;
+    for (int i = 0; i < kSplices; ++i) {
+      now = 1.0 + kPeriod * i;
+      const double t_obs = now - c.latency - 0.004 * (1.0 + std::sin(1.3 * i));
+      std::vector<Waypoint> chunk;
+      for (std::size_t j = 0; j < kChunkSize; ++j) {
+        Waypoint waypoint;
+        waypoint.t = t_obs + c.grid * static_cast<double>(j);
+        waypoint.joints.setConstant(0.3 * std::sin(0.7 * waypoint.t) + 0.01 * std::sin(1.9 * i));
+        chunk.push_back(waypoint);
+      }
+      buffer.splice(chunk, ActionSpace::kJoint, now, c.grid);
+      const Timeline & timeline = buffer.timeline();
+      ASSERT_LE(buffer.size(), kChunkSize + 2) << "splice " << i;
+      ASSERT_LE(timeline.previous.size(), kChunkSize + 2) << "splice " << i;
+      ASSERT_LE(count_before(timeline.waypoints, now), 1u) << "splice " << i;
+      ASSERT_LE(count_before(timeline.previous, now), 1u) << "splice " << i;
+      last_chunk = chunk;
+    }
+
+    // After all that, the reference still passes exactly through the last
+    // chunk's waypoints once its blend is over.
+    int checked = 0;
+    for (const Waypoint & waypoint : last_chunk) {
+      if (waypoint.t < now + c.blend) {
+        continue;
+      }
+      EXPECT_NEAR(sampled_joint(buffer, waypoint.t), waypoint.joints(0), 1e-12)
+        << "t=" << waypoint.t;
+      ++checked;
+    }
+    EXPECT_GT(checked, 2);
+  }
+}
+
+TEST(ActionBuffer, AC6_PruningDoesNotChangeTheReferenceFromNowOn) {
+  // Two buffers get the same last two chunks; one has also had 198 before them,
+  // which pruning takes away. From the last splice on they must sample the same.
+  // Each chunk is planned to start 5 ms after its splice, so the segment `now`
+  // falls in starts at a waypoint of the chunk before: the retained origin.
+  constexpr int kChunkSize = 16;
+  constexpr double kGrid = 0.03;
+  constexpr double kPeriod = 1.0 / 15.0;
+  constexpr double kLead = 0.005;
+  constexpr int kSplices = 200;
+  const auto splice_time = [&](const int k) {return 1.0 + kPeriod * k;};
+  const auto chunk_at = [&](const int k) {
+      std::vector<Waypoint> chunk;
+      for (int j = 0; j < kChunkSize; ++j) {
+        Waypoint waypoint;
+        waypoint.t = splice_time(k) + kLead + kGrid * j;
+        waypoint.joints.setConstant(0.3 * std::sin(1.1 * waypoint.t) + 0.02 * std::sin(2.3 * k));
+        chunk.push_back(waypoint);
+      }
+      return chunk;
+    };
+
+  // 0.05 s < 1/15 s, so no blend is still running at a splice and the outgoing
+  // timeline at the last splice is the same in both buffers.
+  for (const double blend : {0.0, 0.05}) {
+    for (const Interpolation mode : kEveryInterpolation) {
+      SCOPED_TRACE("blend=" + std::to_string(blend) + " " + interpolation_name(mode));
+      ActionBuffer::Params params;
+      params.blend_duration = blend;
+      params.interpolation = mode;
+      ActionBuffer long_history(params);
+      ActionBuffer short_history(params);
+      for (int k = 0; k < kSplices; ++k) {
+        long_history.splice(chunk_at(k), ActionSpace::kJoint, splice_time(k), kGrid);
+        if (k >= kSplices - 2) {
+          short_history.splice(chunk_at(k), ActionSpace::kJoint, splice_time(k), kGrid);
+        }
+      }
+      const double now = splice_time(kSplices - 1);
+      EXPECT_EQ(long_history.size(), short_history.size());
+      EXPECT_EQ(count_before(long_history.timeline().waypoints, now), 1u);
+
+      for (int tick = 0; tick <= 500; ++tick) {
+        const double t = now + 1e-3 * tick;
+        Reference pruned;
+        Reference reference;
+        ASSERT_TRUE(long_history.sample(t, pruned));
+        ASSERT_TRUE(short_history.sample(t, reference));
+        EXPECT_NEAR(pruned.joints(0), reference.joints(0), 1e-12) << "t=" << t;
+        EXPECT_NEAR(pruned.joint_velocity(0), reference.joint_velocity(0), 1e-9) << "t=" << t;
+      }
+    }
+  }
 }
 }  // namespace

@@ -16,7 +16,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Geometry>
@@ -45,6 +48,14 @@ using VLAAction = cho_interfaces::action::VisionLanguageAction;
 using VLAGoalHandle = rclcpp_action::ServerGoalHandle<VLAAction>;
 using GripperAction = cho_interfaces::action::Gripper;
 using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
+
+// Damping of every least-squares solve on the VLA path, VLAController's
+// differential IK and this server's joint-space seed at a change of action
+// space (cho_controller_base::dls_step adds lambda^2 I to J J^T). At FR3's home
+// pose it leaves 11 % (median) and 16 % (worst) of a 5 mm translation error
+// unmapped; near a singularity it caps the gain at 1 / (2 lambda) = 5 rad per
+// metre of error.
+inline constexpr double kVlaDlsLambda = 0.1;
 
 // Franka's adapter over cho_vla_core.
 //
@@ -92,6 +103,16 @@ public:
     cho_vla_core::ActionSpace action_space() const { return active_action_space_; }
     const Vector6d & twist_des() const { return twist_des_; }
 
+    // The EE pose and its LOCAL_WORLD_ALIGNED Jacobian (6x7, the convention of
+    // State::J_arm_world) at the given arm joints. The model is the
+    // controller's; compute() calls this on the RT thread, at most once per
+    // change of action space, so it must not allocate.
+    using ArmKinematics = std::function<void(
+        const Vector7d & joints, pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian)>;
+    // Set by the controller before the first compute(). Effort mode's
+    // joint -> task seed needs it; see commanded_now().
+    void set_arm_kinematics(ArmKinematics kinematics) { arm_kinematics_ = std::move(kinematics); }
+
 protected:
     // `reason` must be a string literal: this runs on the control thread.
     void finish_goal_rt(GoalPhase terminal, State & state, const char * reason = "");
@@ -122,6 +143,20 @@ private:
     // chase gravity sag instead of arresting it.
     void latch_hold(const State & state);
     void apply_hold(State & state);
+    // The limiter's seed when a goal's chunks switch action space into
+    // seed.space: the pose, joints and rates the controller is commanding right
+    // now, in both representations. Not *_des as read: in the representation
+    // that was not running, that is the previous chunks' anchor.
+    //   position, velocity: H_ee_ref and q_arm_ref, i.e. FK(q_ref_) and q_ref_.
+    //   effort, joint -> task: q_arm_des and FK(q_arm_des), from the
+    //     controller's model (set_arm_kinematics()).
+    //   effort, task -> joint: H_ee_des and the measurement plus one damped
+    //     least-squares step toward it, the joints that pose asks for.
+    //   rates: the reference rate of the space being left (v_arm_des or
+    //     twist_des_, both zero while holding), carried into the other through
+    //     the Jacobian or its damped least-squares inverse. The Jacobian is the
+    //     one at q_arm_des for effort joint -> task, J_arm_world otherwise.
+    void commanded_now(const State & state, cho_vla_core::Reference & seed) const;
 
     // ---- core objects ------------------------------------------------------
     cho_vla_core::ActionBuffer buffer_;               // executor
@@ -203,12 +238,16 @@ private:
     cho_vla_core::ActionSpace active_action_space_ {cho_vla_core::ActionSpace::kTask};
     std::atomic<int> rt_action_space_ {static_cast<int>(cho_vla_core::ActionSpace::kTask)};
     Vector6d twist_des_ {Vector6d::Zero()};
+    // Configure-time; called on the RT thread.
+    ArmKinematics arm_kinematics_;
 
     // RT-only hold state.
     bool hold_latched_ {false};
     pinocchio::SE3 hold_pose_ {pinocchio::SE3::Identity()};
     Vector7d hold_joints_ {Vector7d::Zero()};
     bool limiter_seeded_ {false};
+    // RT-only: the previous compute() call's time; see the space-switch seed.
+    double previous_compute_time_ {std::numeric_limits<double>::quiet_NaN()};
 };
 
 } // namespace franka

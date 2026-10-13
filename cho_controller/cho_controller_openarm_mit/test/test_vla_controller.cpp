@@ -21,22 +21,43 @@
 // hold with a VLA reference in it, does the startup ramp still gate the action
 // server, does a NaN chunk get refused before it reaches a command interface,
 // does a quiet stream hold instead of dropping to SAFE.
+//
+// Also the host-side halves of the 2026-10-08 fixes (tests named AC<n>_...):
+// joint chunks refused under the legacy law (AC2), ActionChunk.relative_frame
+// parsed and composed (AC3), max_task_ang_acc wired to the limiter (AC5), and
+// the limiter re-seeded when a goal switches action space (AC8), that re-seed
+// starting from the COMMANDED joints and rates rather than the measurement or
+// rest (AC11), the legacy-law refusal reported in telemetry under its own
+// reason (AC13), and that re-seed kept inside the joint window and stamped
+// with the previous cycle's time (AC18). Expected values come from
+// hand-worked kinematics of the test URDF (tcp_pose(), tcp_twist()), not from
+// the controller's own model.
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <limits>
+#include <mutex>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <cho_interfaces/action/vision_language_action.hpp>
 #include <cho_interfaces/msg/action_chunk.hpp>
+#include <cho_interfaces/msg/vla_telemetry.hpp>
 #include <controller_manager/controller_manager.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <gtest/gtest.h>
 #include <hardware_interface/resource_manager.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rcutils/logging.h>
 #include <std_srvs/srv/trigger.hpp>
 
 #include "cho_controller_openarm_mit/vla_controller.hpp"
@@ -56,6 +77,17 @@ struct VlaControllerTestAccess
   static double position_command(const VlaController & controller, const std::size_t joint)
   {
     return controller.command_interfaces_[5 * joint].get_value();
+  }
+  // The MIT tuple's dq_des for `joint`.
+  static double velocity_command(const VlaController & controller, const std::size_t joint)
+  {
+    return controller.command_interfaces_[5 * joint + 1].get_value();
+  }
+  // Whether the 35 joint commands and 14 joint states are loaned (false once
+  // deactivated, when the vectors are released).
+  static bool loaned(const VlaController & controller)
+  {
+    return controller.command_interfaces_.size() >= 35 && controller.state_interfaces_.size() >= 14;
   }
   static double stiffness(const VlaController & controller, const std::size_t joint)
   {
@@ -85,6 +117,12 @@ struct VlaControllerTestAccess
   {
     return controller.reference_offset_limit_[joint];
   }
+  // Inherited from TaskSpaceImpedanceController: which law the fixture really
+  // configured, so a legacy-law test cannot silently run the drive-side one.
+  static bool drive_side_impedance(const VlaController & controller)
+  {
+    return controller.drive_side_impedance_;
+  }
 };
 }  // namespace cho_controller_openarm_mit
 
@@ -99,7 +137,12 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr const char * kControllerName = "vla_mit_controller";
 constexpr const char * kNamespace = "/mit_vla_test";
 
-std::string urdf()
+// `initial_position` (rad, every joint) is FakeMitSystem's start posture.
+// `mirror_offset` (rad, every joint) is its mirror_position_offset: the next
+// measured position is the accepted q_des plus this, so measurement and
+// command differ by it while the arm holds. Zero leaves a parameter out, which
+// is the URDF every pre-existing test used.
+std::string urdf(const double initial_position = 0.0, const double mirror_offset = 0.0)
 {
   std::ostringstream x;
   // Seven named revolute joints with non-zero distal mass, so nle is a real
@@ -124,7 +167,14 @@ std::string urdf()
     << "<param name='max_abs_position'>6.4</param><param name='max_abs_velocity'>20</param>"
     << "<param name='max_stiffness'>500</param><param name='max_damping'>50</param>"
     << "<param name='max_abs_effort'>100</param><param name='max_lease_cycles'>100</param>"
-    << "<param name='safe_hold_damping'>2</param></hardware>";
+    << "<param name='safe_hold_damping'>2</param>";
+  if (initial_position != 0.0) {
+    x << "<param name='initial_position'>" << initial_position << "</param>";
+  }
+  if (mirror_offset != 0.0) {
+    x << "<param name='mirror_position_offset'>" << mirror_offset << "</param>";
+  }
+  x << "</hardware>";
   for (int i = 1; i <= 7; ++i) {
     x << "<joint name='openarm_joint" << i << "'>";
     for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort"}) {
@@ -149,14 +199,179 @@ std::string urdf()
   return x.str() + "</gpio></ros2_control></robot>";
 }
 
+// Records what the controller under test logs, so a test can assert that a
+// warning or a rejection reason was actually emitted. Chains to the handler it
+// replaces, so console output is unchanged. Only the controller's own logger is
+// kept (its name carries kControllerName).
+struct LogRecord
+{
+  int severity;
+  std::string text;
+};
+
+class LogCapture
+{
+public:
+  static void install()
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    if (installed()) {return;}
+    previous() = rcutils_logging_get_output_handler();
+    rcutils_logging_set_output_handler(&LogCapture::handle);
+    installed() = true;
+  }
+
+  static void clear()
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    records().clear();
+  }
+
+  // Records at `min_severity` or above whose text contains every needle,
+  // case-insensitively.
+  static std::size_t count(const int min_severity, const std::vector<std::string> & needles)
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    std::size_t n = 0;
+    for (const auto & record : records()) {
+      if (record.severity < min_severity) {continue;}
+      const auto text = lower(record.text);
+      bool all = true;
+      for (const auto & needle : needles) {
+        all = all && text.find(lower(needle)) != std::string::npos;
+      }
+      if (all) {++n;}
+    }
+    return n;
+  }
+
+private:
+  static std::string lower(std::string text)
+  {
+    std::transform(text.begin(), text.end(), text.begin(),
+      [](unsigned char c) {return static_cast<char>(std::tolower(c));});
+    return text;
+  }
+
+  static void handle(
+    const rcutils_log_location_t * location, int severity, const char * name,
+    rcutils_time_point_value_t timestamp, const char * format, va_list * args)
+  {
+    if (name != nullptr && std::strstr(name, kControllerName) != nullptr && format != nullptr) {
+      va_list copy;
+      va_copy(copy, *args);
+      char buffer[4096];
+      std::vsnprintf(buffer, sizeof(buffer), format, copy);
+      va_end(copy);
+      std::lock_guard<std::mutex> lock(mutex());
+      if (records().size() < 50000) {records().push_back({severity, buffer});}
+    }
+    if (previous() != nullptr) {previous()(location, severity, name, timestamp, format, args);}
+  }
+
+  static std::mutex & mutex() {static std::mutex m; return m;}
+  static std::vector<LogRecord> & records() {static std::vector<LogRecord> r; return r;}
+  static rcutils_logging_output_handler_t & previous()
+  {
+    static rcutils_logging_output_handler_t p = nullptr;
+    return p;
+  }
+  static bool & installed() {static bool i = false; return i;}
+};
+
+// Forward kinematics of urdf(), worked by hand rather than through the
+// controller's Pinocchio model. Every joint turns about +y and every origin is
+// +0.2 m along the parent's x, so the chain is planar in x-z: with
+// theta_k = q_1 + ... + q_k and Ry(t)*(d, 0, 0) = (d cos t, 0, -d sin t),
+//   joint 1 sits at (0.2, 0, 0), joint k+1 = joint k + Ry(theta_k)*(0.2, 0, 0),
+//   tcp = joint 7 + Ry(theta_7)*(0.05, 0, 0),  R_tcp = Ry(theta_7).
+// At q = 0 that is (1.45, 0, 0) with the identity rotation.
+using Joints = std::array<double, 7>;
+
+struct PlanarPose
+{
+  double x;
+  double y;
+  double z;
+  double pitch;  // rotation angle about +y; R = Ry(pitch)
+};
+
+PlanarPose tcp_pose(const Joints & q)
+{
+  PlanarPose pose {0.2, 0.0, 0.0, 0.0};
+  for (std::size_t k = 0; k < 7; ++k) {
+    pose.pitch += q[k];
+    const double length = k < 6 ? 0.2 : 0.05;
+    pose.x += length * std::cos(pose.pitch);
+    pose.z -= length * std::sin(pose.pitch);
+  }
+  return pose;
+}
+
+// The TCP twist of urdf() for joint rates dq at q, differentiated by hand from
+// tcp_pose(): segment k (length L_k, angle theta_k) turns with every joint
+// j <= k, so
+//   d(x, z)/dq_j = sum over k >= j of L_k * (-sin theta_k, -cos theta_k),
+//   d(pitch)/dq_j = 1.
+// Linear velocity of the TCP origin and angular velocity about +y, both in
+// the base frame -- the LOCAL_WORLD_ALIGNED twist, with y, roll and yaw zero.
+struct PlanarTwist
+{
+  double vx;
+  double vz;
+  double wy;
+};
+
+PlanarTwist tcp_twist(const Joints & q, const Joints & dq)
+{
+  Joints theta {};
+  double angle = 0.0;
+  for (std::size_t k = 0; k < 7; ++k) {
+    angle += q[k];
+    theta[k] = angle;
+  }
+  PlanarTwist twist {0.0, 0.0, 0.0};
+  for (std::size_t j = 0; j < 7; ++j) {
+    double dx = 0.0;
+    double dz = 0.0;
+    for (std::size_t k = j; k < 7; ++k) {
+      const double length = k < 6 ? 0.2 : 0.05;
+      dx -= length * std::sin(theta[k]);
+      dz -= length * std::cos(theta[k]);
+    }
+    twist.vx += dq[j] * dx;
+    twist.vz += dq[j] * dz;
+    twist.wy += dq[j];
+  }
+  return twist;
+}
+
+// One control cycle as the worker saw it right after write(): the MIT tuple's
+// q_des and dq_des, the measurement the fake mirrored from it, and the
+// controller's accepted-chunk count at that moment.
+struct CycleSample
+{
+  Joints q_cmd;
+  Joints dq_cmd;
+  Joints q_meas;
+  std::uint64_t accepted;
+};
+
 class Fixture : public ::testing::Test
 {
 protected:
   virtual void extra_parameters() {}
+  // Called once right after configure_controller(), whatever it returned.
+  virtual void after_configure() {}
+  // FakeMitSystem's start posture for every joint [rad].
+  virtual double initial_position() const {return 0.0;}
+  // FakeMitSystem's mirror_position_offset [rad]: measured = q_des + this.
+  virtual double mirror_position_offset() const {return 0.0;}
 
   static void SetUpTestSuite()
   {
     if (!rclcpp::ok()) {int argc = 0; rclcpp::init(argc, nullptr);}
+    LogCapture::install();
   }
 
   void set(const char * name, const auto & value)
@@ -169,8 +384,8 @@ protected:
   void SetUp() override
   {
     executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
-    auto resources =
-      std::make_unique<hardware_interface::ResourceManager>(urdf(), true, true);
+    auto resources = std::make_unique<hardware_interface::ResourceManager>(
+      urdf(initial_position(), mirror_position_offset()), true, true);
     manager = std::make_shared<controller_manager::ControllerManager>(
       std::move(resources), executor, "controller_manager", kNamespace);
     controller = std::make_shared<VlaController>();
@@ -183,7 +398,7 @@ protected:
     set("torque_limit", std::vector<double>(7, 3.0));
     set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE);
     set("safety_profile_name", "mujoco_sim_safe");
-    set("robot_description", urdf());
+    set("robot_description", urdf(initial_position(), mirror_position_offset()));
     set("ee_frame", "openarm_hand_tcp");
     // Validated as 6 positive values even though drive-side impedance makes it
     // inert on the commanded torque; see the base class on_configure.
@@ -197,6 +412,7 @@ protected:
     extra_parameters();
 
     configured = manager->configure_controller(kControllerName);
+    after_configure();
     if (configured != controller_interface::return_type::OK) {
       return;  // a configure-refusal test asserts on `configured` itself
     }
@@ -213,6 +429,7 @@ protected:
           manager->read(now, period);
           manager->update(now, period);
           manager->write(now, period);
+          if (recording.load(std::memory_order_acquire)) {record_cycle();}
           update_count.fetch_add(1, std::memory_order_release);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -226,6 +443,8 @@ protected:
 
   void TearDown() override
   {
+    // Before the deactivation below releases the interfaces the recorder reads.
+    recording.store(false, std::memory_order_release);
     if (controller && controller->get_node()->get_current_state().id() ==
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE)
     {
@@ -337,6 +556,235 @@ protected:
     cycle(spin);
   }
 
+  // An absolute joint chunk holding every joint at `q` for `steps` waypoints.
+  cho_interfaces::msg::ActionChunk joint_target_chunk(
+    const Joints & q, const int steps = 8, const double control_dt = 0.05) const
+  {
+    cho_interfaces::msg::ActionChunk message;
+    message.action_space = "joint";
+    message.relative_mode = "absolute";
+    message.gripper_mode = "continuous";
+    message.chunk_size = steps;
+    message.control_dt = control_dt;
+    for (int step = 0; step < steps; ++step) {
+      message.arm_actions.insert(message.arm_actions.end(), q.begin(), q.end());
+    }
+    return message;
+  }
+
+  // A task chunk in axis_angle (rotation vector) form, one row
+  // (x, y, z, rx, ry, rz) per waypoint.
+  cho_interfaces::msg::ActionChunk task_chunk(
+    const std::string & relative_mode, const std::vector<std::array<double, 6>> & rows,
+    const std::string & relative_frame, const double control_dt = 0.05) const
+  {
+    cho_interfaces::msg::ActionChunk message;
+    message.action_space = "task";
+    message.relative_mode = relative_mode;
+    message.relative_frame = relative_frame;
+    message.rotation_type = "axis_angle";
+    message.gripper_mode = "continuous";
+    message.chunk_size = static_cast<std::int32_t>(rows.size());
+    message.control_dt = control_dt;
+    for (const auto & row : rows) {
+      message.arm_actions.insert(message.arm_actions.end(), row.begin(), row.end());
+    }
+    return message;
+  }
+
+  // An absolute task chunk holding the TCP at `pose` (model root frame).
+  cho_interfaces::msg::ActionChunk pose_chunk(
+    const PlanarPose & pose, const std::string & relative_frame = "", const int steps = 8) const
+  {
+    return task_chunk(
+      "absolute",
+      std::vector<std::array<double, 6>>(
+        static_cast<std::size_t>(steps), {pose.x, pose.y, pose.z, 0.0, pose.pitch, 0.0}),
+      relative_frame);
+  }
+
+  // A per_step task chunk: `steps` increments of `dz` along the delta frame's z,
+  // with no rotation.
+  cho_interfaces::msg::ActionChunk per_step_z_chunk(
+    const double dz, const std::string & relative_frame, const int steps = 8) const
+  {
+    return task_chunk(
+      "per_step",
+      std::vector<std::array<double, 6>>(
+        static_cast<std::size_t>(steps), {0.0, 0.0, dz, 0.0, 0.0, 0.0}),
+      relative_frame);
+  }
+
+  Joints measured_q() const
+  {
+    Joints q {};
+    for (std::size_t joint = 0; joint < 7; ++joint) {q[joint] = Access::measured(*controller, joint);}
+    return q;
+  }
+
+  Joints commanded_q() const
+  {
+    Joints q {};
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      q[joint] = Access::position_command(*controller, joint);
+    }
+    return q;
+  }
+
+  // The 35 per-joint MIT fields (position, velocity, stiffness, damping, effort
+  // for each of the 7 joints). The four protocol GPIOs after them change every
+  // cycle by design and are left out.
+  std::vector<double> joint_commands() const
+  {
+    std::vector<double> values(35);
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      values[index] = Access::command(*controller, index);
+    }
+    return values;
+  }
+
+  static double max_abs_difference(const Joints & a, const Joints & b)
+  {
+    double worst = 0.0;
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      worst = std::max(worst, std::abs(a[joint] - b[joint]));
+    }
+    return worst;
+  }
+
+  // Cycle at least `min_cycles`, then until the measured joints have stopped
+  // moving (under `tolerance` across three consecutive 10-cycle windows) or
+  // `max_cycles` have run. True if they stopped.
+  bool settle(const int min_cycles, const int max_cycles = 5000, const double tolerance = 1e-6)
+  {
+    cycle(min_cycles);
+    auto previous = measured_q();
+    int still = 0;
+    for (int done = min_cycles; done < max_cycles; done += 10) {
+      cycle(10);
+      const auto now = measured_q();
+      still = max_abs_difference(now, previous) < tolerance ? still + 1 : 0;
+      previous = now;
+      if (still >= 3) {return true;}
+    }
+    return false;
+  }
+
+  // An absolute joint chunk through `path`, one waypoint per entry.
+  cho_interfaces::msg::ActionChunk joint_path_chunk(
+    const std::vector<Joints> & path, const double control_dt = 0.05) const
+  {
+    cho_interfaces::msg::ActionChunk message;
+    message.action_space = "joint";
+    message.relative_mode = "absolute";
+    message.gripper_mode = "continuous";
+    message.chunk_size = static_cast<std::int32_t>(path.size());
+    message.control_dt = control_dt;
+    for (const auto & q : path) {
+      message.arm_actions.insert(message.arm_actions.end(), q.begin(), q.end());
+    }
+    return message;
+  }
+
+  // An absolute task chunk through `path` (model root frame), one waypoint per entry.
+  cho_interfaces::msg::ActionChunk pose_path_chunk(
+    const std::vector<PlanarPose> & path, const double control_dt = 0.05) const
+  {
+    std::vector<std::array<double, 6>> rows;
+    for (const auto & pose : path) {rows.push_back({pose.x, pose.y, pose.z, 0.0, pose.pitch, 0.0});}
+    return task_chunk("absolute", rows, "", control_dt);
+  }
+
+  // Per-cycle recording, taken on the worker thread right after write(), so
+  // no cycle is missed and no value is read mid-update.
+  void start_recording()
+  {
+    {
+      std::lock_guard<std::mutex> lock(trace_mutex);
+      trace.clear();
+      trace.reserve(20000);
+    }
+    recording.store(true, std::memory_order_release);
+  }
+
+  std::vector<CycleSample> recorded()
+  {
+    std::lock_guard<std::mutex> lock(trace_mutex);
+    return trace;
+  }
+
+  std::vector<CycleSample> stop_recording()
+  {
+    recording.store(false, std::memory_order_release);
+    return recorded();
+  }
+
+  void record_cycle()
+  {
+    if (!Access::loaned(*controller)) {return;}
+    CycleSample sample {};
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      sample.q_cmd[joint] = Access::position_command(*controller, joint);
+      sample.dq_cmd[joint] = Access::velocity_command(*controller, joint);
+      sample.q_meas[joint] = Access::measured(*controller, joint);
+    }
+    sample.accepted = Access::accepted(*controller);
+    std::lock_guard<std::mutex> lock(trace_mutex);
+    if (trace.size() < 50000) {trace.push_back(sample);}
+  }
+
+  // The controller's VlaTelemetry, ~/vla_telemetry (cho_interfaces/CONTRACT.md).
+  static std::string telemetry_topic()
+  {
+    return std::string(kNamespace) + "/" + kControllerName + "/vla_telemetry";
+  }
+
+  // Every topic of type VlaTelemetry that exists, for a failure message.
+  std::string telemetry_topics() const
+  {
+    std::string names;
+    for (const auto & entry : client_node->get_topic_names_and_types()) {
+      for (const auto & type : entry.second) {
+        if (type == "cho_interfaces/msg/VlaTelemetry") {names += entry.first + " ";}
+      }
+    }
+    return names.empty() ? std::string("(none)") : names;
+  }
+
+  // Keeps the newest telemetry message. Best effort, so it matches either
+  // reliability on the publisher's side.
+  void watch_telemetry()
+  {
+    telemetry_sub = client_node->create_subscription<cho_interfaces::msg::VlaTelemetry>(
+      telemetry_topic(), rclcpp::SensorDataQoS(),
+      [this](const cho_interfaces::msg::VlaTelemetry::SharedPtr message) {
+        std::lock_guard<std::mutex> lock(telemetry_mutex);
+        latest_telemetry = *message;
+        telemetry_seen = true;
+      });
+  }
+
+  // Cycles until the newest telemetry message satisfies `done`, at most
+  // `max_cycles`. True if one did.
+  template<typename Predicate>
+  bool wait_telemetry(Predicate done, const int max_cycles = 4000)
+  {
+    for (int i = 0; i < max_cycles; i += 5) {
+      {
+        std::lock_guard<std::mutex> lock(telemetry_mutex);
+        if (telemetry_seen && done(latest_telemetry)) {return true;}
+      }
+      cycle(5);
+    }
+    return false;
+  }
+
+  cho_interfaces::msg::VlaTelemetry telemetry()
+  {
+    std::lock_guard<std::mutex> lock(telemetry_mutex);
+    return latest_telemetry;
+  }
+
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
   std::shared_ptr<controller_manager::ControllerManager> manager;
   std::shared_ptr<VlaController> controller;
@@ -346,6 +794,13 @@ protected:
   std::atomic<bool> running {false};
   std::atomic<unsigned long long> update_count {0};
   std::thread worker;
+  std::atomic<bool> recording {false};
+  std::mutex trace_mutex;
+  std::vector<CycleSample> trace;
+  rclcpp::Subscription<cho_interfaces::msg::VlaTelemetry>::SharedPtr telemetry_sub;
+  std::mutex telemetry_mutex;
+  cho_interfaces::msg::VlaTelemetry latest_telemetry;
+  bool telemetry_seen {false};
 };
 
 // max_reference_offset unset: the base class would derive a default, this
@@ -363,6 +818,141 @@ class NoWatchdogFixture : public Fixture
 {
 protected:
   void extra_parameters() override {set("stream_timeout_sec", 0.0);}
+};
+
+// The historical law (real bimanual config): drive_side_impedance false and
+// zero MIT stiffness, so TRACKING_DAMPED_TORQUE pins q_des to the measurement
+// and nothing closes a joint position loop. Long stream timeouts: before the
+// first ACCEPTED chunk the watchdog runs from the goal start and a rejected
+// chunk does not feed it, so with the default 0.2 s / 0.6 s a loaded machine
+// could abort the goal before a test's later chunk lands.
+class LegacyLawFixture : public Fixture
+{
+protected:
+  void extra_parameters() override
+  {
+    set("drive_side_impedance", false);
+    set("kp", std::vector<double>(7, 0.0));
+    set("stream_timeout_sec", 10.0);
+    set("hold_timeout_sec", 20.0);
+    // Frequent telemetry, so the AC13 checks do not wait on the 10 Hz default.
+    set("telemetry_period_sec", 0.05);
+    LogCapture::clear();
+  }
+  void after_configure() override
+  {
+    configure_task_only_warnings =
+      LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"task", "chunk"});
+  }
+  std::size_t configure_task_only_warnings {0};
+};
+
+// A non-singular start (every joint at 0.3 rad, so the TCP is pitched by
+// 2.1 rad and x is reachable) and a stream watchdog long enough that a single
+// chunk plays out and settles without a hold. Explicit limiter bounds so the
+// timing numbers below do not depend on the controller's defaults.
+class CurledFixture : public Fixture
+{
+protected:
+  double initial_position() const override {return 0.3;}
+  void extra_parameters() override
+  {
+    set("stream_timeout_sec", 10.0);
+    set("hold_timeout_sec", 20.0);
+    set("max_task_ang_vel", 1.5);
+    set("max_joint_ref_acc", std::vector<double>(7, 4.0));
+    LogCapture::clear();
+  }
+
+  static constexpr double kStartPitch = 7 * 0.3;  // theta_7 at the start posture [rad]
+
+  // On a fresh goal, sends one per_step chunk of 8 increments of dz = -0.01 m
+  // along `frame`'s z, lets the arm settle, and returns how far the TCP moved
+  // (hand FK of the measured joints; pitch is the change of rotation about y).
+  PlanarPose per_step_displacement(const std::string & frame)
+  {
+    wait_ready();
+    EXPECT_TRUE(Access::ready(*controller));
+    EXPECT_NE(send_goal(vla_goal()), nullptr);
+    const auto start = tcp_pose(measured_q());
+    EXPECT_NEAR(start.pitch, kStartPitch, 1e-9);
+    chunk_pub->publish(per_step_z_chunk(-0.01, frame));
+    EXPECT_TRUE(settle(300)) << "the arm did not come to rest";
+    const auto end = tcp_pose(measured_q());
+    return {end.x - start.x, end.y - start.y, end.z - start.z, end.pitch - start.pitch};
+  }
+
+  struct PitchSample
+  {
+    double elapsed;  // control time since the chunk was published, upper bound [s]
+    double pitch;    // measured TCP pitch minus the pitch at publication [rad]
+  };
+
+  // Publishes one absolute chunk that keeps the TCP where it is and pitches it
+  // by `step` rad about y, then samples the measured pitch once per cycle.
+  // The worker advances control time by exactly 1 ms per update and the chunk
+  // cannot be spliced before the update that follows the publication, so
+  // (updates since publication) * 1 ms bounds the time the reference has had.
+  // The joints are read BEFORE the update count, so the count can only be late.
+  std::vector<PitchSample> pitch_response(const double step, const int cycles)
+  {
+    auto target = tcp_pose(measured_q());
+    const double start_pitch = target.pitch;
+    target.pitch += step;
+    const auto first = update_count.load(std::memory_order_acquire);
+    chunk_pub->publish(pose_chunk(target));
+    std::vector<PitchSample> samples;
+    samples.reserve(static_cast<std::size_t>(cycles));
+    for (int i = 0; i < cycles; ++i) {
+      cycle();
+      const double pitch = tcp_pose(measured_q()).pitch - start_pitch;
+      const auto updates = update_count.load(std::memory_order_acquire) - first;
+      samples.push_back({1e-3 * static_cast<double>(updates), pitch});
+    }
+    return samples;
+  }
+};
+
+constexpr double kAngularAcceleration = 2.0;  // rad/s^2, AngularAccelerationFixture
+
+class AngularAccelerationFixture : public CurledFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    CurledFixture::extra_parameters();
+    set("max_task_ang_acc", kAngularAcceleration);
+  }
+};
+
+// Sets max_task_ang_acc to `value()` without asserting that the set itself
+// succeeds: a range-checked declaration may refuse it at set time, which is as
+// good a refusal as configure failing. Whether the parameter is declared at all
+// is recorded separately, so an undeclared parameter cannot pass as "refused".
+class AngularAccelerationRefusalFixture : public Fixture
+{
+protected:
+  virtual double value() const = 0;
+  void extra_parameters() override
+  {
+    declared = controller->get_node()->has_parameter("max_task_ang_acc");
+    set_accepted = controller->get_node()->set_parameter(
+      rclcpp::Parameter("max_task_ang_acc", value())).successful;
+  }
+  bool declared {false};
+  bool set_accepted {false};
+};
+
+class NegativeAngularAccelerationFixture : public AngularAccelerationRefusalFixture
+{
+protected:
+  double value() const override {return -1.0;}
+};
+
+class NanAngularAccelerationFixture : public AngularAccelerationRefusalFixture
+{
+protected:
+  double value() const override {return kNaN;}
 };
 }  // namespace
 
@@ -669,4 +1259,1019 @@ TEST_F(Fixture, ProtocolGenerationKeepsAdvancingUnderAVlaReference)
   cycle(200);
   const double after = Access::command(*controller, 37);
   EXPECT_GT(after, before);
+}
+
+// ---------------------------------------------------------------------------
+// AC2 (M3). Under drive_side_impedance: false the law sends kp = 0 with q_des
+// pinned to the measurement, so a joint chunk would have no position loop
+// behind it. The controller takes task chunks only there.
+
+TEST_F(LegacyLawFixture, AC2_ConfigureWarnsOnceThatOnlyTaskChunksAreAccepted)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_FALSE(Access::drive_side_impedance(*controller));
+  // At launch, not first at the first refused chunk.
+  EXPECT_GE(configure_task_only_warnings, 1u)
+    << "no WARN mentioning task chunks while configuring the legacy law";
+  // Once: running the control loop does not repeat it.
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  cycle(300);
+  EXPECT_EQ(
+    LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"task", "chunk"}),
+    configure_task_only_warnings);
+}
+
+TEST_F(LegacyLawFixture, AC2_AJointChunkIsRejectedWithItsReasonAndChangesNoCommand)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_FALSE(Access::drive_side_impedance(*controller));
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  // Long enough for the model feed-forward slew to finish, so the snapshot is
+  // a steady state and any later change is the chunk's doing.
+  cycle(300);
+  const auto commands_before = joint_commands();
+  const auto q_before = measured_q();
+  LogCapture::clear();
+
+  publish(joint_chunk(0.5), 150);
+
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_EQ(Access::rejected(*controller), 1u);
+  // Nothing reached the drive. Measured on the pre-fix controller, an ACCEPTED
+  // joint chunk under this law left all 35 fields unchanged too -- kp = 0 and
+  // q_des = measured, so it was taken and silently did nothing, which is the
+  // defect. The counts and the logged reason above are what tell the two apart.
+  const auto commands_after = joint_commands();
+  const char * fields[] = {"position", "velocity", "stiffness", "damping", "effort"};
+  for (std::size_t joint = 0; joint < 7; ++joint) {
+    for (std::size_t field = 0; field < 5; ++field) {
+      const auto index = 5 * joint + field;
+      EXPECT_NEAR(commands_after[index], commands_before[index], field == 4 ? 1e-6 : 1e-9)
+        << "joint " << joint + 1 << " " << fields[field];
+    }
+  }
+  EXPECT_LE(max_abs_difference(measured_q(), q_before), 1e-9);
+  // Refused WITH the reason, which names the setting that would allow it.
+  EXPECT_GE(
+    LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"drive_side_impedance"}) +
+    LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"drive-side impedance"}), 1u)
+    << "the refusal was not logged with its reason";
+  // AC13: and telemetry names it as what it is -- a well-formed chunk in an
+  // action space this configuration does not take -- not as a bad field.
+  watch_telemetry();
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_rejected >= 1;}))
+    << "no telemetry with the rejection on " << telemetry_topic()
+    << "; VlaTelemetry topics: " << telemetry_topics();
+  EXPECT_EQ(telemetry().last_reject, "action_space_not_accepted");
+
+  // The refusal does not end the goal: a task chunk on it is still taken.
+  publish(pose_chunk(tcp_pose(measured_q())), 60);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 1u);
+}
+
+TEST_F(LegacyLawFixture, AC2_ATaskChunkIsAccepted)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_FALSE(Access::drive_side_impedance(*controller));
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  // Straight arm at q = 0: the TCP is at (1.45, 0, 0), unrotated.
+  const auto here = tcp_pose(measured_q());
+  ASSERT_NEAR(here.x, 1.45, 1e-9);
+  publish(pose_chunk(here), 80);
+
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  for (std::size_t index = 0; index < 38; ++index) {
+    EXPECT_TRUE(std::isfinite(Access::command(*controller, index)));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AC3 (M4), host side: ActionChunk.relative_frame is parsed fail-closed and
+// reaches the composition.
+
+TEST_F(CurledFixture, AC3_AnUnknownRelativeFrameIsRejectedInEverySpace)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  const auto q_before = measured_q();
+
+  // Joint space does not use the field, but an unknown value is still refused.
+  Joints nudged = q_before;
+  nudged[0] += 0.1;
+  auto joint = joint_target_chunk(nudged);
+  joint.relative_frame = "bogus";
+  publish(joint, 60);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_EQ(Access::rejected(*controller), 1u);
+
+  // Absolute task chunk: likewise unused, likewise refused.
+  publish(pose_chunk(tcp_pose(q_before), "bogus"), 60);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_EQ(Access::rejected(*controller), 2u);
+
+  // Relative task chunk: the one place the value would matter.
+  publish(per_step_z_chunk(-0.01, "bogus"), 60);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_EQ(Access::rejected(*controller), 3u);
+
+  EXPECT_LE(max_abs_difference(measured_q(), q_before), 1e-9);
+  for (std::size_t index = 0; index < 38; ++index) {
+    EXPECT_TRUE(std::isfinite(Access::command(*controller, index)));
+  }
+}
+
+// The start posture pitches the TCP by theta_7 = 2.1 rad, so the tool z axis
+// Ry(2.1)*z = (sin 2.1, 0, cos 2.1) = (0.863, 0, -0.505) is far from the base z
+// axis, and 8 per_step increments of (0, 0, -0.01) part ways:
+//   base:  p = p_a + sum(dp)        -> (0, 0, -0.08)
+//   ee:    p = p_a + R_a * sum(dp)  -> (-0.08 sin 2.1, 0, -0.08 cos 2.1)
+//                                    = (-0.0691, 0, +0.0404)
+// Orientation is unchanged either way (every rotation increment is zero).
+TEST_F(CurledFixture, AC3_ABaseFramePerStepChunkMovesAlongTheBaseAxes)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  const auto moved = per_step_displacement("base");
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_NEAR(moved.x, 0.0, 5e-3);
+  EXPECT_NEAR(moved.y, 0.0, 1e-9);
+  EXPECT_NEAR(moved.z, -0.08, 5e-3);
+  EXPECT_NEAR(moved.pitch, 0.0, 5e-3);
+  // A bridge that names its frame is not nagged.
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"relative_frame"}), 0u);
+}
+
+TEST_F(CurledFixture, AC3_AnEmptyRelativeFrameIsComposedInTheEeFrameAndWarned)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  const auto moved = per_step_displacement("");
+  // Accepted as before the field existed: the four external bridges must keep
+  // working after a rebuild.
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_NEAR(moved.x, -0.08 * std::sin(kStartPitch), 5e-3);
+  EXPECT_NEAR(moved.z, -0.08 * std::cos(kStartPitch), 5e-3);
+  EXPECT_NEAR(moved.pitch, 0.0, 5e-3);
+  EXPECT_GE(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"relative_frame"}), 1u)
+    << "a relative task chunk without relative_frame was taken silently";
+}
+
+TEST_F(CurledFixture, AC3_AnExplicitEeRelativeFrameIsComposedInTheEeFrame)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  const auto moved = per_step_displacement("ee");
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_NEAR(moved.x, -0.08 * std::sin(kStartPitch), 5e-3);
+  EXPECT_NEAR(moved.z, -0.08 * std::cos(kStartPitch), 5e-3);
+  EXPECT_NEAR(moved.pitch, 0.0, 5e-3);
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"relative_frame"}), 0u);
+}
+
+TEST_F(CurledFixture, AC3_AbsoluteTaskChunksIgnoreTheRelativeFrame)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  const auto q_before = measured_q();
+  const auto here = tcp_pose(q_before);
+
+  // Each holds the TCP where it is. If a frame were applied to an absolute
+  // target (p_a + p, or R_a * p) the arm would leave by tens of centimetres.
+  for (const char * frame : {"", "base", "ee"}) {
+    publish(pose_chunk(here, frame), 150);
+  }
+  EXPECT_EQ(Access::accepted(*controller), 3u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_LE(max_abs_difference(measured_q(), q_before), 2e-3);
+  // An empty field on an absolute chunk is the normal case for absolute
+  // bridges (pi0 ALOHA, GR00T, LeRobot), not something to warn about.
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"relative_frame"}), 0u);
+}
+
+TEST_F(CurledFixture, AC3_JointChunksIgnoreTheRelativeFrame)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  const auto q_before = measured_q();
+
+  for (const char * frame : {"", "base", "ee"}) {
+    auto message = joint_target_chunk(q_before);
+    message.relative_frame = frame;
+    publish(message, 150);
+  }
+  EXPECT_EQ(Access::accepted(*controller), 3u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_LE(max_abs_difference(measured_q(), q_before), 2e-3);
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, {"relative_frame"}), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// AC8 (C12). When the sampled reference changes action space inside one goal,
+// the limiter is re-seeded from what is being commanded NOW in the new space,
+// never from the anchor the old chunk carried. Both tests move the arm away
+// from where the first chunk was anchored, then switch to a chunk whose target
+// is exactly where the arm already is: a correct re-seed commands no motion at
+// all, while a limiter resuming from the stale anchor puts the reference back
+// there and q_des leaps toward it by up to max_reference_offset (0.15 rad).
+
+TEST_F(CurledFixture, AC8_AJointToTaskSwitchInOneGoalStartsFromTheCommandedPose)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  // ONE joint chunk, so its observation-time anchor stays the start pose while
+  // the arm turns 0.4 rad away from it on joint 1 (TCP pitch 2.1 -> 2.5 rad).
+  const Joints start = measured_q();
+  Joints target = start;
+  target[0] += 0.4;
+  chunk_pub->publish(joint_target_chunk(target));
+  ASSERT_TRUE(settle(300)) << "the joint chunk did not come to rest";
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+  const Joints q_switch = measured_q();
+  ASSERT_LE(max_abs_difference(q_switch, target), 1e-3) << "the joint chunk was not followed";
+  const Joints commanded_switch = commanded_q();
+
+  // Same goal, task space, holding the TCP where the joint reference put it.
+  chunk_pub->publish(pose_chunk(tcp_pose(q_switch)));
+  double command_jump = 0.0;
+  double drift = 0.0;
+  for (int i = 0; i < 400; ++i) {
+    cycle();
+    command_jump = std::max(command_jump, max_abs_difference(commanded_q(), commanded_switch));
+    drift = std::max(drift, max_abs_difference(measured_q(), q_switch));
+  }
+  EXPECT_EQ(Access::accepted(*controller), 2u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_LE(command_jump, 2e-3) << "q_des jumped at the joint -> task switch";
+  EXPECT_LE(drift, 2e-3) << "the arm moved although the task target is where it stood";
+}
+
+TEST_F(CurledFixture, AC8_ATaskToJointSwitchInOneGoalStartsFromTheCommandedJoints)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  // ONE absolute task chunk 8 cm below the start: its anchor joints stay the
+  // start posture while the arm moves away from it.
+  const Joints start = measured_q();
+  auto lowered = tcp_pose(start);
+  lowered.z -= 0.08;
+  chunk_pub->publish(pose_chunk(lowered));
+  ASSERT_TRUE(settle(300)) << "the task chunk did not come to rest";
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+  const Joints q_switch = measured_q();
+  ASSERT_NEAR(tcp_pose(q_switch).z, lowered.z, 5e-3) << "the task chunk was not followed";
+  ASSERT_GE(max_abs_difference(q_switch, start), 0.02);
+  const Joints commanded_switch = commanded_q();
+
+  // Same goal, joint space, holding the joints where the task reference put them.
+  chunk_pub->publish(joint_target_chunk(q_switch));
+  double command_jump = 0.0;
+  double drift = 0.0;
+  for (int i = 0; i < 400; ++i) {
+    cycle();
+    command_jump = std::max(command_jump, max_abs_difference(commanded_q(), commanded_switch));
+    drift = std::max(drift, max_abs_difference(measured_q(), q_switch));
+  }
+  EXPECT_EQ(Access::accepted(*controller), 2u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_LE(command_jump, 2e-3) << "q_des jumped at the task -> joint switch";
+  EXPECT_LE(drift, 2e-3) << "the arm moved although the joint target is where it stood";
+}
+
+// ---------------------------------------------------------------------------
+// AC5, host side: max_task_ang_acc reaches ReferenceLimiter's
+// max_angular_acceleration. Default 0 = off.
+
+TEST_F(Fixture, AC5_MaxTaskAngAccIsDeclaredAndDefaultsToOff)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_TRUE(controller->get_node()->has_parameter("max_task_ang_acc"));
+  EXPECT_EQ(controller->get_node()->get_parameter("max_task_ang_acc").as_double(), 0.0);
+}
+
+TEST_F(NegativeAngularAccelerationFixture, AC5_ANegativeMaxTaskAngAccIsRefused)
+{
+  EXPECT_TRUE(declared) << "max_task_ang_acc is not declared";
+  EXPECT_TRUE(!set_accepted || configured != controller_interface::return_type::OK)
+    << "max_task_ang_acc = -1 was taken";
+}
+
+TEST_F(NanAngularAccelerationFixture, AC5_ANonFiniteMaxTaskAngAccIsRefused)
+{
+  EXPECT_TRUE(declared) << "max_task_ang_acc is not declared";
+  EXPECT_TRUE(!set_accepted || configured != controller_interface::return_type::OK)
+    << "max_task_ang_acc = NaN was taken";
+}
+
+// A 0.3 rad pitch step with the TCP held in place. With the limit a, the
+// emitted angular velocity starts at rest and changes by at most a*dt per
+// cycle, so after n cycles the reference has turned at most
+// a*dt^2*n(n+1)/2; the measured pitch follows that reference and cannot be
+// ahead of it. Bang-bang over 0.3 rad at a = 2 takes 2*sqrt(0.3/2) = 0.77 s
+// with a peak of 0.77 rad/s, inside max_task_ang_vel = 1.5.
+TEST_F(AngularAccelerationFixture, AC5_ARotationStepIsAccelerationLimited)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  const auto samples = pitch_response(0.3, 1000);
+  double worst_excess = -1.0;
+  double worst_at = 0.0;
+  for (const auto & sample : samples) {
+    const double n = sample.elapsed / 1e-3;
+    const double bound = 0.5 * kAngularAcceleration * 1e-6 * n * (n + 1.0) + 1e-3;
+    if (sample.pitch - bound > worst_excess) {
+      worst_excess = sample.pitch - bound;
+      worst_at = sample.elapsed;
+    }
+  }
+  EXPECT_LE(worst_excess, 0.0)
+    << "pitch ran ahead of the a*t^2/2 envelope by " << worst_excess << " rad at t = "
+    << worst_at << " s";
+  // Limited, not stuck: it still converges onto the step.
+  ASSERT_TRUE(settle(0, 4000));
+  EXPECT_NEAR(tcp_pose(measured_q()).pitch, kStartPitch + 0.3, 5e-3);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+}
+
+// The same step with the parameter left at its default: the velocity clamp
+// alone, so the pitch leaves the a = 2 envelope at once (1.5 rad/s from the
+// first cycles). This is what makes the test above mean something.
+TEST_F(CurledFixture, AC5_ByDefaultARotationStepIsOnlyVelocityClamped)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  const auto samples = pitch_response(0.3, 250);
+  double best_excess = -1.0;
+  for (const auto & sample : samples) {
+    if (sample.elapsed > 0.25) {break;}
+    const double envelope = 0.5 * kAngularAcceleration * sample.elapsed * sample.elapsed;
+    best_excess = std::max(best_excess, sample.pitch - envelope);
+  }
+  EXPECT_GT(best_excess, 0.05)
+    << "with max_task_ang_acc unset the rotation was already acceleration-limited";
+  ASSERT_TRUE(settle(0, 4000));
+  EXPECT_NEAR(tcp_pose(measured_q()).pitch, kStartPitch + 0.3, 5e-3);
+}
+
+// ---------------------------------------------------------------------------
+// AC11 (A). The space-switch re-seed starts from what is being COMMANDED in the
+// new space, at the rate it is being commanded: joint -> task from
+// FK(commanded q_des) with twist J(q_des) * dq_des, task -> joint from the
+// commanded q_des with dq_des. Not from the measurement, and not from rest.
+//
+// The AC8 tests above cannot tell those apart. They switch at rest, so every
+// rate is zero, and the fake mirrors each accepted q_des into the next
+// measurement, so FK of the measured joints IS FK of the last command. Here the
+// fake's mirror_position_offset keeps the measurement kMirrorOffset from q_des
+// on every joint (a plant that never quite reaches its command), and the
+// moving tests switch in mid-motion with the per-cycle trace recorded on the
+// worker thread.
+
+namespace
+{
+constexpr double kMirrorOffset = 0.005;  // rad, measured = q_des + this on every joint
+constexpr double kJointRampRate = 0.1;   // rad/s on joint 1
+constexpr double kTcpRampSpeed = 0.05;   // m/s, TCP straight down
+// The time from the last recorded cycle to the cycle that splices the next
+// chunk, which a continuation chunk is advanced by. A few cycles; an error in
+// it is a gap the limiter closes, not a step.
+constexpr double kContinuationLead = 0.002;  // s
+
+// Largest change of any joint's commanded position from one recorded cycle to
+// the next (starting from `before`), and largest distance from `before`.
+struct CommandMotion
+{
+  double step;
+  double drift;
+};
+
+CommandMotion command_motion(const std::vector<CycleSample> & trace, const Joints & before)
+{
+  CommandMotion motion {0.0, 0.0};
+  const Joints * previous = &before;
+  for (const auto & sample : trace) {
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      motion.step = std::max(motion.step, std::abs(sample.q_cmd[joint] - (*previous)[joint]));
+      motion.drift = std::max(motion.drift, std::abs(sample.q_cmd[joint] - before[joint]));
+    }
+    previous = &sample.q_cmd;
+  }
+  return motion;
+}
+
+double dot(const Joints & a, const Joints & b)
+{
+  double sum = 0.0;
+  for (std::size_t joint = 0; joint < 7; ++joint) {sum += a[joint] * b[joint];}
+  return sum;
+}
+
+// First trace index at which the accepted-chunk count reached `count`, or the
+// trace size if it never did.
+std::size_t first_with_accepted(const std::vector<CycleSample> & trace, const std::uint64_t count)
+{
+  for (std::size_t i = 0; i < trace.size(); ++i) {
+    if (trace[i].accepted >= count) {return i;}
+  }
+  return trace.size();
+}
+
+class MirrorOffsetFixture : public CurledFixture
+{
+protected:
+  double mirror_position_offset() const override {return kMirrorOffset;}
+};
+
+// Rate bounds at which a reference restarted from rest stays visibly slower
+// than the motion it replaces for many cycles: from zero, 0.5 m/s^2 needs
+// 0.21 s to regain the joint ramp's 0.107 m/s TCP speed and 2 rad/s^2 needs
+// 0.05 s to regain its 0.1 rad/s pitch rate; 1 rad/s^2 per joint needs ~0.1 s
+// to regain the task ramp's joint rates. A re-seed WITH the commanded rates
+// is unaffected by any of them on the switch cycle.
+class MovingSwitchFixture : public CurledFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    CurledFixture::extra_parameters();
+    set("max_task_lin_vel", 0.4);
+    set("max_task_lin_acc", 0.5);
+    set("max_task_ang_acc", 2.0);
+    set("max_joint_ref_acc", std::vector<double>(7, 1.0));
+    set("chunk_time_source", std::string("arrival"));
+  }
+
+  // One switch in mid-motion: the per-cycle trace from the first chunk's
+  // publication to 300 cycles after the second's, `from` the first index
+  // recorded after the second publication, `last` the cycle just before it.
+  struct SwitchRun
+  {
+    std::vector<CycleSample> trace;
+    std::size_t from {0};
+    CycleSample last {};
+  };
+
+  // Joint 1 alone ramps at kJointRampRate; mid-ramp, one task chunk in the
+  // same goal continues that exact path, FK(q_des + dq_des * t).
+  void joint_ramp_then_task_path(SwitchRun & run)
+  {
+    ASSERT_EQ(configured, controller_interface::return_type::OK);
+    wait_ready();
+    ASSERT_TRUE(Access::ready(*controller));
+    ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+    const Joints q0 = commanded_q();
+    std::vector<Joints> ramp;
+    for (int k = 0; k < 30; ++k) {
+      Joints q = q0;
+      q[0] += kJointRampRate * 0.05 * k;
+      ramp.push_back(q);
+    }
+    start_recording();
+    chunk_pub->publish(joint_path_chunk(ramp));
+    cycle(750);  // mid-ramp: the ramp lasts 1.45 s
+    const auto before = recorded();
+    ASSERT_GE(before.size(), 600u);
+    run.last = before.back();
+    const CycleSample & last = run.last;
+    ASSERT_NEAR(last.dq_cmd[0], kJointRampRate, 0.1 * kJointRampRate)
+      << "the joint ramp is not being commanded at its rate";
+    for (std::size_t joint = 1; joint < 7; ++joint) {
+      ASSERT_NEAR(last.dq_cmd[joint], 0.0, 1e-3) << "joint " << joint + 1 << " moves in the joint ramp";
+    }
+    const auto twist = tcp_twist(last.q_cmd, last.dq_cmd);
+    ASSERT_GT(twist.vx * twist.vx + twist.vz * twist.vz, 0.05 * 0.05);
+    ASSERT_GT(twist.wy, 0.05);
+
+    std::vector<PlanarPose> path;
+    for (int k = 0; k < 20; ++k) {
+      Joints q = last.q_cmd;
+      for (std::size_t joint = 0; joint < 7; ++joint) {
+        q[joint] += last.dq_cmd[joint] * (kContinuationLead + 0.05 * k);
+      }
+      path.push_back(tcp_pose(q));
+    }
+    run.from = before.size();
+    chunk_pub->publish(pose_path_chunk(path));
+    cycle(300);
+    run.trace = stop_recording();
+    EXPECT_EQ(Access::accepted(*controller), 2u);
+    EXPECT_EQ(Access::rejected(*controller), 0u);
+    ASSERT_LT(first_with_accepted(run.trace, 2), run.trace.size() - 200)
+      << "the task chunk came too late to judge";
+  }
+
+  // The TCP goes straight down at kTcpRampSpeed; mid-ramp, one joint chunk in
+  // the same goal continues the commanded joints along q_des + dq_des * t.
+  void task_ramp_then_joint_path(SwitchRun & run)
+  {
+    ASSERT_EQ(configured, controller_interface::return_type::OK);
+    wait_ready();
+    ASSERT_TRUE(Access::ready(*controller));
+    ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+    const auto start = tcp_pose(commanded_q());
+    std::vector<PlanarPose> ramp;
+    for (int k = 0; k < 30; ++k) {
+      auto pose = start;
+      pose.z -= kTcpRampSpeed * 0.05 * k;
+      ramp.push_back(pose);
+    }
+    start_recording();
+    chunk_pub->publish(pose_path_chunk(ramp));
+    cycle(750);
+    const auto before = recorded();
+    ASSERT_GE(before.size(), 600u);
+    run.last = before.back();
+    const CycleSample & last = run.last;
+    ASSERT_GT(dot(last.dq_cmd, last.dq_cmd), 0.05 * 0.05) << "the task ramp is not moving the joints";
+    const auto twist = tcp_twist(last.q_cmd, last.dq_cmd);
+    ASSERT_NEAR(twist.vz, -kTcpRampSpeed, 0.2 * kTcpRampSpeed) << "the task ramp is not being commanded";
+
+    std::vector<Joints> path;
+    for (int k = 0; k < 20; ++k) {
+      Joints q = last.q_cmd;
+      for (std::size_t joint = 0; joint < 7; ++joint) {
+        q[joint] += last.dq_cmd[joint] * (kContinuationLead + 0.05 * k);
+      }
+      path.push_back(q);
+    }
+    run.from = before.size();
+    chunk_pub->publish(joint_path_chunk(path));
+    cycle(300);
+    run.trace = stop_recording();
+    EXPECT_EQ(Access::accepted(*controller), 2u);
+    EXPECT_EQ(Access::rejected(*controller), 0u);
+    ASSERT_LT(first_with_accepted(run.trace, 2), run.trace.size() - 200)
+      << "the joint chunk came too late to judge";
+  }
+};
+}  // namespace
+
+// Joint -> task at rest, measurement 5 mrad off the command on every joint.
+// The task law emits q_des = q + J^+ (x_ref - FK(q)) (drive-side DLS offset,
+// lambda = 0.01). Seeded at FK(q_des), the first task cycle commands, to first
+// order, q + J^+ J (q_des - q): the row-space part of the previous q_des - q is
+// kept and its null-space part (I - J^+ J)(q_des - q) is dropped in that one
+// cycle. This offset is uniform, and the pitch row of J is all ones, so it is
+// nearly all row space: worked through this posture's kinematics, its
+// null-space part is 0.04 mrad (from the DLS damping), and the 0.43 mrad the
+// first cycle moves q_des on the worst joint is the second-order residual of
+// the one Newton step (it scales with the offset squared); 0.49 mrad of drift
+// to the law's fixed point. What this test checks is therefore row-space
+// continuity. Seeded at FK(q), the reference sits on the measurement, the
+// offset term vanishes and q_des = q: a 5 mrad step on every joint at once.
+TEST_F(MirrorOffsetFixture, AC11_AJointToTaskSwitchStartsFromFkOfTheCommandedJoints)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  Joints target = commanded_q();
+  target[0] += 0.2;
+  chunk_pub->publish(joint_target_chunk(target));
+  ASSERT_TRUE(settle(300)) << "the joint chunk did not come to rest";
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+  const Joints q_des = commanded_q();
+  const Joints q = measured_q();
+  // The joint law commands the reference itself (q + clamp(q_ref - q)), so
+  // the command sits on the target and the measurement is offset from it.
+  ASSERT_LE(max_abs_difference(q_des, target), 1e-4) << "the joint chunk was not followed";
+  for (std::size_t joint = 0; joint < 7; ++joint) {
+    ASSERT_NEAR(q[joint] - q_des[joint], kMirrorOffset, 1e-6)
+      << "the fake's mirror offset is not in effect on joint " << joint + 1;
+  }
+
+  // Same goal, task space, holding the TCP at FK of the COMMANDED joints.
+  start_recording();
+  chunk_pub->publish(pose_chunk(tcp_pose(q_des)));
+  cycle(400);
+  const auto trace = stop_recording();
+  ASSERT_GE(trace.size(), 300u);
+  EXPECT_EQ(Access::accepted(*controller), 2u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  ASSERT_LT(first_with_accepted(trace, 2), trace.size() - 200) << "the task chunk came too late to judge";
+
+  const auto motion = command_motion(trace, q_des);
+  EXPECT_LE(motion.step, kMirrorOffset / 4)
+    << "q_des stepped by " << motion.step << " rad in one cycle at the joint -> task switch "
+    << "(a re-seed from the measured pose steps it by the full " << kMirrorOffset << ")";
+  EXPECT_LE(motion.drift, kMirrorOffset / 2)
+    << "q_des left the commanded joints by " << motion.drift << " rad after the switch";
+}
+
+// Task -> joint at rest with the same offset. The task law has settled to its
+// fixed point, the measurement 5 mrad off it; the joint chunk holds exactly
+// the commanded joints. Seeded from the commanded q_des the joint law emits
+// that same q_des (q + clamp(q_ref - q) with q_ref = q_des): no motion at all.
+// Seeded from the measurement it emits the measurement, a 5 mrad step.
+TEST_F(MirrorOffsetFixture, AC11_ATaskToJointSwitchStartsFromTheCommandedJoints)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  auto lowered = tcp_pose(commanded_q());
+  lowered.z -= 0.05;
+  chunk_pub->publish(pose_chunk(lowered));
+  ASSERT_TRUE(settle(300)) << "the task chunk did not come to rest";
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+  const Joints q_des = commanded_q();
+  const Joints q = measured_q();
+  // One DLS step from a measurement offset by 5 mrad leaves FK(q_des) within
+  // about 0.25 mm of the target at this posture.
+  ASSERT_NEAR(tcp_pose(q_des).z, lowered.z, 2e-3) << "the task chunk was not followed";
+  for (std::size_t joint = 0; joint < 7; ++joint) {
+    ASSERT_NEAR(q[joint] - q_des[joint], kMirrorOffset, 1e-6)
+      << "the fake's mirror offset is not in effect on joint " << joint + 1;
+  }
+
+  start_recording();
+  chunk_pub->publish(joint_target_chunk(q_des));
+  cycle(400);
+  const auto trace = stop_recording();
+  ASSERT_GE(trace.size(), 300u);
+  EXPECT_EQ(Access::accepted(*controller), 2u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  ASSERT_LT(first_with_accepted(trace, 2), trace.size() - 200) << "the joint chunk came too late to judge";
+
+  const auto motion = command_motion(trace, q_des);
+  EXPECT_LE(motion.step, kMirrorOffset / 4)
+    << "q_des stepped by " << motion.step << " rad in one cycle at the task -> joint switch";
+  EXPECT_LE(motion.drift, kMirrorOffset / 2)
+    << "q_des left the commanded joints by " << motion.drift << " rad after the switch";
+}
+
+// Joint -> task in mid-motion. Joint 1 alone turns at 0.1 rad/s, so the
+// commanded TCP twist is J(q_des) * dq_des = 0.1 * (dx/dq_1, dz/dq_1) at
+// 0.107 m/s with a pitch rate of 0.1 rad/s (tcp_twist()). The task chunk
+// continues that exact path, FK(q_des + dq_des * t). With the commanded twist
+// in the seed, the switch cycle already commands it (dq_des = J^+ twist, whose
+// image J dq_des is the twist up to the DLS damping, a few percent here) and
+// the acceleration bounds keep it there. Seeded at rest, dq_des is zero on the
+// switch cycle and regains the motion only at 0.5 m/s^2 and 2 rad/s^2.
+TEST_F(MovingSwitchFixture, AC11_AJointToTaskSwitchInMotionKeepsTheCommandedTwist)
+{
+  SwitchRun run;
+  ASSERT_NO_FATAL_FAILURE(joint_ramp_then_task_path(run));
+  const auto & trace = run.trace;
+  const std::size_t from = run.from;
+  const auto twist = tcp_twist(run.last.q_cmd, run.last.dq_cmd);
+  const double linear_sq = twist.vx * twist.vx + twist.vz * twist.vz;
+
+  // Along the commanded twist, every cycle from the publication on: the
+  // linear part projected on the joint ramp's, and the pitch rate.
+  double worst_linear = std::numeric_limits<double>::infinity();
+  double worst_angular = std::numeric_limits<double>::infinity();
+  double worst_step = 0.0;
+  bool spread = false;
+  for (std::size_t i = from; i < trace.size(); ++i) {
+    const auto now = tcp_twist(trace[i].q_cmd, trace[i].dq_cmd);
+    worst_linear = std::min(worst_linear, (now.vx * twist.vx + now.vz * twist.vz) / linear_sq);
+    worst_angular = std::min(worst_angular, now.wy / twist.wy);
+    worst_step = std::max(worst_step, max_abs_difference(trace[i].q_cmd, trace[i - 1].q_cmd));
+    for (std::size_t joint = 1; joint < 7; ++joint) {
+      spread = spread || std::abs(trace[i].dq_cmd[joint]) > 5e-3;
+    }
+  }
+  // The task law's dq_des = J^+ twist spreads over every joint (joint 2 gets
+  // about 0.036 rad/s here), so this proves the window saw the task law.
+  EXPECT_TRUE(spread) << "the commanded joint rates never left the joint ramp";
+  EXPECT_GE(worst_linear, 0.5)
+    << "the commanded TCP velocity fell to " << worst_linear << " of the joint ramp's at the switch";
+  EXPECT_GE(worst_angular, 0.5)
+    << "the commanded pitch rate fell to " << worst_angular << " of the joint ramp's at the switch";
+  EXPECT_LE(worst_step, 2e-3) << "q_des stepped by " << worst_step << " rad at the switch";
+}
+
+// Task -> joint in mid-motion. The TCP goes straight down at 0.05 m/s, which
+// the task law commands as dq_des = J^+ v (about 0.15 rad/s in norm here,
+// spread over all seven joints). The joint chunk continues those joints along
+// q_des + dq_des * t. Seeded with dq_des, the joint law's dq_des carries on;
+// seeded at rest it is zero on the switch cycle and regains the motion only
+// at 1 rad/s^2 per joint.
+TEST_F(MovingSwitchFixture, AC11_ATaskToJointSwitchInMotionKeepsTheCommandedJointRates)
+{
+  SwitchRun run;
+  ASSERT_NO_FATAL_FAILURE(task_ramp_then_joint_path(run));
+  const auto & trace = run.trace;
+  const std::size_t from = run.from;
+  const CycleSample & last = run.last;
+  const double speed_sq = dot(last.dq_cmd, last.dq_cmd);
+
+  double worst = std::numeric_limits<double>::infinity();
+  double worst_step = 0.0;
+  for (std::size_t i = from; i < trace.size(); ++i) {
+    worst = std::min(worst, dot(trace[i].dq_cmd, last.dq_cmd) / speed_sq);
+    worst_step = std::max(worst_step, max_abs_difference(trace[i].q_cmd, trace[i - 1].q_cmd));
+  }
+  EXPECT_GE(worst, 0.5)
+    << "the commanded joint rates fell to " << worst << " of the task ramp's at the switch";
+  EXPECT_LE(worst_step, 2e-3) << "q_des stepped by " << worst_step << " rad at the switch";
+}
+
+// ---------------------------------------------------------------------------
+// AC13 (C). Under drive_side_impedance: false a joint chunk is refused as a
+// well-formed chunk in an action space this configuration does not take
+// (Reject::kActionSpaceNotAccepted, "action_space_not_accepted"), not as an
+// unparseable field -- which is still what an unknown field value is.
+
+TEST_F(LegacyLawFixture, AC13_TheJointRefusalHasItsOwnReasonDistinctFromABadField)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_FALSE(Access::drive_side_impedance(*controller));
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  watch_telemetry();
+
+  // A task chunk with an unknown relative_frame: a bad field, as before.
+  publish(per_step_z_chunk(-0.01, "bogus"), 40);
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_rejected >= 1;}))
+    << "no telemetry with the first rejection on " << telemetry_topic()
+    << "; VlaTelemetry topics: " << telemetry_topics();
+  EXPECT_EQ(telemetry().last_reject, "unparseable_field");
+
+  // A well-formed joint chunk this law cannot run.
+  publish(joint_chunk(0.5), 40);
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_rejected >= 2;}))
+    << "no telemetry with the second rejection";
+  const auto latest = telemetry();
+  EXPECT_EQ(latest.last_reject, "action_space_not_accepted");
+  EXPECT_EQ(latest.chunks_rejected, 2u);
+  EXPECT_EQ(latest.chunks_accepted, 0u);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_EQ(Access::rejected(*controller), 2u);
+}
+
+// The new reason is the legacy law's alone: a drive-side host takes a joint
+// chunk, and refuses one with an unknown relative_frame as a bad field.
+// CurledFixture for its long stream watchdog: a rejected chunk does not feed
+// it, and the telemetry wait may outlast the default 0.2 s.
+TEST_F(CurledFixture, AC13_ADriveSideHostTakesJointChunksAndReportsABadFieldAsSuch)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  ASSERT_TRUE(Access::drive_side_impedance(*controller));
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  watch_telemetry();
+
+  const Joints here = measured_q();
+  auto bad = joint_target_chunk(here);
+  bad.relative_frame = "bogus";
+  publish(bad, 40);
+  ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_rejected >= 1;}))
+    << "no telemetry with the rejection on " << telemetry_topic()
+    << "; VlaTelemetry topics: " << telemetry_topics();
+  EXPECT_EQ(telemetry().last_reject, "unparseable_field");
+
+  publish(joint_target_chunk(here), 40);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// AC18 (review 20261013-140008 C1, C4).
+//
+// C1: the limiter is never seeded outside the joint window. Under the task law
+// q_des = q + offset can lie past a joint's window edge; the joint is sent at
+// the edge. A task -> joint switch (or a goal start or resume) that seeded the
+// joint limiter with the unclamped q_des left the limiter's window clamp to
+// pull the joint back on the next cycle, and that cycle's rate came out as the
+// whole distance over one period.
+//
+// C4: a space switch seeds the limiter at the previous cycle's time, so the
+// switch cycle advances the command by one cycle of the commanded motion, as
+// every other cycle does. Seeded at the switch cycle's own time, the limiter
+// has no time to integrate on that cycle and returns the seed: q_des stands
+// still for one cycle (0.1 mrad at 0.1 rad/s and 1 kHz) and stays that far
+// behind.
+
+namespace
+{
+constexpr double kCycle = 1e-3;  // s, one update of the fixture's worker
+// Joint 4 (index 3). Its mujoco_sim_safe window is [0, 2.443461] rad, so its
+// lower edge is its zero.
+constexpr std::size_t kEdgeJoint = 3;
+constexpr double kNearEdge = 0.02;   // rad, where the joint chunk parks joint 4
+constexpr double kPastEdge = -0.1;   // rad, where the task target needs it
+constexpr double kJointRefAcc = 4.0;  // rad/s^2, CurledFixture's max_joint_ref_acc
+
+// The task law's DLS offset weighted onto joint 4 (reference_offset_weight 1
+// there, 1e6 on the others): it resolves the task error with joint 4 and
+// leaves the other joints practically where they are. A task target that
+// needs joint 4 at kPastEdge then holds q_des_4 = 0 + offset_4 about 0.1 rad
+// below the window for as long as the target stands (worked through this
+// posture's kinematics: -0.099 rad after 0.6 s), while joint 4 is sent, and
+// measured, at the edge. With equal weights the other joints take the error
+// up within a few cycles and the push past the edge lasts only that long.
+class WindowEdgeFixture : public CurledFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    CurledFixture::extra_parameters();
+    std::vector<double> weight(7, 1e6);
+    weight[kEdgeJoint] = 1.0;
+    set("reference_offset_weight", weight);
+  }
+};
+
+// The slowest and the fastest of a per-cycle series, and where they were.
+struct Extremes
+{
+  double slowest {std::numeric_limits<double>::infinity()};
+  double fastest {-std::numeric_limits<double>::infinity()};
+  std::size_t slowest_at {0};
+  std::size_t fastest_at {0};
+
+  void note(const double value, const std::size_t at)
+  {
+    if (value < slowest) {
+      slowest = value;
+      slowest_at = at;
+    }
+    if (value > fastest) {
+      fastest = value;
+      fastest_at = at;
+    }
+  }
+};
+}  // namespace
+
+// Task -> joint with joint 4 pushed past its window edge by the task law. The
+// target has been reached as far as the edge allows, so nothing moves; the
+// joint chunk holds the commanded joints, joint 4 at its edge. Seeded inside
+// the window, at the commanded rates, every dq_des stays within what the
+// acceleration bound allows from the rates before the switch, two cycles of
+// 4 rad/s^2. Seeded at the unclamped q_des_4, the joint limiter's window clamp
+// reports the 0.1 rad back to the edge as one cycle's rate, 100 rad/s, which
+// the host passes on at command_velocity (5.4 rad/s on joint 4).
+TEST_F(WindowEdgeFixture, AC18_ATaskToJointSwitchAtAWindowEdgeKeepsDqDesWithinTheBounds)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+
+  // Joint 4 to just inside its lower edge.
+  Joints parked = commanded_q();
+  parked[kEdgeJoint] = kNearEdge;
+  chunk_pub->publish(joint_target_chunk(parked));
+  ASSERT_TRUE(settle(300)) << "the joint chunk did not come to rest";
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+  ASSERT_LE(max_abs_difference(commanded_q(), parked), 1e-4) << "joint 4 was not parked";
+
+  // Same goal, a task target that needs joint 4 at -0.1 rad.
+  Joints past = commanded_q();
+  past[kEdgeJoint] = kPastEdge;
+  const PlanarPose target = tcp_pose(past);
+  chunk_pub->publish(pose_chunk(target));
+  cycle(1500);
+  ASSERT_EQ(Access::accepted(*controller), 2u);
+  ASSERT_EQ(Access::rejected(*controller), 0u);
+
+  start_recording();
+  cycle(30);
+  const auto before = recorded();
+  ASSERT_GE(before.size(), 20u);
+  const CycleSample last = before.back();
+  ASSERT_NEAR(last.q_cmd[kEdgeJoint], 0.0, 1e-9) << "joint 4 is not sent at its window edge";
+  // Held off the target pitch by the edge: the task law is still pushing.
+  ASSERT_GE(tcp_pose(last.q_cmd).pitch - target.pitch, 0.05)
+    << "the task target does not need joint 4 past its edge";
+  double rate_before = 0.0;
+  for (const auto & sample : before) {
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      rate_before = std::max(rate_before, std::abs(sample.dq_cmd[joint]));
+    }
+  }
+  ASSERT_LE(rate_before, 0.05) << "the arm is not at rest before the switch";
+
+  // Same goal, joint space, holding the commanded joints.
+  const std::size_t from = before.size();
+  chunk_pub->publish(joint_target_chunk(last.q_cmd));
+  cycle(300);
+  const auto trace = stop_recording();
+  EXPECT_EQ(Access::accepted(*controller), 3u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  ASSERT_LT(first_with_accepted(trace, 3), trace.size() - 200) << "the joint chunk came too late to judge";
+
+  const double rate_bound = rate_before + 2.0 * kJointRefAcc * kCycle + 1e-3;
+  double worst_rate = 0.0;
+  std::size_t worst_joint = 0;
+  std::size_t worst_at = 0;
+  double worst_step = 0.0;
+  for (std::size_t i = from; i < trace.size(); ++i) {
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      const double rate = std::abs(trace[i].dq_cmd[joint]);
+      if (rate > worst_rate) {
+        worst_rate = rate;
+        worst_joint = joint;
+        worst_at = i - from;
+      }
+    }
+    worst_step = std::max(worst_step, max_abs_difference(trace[i].q_cmd, trace[i - 1].q_cmd));
+  }
+  RecordProperty("rate_before", std::to_string(rate_before));
+  RecordProperty("worst_rate", std::to_string(worst_rate));
+  RecordProperty("worst_step", std::to_string(worst_step));
+  EXPECT_LE(worst_rate, rate_bound)
+    << "dq_des reached " << worst_rate << " rad/s on joint " << worst_joint + 1 << ", "
+    << worst_at << " cycles after the joint chunk was published";
+  EXPECT_LE(worst_step, 1e-4) << "q_des stepped by " << worst_step << " rad at the switch";
+  EXPECT_NEAR(trace.back().q_cmd[kEdgeJoint], 0.0, 1e-6) << "joint 4 left its edge";
+}
+
+// Joint -> task in mid-motion (the AC11 scenario): per cycle from the task
+// chunk's publication on, how far the commanded TCP moved along the twist
+// commanded before it, in cycles of that twist (1 = as before, 0 = stood
+// still). Measured on the TCP because the task law keeps only the row-space
+// part of the joint motion (AC11): the joints' own progress changes there by
+// design.
+TEST_F(MovingSwitchFixture, AC18_AJointToTaskSwitchInMotionAdvancesTheCommandOnTheSwitchCycle)
+{
+  SwitchRun run;
+  ASSERT_NO_FATAL_FAILURE(joint_ramp_then_task_path(run));
+  const auto twist = tcp_twist(run.last.q_cmd, run.last.dq_cmd);
+  const double linear_sq = twist.vx * twist.vx + twist.vz * twist.vz;
+
+  Extremes linear;
+  Extremes angular;
+  for (std::size_t i = run.from; i < run.trace.size(); ++i) {
+    const auto a = tcp_pose(run.trace[i - 1].q_cmd);
+    const auto b = tcp_pose(run.trace[i].q_cmd);
+    linear.note(
+      ((b.x - a.x) * twist.vx + (b.z - a.z) * twist.vz) / (linear_sq * kCycle), i - run.from);
+    angular.note((b.pitch - a.pitch) / (twist.wy * kCycle), i - run.from);
+  }
+  RecordProperty("linear_progress", std::to_string(linear.slowest) + " .. " + std::to_string(linear.fastest));
+  RecordProperty("angular_progress", std::to_string(angular.slowest) + " .. " + std::to_string(angular.fastest));
+  EXPECT_GE(linear.slowest, 0.5)
+    << "the commanded TCP advanced " << linear.slowest << " of a cycle of its velocity, "
+    << linear.slowest_at << " cycles after the task chunk was published";
+  EXPECT_LE(linear.fastest, 1.5)
+    << "the commanded TCP advanced " << linear.fastest << " cycles of its velocity in one, "
+    << linear.fastest_at << " cycles after the task chunk was published";
+  EXPECT_GE(angular.slowest, 0.5)
+    << "the commanded pitch advanced " << angular.slowest << " of a cycle of its rate, "
+    << angular.slowest_at << " cycles after the task chunk was published";
+  EXPECT_LE(angular.fastest, 1.5)
+    << "the commanded pitch advanced " << angular.fastest << " cycles of its rate in one, "
+    << angular.fastest_at << " cycles after the task chunk was published";
+}
+
+// Task -> joint in mid-motion (the AC11 scenario): per cycle from the joint
+// chunk's publication on, how far q_des moved along the joint rates commanded
+// before it, in cycles of those rates.
+TEST_F(MovingSwitchFixture, AC18_ATaskToJointSwitchInMotionAdvancesTheCommandOnTheSwitchCycle)
+{
+  SwitchRun run;
+  ASSERT_NO_FATAL_FAILURE(task_ramp_then_joint_path(run));
+  const Joints & rate = run.last.dq_cmd;
+  const double speed_sq = dot(rate, rate);
+
+  Extremes progress;
+  for (std::size_t i = run.from; i < run.trace.size(); ++i) {
+    Joints step {};
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      step[joint] = run.trace[i].q_cmd[joint] - run.trace[i - 1].q_cmd[joint];
+    }
+    progress.note(dot(step, rate) / (speed_sq * kCycle), i - run.from);
+  }
+  RecordProperty("progress", std::to_string(progress.slowest) + " .. " + std::to_string(progress.fastest));
+  EXPECT_GE(progress.slowest, 0.5)
+    << "q_des advanced " << progress.slowest << " of a cycle of its rates, "
+    << progress.slowest_at << " cycles after the joint chunk was published";
+  EXPECT_LE(progress.fastest, 1.5)
+    << "q_des advanced " << progress.fastest << " cycles of its rates in one, "
+    << progress.fastest_at << " cycles after the joint chunk was published";
 }

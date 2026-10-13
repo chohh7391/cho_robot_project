@@ -69,6 +69,16 @@ echo 'export PATH=$PATH:$MUJOCO_DIR/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
+`extern/mujoco_ros2_control` links the `libmujoco` of `ros-humble-mujoco-vendor`. After
+that package is upgraded to another MuJoCo version, rebuild the two packages that link
+it. Their tests do not compile against MuJoCo 3.12 (`-Werror=conversion`), so build
+without tests:
+
+```bash
+MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install \
+  --packages-select mujoco_ros2_control mujoco_ros2_control_plugins --cmake-args -DBUILD_TESTING=OFF
+```
+
 ## OpenArm
 
 `cho_description_openarm` is a vendored fork (URDF/xacro, meshes and MJCF all

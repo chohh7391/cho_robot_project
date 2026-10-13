@@ -38,9 +38,14 @@ controllers:
   # bringup with hand:=true. The real MIT adapter has no finger transport yet,
   # so a real bringup exposes no gripper action.
   gripper: gripper_controller
-  # cho_controller_openarm_mit/VlaController. Selected only on the MuJoCo MIT
-  # prototype path (mit_controller_name:=vla_mit_controller); the real bringup
-  # does not offer it yet, and the non-MIT bringups have no VLA controller at all.
+  # cho_controller_openarm_mit/VlaController. Selected on the MuJoCo MIT
+  # prototype path (mit_controller_name:=vla_mit_controller) and on the real
+  # bringup (controller_name:=vla_mit_controller, admitted by
+  # launch_utils.REAL_MIT_DIRECT_CONTROLLERS). Under drive_side_impedance: false
+  # (the real bimanual config) it takes TASK chunks only and rejects joint chunks
+  # at ingest: that law sends kp = 0 with q_des pinned to the measurement, so no
+  # joint position loop closes. Its joint path has only run in MuJoCo. The
+  # non-MIT bringups have no VLA controller at all.
   vla: vla_mit_controller
 compatibility:
   # The behavior-tree task manager still selects the legacy effort controller.

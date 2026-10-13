@@ -23,21 +23,44 @@ namespace cho_vla_core
 // Reference-side velocity, acceleration and jerk bound: the single choke point
 // on how fast ANY control law is asked to move.
 //
-// Ported from the Franka pipeline's saturate_des(), with two fixes. It now runs
-// only on the ACTIVE action space -- the historical version limited pose and
-// joints on every cycle regardless, so the inactive representation's rate state
-// froze at goal start and became the ramp origin if a chunk later switched space.
-// And the joint bounds are per-joint rather than one scalar, because the MIT
-// safety profile's command_velocity differs per joint and is the authority there.
+// Ported from the Franka pipeline's saturate_des(), with two fixes. It runs only
+// on the ACTIVE action space -- the historical version limited pose and joints
+// on every cycle regardless, so the inactive representation's rate state froze
+// at goal start. That alone does NOT make a change of action space continuous.
+// A sampled reference's inactive representation is the running chunk's anchor,
+// passed through unlimited, so when a chunk switches space the last value this
+// limiter emitted in the new space is that anchor, not what the arm is being
+// commanded to, and the first cycle would ramp from it. The host re-seeds at a
+// switch, with what it commands in the new space and how fast: see
+// seed_with_rates(). And the joint bounds are per-joint rather than one scalar,
+// because the MIT safety profile's command_velocity differs per joint and is
+// the authority there.
 //
 // The limiter TRACKS the sampled reference rather than chasing it. Each cycle
 // it asks for the velocity the reference itself has (feed-forward) plus a
 // correction that closes any gap between the two, and Ruckig's velocity
-// interface takes that request to the bounds: velocity, acceleration and jerk,
-// each bounded in BOTH directions. A reference that stays inside the bounds is
-// therefore followed with no lag, and only the part of it that does not is
-// shaped -- which is what a safety bound downstream of a smooth interpolation
-// should do.
+// interface takes that request to the bounds: velocity (next paragraph),
+// acceleration and jerk, each bounded in BOTH directions. A reference that
+// stays inside the bounds is therefore followed with no lag, and only the part
+// of it that does not is shaped -- which is what a safety bound downstream of a
+// smooth interpolation should do.
+//
+// The emitted rate in the active space stays within its velocity bound whatever
+// the sampled rate does, to a relative 1e-9: each joint's joint_velocity within
+// its max_joint_velocity, the linear and angular parts of the twist within
+// max_linear_velocity and max_angular_velocity as norms, and one cycle's
+// displacement within the bound times the step. Ruckig's velocity interface
+// does not bound velocity, so two things do. Near the bound the feed-forward
+// acceleration is capped to what still levels off inside it (none for a
+// request clipped onto it), so the profile does not commit to passing it; and
+// Ruckig's output is projected into the bound, per joint and on the norms, with
+// the position following the projected rate. Both act only near the bound, so a
+// reference followed inside the bounds is not affected. Not covered: the
+// inactive space's fields, which pass through. The joint window clamp can move
+// a joint further than that only from outside the window. A seed's joints are
+// clamped into it (seed()), so that happens only on a joint cycle that follows
+// task space without the re-seed a switch requires, starting from the joints
+// task space passed through.
 //
 // The two limiters this replaced -- the historical trapezoid, then a Ruckig
 // planning to come to rest on the sampled position -- both CHASED: every cycle
@@ -68,11 +91,47 @@ namespace cho_vla_core
 // Translation is tracked the same way on three axes. Its bounds are on NORMS:
 // the requested velocity is clamped to max_linear_velocity as a vector, and the
 // per-axis acceleration and jerk bounds are the norm bounds over sqrt(3), so the
-// vector never exceeds them. Rotation keeps a velocity clamp alone, which never
-// lagged: a rotation inside its bound passes through unchanged.
+// vector never exceeds them.
+//
+// Rotation, by default, keeps a velocity clamp alone, which never lagged: a
+// rotation inside its bound passes through unchanged -- and so does any step in
+// angular rate, a sampled reference that turns faster than the clamp included.
+// With max_angular_acceleration set, rotation is tracked like translation
+// instead, on the world-aligned angular velocity: the gap is the rotation vector
+// from the emitted orientation to the sampled one, the request is the sampled
+// rate plus the same proportional-then-braking-envelope correction, and Ruckig's
+// velocity interface brings the emitted rate to it within the acceleration bound
+// (norm, as for translation) and a jerk of a / 0.04 s. The emitted rate never
+// exceeds max_angular_velocity when that is set; the orientation advances by the
+// trapezoid of the previous and the new rate.
+//
+// A cycle on which time does not advance (now - previous time zero, negative
+// or not finite) emits exactly what the previous cycle did -- pose, joints,
+// twist and joint_velocity -- and leaves every rate state alone, so the next
+// cycle that does advance continues as though that one had not happened. It
+// used to invent a 1 ms step, which moved the reference on every
+// repeated-state cycle Isaac reports. So does a cycle on which the clock JUMPS
+// forward by more than kClockRebaseSec: that step is not a control period, and
+// integrating it would move the reference by up to the velocity bound times
+// the jump in one cycle. The previous time stays on a cycle that does not
+// advance, except when the clock has been set back by more than
+// kClockRebaseSec; there, and after a forward jump, `now` becomes the time
+// base. Kept after a set-back, the output would hold until the clock passed
+// the old time again -- after a 50 s sim-time reset, 50 s of an arm standing
+// still while its policy streams accepted chunks. See apply().
 class ReferenceLimiter
 {
 public:
+  // A step larger than this, back or forward, is the clock being SET (a
+  // sim-time reset, a system clock step), not a control period or jitter:
+  // apply() integrates nothing over it and re-bases on it. The hosts' control
+  // periods are 1-4 ms, and a period of 0.1 s or more is already one the
+  // OpenArm task-space controller refuses to advance its clock by. One
+  // threshold serves both directions, so one stray sample from another clock
+  // costs two held cycles, out and back, and a clock that keeps alternating
+  // holds the output for as long as it does.
+  static constexpr double kClockRebaseSec = 0.1;
+
   struct Params
   {
     // <= 0 disables that bound.
@@ -81,6 +140,10 @@ public:
     double max_linear_acceleration {0.0};
     // <= 0 means a / 0.04 s, as for the joints.
     double max_linear_jerk {0.0};
+    // [rad/s^2], a bound on the norm of the emitted angular velocity's rate of
+    // change. <= 0 (the default) disables it, leaving the velocity clamp alone,
+    // with output identical to before it existed. See the class comment.
+    double max_angular_acceleration {0.0};
     // How fast a gap between the emitted and the sampled reference is closed
     // [1/s]; see the class comment.
     double tracking_gain {10.0};
@@ -104,32 +167,102 @@ public:
   void set_params(const Params & params) {params_ = params;}
   const Params & params() const {return params_;}
 
-  // Seed the rate state from what the host is currently commanding, so the first
-  // limited cycle is continuous. Call this whenever the reference source changes
-  // discontinuously by design: goal start, or a resume out of hold.
+  // Seed AT REST from what the host is currently commanding, so the first
+  // limited cycle is continuous: pose and joints from `reference`, every rate and
+  // acceleration zero (its twist and joint_velocity are not read). For a change
+  // of source while the arm is held: goal start, or a resume out of hold.
+  //
+  // With clamp_joint_window the joints are clamped into [joint_lower,
+  // joint_upper], where every joint cycle's output lies; a joint inside it is
+  // taken unchanged. A command outside the window (a host law's q + offset
+  // before its own window clamp) is therefore seeded on the window's edge, and
+  // the first joint cycle's joint_velocity, its displacement over the step,
+  // stays within the velocity bound.
   void seed(const Reference & reference, double now);
 
-  // Limit `reference` in place. Does nothing until seed() has been called.
+  // As seed(), but the rate state starts at what the host is commanding instead
+  // of at rest: joint space from reference.joint_velocity, task space from
+  // reference.twist (linear, then world-aligned angular, the convention apply()
+  // emits). Both are taken; the space the next apply() runs in continues from
+  // its own, and the other is reset there as on every cycle. Each rate is
+  // clamped into its configured velocity bound (per joint; translation and
+  // rotation on their norms) and a non-finite one starts at zero. Acceleration
+  // state starts at zero. The joints are clamped into the window as in seed();
+  // the rates are not changed by that. A cycle at the seed's own time emits the
+  // seed with these rates.
+  //
+  // `now` is the time the seeded value was commanded at. A host seeding with
+  // what the previous cycle commanded passes that cycle's time (when it is
+  // finite and earlier than this cycle's), so this cycle's apply() advances from
+  // the seed at the seeded rate. Seeded at this cycle's time, apply() sees a
+  // zero step and emits the seed itself: a moving reference stands still for
+  // one cycle.
+  //
+  // The host calls it when the sampled reference changes action space within a
+  // goal (Reference::space differs from the previous cycle's; the class comment
+  // says why the limiter cannot bridge that itself). `reference` carries the NEW
+  // space's commanded value and rate -- not the measured state, which differs
+  // by whatever the law is pushing against: for joint -> task the forward
+  // kinematics of the commanded joints and their Jacobian times the commanded
+  // joint rate. Seeding at rest there would drop a moving reference's rate to
+  // zero in one cycle and re-accelerate it, the arm falling behind meanwhile.
+  void seed_with_rates(const Reference & reference, double now);
+
+  // Limit `reference` in place. Does nothing until seed() or seed_with_rates()
+  // has been called. In the active space, the emitted rates and one cycle's
+  // displacement keep to the velocity bounds for any sampled input (class
+  // comment).
+  //
+  // Only a step = now - previous time with 0 < step <= kClockRebaseSec is
+  // integrated. On any other, the reference's pose, joints, twist and
+  // joint_velocity are set to the previously EMITTED ones (right after a seed:
+  // the seed's pose and joints with the seeded rates, zero after seed()) and no
+  // rate state changes. Then:
+  //   - NaN or +-inf: the previous time is kept too.
+  //   - -kClockRebaseSec <= step <= 0: the previous time is kept too, so the
+  //     next cycle that advances is measured from the last one that did.
+  //   - step < -kClockRebaseSec: the previous time becomes `now`, and the next
+  //     positive step continues from there.
+  //   - step > kClockRebaseSec: the previous time becomes `now` too, so the
+  //     jump is never integrated; the next step continues from there.
+  // A seed at a non-finite time is replaced the same way by the first finite
+  // `now`. A clock that goes back or forward and STAYS there costs one held
+  // cycle. One stray sample from another clock, followed by the old one again,
+  // costs two, the second a jump as long as the first; a clock alternating
+  // between two times holds the output throughout.
   void apply(double now, Reference & reference);
 
   bool seeded() const {return seeded_;}
 
 private:
+  // Task-space rotation under max_angular_acceleration: sets
+  // reference.pose.rotation() and reference.twist.tail<3>().
+  void track_rotation(double step, Reference & reference);
+
   Params params_ {};
   bool seeded_ {false};
   double previous_time_ {0.0};
   SE3 previous_pose_ {SE3::Identity()};
   Vector7 previous_joints_ {Vector7::Zero()};
+  // What the previous cycle (or the seed) emitted besides pose and joints, for a
+  // cycle on which time does not advance.
+  Vector6 emitted_twist_ {Vector6::Zero()};
+  Vector7 emitted_joint_velocity_ {Vector7::Zero()};
   Eigen::Vector3d previous_linear_velocity_ {Eigen::Vector3d::Zero()};
   Eigen::Vector3d previous_linear_acceleration_ {Eigen::Vector3d::Zero()};
+  // World-aligned; only rate state when max_angular_acceleration is set.
+  Eigen::Vector3d previous_angular_velocity_ {Eigen::Vector3d::Zero()};
+  Eigen::Vector3d previous_angular_acceleration_ {Eigen::Vector3d::Zero()};
   Vector7 previous_joint_velocity_ {Vector7::Zero()};
   Vector7 previous_joint_acceleration_ {Vector7::Zero()};
   // The SAMPLED rates of the previous cycle, whose difference is the
   // feed-forward acceleration. Invalid until a cycle in that space has run.
   Vector7 previous_joint_rate_ {Vector7::Zero()};
   Eigen::Vector3d previous_linear_rate_ {Eigen::Vector3d::Zero()};
+  Eigen::Vector3d previous_angular_rate_ {Eigen::Vector3d::Zero()};
   bool joint_rate_valid_ {false};
   bool linear_rate_valid_ {false};
+  bool angular_rate_valid_ {false};
 
   // Fixed-size, so update() does not allocate: safe on the control thread.
   ruckig::Ruckig<kJoints> joint_generator_ {};
@@ -138,6 +271,9 @@ private:
   ruckig::Ruckig<3> linear_generator_ {};
   ruckig::InputParameter<3> linear_input_ {};
   ruckig::OutputParameter<3> linear_output_ {};
+  ruckig::Ruckig<3> angular_generator_ {};
+  ruckig::InputParameter<3> angular_input_ {};
+  ruckig::OutputParameter<3> angular_output_ {};
 };
 
 }  // namespace cho_vla_core

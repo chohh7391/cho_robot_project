@@ -225,6 +225,11 @@ ros2 launch cho_task_manager run_task_manager.launch.py \
 See [docs/tasks.md](docs/tasks.md) for task requirements and
 [docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup.
 
+VLA bridges send `cho_interfaces/ActionChunk` to `vla_controller` (Franka) or
+`vla_mit_controller` (OpenArm). Relative task chunks name their delta frame in
+`relative_frame`. See [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#vla-chunks).
+On the real bimanual OpenArm, `vla_mit_controller` takes task chunks only.
+
 Controllers publish desired-versus-measured state on per-controller topics:
 
 ```text

@@ -43,6 +43,34 @@ std::size_t source_column(const Chunk & chunk, const std::size_t joint)
 {
   return chunk.joint_order.empty() ? joint : chunk.joint_order[joint];
 }
+
+bool is_known(const RelativeFrame frame)
+{
+  return frame == RelativeFrame::kEe || frame == RelativeFrame::kBase;
+}
+
+// Apply one relative task delta to `origin` (the anchor for kFromAnchor, the
+// previous waypoint for kPerStep). See RelativeFrame for the two conventions.
+// validate() has already refused any other enum value.
+//
+// No re-orthonormalisation: every decoded dR is orthonormal to rounding, and a
+// chain restarts from the anchor every chunk, so the drift is chunk_size
+// products of rounding error -- the same as the kEe path has always had.
+SE3 compose(const SE3 & origin, const SE3 & delta, const RelativeFrame frame)
+{
+  if (frame == RelativeFrame::kBase) {
+    // Root-frame delta: translate along the root axes and rotate about
+    // root-aligned axes through the tool point, so the position is unaffected by
+    // the rotation. This is not delta * origin, which would swing the position
+    // about the root origin as well.
+    const Eigen::Matrix3d rotation = delta.rotation() * origin.rotation();
+    const Eigen::Vector3d translation = origin.translation() + delta.translation();
+    return SE3(rotation, translation);
+  }
+  // kEe: body-frame composition, the delta expressed in the frame it is applied
+  // to (p + R * dp, R * dR).
+  return origin * delta;
+}
 }  // namespace
 
 Reject validate(const Chunk & chunk, const ValidationLimits & limits)
@@ -67,6 +95,11 @@ Reject validate(const Chunk & chunk, const ValidationLimits & limits)
   // fire -- and the historical undefined-behaviour path is exactly a rotation
   // whose dimension could not be resolved.
   if (!joint_space && rotation_dim(chunk.rotation) == 0) {return Reject::kRotationType;}
+  // Same idea for the frame: the hosts parse it with parse_relative_frame(),
+  // which can only produce a known value, so anything else is a host bug. It is
+  // refused in every space and mode, including those that do not read it, so a
+  // bad value cannot ride along on a joint chunk unnoticed.
+  if (!is_known(chunk.relative_frame)) {return Reject::kUnparseableField;}
   const std::size_t dim = joint_space ? kJoints : task_waypoint_dim(chunk.rotation);
   if (chunk.arm_actions.size() != steps * dim) {return Reject::kSizeMismatch;}
   if (!all_finite(chunk.arm_actions)) {return Reject::kNonFinite;}
@@ -158,12 +191,12 @@ Reject decode(
           waypoint.pose = raw;
           break;
         case RelativeMode::kFromAnchor:
-          // EE-frame composition: the policy's delta is expressed in the frame it
-          // observed, which is the anchor's own frame.
-          waypoint.pose = anchor.pose * raw;
+          // kEe: p_a + R_a * dp, R_a * dR.  kBase: p_a + dp, dR * R_a.
+          waypoint.pose = compose(anchor.pose, raw, chunk.relative_frame);
           break;
         case RelativeMode::kPerStep:
-          pose_accumulator = pose_accumulator * raw;
+          // The same composition, applied to the previous waypoint each step.
+          pose_accumulator = compose(pose_accumulator, raw, chunk.relative_frame);
           waypoint.pose = pose_accumulator;
           break;
       }

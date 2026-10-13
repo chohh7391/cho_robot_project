@@ -51,14 +51,18 @@ def generate_launch_description():
             choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller',
                      'vla_mit_controller'],
             description='Direct seven-axis MIT action controller to activate. '
-                        'vla_mit_controller is admitted for its TASK action space '
-                        'only: its Cartesian path is the commissioned '
+                        'vla_mit_controller is admitted for TASK chunks: its '
+                        'Cartesian path is the commissioned '
                         'task_space_impedance_mit_controller law fed by a chunk '
-                        'stream, but its JOINT action space is new code that has '
-                        'only ever run in MuJoCo and omits the joint-limit spring, '
-                        'so do not send joint chunks to a real arm. '
+                        'stream. With bimanual:=true (drive_side_impedance: false) '
+                        'it rejects joint chunks at ingest: that law sends kp = 0 '
+                        'with q_des pinned to the measurement, so no joint '
+                        'position loop closes. The single arm (drive-side '
+                        'impedance) accepts them, but that path has only ever run '
+                        'in MuJoCo and omits the joint-limit spring, so do not '
+                        'send joint chunks to a real arm before commissioning it. '
                         'launch_utils.REAL_MIT_DIRECT_CONTROLLERS is the resolver '
-                        'side of this list and already carried it.'),
+                        'side of this list.'),
         DeclareLaunchArgument(
             'mit_arm', default_value='both_independent',
             choices=['left', 'right', 'both_independent'],

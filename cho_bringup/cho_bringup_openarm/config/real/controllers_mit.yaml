@@ -386,10 +386,15 @@
   # gravity terms mirror task_space_impedance_mit_controller so a VLA rollout and
   # a TaskSpace goal are comparable on the same arm.
   #
-  # NOT selectable from the real bringup yet: launch_utils keeps
-  # REAL_MIT_DIRECT_CONTROLLERS to the two commissioned controllers, so this
-  # block exists to be reviewed and to be ready, not to be run. Commission it in
-  # MuJoCo first.
+  # Selectable from the real bringup (controller_name:=vla_mit_controller,
+  # admitted by launch_utils.REAL_MIT_DIRECT_CONTROLLERS) for TASK chunks: that
+  # path is the commissioned Cartesian law above, fed by a chunk stream. This
+  # block runs drive_side_impedance: true, so the controller takes JOINT chunks
+  # here as well, but that path has only ever run in MuJoCo and carries no
+  # joint-limit spring (tau_ff is the model term alone): commission it in MuJoCo
+  # before sending joint chunks to this arm. The bimanual file runs the legacy
+  # law, under which joint chunks are rejected at ingest (kp = 0 with q_des
+  # pinned to the measurement, so no joint position loop closes).
       # ---- VLA reference source ---------------------------------------------
       # REQUIRED here, unlike the TaskSpace controller which derives a default.
       # The drive adds kp*(q_des - q) downstream of torque_limit, so this is the

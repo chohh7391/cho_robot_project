@@ -129,7 +129,7 @@ controllers is loaded and a task on that path must not try to switch to one.
 | --- | --- | --- | --- | --- |
 | `joint_impedance_mit_controller` | `JointImpedanceActionController` | ✓ | ✓ | `cho_interfaces/JointSpace` action |
 | `task_space_impedance_mit_controller` | `TaskSpaceImpedanceController` | ✓ | ✓ | `cho_interfaces/TaskSpace` action |
-| `vla_mit_controller` | `VlaController` | ✓ | ✓ | `cho_interfaces/VisionLanguageAction` + `ActionChunk` topic |
+| `vla_mit_controller` | `VlaController` | ✓ | ✓ | `cho_interfaces/VisionLanguageAction` + `ActionChunk` topic; joint chunks need `drive_side_impedance: true` (see below) |
 | `joint_position_mit_controller` | `JointPositionController` | ✓ | — | `cho_interfaces/JointSpace` action |
 | `single_arm_follow_joint_trajectory_mit_controller` | `SingleArmFollowJointTrajectoryController` | ✓ (bimanual only) | — | `control_msgs/FollowJointTrajectory` |
 | `bimanual_follow_joint_trajectory_mit_controller` | `BimanualFollowJointTrajectoryController` | ✓ (MoveIt only) | — | `control_msgs/FollowJointTrajectory` |
@@ -145,6 +145,11 @@ need about 101% of a 1 Mbps CAN FD bus, so it was removed.
 The three real-selectable controllers are enforced by
 `launch_utils.REAL_MIT_DIRECT_CONTROLLERS`; anything else is refused at launch
 rather than spawned.
+
+`vla_mit_controller` takes joint chunks only with `drive_side_impedance: true` (MuJoCo
+configs, real single-arm `controllers_mit.yaml`; joint path verified in MuJoCo only). The real
+bimanual `controllers_mit_bimanual.yaml` runs `false` (kp = 0, q_des = measurement): task chunks
+only; joint chunks are rejected at ingest with telemetry `last_reject: action_space_not_accepted`.
 
 ## OpenArm MIT: direct vs FJT
 
@@ -233,7 +238,8 @@ OpenArm, MuJoCo, paired MoveIt (both arms as one transaction):
 ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py bimanual:=true arm:=both mujoco_mit_prototype:=true
 ```
 
-OpenArm, real, bimanual VLA:
+OpenArm, real, bimanual VLA (task chunks only: a joint chunk is rejected under this config's
+`drive_side_impedance: false`):
 
 ```bash
 ros2 launch cho_bringup_openarm bringup_real_robot.launch.py bimanual:=true controller_name:=vla_mit_controller mit_arm:=both_independent hand:=false left_can_interface:=can1 right_can_interface:=can0
@@ -252,6 +258,21 @@ misbehaves:
 ```bash
 ROS_DOMAIN_ID=7 ros2 launch cho_bringup_openarm bringup_isaac_robot.launch.py control_mode:=torque controller_name:=joint_space_impedance_controller physics_engine:=newton bimanual:=true
 ```
+
+## VLA chunks
+
+`vla_controller` (Franka) and `vla_mit_controller` (OpenArm) take `cho_interfaces/ActionChunk`.
+`cho_interfaces/msg/ActionChunk.msg` defines the fields, the `rotation_type` conventions and the
+message versions; `cho_vla_core/DESIGN.md` describes the pipeline. Rebuild every bridge with the
+current `cho_interfaces`.
+
+- `relative_frame` sets the frame of a relative task chunk's deltas: `ee` (the anchor's body
+  frame) or `base` (the model root frame). Empty means `ee` and is accepted with a throttled
+  warning. Any other value is rejected, in every action space; joint and absolute chunks do not
+  otherwise use it.
+- `max_task_ang_acc` [rad/s²] bounds the angular acceleration of the task reference; 0 turns it
+  off. Default: 10 on Franka `vla_controller`, 0 on OpenArm `vla_mit_controller`.
+- `ros2 run cho_control_tools vla_action_client` sends relative chunks with `relative_frame: base`.
 
 ## Inspecting a running system
 

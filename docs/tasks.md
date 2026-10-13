@@ -261,7 +261,8 @@ description, not from a run on the hardware with its actual payload.
 
 The VLA tasks wait for an external VLA policy: an ActionChunk publisher on
 `/vla/action/ee_pose` plus the VLA action goal
-(see `ros2 run cho_control_tools vla_action_client` for a reference client).
+(see `ros2 run cho_control_tools vla_action_client` for a reference client). A relative task
+chunk sets `relative_frame`; see [controllers_and_bringup.md](controllers_and_bringup.md#vla-chunks).
 
 The `controller_check_*` smoke checks switch through every switchable controller of
 that bringup mode and drive a small motion through its action server — run one after

@@ -19,18 +19,13 @@
 
 #include <Eigen/Eigen>
 #include <pinocchio/spatial/explog.hpp>
+#include "cho_controller_base/kinematics.hpp"
 #include "cho_controller_franka/robot_utils.hpp"
 #include "cho_controller_franka/vla_controller.hpp"
 #include "cho_controller_franka/servers/vla_action_server.hpp"
 
 namespace cho_controller {
 namespace franka {
-
-namespace {
-// Damping added to J*J^T in the differential IK, so joint velocities stay bounded
-// near singularities even if a chunk commands an aggressive target.
-constexpr double kIkDamping = 0.01;
-}  // namespace
 
 controller_interface::InterfaceConfiguration
 VLAController::command_interface_configuration() const
@@ -84,6 +79,10 @@ CallbackReturn VLAController::on_configure(
   }
 
   action_server_ = std::make_shared<VLAActionServer>(get_node(), "~/vla");
+  action_server_->set_arm_kinematics(
+    [this](const Vector7d & joints, pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian) {
+      arm_kinematics_world(joints, pose, jacobian);
+    });
   action_server_->init();
   action_server_->attach_activity(&activity_);
 
@@ -185,7 +184,7 @@ controller_interface::return_type VLAController::update(
     //    per clock message and three of them report measured_period == 0). With the
     //    raw period that collapsed both step clamps to zero and, worse, turned the
     //    (q_ref_ - q_ref_prev) / period feedforward into 0/0 = NaN.
-    write_open_loop(space, vla_running, nominal_period(period));
+    write_open_loop(space, vla_running, twist_des, nominal_period(period));
   }
   return controller_interface::return_type::OK;
 }
@@ -263,7 +262,7 @@ VLAController::Vector7d VLAController::clamp_step(const Vector7d & step, const d
   return step.cwiseMax(-max_step).cwiseMin(max_step);
 }
 
-VLAController::Vector7d VLAController::task_step(const double dt)
+VLAController::Vector7d VLAController::task_step(const Vector6d & twist_des, const double dt)
 {
   // FK/Jacobian at q_ref_ (not measured) so the open-loop reference stays free
   // of encoder noise, exactly like task_space_ik_controller.
@@ -273,20 +272,37 @@ VLAController::Vector7d VLAController::task_step(const double dt)
   Eigen::Matrix<double, 6, 7> J;  // 6x7 Body Jacobian (LOCAL)
   FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ref, J);
 
-  Vector6d error;
-  error.head<3>() =
-    H_ref.rotation().transpose() * (state_.H_ee_des.translation() - H_ref.translation());
-  error.tail<3>() = pinocchio::log3(
-    Eigen::Matrix3d(H_ref.rotation().transpose() * state_.H_ee_des.rotation()));
+  // Both in H_ref's frame, as J is: the error to this cycle's target, and the
+  // reference's advance this cycle (twist_des is world-aligned).
+  const Vector6d error = cho_controller_base::local_pose_error(H_ref, state_.H_ee_des);
+  const Eigen::Matrix3d to_local = H_ref.rotation().transpose();
+  Vector6d advance;
+  advance.head<3>() = to_local * twist_des.head<3>() * dt;
+  advance.tail<3>() = to_local * twist_des.tail<3>() * dt;
 
-  // Damped least squares: dq = J^T (J J^T + damping)^-1 v.
-  Eigen::Matrix<double, 6, 6> JJt = J * J.transpose();
-  JJt.diagonal().array() += kIkDamping;
-  return J.transpose() * JJt.ldlt().solve(current_kp_task_.cwiseProduct(error)) * dt;
+  // The advance, plus kp_task * dt of the error to where the reference was
+  // before it (H_ee_des is already this cycle's target). A reference moving at
+  // a steady twist is tracked without lag; the P term alone lags it by
+  // twist / kp_task.
+  const Vector6d move = advance + (current_kp_task_ * dt).cwiseProduct(error - advance);
+  return cho_controller_base::dls_step(J, move, kVlaDlsLambda);
+}
+
+void VLAController::arm_kinematics_world(
+  const Vector7d & joints, pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian)
+{
+  q_scratch_ = state_.q;
+  q_scratch_.head(num_dof_) = joints;
+  Eigen::Matrix<double, 6, 7> local;
+  FrankaBaseController::compute_arm_kinematics(q_scratch_, pose, local);
+  // LOCAL -> LOCAL_WORLD_ALIGNED: the same origin, world axes.
+  jacobian.topRows<3>() = pose.rotation() * local.topRows<3>();
+  jacobian.bottomRows<3>() = pose.rotation() * local.bottomRows<3>();
 }
 
 void VLAController::write_open_loop(
-  const cho_vla_core::ActionSpace space, const bool vla_running, const double dt)
+  const cho_vla_core::ActionSpace space, const bool vla_running,
+  const Vector6d & twist_des, const double dt)
 {
   // ----- Position & velocity control: shared OPEN-LOOP reference generation -----
   // Both modes integrate the same joint reference q_ref_ (active only while a VLA
@@ -308,7 +324,7 @@ void VLAController::write_open_loop(
     // seed briefly off right after a goal starts) cannot spike the reference.
     const Vector7d step = (space == cho_vla_core::ActionSpace::kJoint)
         ? Vector7d(state_.q_arm_des - q_ref_)
-        : task_step(dt);
+        : task_step(twist_des, dt);
     q_ref_ += clamp_step(step, dt);
     ref_fk_dirty_ = true;
   }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -165,7 +166,179 @@ TEST(ChunkSmoother, NoSeedFromAnEmptyTimelineOrAcrossASpaceSwitch) {
 
   ActionBuffer buffer;
   buffer.splice(incoming, ActionSpace::kTask, 0.9, 0.1);
-  EXPECT_FALSE(ema_seed(buffer.timeline(), incoming, ActionSpace::kJoint, 0.1, seed));
-  EXPECT_TRUE(ema_seed(buffer.timeline(), incoming, ActionSpace::kTask, 0.1, seed));
+  // The next chunk starts at 1.1, so its seed is the timeline at 1.05: inside the
+  // 1.0 .. 1.1 the timeline holds. (Chaining `incoming` onto itself would ask for
+  // 0.9, before the timeline's first waypoint, which AC12 now refuses.)
+  std::vector<Waypoint> next(2);
+  next[0].t = 1.1;
+  next[1].t = 1.2;
+  EXPECT_FALSE(ema_seed(buffer.timeline(), next, ActionSpace::kJoint, 0.05, seed));
+  EXPECT_TRUE(ema_seed(buffer.timeline(), next, ActionSpace::kTask, 0.05, seed));
+}
+
+// ============================ AC12: no seed from a time the timeline no longer holds ==
+//
+// ema_seed() asks the timeline for its value at incoming.front().t - control_dt.
+// Since a splice prunes the played past (AC6: the last waypoint before `now` is
+// all that is kept of it), a chunk that arrives later than the splice period
+// after its observation asks for a time that is gone. The timeline then used to
+// hand back its first waypoint's value -- a later time's value, reported as a
+// success (review draft D4). Now that is false, do not chain; anything at or
+// after the first waypoint is unchanged. All times are exact in binary.
+
+constexpr double kGrid = 0.125;
+
+// value(t) = 2 (t - 1) in joint 0 and in the pose's x: linear playback of any of
+// these, spliced however, samples the line itself, so every expected seed is
+// value(request time).
+double on_line(const double t) {return 2.0 * (t - 1.0);}
+
+std::vector<Waypoint> line_chunk(const double t0, const double dt, const int count)
+{
+  std::vector<Waypoint> out;
+  for (int index = 0; index < count; ++index) {
+    Waypoint waypoint;
+    waypoint.t = t0 + dt * index;
+    waypoint.joints.setConstant(on_line(waypoint.t));
+    waypoint.pose =
+      SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(on_line(waypoint.t), 0.0, 0.0));
+    out.push_back(waypoint);
+  }
+  return out;
+}
+
+double seed_value(const Waypoint & seed, const ActionSpace space)
+{
+  return space == ActionSpace::kJoint ? seed.joints(0) : seed.pose.translation()(0);
+}
+
+ActionBuffer::Params linear_playback()
+{
+  ActionBuffer::Params params;
+  params.interpolation = Interpolation::kLinear;
+  params.blend_duration = 0.0;
+  return params;
+}
+
+// 1.0 .. 2.0 spliced at 1.0, then 1.25 .. 2.125 spliced 350 ms late at 1.6. AC6
+// keeps 1.5, the last waypoint before 1.6, and nothing earlier.
+void prune_at_1_6(ActionBuffer & buffer, const ActionSpace space)
+{
+  buffer.splice(line_chunk(1.0, kGrid, 9), space, 1.0, kGrid);
+  buffer.splice(line_chunk(1.25, kGrid, 8), space, 1.6, kGrid);
+}
+
+const char * name_of(const ActionSpace space)
+{
+  return space == ActionSpace::kJoint ? "joint" : "task";
+}
+
+TEST(ChunkSmoother, AC12_NoSeedFromBeforeWhatTheLastSpliceKept) {
+  for (const ActionSpace space : {ActionSpace::kJoint, ActionSpace::kTask}) {
+    SCOPED_TRACE(name_of(space));
+    ActionBuffer buffer(linear_playback());
+    prune_at_1_6(buffer, space);
+    ASSERT_NEAR(buffer.timeline().waypoints.front().t, 1.5, 1e-12);
+
+    Waypoint seed;
+    // Observed at 1.5, so the seed is wanted at 1.375: pruned. The old answer was
+    // the value at 1.5 (1.0), where the unpruned line says 0.75.
+    EXPECT_FALSE(ema_seed(buffer.timeline(), line_chunk(1.5, kGrid, 4), space, kGrid, seed));
+    // Further back still.
+    EXPECT_FALSE(ema_seed(buffer.timeline(), line_chunk(1.25, kGrid, 4), space, kGrid, seed));
+    EXPECT_FALSE(ema_seed(buffer.timeline(), line_chunk(1.0, kGrid, 4), space, kGrid, seed));
+    // 0.1 ms short of the first waypoint is not the same instant.
+    EXPECT_FALSE(
+      ema_seed(buffer.timeline(), line_chunk(1.625 - 1e-4, kGrid, 4), space, kGrid, seed));
+  }
+}
+
+TEST(ChunkSmoother, AC12_ASeedFromWhatWasKeptIsStillTheTimelinesValueThere) {
+  for (const ActionSpace space : {ActionSpace::kJoint, ActionSpace::kTask}) {
+    SCOPED_TRACE(name_of(space));
+    ActionBuffer buffer(linear_playback());
+    prune_at_1_6(buffer, space);
+    ASSERT_NEAR(buffer.timeline().waypoints.front().t, 1.5, 1e-12);
+
+    Waypoint seed;
+    // Exactly the first waypoint.
+    ASSERT_TRUE(ema_seed(buffer.timeline(), line_chunk(1.625, kGrid, 4), space, kGrid, seed));
+    EXPECT_NEAR(seed.t, 1.5, 1e-12);
+    EXPECT_NEAR(seed_value(seed, space), 1.0, 1e-12);
+    // Between the first two.
+    ASSERT_TRUE(ema_seed(buffer.timeline(), line_chunk(1.6875, kGrid, 4), space, kGrid, seed));
+    EXPECT_NEAR(seed.t, 1.5625, 1e-12);
+    EXPECT_NEAR(seed_value(seed, space), 1.125, 1e-12);
+    // Further in.
+    ASSERT_TRUE(ema_seed(buffer.timeline(), line_chunk(2.0, kGrid, 4), space, kGrid, seed));
+    EXPECT_NEAR(seed.t, 1.875, 1e-12);
+    EXPECT_NEAR(seed_value(seed, space), 1.75, 1e-12);
+    // A rounding error short of the first waypoint is still its instant: grid times
+    // reached by different sums differ in the last bits.
+    ASSERT_TRUE(
+      ema_seed(buffer.timeline(), line_chunk(1.625 - 1e-12, kGrid, 4), space, kGrid, seed));
+    EXPECT_NEAR(seed.t, 1.5, 1e-9);
+    EXPECT_NEAR(seed_value(seed, space), 1.0, 1e-9);
+  }
+}
+
+TEST(ChunkSmoother, AC12_NoSeedFromBeforeATimelineThatWasNeverPruned) {
+  // Planned ahead and spliced before it starts: the timeline begins at 1.0, and
+  // there is nothing to say what the reference was at 0.875 either.
+  ActionBuffer buffer(linear_playback());
+  buffer.splice(line_chunk(1.0, kGrid, 9), ActionSpace::kJoint, 0.5, kGrid);
+  ASSERT_NEAR(buffer.timeline().waypoints.front().t, 1.0, 1e-12);
+
+  Waypoint seed;
+  EXPECT_FALSE(
+    ema_seed(buffer.timeline(), line_chunk(1.0, kGrid, 4), ActionSpace::kJoint, kGrid, seed));
+  ASSERT_TRUE(
+    ema_seed(buffer.timeline(), line_chunk(1.125, kGrid, 4), ActionSpace::kJoint, kGrid, seed));
+  EXPECT_NEAR(seed.t, 1.0, 1e-12);
+  EXPECT_NEAR(seed.joints(0), 0.0, 1e-12);
+}
+
+TEST(ChunkSmoother, AC12_AStreamChainsOnlyWhileItsLatencyLeavesTheSeedUnpruned) {
+  // 16 Hz splices of 16-waypoint chunks on a 1/32 s grid, 10 s of them. Before
+  // splice i (at now_i) the timeline starts at the last waypoint before now_{i-1}
+  // = now_i - 1/16, and chunk i, observed at now_i - L, wants its seed at
+  // now_i - L - 1/32.
+  //   L = 1/64: the timeline starts at now_{i-1} - 1/64 = now_i - 5/64, the seed is
+  //             wanted at now_i - 3/64: inside, every chunk chains.
+  //   L = 3/32: the timeline starts at now_{i-1} - 1/32 = now_i - 3/32, the seed is
+  //             wanted at now_i - 4/32: pruned, no chunk chains. Inference slower
+  //             than the splice period leaves the filter unchained, not chained to
+  //             the wrong time.
+  constexpr double kPeriod = 1.0 / 16.0;
+  constexpr double kStreamGrid = 1.0 / 32.0;
+  constexpr int kChunkSize = 16;
+  struct Case
+  {
+    double latency;
+    bool chains;
+  };
+  const Case cases[] = {{1.0 / 64.0, true}, {3.0 / 32.0, false}};
+  for (const Case & c : cases) {
+    SCOPED_TRACE("latency=" + std::to_string(c.latency));
+    ActionBuffer buffer(linear_playback());
+    for (int i = 0; i < 160; ++i) {
+      const double now = 1.0 + kPeriod * i;
+      const double t_obs = now - c.latency;
+      const std::vector<Waypoint> chunk = line_chunk(t_obs, kStreamGrid, kChunkSize);
+      Waypoint seed;
+      const bool chained =
+        ema_seed(buffer.timeline(), chunk, ActionSpace::kJoint, kStreamGrid, seed);
+      if (i == 0) {
+        EXPECT_FALSE(chained) << "nothing to chain from yet";
+      } else {
+        ASSERT_EQ(chained, c.chains) << "splice " << i;
+        if (chained) {
+          EXPECT_NEAR(seed.t, t_obs - kStreamGrid, 1e-12) << "splice " << i;
+          EXPECT_NEAR(seed.joints(0), on_line(t_obs - kStreamGrid), 1e-9) << "splice " << i;
+        }
+      }
+      buffer.splice(chunk, ActionSpace::kJoint, now, kStreamGrid);
+    }
+  }
 }
 }  // namespace

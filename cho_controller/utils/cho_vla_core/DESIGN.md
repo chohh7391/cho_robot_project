@@ -56,10 +56,51 @@ last dropped waypoint is retained as the segment origin, so `now` falls inside a
 segment and interpolation stays continuous instead of jumping to the first
 future waypoint.
 
+The same rule prunes what is already buffered: every splice drops the
+timeline's waypoints before `now` except the last, from `waypoints` and from the
+blend's `previous` alike. A segment is drawn from its two end waypoints and the
+slopes stored on them, so samples at or after `now` are bit-for-bit what they
+were; only the past is forgotten. Without it the timeline grew by a chunk on
+every splice and was copied whole each time — about 36k waypoints after ten
+minutes at 15 Hz; with it the timeline stays at one chunk plus its origin. The
+one reader of the past is `ema_seed()`, which samples a waypoint spacing before
+a chunk's first waypoint. When inference latency puts that behind the retained
+origin (or behind the first waypoint of a running blend's outgoing trajectory)
+it returns false and the chunk is not chained: the sampler would otherwise hold
+the origin and hand back a later time's value as if it were the requested one.
+That matters only with `chunk_ema_factor` below 1 on absolute chunks.
+
 Anchors for `kFromAnchor` and `kPerStep` come from `ReferenceHistory::at(t_obs)`
 for the same reason: the policy measured its offsets from `s(t_obs)`, so adding
 them to `s(t_arrival)` overshoots by the motion that happened during inference,
 every chunk, in the same direction.
+
+A relative TASK delta is composed in the frame `Chunk::relative_frame` names.
+`"ee"` (the default, and what an empty value means: the pre-v3 behaviour) reads
+the delta in the body frame of the pose it is applied to, so from the anchor
+`p = p_a + R_a·Δp` and `R = R_a·ΔR`. `"base"` reads it in the model root
+frame: `p = p_a + Δp` and `R = ΔR·R_a`. The position then does not depend on
+the rotation; it is not `ΔT·T_a`, which would also swing the position about the
+root origin. `per_step` applies the same rule at every step to the previous
+waypoint instead of the anchor: `"ee"` accumulates `T_k = T_{k-1}·ΔT_k`,
+`"base"` accumulates `p_k = p_{k-1} + Δp_k` and `R_k = ΔR_k·R_{k-1}`. The two
+agree for every delta only when the anchor's rotation is the identity. With the
+tool pointing down (`R_a = Rx(π)`), `"ee"` reads a root-frame Δz of −0.01 as
++0.01, so eight steps from z = 0.4 end at 0.48 where `"base"` ends at 0.32. The
+OpenVLA-OFT LIBERO deltas are applied in LIBERO's world axes, which are its
+robot base axes, so that bridge sends `"base"`; they are also robosuite
+`OSC_POSE` controller inputs rather than metres and radians, so it clips them
+to [−1, 1], scales them by 0.05 m and 0.5 rad, and sends the rotation as
+`axis_angle` (`ActionChunk.msg` has the prescription, read from public sources
+and to be confirmed in the version bridged). The model root is the frame the
+registry names `model.absolute_goal_frame`, not always the arm's base link: on
+the OpenArm bimanual torso it is `world`, and each arm's `link0` is turned
+±90° about x from it (`types.hpp`, `RelativeFrame`, lists each robot).
+Joint chunks and `kAbsolute` task chunks do not read the field. A relative task
+chunk that leaves it empty is still accepted, as `"ee"`, and the host warns
+(throttled); an unrecognised value is rejected as `kUnparseableField`, never
+guessed, because a wrong frame drives the arm the wrong way with no error to
+show for it.
 
 Sampling is by time, not by index. LeRobot's `async_inference` pops one action
 per tick and its newer rollout backend interpolates by an integer multiple; both
@@ -117,6 +158,14 @@ any gap (proportional for a small gap, capped by the braking envelope
 applied in both directions. A reference inside the bounds passes through with
 no lag; only what exceeds them is shaped.
 
+In the active space the emitted rate never exceeds its velocity bound, whatever
+the sampled rate does — per joint, and on the norm for translation and
+rotation — and no cycle moves the reference further than the bound times the
+step. Ruckig's velocity interface does not bound velocity itself, so near the
+bound the feed-forward acceleration is capped to what still levels off inside
+it, and Ruckig's output is projected into the bound. Neither acts on a
+reference followed inside the bounds.
+
 The two limiters it replaced both chased: each cycle they planned to stop at
 where the reference was, so a moving reference was followed `v²/(2a)` behind —
 44–80 ms behind the policy's path in MuJoCo, against 1 ms now — and on a clean
@@ -124,6 +173,89 @@ policy the arm moved most smoothly with no limiter at all, because the
 smoothing they added was a side effect of that lag. The older one (a
 trapezoid) also allowed instant deceleration, which was the largest
 acceleration spike in the whole reference.
+
+Joints and translation are tracked that way always. Rotation, by default, has a
+velocity clamp alone: it adds no lag, but it also passes any step in angular
+rate straight through. `max_angular_acceleration` (off by default, and with
+identical output while off) tracks rotation the same way as translation, on
+the world-aligned angular velocity: the gap is the rotation vector from the
+emitted orientation to the sampled one, and Ruckig keeps the emitted rate's
+per-cycle change within `α·dt` (a norm bound, per-axis `α/√3`) and its size
+within `max_angular_velocity`. A rotation inside both bounds is followed with
+the gap closing to zero; a stationary step is approached on the braking
+envelope without overshoot.
+
+Only a step `0 < now − previous ≤ kClockRebaseSec` (0.1 s) is integrated. Any
+other cycle — `now` equal to or before the previous one, a step that is not
+finite, or one longer than `kClockRebaseSec` — emits exactly what the previous
+cycle emitted (pose, joints, twist, joint velocity) and changes no rate state,
+so the next cycle that does advance continues as if it had not happened. Isaac
+reports zero steps routinely when `update_rate` and `/clock` disagree. Which
+time the next step is measured from depends on the step:
+
+- not finite (NaN, ±inf): the previous time is kept, so a NaN does not make
+  every later step NaN;
+- zero, or back by at most `kClockRebaseSec`: kept, so jitter is not counted
+  twice;
+- back by more than that: the clock was *set back* (a sim-time reset, a system
+  clock step), so `now` becomes the time base and the next positive step
+  continues from it, without waiting for the clock to pass the old time;
+- forward by more than that: the clock jumped ahead, so `now` becomes the time
+  base and the jump is never integrated. One stray sample from another clock
+  costs two held cycles; clocks that keep alternating hold the reference.
+
+The threshold is far above any control period here (1–4 ms) and is the period
+the OpenArm task-space controller refuses to advance its clock by. A seed at a
+non-finite time is replaced by the first finite `now`.
+
+### Seeding
+
+The limiter carries rate state, so wherever the reference source changes by
+design the host seeds it with what it is *commanding* at that moment. There are
+two cases, and they differ in the rates:
+
+- `seed()` — goal start and a resume out of hold. The arm is held, so every
+  rate and acceleration starts at zero.
+- `seed_with_rates()` — a change of action space within a goal, seen on the
+  control thread as the sampled `Reference::space` differing from the previous
+  cycle's. The pipeline cannot bridge that by itself: the limiter runs on the
+  active space only, and a sampled reference's other representation is the
+  running chunk's anchor, passed through unlimited, so the last value it holds
+  in the new space is that anchor rather than what the arm is commanded to.
+  Nor can it know what the host's law is commanding — a drive-side offset or an
+  effort law's spring makes that differ from the measured state. The host
+  therefore seeds the new space's commanded value *and rate* (for joint → task,
+  the forward kinematics of the commanded joints and their Jacobian times the
+  commanded joint rate). The rates are clamped into the velocity bounds and the
+  acceleration starts at zero. Seeding at rest there instead dropped a moving
+  reference's rate to zero in one cycle and re-accelerated it, the arm falling
+  behind meanwhile: in the CPU bench (a 0.15 m/s path, the Franka
+  position/velocity-mode seed, a servo-model plant) an arm 6.8 mm behind the
+  path before the switch fell 18.9 mm behind after it.
+
+Under `clamp_joint_window` both clamp the seeded joints into the window, where
+every joint cycle's output lies; a joint inside it is seeded unchanged. A host
+command outside the window (a law's `q + offset` before the host's own window
+clamp) is seeded on the window's edge, so the first cycle's joint rate, its
+displacement over the step, stays within the velocity bound.
+
+A seed is dated when it was commanded. A host seeding with what the previous
+cycle commanded passes that cycle's time (when it is finite and earlier than
+the current one), so the switch cycle advances from it at the seeded rate;
+seeded at the current time, that cycle's step is zero and a moving reference
+stands still for one cycle.
+
+The seed makes the limited *reference* continuous across a switch; the host's
+command is continuous only in what the new space represents. Joint → task on a
+7-joint arm carries the row-space part of the joint law's offset and not its
+null-space part. With the OpenArm drive-side law `q_des = q + J⁺(x_ref − FK(q))`
+(`J⁺` its damped, weighted inverse), seeded at `FK(q_des)`, the first task
+cycle keeps `J⁺J(q_des − q)` to first order and drops `(I − J⁺J)(q_des − q)`
+in that cycle, a step of first order in the offset.
+
+`ActionBuffer::SpliceResult::space_reset` reports the same switch at the
+splice, on the executor; the re-seed belongs to the first control cycle that
+samples the new space.
 
 ## Chunk combination
 
@@ -138,11 +270,34 @@ value a slot holds where both chunks cover it — `1.0` is LeRobot's
 how the reference *reaches* it, as a minimum-jerk blend between the outgoing
 and incoming trajectories: the weight is `10s³ − 15s⁴ + 6s⁵`, the quintic
 deoxys' min-jerk interpolators use, flat in its first and second derivative at
-both ends, so the blend adds neither a velocity nor an acceleration step at
-either boundary (the cubic smoothstep it replaced was flat in velocity only).
+both ends (the cubic smoothstep it replaced was flat in velocity only).
 Averaging alone still steps; a servo bus absorbs that, a torque-controlled arm
 does not. Blending two trajectories rather than a frozen value against a
 trajectory matters too: freezing would lag the motion for the whole window.
+
+What the blend guarantees at a splice depends on whether an earlier blend is
+still running there:
+
+- None running (chunks at least `blend_duration` apart): the outgoing
+  trajectory is the old waypoints, and the reference has neither a position,
+  a velocity nor an acceleration step at either end of the window.
+- One running (chunks closer together than `blend_duration`, which is every
+  chunk at 15 Hz with a 0.1 or 0.2 s blend): the outgoing trajectory is what
+  the timeline was *emitting* — that blend — re-expressed as knots carrying its
+  position and velocity: one at the splice instant, one at each remaining
+  waypoint inside the running window, the segment origin before the splice,
+  and the old waypoints unchanged from the window's end on. Position stays
+  continuous under every interpolation and velocity under `pchip` and
+  `spline`; `linear` draws straight lines between those knots, so its velocity
+  can step. Acceleration can step under all three, by the difference between
+  the curve through the knots and the blend it stands in for. Measured on the
+  sampler (chunks A → B → B 1/15 s apart, sampled at 1 kHz, cubic): the peak
+  acceleration was 1.0–1.15× a single blend's at τ = 0.1 s and 1.3–1.5× at
+  τ = 0.2 s, and the largest 1 ms change 0.019 and 0.011 of the gap.
+  This used to hand over the waypoints underneath, so the window restarted
+  from the pre-blend trajectory: a position step of `(1 − w(T/τ))` of the gap
+  between chunks, 21% at τ = 0.1 s and 79% at τ = 0.2 s.
+
 The blend's velocities are its derivative: the weighted rates plus the weight's
 own rate times the gap between the two trajectories, the term the limiter needs
 as feed-forward through the window. Translation blends linearly and rotation
@@ -186,6 +341,14 @@ vector is *not* degenerate — it legitimately means no rotation.
 
 `joint_order` must be a full permutation. A partial or duplicated `joint_names`
 list would otherwise silently drop or double-drive a joint.
+
+A host can also refuse a well-formed chunk because of its own configuration:
+the OpenArm `VlaController` under `drive_side_impedance: false` takes task
+chunks only. That is `Reject::kActionSpaceNotAccepted`
+(`action_space_not_accepted` in the telemetry), not `kUnparseableField`: a
+bridge on another PC sees only the telemetry's reason name, and "the message
+is malformed" would send it looking at its messages when no change to them but
+the action space gets the chunk accepted.
 
 ## Stream liveness
 

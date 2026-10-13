@@ -357,10 +357,20 @@ protected:
   double idle_release_elapsed_{0.0};
   pinocchio::SE3 idle_release_start_{pinocchio::SE3::Identity()};
   pinocchio::SE3 idle_release_goal_{pinocchio::SE3::Identity()};
-  // Joint reference used only by startup and the return-to-zero gain handoff.
-  // Active and idle Cartesian control put the Franka task law in MIT tau_ff
-  // with zero joint stiffness, and keep `kd` as actuator-side joint damping
-  // for the arm's null space.
+  // Joint reference. This class writes it only at activation and during startup
+  // -- the measurement at activation and when the session is seeded, the
+  // return-to-zero ramp's q_des on every cycle of the ramp, then the converged
+  // posture, which update() commands while no Cartesian pose is latched yet
+  // (the gain handoff) -- and its own Cartesian control leaves it there: a
+  // TaskSpace goal neither reads nor updates it.
+  //
+  // A derived controller may widen that, and VlaController does:
+  // note_commanded_joints() records the q_des of every target it writes, on its
+  // Cartesian paths too (the measurement under the legacy law, which pins q_des
+  // there), and reads it back as "the q_des being commanded now" -- its anchor
+  // ring's joint field and its limiter seeds. Changing what this holds, or when,
+  // changes those. task_q_reference_observed_ mirrors it for the diagnostics
+  // service's q_ref, which under VlaController is therefore that q_des.
   std::array<double, 7> task_q_ref_{};
   std::array<double, 7> task_last_model_feedforward_{};
   std::array<std::atomic<double>, 6> task_last_error_{};

@@ -43,7 +43,13 @@ void apply_ema(std::vector<Waypoint> & waypoints, double factor, const Waypoint 
 // The seed that chains apply_ema() across a chunk boundary: the timeline's own
 // value one waypoint before `incoming` begins, i.e. the sample the filter would
 // have seen last. False -- do not chain -- when the timeline is empty or in
-// another action space.
+// another action space, and when it no longer holds that time: earlier than its
+// first waypoint (by more than 1e-9 s), or, where the time falls in a running
+// blend, than the first waypoint of the blend's outgoing trajectory. Before a
+// series' first waypoint the sampler holds that waypoint, so it would hand back
+// a LATER time's value as this one's. ActionBuffer::splice() keeps one waypoint
+// before each splice instant, so this is the case whenever inference latency
+// exceeds about one chunk period.
 //
 // Both hosts used to chain from the PREVIOUS chunk's last waypoint, which lies a
 // whole horizon ahead of where the new chunk starts playing, so every chunk's

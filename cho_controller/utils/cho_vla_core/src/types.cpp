@@ -36,6 +36,7 @@ const char * reject_name(const Reject reject)
     case Reject::kStaleSeq: return "stale_seq";
     case Reject::kNonFiniteStamp: return "non_finite_stamp";
     case Reject::kUnparseableField: return "unparseable_field";
+    case Reject::kActionSpaceNotAccepted: return "action_space_not_accepted";
   }
   return "unknown";
 }
@@ -56,6 +57,13 @@ bool parse_relative_mode(const std::string & text, const bool legacy_relative, R
   if (text == "absolute") {out = RelativeMode::kAbsolute; return true;}
   if (text == "from_anchor") {out = RelativeMode::kFromAnchor; return true;}
   if (text == "per_step") {out = RelativeMode::kPerStep; return true;}
+  return false;
+}
+
+bool parse_relative_frame(const std::string & text, RelativeFrame & out)
+{
+  if (text.empty() || text == "ee") {out = RelativeFrame::kEe; return true;}
+  if (text == "base") {out = RelativeFrame::kBase; return true;}
   return false;
 }
 
@@ -105,7 +113,8 @@ bool decode_rotation(const double * values, const RotationType rotation, Eigen::
       return true;
     }
     case RotationType::kEuler: {
-      // Intrinsic X-Y-Z, matching the existing Franka pipeline.
+      // Intrinsic X-Y-Z, R = Rx(a) * Ry(b) * Rz(c), matching the existing Franka
+      // pipeline. Not ROS roll-pitch-yaw (Rz * Ry * Rx): see RotationType.
       out = (Eigen::AngleAxisd(values[0], Eigen::Vector3d::UnitX()) *
         Eigen::AngleAxisd(values[1], Eigen::Vector3d::UnitY()) *
         Eigen::AngleAxisd(values[2], Eigen::Vector3d::UnitZ())).toRotationMatrix();
@@ -120,6 +129,7 @@ bool decode_rotation(const double * values, const RotationType rotation, Eigen::
     }
     case RotationType::kRotation6D: {
       // Gram-Schmidt on two 3-vectors (Zhou et al. continuous representation).
+      // They are R's first two COLUMNS; rows would decode as R^T (RotationType).
       const Eigen::Vector3d first(values[0], values[1], values[2]);
       const Eigen::Vector3d second(values[3], values[4], values[5]);
       if (first.norm() < 1e-9) {return false;}

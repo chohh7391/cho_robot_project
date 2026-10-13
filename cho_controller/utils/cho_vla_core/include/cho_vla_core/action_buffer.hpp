@@ -78,8 +78,12 @@ bool parse_interpolation(const std::string & text, Interpolation & out);
 // RealtimeBuffer and have the control loop sample it without allocating.
 struct Timeline
 {
+  // Ascending in t. Holds nothing before the last splice instant except the one
+  // waypoint the segment containing it starts from.
   std::vector<Waypoint> waypoints;
-  // Outgoing timeline, retained only for the blend window.
+  // Outgoing trajectory, retained only for the blend window: what the timeline
+  // was emitting at the splice, pruned the same way. See
+  // ActionBuffer::Params::blend_duration.
   std::vector<Waypoint> previous;
   double blend_start {0.0};
   double blend_end {0.0};
@@ -111,13 +115,26 @@ public:
     // drive but on a torque-controlled arm is a reference discontinuity.
     double aggregate_weight {1.0};
 
-    // Minimum-jerk blend from the outgoing chunk's trajectory to the new one,
-    // over this many seconds from the splice instant. 0 disables it, giving a
-    // hard splice. This blends two TRAJECTORIES, not a frozen value against a
+    // Minimum-jerk blend from the outgoing trajectory to the new chunk's, over
+    // this many seconds from the splice instant. 0 disables it, giving a hard
+    // splice. This blends two TRAJECTORIES, not a frozen value against a
     // trajectory: freezing would lag behind the motion for the whole window.
     // The weight is 10s^3 - 15s^4 + 6s^5 (deoxys' min-jerk interpolator): flat
-    // in its first AND second derivative at both ends, so the blend adds
-    // neither a velocity nor an acceleration step at either boundary.
+    // in its first AND second derivative at both ends.
+    //
+    // What that buys depends on where the splice lands:
+    //   - no blend running: the outgoing trajectory is the old waypoints, and
+    //     the reference has neither a position, a velocity nor an acceleration
+    //     step at either end of the window.
+    //   - inside a window still running from an earlier splice (chunks closer
+    //     together than this duration): the outgoing trajectory is what was
+    //     being EMITTED -- that blend -- re-expressed as knots carrying its
+    //     position and velocity. Position stays continuous under every
+    //     interpolation and velocity under pchip and spline; acceleration may
+    //     step at the splice, by the difference between that cubic and the
+    //     blend it stands in for. Before this, the window restarted from the
+    //     pre-blend trajectory, a position step of (1 - w(T/duration)) of the
+    //     gap: 21% at 0.1 s and 79% at 0.2 s for 15 Hz chunks.
     double blend_duration {0.0};
 
     // Between-waypoint interpolation; see Interpolation.
@@ -136,6 +153,11 @@ public:
     // Waypoints whose execution time had already passed on arrival.
     std::size_t dropped_past {0};
     // The incoming chunk changed action space, so the timeline was cleared.
+    // Nothing here touches the ReferenceLimiter: the host re-seeds it, with
+    // seed_with_rates(), on the first control cycle whose sampled
+    // Reference::space differs from the previous cycle's -- that cycle, on the
+    // control thread, not this splice on the executor, is where the switch
+    // reaches the reference. See ReferenceLimiter.
     bool space_reset {false};
   };
 
@@ -157,6 +179,16 @@ public:
   // Splice `incoming` (ascending in t, as produced by decode()) onto the
   // timeline at `now`. `control_dt` is the chunk's waypoint spacing, used only
   // for the slot-match tolerance.
+  //
+  // Waypoints before `now` are dropped from both `waypoints` and `previous`,
+  // except the last one, the origin of the segment `now` lies in. Samples at or
+  // after `now` are unchanged by that; samples before the retained origin are
+  // not kept. The control loop never asks for those. ema_seed() can: it samples
+  // one waypoint before a chunk's first, and when inference latency puts that
+  // behind the origin retained at the previous splice it returns false, so that
+  // chunk is not chained (only matters with chunk_ema_factor < 1, on absolute
+  // chunks). The timeline therefore stays at about one chunk instead of growing
+  // by one every splice.
   SpliceResult splice(
     const std::vector<Waypoint> & incoming, ActionSpace space, double now, double control_dt);
 

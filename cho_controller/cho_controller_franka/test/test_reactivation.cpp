@@ -19,10 +19,23 @@
 // again (re-audit A2). The base server's own test proves compute() returns false
 // on that period; this one proves each adapter honours it, through the real
 // controller_manager lifecycle on mock hardware.
+//
+// The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
+// change of action space within one goal (AC8, AC11, AC18 C3).
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <chrono>
+#include <cmath>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
 #include <fstream>
+#include <functional>
 #include <future>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -33,6 +46,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <gtest/gtest.h>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rcutils/logging.h>
 
 #include "cho_controller_base/goal_phase_action_server.hpp"
 #include "cho_controller_base/testing/controller_manager_harness.hpp"
@@ -89,6 +103,221 @@ std::string fr3_description()
     text.str(), cho_controller_base::testing::mock_ros2_control(
       kJoints, kHome, {"fr3_finger_joint1"}));
 }
+
+// fr3_hand_tcp in fr3_link0, from the joint origins of
+// cho_description_franka/urdf/fr3/fr3_franka_hand.urdf: each arm joint is a
+// translation, a roll about x and a turn about its own z axis, then fr3_joint8,
+// fr3_hand_joint and fr3_hand_tcp_joint. Computed here, not by the controller's
+// model, so the VLA tests can derive targets and judge the commanded joints
+// without it. The TCP lies on fr3_joint7's axis, so joint 7 alone turns it about
+// its own z axis and leaves it where it is.
+using Vec3 = std::array<double, 3>;
+using Mat3 = std::array<Vec3, 3>;  // rows
+
+struct Pose
+{
+  Mat3 R;
+  Vec3 p;
+};
+
+Mat3 mul(const Mat3 & a, const Mat3 & b)
+{
+  Mat3 c{};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      for (int k = 0; k < 3; ++k) {
+        c[i][j] += a[i][k] * b[k][j];
+      }
+    }
+  }
+  return c;
+}
+
+Vec3 mul(const Mat3 & a, const Vec3 & v)
+{
+  Vec3 out{};
+  for (int i = 0; i < 3; ++i) {
+    for (int k = 0; k < 3; ++k) {
+      out[i] += a[i][k] * v[k];
+    }
+  }
+  return out;
+}
+
+Mat3 transpose(const Mat3 & a)
+{
+  Mat3 t{};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      t[i][j] = a[j][i];
+    }
+  }
+  return t;
+}
+
+Vec3 add(const Vec3 & a, const Vec3 & b) {return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};}
+Vec3 sub(const Vec3 & a, const Vec3 & b) {return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};}
+double norm(const Vec3 & v) {return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);}
+
+Mat3 rot_x(const double a)
+{
+  const double c = std::cos(a);
+  const double s = std::sin(a);
+  return {{{1.0, 0.0, 0.0}, {0.0, c, -s}, {0.0, s, c}}};
+}
+
+Mat3 rot_z(const double a)
+{
+  const double c = std::cos(a);
+  const double s = std::sin(a);
+  return {{{c, -s, 0.0}, {s, c, 0.0}, {0.0, 0.0, 1.0}}};
+}
+
+Pose fr3_tcp(const Doubles & q)
+{
+  constexpr double kHalfPi = 1.570796326794897;
+  struct Origin
+  {
+    Vec3 xyz;
+    double roll;
+  };
+  static const std::array<Origin, 7> kOrigins = {{
+    {{0.0, 0.0, 0.333}, 0.0}, {{0.0, 0.0, 0.0}, -kHalfPi}, {{0.0, -0.316, 0.0}, kHalfPi},
+    {{0.0825, 0.0, 0.0}, kHalfPi}, {{-0.0825, 0.384, 0.0}, -kHalfPi}, {{0.0, 0.0, 0.0}, kHalfPi},
+    {{0.088, 0.0, 0.0}, kHalfPi}}};
+  Pose pose{{{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}}, {0.0, 0.0, 0.0}};
+  for (std::size_t i = 0; i < kOrigins.size(); ++i) {
+    pose.p = add(pose.p, mul(pose.R, kOrigins[i].xyz));
+    pose.R = mul(mul(pose.R, rot_x(kOrigins[i].roll)), rot_z(q[i]));
+  }
+  pose.p = add(pose.p, mul(pose.R, Vec3{0.0, 0.0, 0.107}));   // fr3_joint8
+  pose.R = mul(pose.R, rot_z(-0.7853981633974483));            // fr3_hand_joint
+  pose.p = add(pose.p, mul(pose.R, Vec3{0.0, 0.0, 0.1034}));  // fr3_hand_tcp_joint
+  return pose;
+}
+
+// Rotation vector (axis * angle) of R, for angles below pi.
+Vec3 log_so3(const Mat3 & R)
+{
+  const double cosine = std::clamp((R[0][0] + R[1][1] + R[2][2] - 1.0) / 2.0, -1.0, 1.0);
+  const double angle = std::acos(cosine);
+  const double scale = angle < 1e-9 ? 1.0 : angle / std::sin(angle);
+  return {scale * (R[2][1] - R[1][2]) / 2.0, scale * (R[0][2] - R[2][0]) / 2.0,
+    scale * (R[1][0] - R[0][1]) / 2.0};
+}
+
+double angle_between(const Mat3 & a, const Mat3 & b) {return norm(log_so3(mul(transpose(a), b)));}
+
+// ActionChunk's quaternion order, (x, y, z, w).
+std::array<double, 4> quaternion_xyzw(const Mat3 & R)
+{
+  const double trace = R[0][0] + R[1][1] + R[2][2];
+  if (trace > 0.0) {
+    const double s = 2.0 * std::sqrt(1.0 + trace);
+    return {(R[2][1] - R[1][2]) / s, (R[0][2] - R[2][0]) / s, (R[1][0] - R[0][1]) / s, 0.25 * s};
+  }
+  if (R[0][0] > R[1][1] && R[0][0] > R[2][2]) {
+    const double s = 2.0 * std::sqrt(1.0 + R[0][0] - R[1][1] - R[2][2]);
+    return {0.25 * s, (R[0][1] + R[1][0]) / s, (R[0][2] + R[2][0]) / s, (R[2][1] - R[1][2]) / s};
+  }
+  if (R[1][1] > R[2][2]) {
+    const double s = 2.0 * std::sqrt(1.0 + R[1][1] - R[0][0] - R[2][2]);
+    return {(R[0][1] + R[1][0]) / s, 0.25 * s, (R[1][2] + R[2][1]) / s, (R[0][2] - R[2][0]) / s};
+  }
+  const double s = 2.0 * std::sqrt(1.0 + R[2][2] - R[0][0] - R[1][1]);
+  return {(R[0][2] + R[2][0]) / s, (R[1][2] + R[2][1]) / s, 0.25 * s, (R[1][0] - R[0][1]) / s};
+}
+
+// The helper itself, against the FR3 ready pose (Franka's documented TCP
+// position at kHome; the same chain evaluated independently with numpy):
+// (0.30689, 0, 0.48688), TCP z axis straight down, R = Rx(pi).
+TEST(Fr3Kinematics, KHomeIsTheReadyPose)
+{
+  const Pose home = fr3_tcp(kHome);
+  EXPECT_NEAR(home.p[0], 0.30689, 1e-4);
+  EXPECT_NEAR(home.p[1], 0.0, 1e-4);
+  EXPECT_NEAR(home.p[2], 0.48688, 1e-4);
+  EXPECT_LT(angle_between(home.R, rot_x(M_PI)), 1e-3);
+  // Joint 7 turns the TCP about its own z axis and does not move it.
+  Doubles turned = kHome;
+  turned[6] += 0.1;
+  const Pose after = fr3_tcp(turned);
+  EXPECT_LT(norm(sub(after.p, home.p)), 1e-12);
+  EXPECT_LT(angle_between(after.R, mul(home.R, rot_z(0.1))), 1e-12);
+  const auto q = quaternion_xyzw(home.R);
+  EXPECT_NEAR(std::abs(q[0]), 1.0, 1e-3);
+}
+
+// Every log record at WARN or above, whatever logger wrote it, so a test can
+// ask whether the VLA host warned about a field.
+class LogCapture
+{
+public:
+  static void install()
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    if (installed()) {return;}
+    previous() = rcutils_logging_get_output_handler();
+    rcutils_logging_set_output_handler(&LogCapture::handle);
+    installed() = true;
+  }
+
+  static void clear()
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    records().clear();
+  }
+
+  // Records at `min_severity` or above whose text contains `needle`, case-insensitively.
+  static std::size_t count(const int min_severity, const std::string & needle)
+  {
+    std::lock_guard<std::mutex> lock(mutex());
+    std::size_t n = 0;
+    for (const auto & record : records()) {
+      if (record.first >= min_severity && lower(record.second).find(lower(needle)) != std::string::npos) {
+        ++n;
+      }
+    }
+    return n;
+  }
+
+private:
+  static std::string lower(std::string text)
+  {
+    std::transform(text.begin(), text.end(), text.begin(),
+      [](unsigned char c) {return static_cast<char>(std::tolower(c));});
+    return text;
+  }
+
+  static void handle(
+    const rcutils_log_location_t * location, int severity, const char * name,
+    rcutils_time_point_value_t timestamp, const char * format, va_list * args)
+  {
+    if (severity >= RCUTILS_LOG_SEVERITY_WARN && format != nullptr) {
+      va_list copy;
+      va_copy(copy, *args);
+      char buffer[4096];
+      std::vsnprintf(buffer, sizeof(buffer), format, copy);
+      va_end(copy);
+      std::lock_guard<std::mutex> lock(mutex());
+      if (records().size() < 50000) {records().emplace_back(severity, buffer);}
+    }
+    if (previous() != nullptr) {previous()(location, severity, name, timestamp, format, args);}
+  }
+
+  static std::mutex & mutex() {static std::mutex m; return m;}
+  static bool & installed() {static bool value = false; return value;}
+  static rcutils_logging_output_handler_t & previous()
+  {
+    static rcutils_logging_output_handler_t handler = nullptr;
+    return handler;
+  }
+  static std::vector<std::pair<int, std::string>> & records()
+  {
+    static std::vector<std::pair<int, std::string>> value;
+    return value;
+  }
+};
 
 class Reactivation : public ::testing::TestWithParam<Case>
 {
@@ -357,33 +586,41 @@ protected:
     harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_vla");
     // config/mujoco/controllers.yaml's VLA block, position mode, with every
     // global name moved under this test's namespace.
-    ASSERT_NE(harness_->load(kName, "cho_controller_franka/VLAController", {
-        rclcpp::Parameter("robot_description", fr3_description()),
-        rclcpp::Parameter("robot_type", "fr3"),
-        rclcpp::Parameter("bringup_type", "mujoco"),
-        rclcpp::Parameter("control_mode", "position"),
-        rclcpp::Parameter("ee_name", "fr3_hand_tcp"),
-        rclcpp::Parameter("kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
-        rclcpp::Parameter("kd_task", Doubles{60, 60, 60, 5, 5, 5}),
-        rclcpp::Parameter("default_dof_pos", kHome),
-        rclcpp::Parameter("default_kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
-        rclcpp::Parameter("default_kd_task", Doubles{60, 60, 60, 5, 5, 5}),
-        rclcpp::Parameter("chunk_topic", "/franka_vla/chunks"),
-        rclcpp::Parameter("success_service", "/franka_vla/success"),
-        rclcpp::Parameter("gripper_action", "/franka_vla/gripper"),
-        rclcpp::Parameter("chunk_time_source", "observation"),
-        rclcpp::Parameter("telemetry_period_sec", 0.02)}), nullptr);
+    std::vector<rclcpp::Parameter> parameters = {
+      rclcpp::Parameter("robot_description", fr3_description()),
+      rclcpp::Parameter("robot_type", "fr3"),
+      rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("control_mode", "position"),
+      rclcpp::Parameter("ee_name", "fr3_hand_tcp"),
+      rclcpp::Parameter("kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
+      rclcpp::Parameter("kd_task", Doubles{60, 60, 60, 5, 5, 5}),
+      rclcpp::Parameter("default_dof_pos", kHome),
+      rclcpp::Parameter("default_kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
+      rclcpp::Parameter("default_kd_task", Doubles{60, 60, 60, 5, 5, 5}),
+      rclcpp::Parameter("chunk_topic", "/franka_vla/chunks"),
+      rclcpp::Parameter("success_service", "/franka_vla/success"),
+      rclcpp::Parameter("gripper_action", "/franka_vla/gripper"),
+      rclcpp::Parameter("chunk_time_source", "observation"),
+      rclcpp::Parameter("telemetry_period_sec", 0.02)};
+    const auto extra = extra_parameters();
+    parameters.insert(parameters.end(), extra.begin(), extra.end());
+    ASSERT_NE(harness_->load(kName, "cho_controller_franka/VLAController", parameters), nullptr);
     ASSERT_TRUE(harness_->configure(kName));
     ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
     client_ = rclcpp_action::create_client<Vla>(harness_->client_node(), std::string("/franka_vla/") + kName + "/vla");
     ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
   }
 
-  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr send()
+  // Parameters a derived fixture adds to the VLA block.
+  virtual std::vector<rclcpp::Parameter> extra_parameters() const {return {};}
+
+  // `stream_timeout` <= 0 leaves the controller's default.
+  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr send(const double stream_timeout = 0.0)
   {
     Vla::Goal goal;
     goal.model_name = "test";
     goal.inference_frequency = 10.0f;
+    goal.stream_timeout = stream_timeout;
     auto future = client_->async_send_goal(goal);
     return harness_->spin_until(future) ? future.get() : nullptr;
   }
@@ -472,6 +709,435 @@ TEST_F(VlaGoal, AChunkObservedBeforeTheGoalHasAnExactAnchor)
   }
   ASSERT_TRUE(accepted) << "the chunk never reached the controller";
   EXPECT_FALSE(inexact) << "the chunk was anchored to the oldest entry, not to its observation time";
+}
+
+// A goal with a bridge's two topics connected: the chunk publisher and the
+// telemetry it steers by. Position mode, so the mock joints follow the command
+// and the commanded joints can be read back from the position states (one
+// period late: GenericSystem copies a command into the state on the next read).
+//
+// Two clocks. The controller times a chunk's arrival on its node clock, wall
+// time here, and plays the chunk on the period times the harness hands
+// update(); in a bringup both are the same ROS time. The harness clock starts
+// about 1 s behind (configure waits for a gripper server) and runs as fast as
+// the periods do, so a chunk stamped on it can arrive with every waypoint
+// already in the past. align_clocks() before a publish and tick() while a chunk
+// is in flight keep the two within a period of each other.
+class VlaStream : public VlaGoal
+{
+protected:
+  using Chunk = cho_interfaces::msg::ActionChunk;
+  using Telemetry = cho_interfaces::msg::VlaTelemetry;
+  static constexpr double kPeriod = ControllerManagerHarness::kPeriod;
+
+  void start()
+  {
+    LogCapture::install();
+    harness_->cycle(50);
+    goal_ = send(5.0);
+    ASSERT_NE(goal_, nullptr) << "goal rejected";
+    telemetry_subscription_ = harness_->client_node()->create_subscription<Telemetry>(
+      std::string("/franka_vla/") + kName + "/vla_telemetry", 10,
+      [this](const Telemetry & message) {telemetry_ = message; has_telemetry_ = true;});
+    chunks_ = harness_->client_node()->create_publisher<Chunk>("/franka_vla/chunks", 10);
+    ASSERT_TRUE(cycle_until([this] {
+        return chunks_->get_subscription_count() > 0 && telemetry_subscription_->get_publisher_count() > 0 &&
+               has_telemetry_;
+      })) << "the chunk and telemetry topics never connected";
+    align_clocks();
+  }
+
+  double wall() const {return harness_->client_node()->now().seconds();}
+
+  // One period, once the wall clock has reached its time.
+  void tick()
+  {
+    const double next = harness_->now().seconds() + kPeriod;
+    while (wall() < next) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    harness_->cycle(1);
+  }
+
+  // Periods at once while the harness is behind the wall clock, a wait while it is ahead.
+  void align_clocks()
+  {
+    while (harness_->now().seconds() + kPeriod < wall()) {
+      harness_->cycle(1);
+    }
+    while (wall() < harness_->now().seconds()) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+  }
+
+  Doubles commanded() {return harness_->states(kJoints, "position");}
+
+  // Stamped now, i.e. observed at the period the controllers last ran.
+  Chunk chunk(
+    const std::string & space, const std::string & mode, const std::string & frame,
+    const std::string & rotation, const std::vector<Doubles> & rows, const double control_dt)
+  {
+    Chunk message;
+    message.header.stamp = harness_->now();
+    message.seq = ++seq_;
+    message.action_space = space;
+    message.relative_mode = mode;
+    message.relative_frame = frame;
+    message.rotation_type = rotation;
+    message.chunk_size = static_cast<std::int32_t>(rows.size());
+    message.control_dt = control_dt;
+    for (const auto & row : rows) {
+      message.arm_actions.insert(message.arm_actions.end(), row.begin(), row.end());
+    }
+    return message;
+  }
+
+  // Aligns the clocks, then publishes the chunk stamped at that moment.
+  void publish(
+    const std::string & space, const std::string & mode, const std::string & frame,
+    const std::string & rotation, const std::vector<Doubles> & rows, const double control_dt)
+  {
+    align_clocks();
+    chunks_->publish(chunk(space, mode, frame, rotation, rows, control_dt));
+  }
+
+  // An absolute task row, quaternion (x, y, z, w).
+  static Doubles pose_row(const Vec3 & p, const Mat3 & R)
+  {
+    const auto q = quaternion_xyzw(R);
+    return {p[0], p[1], p[2], q[0], q[1], q[2], q[3]};
+  }
+
+  // Paced periods, the executor spun after each, until `done` holds.
+  bool cycle_until(const std::function<bool()> & done, const int budget = 3000)
+  {
+    for (int i = 0; i < budget; ++i) {
+      if (done()) {
+        return true;
+      }
+      tick();
+    }
+    return done();
+  }
+
+  // Until the telemetry has counted `accepted` chunks taken or any more than
+  // `rejected` refused.
+  bool answered(const std::uint64_t accepted, const std::uint64_t rejected)
+  {
+    return cycle_until([this, accepted, rejected] {
+               return telemetry_.chunks_accepted >= accepted || telemetry_.chunks_rejected > rejected;
+             });
+  }
+
+  Telemetry telemetry_;
+  bool has_telemetry_{false};
+  rclcpp::Subscription<Telemetry>::SharedPtr telemetry_subscription_;
+  rclcpp::Publisher<Chunk>::SharedPtr chunks_;
+  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr goal_;
+  std::uint64_t seq_{0};
+};
+
+// AC3: a relative task delta composes in the frame relative_frame names. The
+// anchor is the hold at kHome, R_a = Rx(pi) (TCP z axis down), and every
+// waypoint carries dp = (0, 0.01, 0.02) m and dR = Rz(0.1) (axis-angle):
+//   "ee"   p = p_a + R_a*dp = p_a + (0, -0.01, -0.02),  R = R_a*Rz(0.1)
+//   "base" p = p_a + dp     = p_a + (0, +0.01, +0.02),  R = Rz(0.1)*R_a
+// R_a*Rz(0.1) = Rz(-0.1)*R_a, so the two frames also turn the TCP opposite ways
+// about the base z axis. Empty is "ee", with a warning.
+class VlaFrame : public VlaStream
+{
+protected:
+  // Where the commanded TCP is 2.5 s after the chunk was taken; the chunk spans 3 s.
+  void follow(const std::string & frame, Pose & anchor, Pose & reached)
+  {
+    ASSERT_NO_FATAL_FAILURE(start());
+    harness_->cycle(20);
+    anchor = fr3_tcp(commanded());
+    LogCapture::clear();
+    publish("task", "from_anchor", frame, "axis_angle", std::vector<Doubles>(30, kDelta), 0.1);
+    ASSERT_TRUE(answered(1, 0)) << "the chunk was never answered";
+    ASSERT_EQ(telemetry_.chunks_rejected, 0u)
+      << "relative_frame '" << frame << "' was refused: " << telemetry_.last_reject;
+    harness_->cycle(2500);
+    reached = fr3_tcp(commanded());
+  }
+
+  static void expect_at(const Pose & reached, const Vec3 & p, const Mat3 & R, const std::string & frame)
+  {
+    EXPECT_LT(norm(sub(reached.p, p)), 2e-3)
+      << "relative_frame '" << frame << "': TCP at (" << reached.p[0] << ", " << reached.p[1] << ", "
+      << reached.p[2] << "), expected (" << p[0] << ", " << p[1] << ", " << p[2] << ")";
+    EXPECT_LT(angle_between(reached.R, R), 1e-2)
+      << "relative_frame '" << frame << "': orientation off by " << angle_between(reached.R, R) << " rad";
+  }
+
+  static void expect_ee(const Pose & anchor, const Pose & reached, const std::string & frame)
+  {
+    expect_at(reached, add(anchor.p, mul(anchor.R, kDp)), mul(anchor.R, rot_z(kTurn)), frame);
+  }
+
+  static constexpr double kTurn = 0.1;
+  static inline const Vec3 kDp = {0.0, 0.01, 0.02};
+  static inline const Doubles kDelta = {0.0, 0.01, 0.02, 0.0, 0.0, 0.1};
+};
+
+TEST_F(VlaFrame, AC3_AnEmptyRelativeFrameIsTakenAsEeWithAWarning)
+{
+  Pose anchor{}, reached{};
+  ASSERT_NO_FATAL_FAILURE(follow("", anchor, reached));
+  expect_ee(anchor, reached, "");
+  EXPECT_GE(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, "relative_frame"), 1u)
+    << "a relative task chunk without relative_frame was taken without a warning";
+}
+
+TEST_F(VlaFrame, AC3_AnEeDeltaComposesInTheAnchorBodyFrame)
+{
+  Pose anchor{}, reached{};
+  ASSERT_NO_FATAL_FAILURE(follow("ee", anchor, reached));
+  expect_ee(anchor, reached, "ee");
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, "relative_frame"), 0u)
+    << "an explicit relative_frame was warned about";
+}
+
+// The regression that matters most: a host that never parses the field takes
+// "base" as the default "ee", and the arm goes the mirror way without an error.
+TEST_F(VlaFrame, AC3_ABaseDeltaComposesInTheRootFrame)
+{
+  Pose anchor{}, reached{};
+  ASSERT_NO_FATAL_FAILURE(follow("base", anchor, reached));
+  expect_at(reached, add(anchor.p, kDp), mul(rot_z(kTurn), anchor.R), "base");
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_WARN, "relative_frame"), 0u)
+    << "an explicit relative_frame was warned about";
+}
+
+// AC3: an unknown relative_frame is refused in every action space, as a bad
+// field, and moves nothing. Each chunk is one the arm would follow, and the same
+// chunks with a valid frame are then taken, so each refusal was the frame's.
+TEST_F(VlaStream, AC3_AnUnknownRelativeFrameIsRefusedInEverySpaceAndMovesNothing)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  const Doubles hold = commanded();
+  const Pose at_hold = fr3_tcp(hold);
+  struct Kind
+  {
+    const char * what;
+    std::string space;
+    std::string mode;
+    std::string rotation;
+    std::vector<Doubles> rows;
+    std::string valid_frame;
+  };
+  Doubles joint_offset(7, 0.0);
+  joint_offset[0] = 0.05;
+  const std::vector<Kind> kinds = {
+    {"relative task chunk (from_anchor)", "task", "from_anchor", "axis_angle",
+      std::vector<Doubles>(20, Doubles{0.0, 0.01, 0.02, 0.0, 0.0, 0.0}), "ee"},
+    {"relative task chunk (per_step)", "task", "per_step", "axis_angle",
+      std::vector<Doubles>(10, Doubles{0.0, 0.001, 0.002, 0.0, 0.0, 0.0}), "base"},
+    {"absolute task chunk", "task", "absolute", "quaternion",
+      std::vector<Doubles>(20, pose_row(add(at_hold.p, Vec3{0.0, 0.01, 0.02}), at_hold.R)), ""},
+    {"joint chunk", "joint", "from_anchor", "", std::vector<Doubles>(20, joint_offset), ""}};
+
+  for (std::size_t i = 0; i < kinds.size(); ++i) {
+    const auto & kind = kinds[i];
+    publish(kind.space, kind.mode, "bogus", kind.rotation, kind.rows, 0.1);
+    ASSERT_TRUE(answered(1, i)) << kind.what << " was never answered";
+    EXPECT_EQ(telemetry_.chunks_accepted, 0u) << kind.what << " with relative_frame 'bogus' was taken";
+    EXPECT_EQ(telemetry_.chunks_rejected, i + 1) << kind.what;
+    EXPECT_EQ(telemetry_.last_reject, "unparseable_field") << kind.what;
+  }
+  harness_->cycle(200);
+  EXPECT_LT(max_abs_difference(commanded(), hold), 1e-12) << "a refused chunk moved the command";
+
+  for (std::size_t i = 0; i < kinds.size(); ++i) {
+    const auto & kind = kinds[i];
+    publish(kind.space, kind.mode, kind.valid_frame, kind.rotation, kind.rows, 0.1);
+    ASSERT_TRUE(answered(i + 1, kinds.size())) << kind.what << " with a valid frame was never answered";
+    EXPECT_EQ(telemetry_.chunks_rejected, kinds.size())
+      << kind.what << " with relative_frame '" << kind.valid_frame << "' was refused too: "
+      << telemetry_.last_reject << " -- so the test chunk is malformed, not just its frame";
+  }
+}
+
+// AC8, AC11, AC18 (C3, C4, C6): within one goal, joint chunks give way to task
+// chunks while the arm moves. Joint 7 turns at kRate, which turns the TCP about
+// its own z axis and leaves it in place; the task chunk carries that motion on
+// as absolute targets. The switch re-seeds the limiter from the commanded pose
+// and its rate, and the position-mode task law feeds the reference twist
+// forward, so the commanded TCP keeps turning at about kRate through the switch
+// period and after it. What fails it: a step back to a stale pose, a period
+// where the command stands still, a rate that restarts from zero, or one that
+// drops to the task law's gain times the period.
+//
+// max_task_ang_acc bounds how fast the task reference's angular rate can change
+// (kAngularAcceleration * 1 ms per period), so a re-seed without the commanded
+// rate shows up as a rate near zero right after the switch. Only the row-space
+// part of the joint motion carries over (the task law spreads it across joints
+// 1, 3, 5 and 7), so the joint-space check is a bound, not an equality.
+class VlaSwitch : public VlaStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("max_task_ang_acc", kAngularAcceleration),
+      rclcpp::Parameter("use_nullspace_posture", false)};
+  }
+
+  static constexpr double kAngularAcceleration = 2.0;  // [rad/s^2]
+};
+
+TEST_F(VlaSwitch, AC18_C3_AJointToTaskSwitchInMotionCarriesOnFromTheCommand)
+{
+  constexpr double kRate = 0.2;  // joint 7 [rad/s]
+  constexpr double kDt = ControllerManagerHarness::kPeriod;
+  constexpr double kStep = kRate * kDt;
+  ASSERT_NO_FATAL_FAILURE(start());
+
+  // Joint 7 from the hold at kRate for 1 s; the other joints stay.
+  std::vector<Doubles> joint_rows;
+  for (int k = 0; k < 100; ++k) {
+    Doubles row(7, 0.0);
+    row[6] = kRate * 0.01 * k;
+    joint_rows.push_back(row);
+  }
+  publish("joint", "from_anchor", "", "", joint_rows, 0.01);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+
+  // Paced periods from here on, each followed by the commanded joints and the
+  // time they were commanded at.
+  std::vector<Doubles> q;
+  std::vector<double> t;
+  const auto step = [&] {
+      tick();
+      q.push_back(commanded());
+      t.push_back(harness_->now().seconds() - kDt);
+    };
+  for (int i = 0; i < 500; ++i) {
+    step();
+  }
+  for (std::size_t k = q.size() - 20; k < q.size(); ++k) {
+    for (std::size_t j = 0; j < 6; ++j) {
+      ASSERT_NEAR(q[k][j], q[k - 1][j], 1e-9) << "joint " << j + 1 << " moves under the joint chunk";
+    }
+    ASSERT_NEAR(q[k][6] - q[k - 1][6], kStep, 0.05 * kStep)
+      << "joint 7 is not turning at the chunk's rate, so nothing below would test the switch";
+  }
+
+  // The task chunk: the TCP where the command has it now, turning on at kRate
+  // about its own z axis, waypoints 5 ms apart for 0.6 s.
+  Doubles q_observed = q.back();
+  q_observed[6] += kStep;  // the command of the period now() stamps
+  const Pose observed = fr3_tcp(q_observed);
+  const double t_observed = harness_->now().seconds();
+  std::vector<Doubles> task_rows;
+  for (int k = 0; k < 120; ++k) {
+    task_rows.push_back(pose_row(observed.p, mul(observed.R, rot_z(kRate * 0.005 * k))));
+  }
+  const std::size_t published_at = q.size() - 1;
+  chunks_->publish(chunk("task", "absolute", "", "quaternion", task_rows, 0.005));
+  bool taken = false;
+  for (int i = 0; i < 3000 && !taken; ++i) {
+    step();
+    taken = telemetry_.chunks_accepted >= 2 || telemetry_.chunks_rejected > 0;
+  }
+  ASSERT_TRUE(taken) << "the task chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+  for (int i = 0; i < 200; ++i) {
+    step();
+  }
+  EXPECT_EQ(telemetry_.action_space, "task");
+
+  // Every period from the one before the publish to the end: the switch is in
+  // there, and at least 200 periods of the task chunk after it.
+  double largest_step = 0.0, lowest_rate = std::numeric_limits<double>::infinity(), highest_rate = 0.0;
+  double largest_drift = 0.0, largest_off_path = 0.0;
+  std::size_t at_largest_step = 0, at_lowest_rate = 0, at_off_path = 0;
+  for (std::size_t k = published_at; k < q.size(); ++k) {
+    const double moved = max_abs_difference(q[k], q[k - 1]);
+    if (moved > largest_step) {
+      largest_step = moved;
+      at_largest_step = k;
+    }
+    const Pose before = fr3_tcp(q[k - 1]);
+    const Pose now = fr3_tcp(q[k]);
+    const double rate = log_so3(mul(transpose(before.R), now.R))[2] / kDt;  // about the TCP's own z
+    if (rate < lowest_rate) {
+      lowest_rate = rate;
+      at_lowest_rate = k;
+    }
+    highest_rate = std::max(highest_rate, rate);
+    largest_drift = std::max(largest_drift, norm(sub(now.p, observed.p)));
+    const double off_path = angle_between(now.R, mul(observed.R, rot_z(kRate * (t[k] - t_observed))));
+    if (off_path > largest_off_path) {
+      largest_off_path = off_path;
+      at_off_path = k;
+    }
+  }
+  RecordProperty("largest_joint_step_rad", std::to_string(largest_step));
+  RecordProperty("lowest_tcp_rate_rad_s", std::to_string(lowest_rate));
+  RecordProperty("highest_tcp_rate_rad_s", std::to_string(highest_rate));
+  RecordProperty("largest_tcp_drift_m", std::to_string(largest_drift));
+  RecordProperty("largest_off_path_rad", std::to_string(largest_off_path));
+  const auto periods = [published_at](std::size_t k) {
+      return std::to_string(static_cast<long>(k) - static_cast<long>(published_at));
+    };
+  EXPECT_LE(largest_step, 2.5 * kStep)
+    << "a joint command moved " << largest_step << " rad in one period (" << periods(at_largest_step)
+    << " periods after the publish); the motion moves at most " << kStep << " rad per period";
+  EXPECT_GE(lowest_rate, 0.5 * kRate)
+    << "the commanded TCP turned at " << lowest_rate << " rad/s " << periods(at_lowest_rate)
+    << " periods after the publish, against " << kRate << " before the switch";
+  EXPECT_LE(highest_rate, 1.5 * kRate);
+  EXPECT_LT(largest_drift, 5e-4) << "the commanded TCP moved off its point by " << largest_drift << " m";
+  EXPECT_LT(largest_off_path, 5e-3)
+    << "the commanded TCP orientation left the continued turn by " << largest_off_path << " rad, "
+    << periods(at_off_path) << " periods after the publish";
+}
+
+// AC8: the other way, from rest. A task chunk moves the TCP 2 cm and the arm
+// settles there; an absolute joint chunk then holds the joints the command has.
+// The switch re-seeds the joint limiter from those commanded joints, not from
+// joints left over from before the task chunk (kHome, where the goal started),
+// so nothing moves.
+TEST_F(VlaStream, AC8_ATaskToJointSwitchStartsFromTheCommandedJoints)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  const Pose at_hold = fr3_tcp(commanded());
+  const Vec3 target = add(at_hold.p, Vec3{0.0, 0.01, 0.02});
+  publish("task", "absolute", "", "quaternion", std::vector<Doubles>(30, pose_row(target, at_hold.R)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+  harness_->cycle(2000);
+  Doubles previous = commanded();
+  for (int i = 0; i < 20; ++i) {
+    harness_->cycle(1);
+    const Doubles now = commanded();
+    ASSERT_LT(max_abs_difference(now, previous), 1e-7) << "the arm has not settled under the task chunk";
+    previous = now;
+  }
+  ASSERT_LT(norm(sub(fr3_tcp(previous).p, target)), 2e-3) << "the task chunk did not take the TCP to its target";
+  ASSERT_GT(max_abs_difference(previous, kHome), 1e-2) << "the task chunk did not move the joints off kHome";
+
+  const Doubles held = previous;
+  publish("joint", "absolute", "", "", std::vector<Doubles>(20, held), 0.05);
+  double largest = 0.0;
+  bool taken = false;
+  for (int i = 0; i < 3000 && !taken; ++i) {
+    tick();
+    largest = std::max(largest, max_abs_difference(commanded(), held));
+    taken = telemetry_.chunks_accepted >= 2 || telemetry_.chunks_rejected > 0;
+  }
+  ASSERT_TRUE(taken) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+  for (int i = 0; i < 300; ++i) {
+    harness_->cycle(1);
+    largest = std::max(largest, max_abs_difference(commanded(), held));
+  }
+  EXPECT_EQ(telemetry_.action_space, "joint");
+  EXPECT_LT(largest, 1e-6) << "the joint command left the commanded joints by " << largest << " rad across the switch";
 }
 
 // The Franka gripper relay with no franka_gripper servers up, which fails every

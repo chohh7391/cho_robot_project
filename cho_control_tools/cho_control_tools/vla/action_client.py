@@ -166,6 +166,12 @@ class VLAActionTester(Node):
         msg.action_space = "task"
         msg.rotation_type = self.test_rotation_type
         msg.relative = self.is_relative
+        if self.is_relative:
+            # The offsets below are deltas along the base axes, so say "base" (the model root
+            # frame) explicitly. Left empty the controller composes them in the anchor's body
+            # frame ("ee"), which turns them with the tool whenever it is not aligned with the
+            # base. header.frame_id says nothing here: no controller reads it.
+            msg.relative_frame = "base"
         msg.chunk_size = self.chunk_size
         msg.control_dt = self.dt  # explicit waypoint spacing (0.0 would fall back to inference_dt/chunk_size)
 

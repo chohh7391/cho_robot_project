@@ -42,8 +42,10 @@ namespace
 {
 // Minimum-jerk weight, 10s^3 - 15s^4 + 6s^5 -- the quintic deoxys' min-jerk
 // interpolators use. Its first and second derivatives vanish at both ends, so
-// the blend introduces neither a velocity nor an acceleration step at either
-// boundary. The cubic smoothstep this replaced was flat in velocity only.
+// the weight itself introduces neither a velocity nor an acceleration step at
+// either boundary (what a splice inside a running window keeps is in
+// ActionBuffer::Params::blend_duration). The cubic smoothstep this replaced was
+// flat in velocity only.
 double min_jerk(const double ratio)
 {
   const double s = std::clamp(ratio, 0.0, 1.0);
@@ -243,6 +245,98 @@ void assign_tangents(std::vector<Waypoint> & chunk, const Interpolation interpol
     chunk[k].angular_tangent = rotation_tangent(chunk, k);
   }
 }
+
+// First waypoint of `series` (ascending in t) that is not before `now`.
+std::vector<Waypoint>::const_iterator first_due(
+  const std::vector<Waypoint> & series, const double now)
+{
+  return std::lower_bound(
+    series.begin(), series.end(), now,
+    [](const Waypoint & waypoint, const double time) {return waypoint.t < time;});
+}
+
+// Drop the waypoints the reference has already played: everything before `now`
+// except the last such one, which is the origin of the segment `now` lies in.
+// Nothing at or after `now` reads an older waypoint -- a segment is drawn from
+// its two end waypoints and the slopes stored on them -- so sample(t) for any
+// t >= now is exactly what it was. Without this the timeline grew by a chunk's
+// worth on every splice and was copied whole each time: ~36k waypoints after
+// ten minutes at 15 Hz.
+void drop_played(std::vector<Waypoint> & series, const double now)
+{
+  const auto due = first_due(series, now);
+  if (due - series.cbegin() > 1) {
+    series.erase(series.cbegin(), due - 1);
+  }
+}
+
+// A knot carrying what `timeline` EMITS at `t` -- the blend, where one runs --
+// with the emitted velocity as its slopes, so the cubic samplers leave the knot
+// at exactly that position and velocity. Velocity is the curve's slope here, not
+// a supplied rate (has_joint_velocity stays false).
+Waypoint emitted_knot(const Timeline & timeline, const double t)
+{
+  Reference emitted;
+  sample_timeline(timeline, t, emitted);
+  Waypoint knot;
+  knot.t = t;
+  knot.joints = emitted.joints;
+  knot.pose = emitted.pose;
+  knot.joint_velocity = emitted.joint_velocity;
+  knot.gripper = emitted.gripper;
+  knot.has_gripper = emitted.has_gripper;
+  knot.gripper_mode = emitted.gripper_mode;
+  knot.joint_tangent = emitted.joint_velocity;
+  knot.linear_tangent = emitted.twist.head<3>();
+  knot.angular_tangent = emitted.twist.tail<3>();
+  return knot;
+}
+
+// The outgoing trajectory for a splice at `now` that lands inside a blend still
+// running from an earlier splice. It has to be what the timeline was EMITTING,
+// not its waypoints: handing over the waypoints restarted the blend from the
+// pre-blend trajectory, a reference step of (1 - w(T/tau)) of the gap -- 21% at
+// tau = 0.1 s and 79% at tau = 0.2 s for 15 Hz chunks.
+//
+// The emitted curve is re-expressed as knots: one at `now`, one at each
+// remaining waypoint inside the running window, each carrying the emitted
+// position and velocity, plus the segment origin before `now`. Waypoints at or
+// past the window's end are copied as they are, since there the emission IS the
+// waypoint curve; if the waypoints end inside the window, a knot at its end
+// carries the settled value. Between knots inside the window the cubic is an
+// approximation of the blend it stands in for -- exact in position and velocity
+// at every knot, not in acceleration.
+std::vector<Waypoint> emitted_outgoing(
+  const Timeline & timeline, const double now, const double fallback_span)
+{
+  const std::vector<Waypoint> & series = timeline.waypoints;
+  const auto due = first_due(series, now);
+
+  // Segment origin, so a control cycle stamped just before `now` still samples a
+  // moving curve rather than the hold in front of its first knot: the last
+  // waypoint before `now`, else the running blend's start, else one blend
+  // duration back.
+  double origin = now - fallback_span;
+  if (due != series.cbegin()) {
+    origin = (due - 1)->t;
+  } else if (timeline.blend_start < now) {
+    origin = timeline.blend_start;
+  }
+
+  std::vector<Waypoint> outgoing;
+  outgoing.reserve(static_cast<std::size_t>(series.cend() - due) + 3);
+  outgoing.push_back(emitted_knot(timeline, origin));
+  outgoing.push_back(emitted_knot(timeline, now));
+  for (auto waypoint = due; waypoint != series.cend(); ++waypoint) {
+    if (!(waypoint->t > now)) {continue;}
+    outgoing.push_back(
+      waypoint->t < timeline.blend_end ? emitted_knot(timeline, waypoint->t) : *waypoint);
+  }
+  if (outgoing.back().t < timeline.blend_end) {
+    outgoing.push_back(emitted_knot(timeline, timeline.blend_end));
+  }
+  return outgoing;
+}
 }  // namespace
 
 void ActionBuffer::reset()
@@ -276,7 +370,10 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
   // the switch would mean interpolating a pose toward a joint vector's stand-in
   // pose. The historical code reset only the interpolation seed on this switch
   // and left the rate-limiter state, so the first post-switch cycle ramped from a
-  // value latched at goal start.
+  // value latched at goal start. Clearing the timeline here does not change
+  // that: the host re-seeds the limiter, with
+  // ReferenceLimiter::seed_with_rates(), on the first control cycle that
+  // samples the new space.
   if (space_set_ && space != timeline_.space) {
     timeline_.waypoints.clear();
     timeline_.previous.clear();
@@ -335,12 +432,19 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
   }
 
   if (params_.blend_duration > 0.0 && !timeline_.waypoints.empty() && !result.space_reset) {
-    timeline_.previous = timeline_.waypoints;
+    // Built from the timeline as it stands, before any of it is replaced.
+    if (now < timeline_.blend_end && !timeline_.previous.empty()) {
+      timeline_.previous = emitted_outgoing(timeline_, now, params_.blend_duration);
+    } else {
+      timeline_.previous = timeline_.waypoints;
+      drop_played(timeline_.previous, now);
+    }
     timeline_.blend_start = now;
     timeline_.blend_end = now + params_.blend_duration;
   }
 
   merged.insert(merged.end(), admitted.begin(), admitted.end());
+  drop_played(merged, now);
   timeline_.waypoints = std::move(merged);
   return result;
 }
