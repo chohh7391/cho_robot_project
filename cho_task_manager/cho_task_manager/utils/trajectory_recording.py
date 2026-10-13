@@ -14,15 +14,17 @@
 
 """Read a recorded joint trajectory, and decide what may be replayed from it.
 
-A trajectory recorded in a simulator and replayed on this arm is **position
+A trajectory recorded in a simulator and replayed on an arm is **position
 control that senses nothing**. Everything in this module exists because of that
 one fact, and none of it is book-keeping:
 
-* **The layout is part of the trajectory.** The recording was planned against
-  vessels at particular places; the arm will go to those places whether or not
-  anything is there. So a replay is gated on the cell matching the layout the
-  recording carries, and a mismatch REFUSES rather than warns. A warning that
-  scrolls past is how a pour lands on the bench.
+* **The layout is part of the trajectory.** A recording planned against objects
+  at particular places declares them in its meta
+  (``layout_the_trajectory_assumes``), and the arm will go to those places
+  whether or not anything is there. So that replay is gated on the cell
+  matching the declared layout, and a mismatch REFUSES rather than warns. A
+  warning that scrolls past is how a pour lands on the bench. A recording that
+  declares ``{}`` (or no key) assumes nothing and has nothing to check.
 * **The gripper is a separate channel.** The CSV has no gripper column -- in the
   recording the gripper was a service, not a topic, and its events were
   recovered from the simulated finger joint, so their times are approximate.
@@ -42,7 +44,7 @@ steps. The labels are still carried through, because a segment that says
 ``Move_to_Surface+pouring+Place`` is the one useful thing they give a log line.
 
 A linked workflow (Move -> Transfer -> Stir) changes tools partway through and
-CANNOT be replayed by this module as one recording -- this arm carries one
+CANNOT be replayed by this module as one recording -- each arm here carries one
 gripper and the repo has no tool-change action. Replay the workflows either
 side of a tool change separately.
 
@@ -152,8 +154,17 @@ class Recording:
 
     @property
     def layout(self):
-        """The object placement the trajectory was planned against."""
-        return self.meta.get('layout_the_trajectory_assumes', {})
+        """The object placement the trajectory was planned against; ``{}`` for none.
+
+        A meta without the key, or with ``{}``, assumes no layout, and a replay
+        of it has no cell to check. Anything else must be a mapping of object
+        -> ``{xy, yaw_deg}``: a ``null`` is refused rather than read as "none",
+        because it is not a recording saying it assumes nothing.
+        """
+        if 'layout_the_trajectory_assumes' not in self.meta:
+            return {}
+        return checked_layout(
+            self.meta['layout_the_trajectory_assumes'], _assumed_layout_name(self.source))
 
     @property
     def home(self):
@@ -253,7 +264,43 @@ def load_recording(csv_path, meta_path=None, joint_names=None):
             'the meta declares %d waypoints but the CSV has %d'
             % (declared, len(times) + len(dropped)))
 
+    if 'layout_the_trajectory_assumes' in meta:
+        # A malformed layout is refused at load, not when a replay first asks for it.
+        checked_layout(meta['layout_the_trajectory_assumes'], _assumed_layout_name(csv_path))
+
     return Recording(times, positions, operations, meta, dropped, csv_path, recorded_joints)
+
+
+def _assumed_layout_name(source):
+    return '%s: layout_the_trajectory_assumes' % os.path.basename(source)
+
+
+def checked_layout(layout, where):
+    """*layout* if it is a mapping of object -> ``{'xy': [x, y], 'yaw_deg': deg}``.
+
+    ``yaw_deg`` is optional. Raises :class:`RecordingRejected` naming *where*
+    otherwise, so a malformed layout is refused instead of failing halfway
+    through a comparison.
+    """
+    if not isinstance(layout, dict):
+        raise RecordingRejected(
+            '%s must be a mapping of object -> {xy, yaw_deg} ({} for none); got %r'
+            % (where, layout))
+    for name, entry in layout.items():
+        xy = entry.get('xy') if isinstance(entry, dict) else None
+        if (not isinstance(xy, (list, tuple)) or len(xy) != 2
+                or not all(_is_number(value) for value in xy)):
+            raise RecordingRejected(
+                '%s: %s needs xy: [x, y] in metres; got %r' % (where, name, entry))
+        if 'yaw_deg' in entry and not _is_number(entry['yaw_deg']):
+            raise RecordingRejected(
+                '%s: %s has a yaw_deg that is not a number (%r)'
+                % (where, name, entry['yaw_deg']))
+    return layout
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def load_cell_layout(path):
@@ -265,11 +312,11 @@ def load_cell_layout(path):
     """
     with open(path, encoding='utf-8') as handle:
         loaded = json.load(handle) if path.endswith('.json') else _safe_yaml(handle)
-    layout = (loaded or {}).get('layout')
+    layout = loaded.get('layout') if isinstance(loaded, dict) else None
     if not isinstance(layout, dict):
         raise RecordingRejected(
             "%s declares no 'layout' mapping of object -> {xy, yaw_deg}" % path)
-    return layout
+    return checked_layout(layout, '%s: layout' % path)
 
 
 def _safe_yaml(handle):
@@ -340,21 +387,25 @@ def require_layout(recording, actual,
     return True
 
 
-def load_velocity_limits(path):
-    """``{joint: max_velocity}`` from a MoveIt ``joint_limits.yaml``.
+def joint_velocity_limits(joint_limits):
+    """``{joint: max_velocity}`` [rad/s] from a ``joint_limits`` mapping.
 
-    That file, not the scaling factor, is where this arm's trajectory path is
+    *joint_limits* is ros2_control's ``joint_limits.<joint>.*`` schema, which is
+    what a MoveIt package's joint limits are written in and what
+    ``cho_robot_config.motion_limit_parameters()`` returns. Only joints with
+    ``has_velocity_limits`` and a positive ``max_velocity`` are kept.
+
+    Those limits, not the scaling factor, are where a trajectory path is
     bounded: ``joint_trajectory_controller`` has no per-cycle clamp of its own,
-    so nothing downstream of a goal enforces a rate. Its own header says so.
+    so nothing downstream of a goal enforces a rate.
     """
-    with open(path, encoding='utf-8') as handle:
-        loaded = _safe_yaml(handle) or {}
     limits = {}
-    for joint, entry in (loaded.get('joint_limits') or {}).items():
-        if entry.get('has_velocity_limits') and entry.get('max_velocity'):
-            limits[joint] = float(entry['max_velocity'])
-    if not limits:
-        raise RecordingRejected('%s declares no joint velocity limits' % path)
+    for joint, entry in (joint_limits or {}).items():
+        if not isinstance(entry, dict) or not entry.get('has_velocity_limits'):
+            continue
+        value = entry.get('max_velocity')
+        if _is_number(value) and value > 0.0:
+            limits[joint] = float(value)
     return limits
 
 

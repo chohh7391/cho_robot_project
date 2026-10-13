@@ -34,7 +34,6 @@ from cho_task_manager.utils.controller_names import (
     exclusive_arm_controllers,
     load_robot_config,
     moveit_joint_action_name,
-    valid_controller_action_names,
     vla_completion_service_name,
 )
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
@@ -114,9 +113,3 @@ def test_the_bridge_is_never_mistaken_for_a_controller(robot_type, profile):
     # bridge is not something controller_manager could switch.
     names = exclusive_arm_controllers(load_robot_config(robot_type, profile))
     assert not any('moveit_action_bridge' in name for name in names)
-
-
-def test_no_action_is_named_the_old_way():
-    legacy = [name for name in valid_controller_action_names()
-              if 'controller_action_server' in name]
-    assert legacy == []

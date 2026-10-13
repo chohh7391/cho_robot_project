@@ -57,7 +57,7 @@ def _scene(**overrides):
 def test_a_tag_shrinks_with_range_the_way_the_gate_reads_it():
     # This is the number cho_object_pose's min_edge_px gates on, so it has to
     # be the real relation and not a fudge: 39 mm at 447 px focal is about
-    # 39 px at 0.45 m, which is the range the shipped sweep raster works at.
+    # 39 px at 0.45 m, the range the fr5_bench raster (auto_chem branch) works at.
     assert fake_scene.apparent_edge_px(0.039, 447.0, 0.45) == pytest.approx(38.7, abs=0.2)
     assert fake_scene.apparent_edge_px(0.039, 447.0, 0.62) == pytest.approx(28.1, abs=0.2)
     far = fake_scene.apparent_edge_px(0.039, 447.0, 1.0)
@@ -215,11 +215,11 @@ def test_the_shipped_scene_matches_the_camera_table_it_stands_in_for():
 
 
 def test_the_shipped_scene_walks_the_fr5_raster_without_satisfying_it_at_once():
-    # What margin_per_px is FOR. cho_task_manager's fr5_bench raster asks for a
-    # decode margin of 55; the harness has to FAIL the far row (about 0.59 m to
-    # the tag) and PASS in the middle one (about 0.55 m), or the sweep either
-    # succeeds on its first waypoint and the raster is never exercised, or
-    # never succeeds at all and only the failure path is.
+    # What margin_per_px is FOR. The fr5_bench sweep raster (auto_chem branch)
+    # asks for a decode margin of 55; the harness has to FAIL the far row
+    # (about 0.59 m to the tag) and PASS in the middle one (about 0.55 m), or
+    # the sweep either succeeds on its first waypoint and the raster is never
+    # exercised, or never succeeds at all and only the failure path is.
     scene = _shipped()
 
     def margin(range_m):
@@ -252,37 +252,6 @@ def test_the_shipped_scene_puts_the_tags_where_the_object_table_expects_them():
     for name, vessel_x, stalk in (('beaker', 0.49, 0.070), ('flask', 0.48383, 0.090)):
         tag = next(entry for entry in scene.tags if entry.name == name)
         assert tag.position[0] - stalk == pytest.approx(vessel_x, abs=1e-3)
-
-
-def test_the_shipped_scenes_tags_are_within_sight_of_the_raster():
-    # The raster is not aimed at these tags -- it covers an area, because the
-    # point is that the object's position is not known -- and the tags do NOT
-    # have to lie inside it. The area is where the CAMERA goes; what it sees
-    # reaches a footprint further in every direction.
-    #
-    # What does have to hold is that the footprint gets there. A harness whose
-    # tags are outside everything the sweep can see tests only the failure
-    # path, and does it while looking like a bench problem.
-    share = pytest.importorskip(
-        'ament_index_python.packages').get_package_share_directory
-    path = os.path.join(share('cho_task_manager'), 'config', 'sweep',
-                        'fr5_bench.raster.yaml')
-    with open(path, encoding='utf-8') as stream:
-        spec = yaml.safe_load(stream)
-    area = spec['raster']['area']
-    survey = next(item for item in spec['raster']['passes']
-                  if not item.get('at_centre'))
-    scene = _shipped()
-    # Half the guaranteed footprint at the survey height: the SHORT half-cone,
-    # because nothing constrains the image roll.
-    camera = next(item for item in scene.cameras if item.half_fov_rad is not None)
-    reach = float(survey['height_m']) * math.tan(camera.half_fov_rad)
-    assert reach > 0.2, reach
-    for tag in scene.tags:
-        assert area['x'][0] - reach <= tag.position[0] <= area['x'][1] + reach, (
-            tag.name, area, reach)
-        assert area['y'][0] - reach <= tag.position[1] <= area['y'][1] + reach, (
-            tag.name, area, reach)
 
 
 def test_the_wrist_is_cone_gated_and_the_side_camera_is_not():

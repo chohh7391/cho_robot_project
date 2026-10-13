@@ -231,43 +231,27 @@ def main():
     node.declare_parameter("probe_translation", [0.0, 0.0, 0.0])
     node.declare_parameter("probe_duration", 0.0)
     node.declare_parameter("probe_return", True)
-    # Recorded-trajectory replay. Paths rather than contents: a recording is an
-    # artefact produced elsewhere, and the layout file is the cell's own
-    # description of itself, which the replay checks the recording against and
-    # REFUSES on a mismatch. Empty means "not a replay task"; the replay tree
-    # raises a clear error if it is selected without them.
+    # Recorded-trajectory replay (tasks/trajectory_replay.py). Paths rather than
+    # contents: a recording is an artefact produced elsewhere. An empty
+    # replay_trajectory replays the robot's bundled example
+    # (config/replay/<robot>/example_waypoints.csv). replay_layout is the cell's
+    # own description of itself, needed only when the recording assumes a cell
+    # layout: the replay checks the two against each other and REFUSES on a
+    # mismatch.
     node.declare_parameter("replay_trajectory", "")
     node.declare_parameter("replay_meta", "")
     node.declare_parameter("replay_layout", "")
-    # Fraction of the recorded clock to replay at. 0.0 means "use the task's own
-    # default", which is deliberately conservative: a first replay should be
-    # slow, and these recordings are timed for a simulator, not for this arm.
+    # Fraction of the recorded clock to replay at. 0.0 means "use the robot's
+    # own default" (ReplayDefaults.speed_scale: 0.25 on the FR5, whose
+    # recordings are timed for a simulator, 1.0 elsewhere). The joint velocity
+    # ceiling stretches the clock further whenever it has to.
     node.declare_parameter("replay_speed_scale", 0.0)
     # How the arm reaches the recording's start pose: "direct" interpolates
     # there through the hold controller and checks nothing, "moveit" plans it
     # and needs move_group plus the MoveIt bridge running. Empty keeps the
-    # task default (moveit, trajectory_replay.DEFAULT_HOME_VIA); a bringup
-    # without MoveIt -- a simulator with no collisions to check -- passes
-    # "direct".
+    # robot's default (ReplayDefaults.home_via: moveit on the FR5, direct
+    # elsewhere); an FR5 bringup without MoveIt passes "direct".
     node.declare_parameter("home_via", "")
-    # Vessels the perceived replay keeps a camera on while the arm runs, as a
-    # space- or comma-separated list. Empty means no watchdog, which is the
-    # default on purpose: a transfer recording MOVES a vessel, and a monitor
-    # that did not know which one is being carried would abort the run it
-    # exists to protect. Name the ones that should stay put.
-    node.declare_parameter("replay_watch", "")
-    # Where the wrist camera goes to look at a vessel the standing camera
-    # cannot see (occlusion_recovery). A bench's joint configurations, not a
-    # robot's, so it is a path like the replay artefacts above rather than
-    # anything derivable from the registry. Empty means "not a recovery task";
-    # the tree raises a clear error if it is selected without one.
-    node.declare_parameter("sweep_config", "")
-    # single_pass (empty) looks for every object in one pass over the raster;
-    # per_object sweeps and returns once per object.
-    node.declare_parameter("sweep_mode", "")
-    # Where cho_object_pose says what each camera can see. Empty keeps the
-    # node's own default, which is what its launch publishes on.
-    node.declare_parameter("visibility_topic", "")
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
@@ -305,8 +289,7 @@ def main():
         robot_config['control_mode'] = control_mode
         node.get_logger().info(f"--- Control mode override: {control_mode} ---")
 
-    for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via",
-                "replay_watch", "sweep_config", "sweep_mode", "visibility_topic"):
+    for key in ("replay_trajectory", "replay_meta", "replay_layout", "home_via"):
         value = node.get_parameter(key).get_parameter_value().string_value
         if value:
             robot_config[key] = value
@@ -322,6 +305,21 @@ def main():
         node.destroy_node()
         rclpy.try_shutdown()
         return
+
+    replay = getattr(root, 'replay_summary', None)
+    if replay:
+        # Which recording, and how much slower than recorded: an empty
+        # replay_trajectory picks the robot's example, and a stretched clock is
+        # a difference between the recording and the arm worth seeing.
+        ceiling = (f", {replay['ceiling_joint']} at {replay['ceiling_rate']:.3f} rad/s "
+                   f"over its {replay['ceiling']:.3f} ceiling"
+                   if replay['ceiling_joint'] else '')
+        node.get_logger().info(
+            f"--- Replaying {replay['source']}: {replay['waypoints']} waypoints, "
+            f"{replay['duration_s']:.1f} s recorded, clock x{replay['time_scale']:.2f} "
+            f"(speed_scale {replay['speed_scale']:.2f}{ceiling}), "
+            f"home_via {replay['home_via']}, layout "
+            f"{'checked' if replay['layout_checked'] else 'not assumed'} ---")
 
     tree = StoppableBehaviourTree(
         root=root,

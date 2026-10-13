@@ -6,6 +6,7 @@ LAUNCH cho_bringup_ur/bringup_mujoco_robot.launch.py []
   ARG urdf_file default='<share:cho_description_ur>/urdf/ur5e.urdf' choices=None
   ARG controllers_file default='<share:cho_bringup_ur>/config/mujoco/controllers.yaml' choices=None
   ARG controller_manager_timeout default='30' choices=None
+  ARG load_moveit_controller default='false' choices=None
   OPAQUE setup_control_environment
     XACRO '<share:cho_description_ur>/urdf/ur5e.urdf' mappings={hardware: 'mujoco'}
     NODE robot_state_publisher/robot_state_publisher

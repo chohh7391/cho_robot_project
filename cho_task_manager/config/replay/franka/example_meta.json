@@ -1,0 +1,34 @@
+{
+ "joint_names": [
+  "fr3_joint1",
+  "fr3_joint2",
+  "fr3_joint3",
+  "fr3_joint4",
+  "fr3_joint5",
+  "fr3_joint6",
+  "fr3_joint7"
+ ],
+ "waypoints": 291,
+ "duration_s": 14.5,
+ "home_arm_rad": [
+  0.0,
+  -0.397,
+  0.0,
+  -2.382,
+  0.0,
+  1.985,
+  0.785
+ ],
+ "gripper_events": [
+  {
+   "t_s": 7.0,
+   "event": "close"
+  },
+  {
+   "t_s": 13.75,
+   "event": "open"
+  }
+ ],
+ "layout_the_trajectory_assumes": {},
+ "description": "Wrist-only out-and-back (fr3_joint5, 6, 7) from task_home, with one gripper close and one open."
+}

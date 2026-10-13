@@ -132,7 +132,7 @@ wrong edge length returns a confident, wrong range and nothing downstream can
 tell:
 
 ```text
-[cho_object_pose] apriltag_node looking for tag_0 = 39.0 mm, tag_1 = 39.0 mm (from .../vessel_detect.yaml)
+[cho_object_pose] apriltag_node looking for tag_9 = 40.0 mm (from .../tag_reach.yaml)
 ```
 
 `run_task_manager.launch.py` starts this node only when `object_pose_config` is non-empty, so a
@@ -241,7 +241,8 @@ and only for those:
     priority: 0
 ```
 
-The case it exists for is a recovery sweep. A close-up view and a metre-away
+The case it exists for is a recovery sweep (the task that runs one is on the
+`auto_chem` branch). A close-up view and a metre-away
 view are not two measurements of one quantity: median them and the result is a
 pose neither camera saw, or the spread gate refuses them both during exactly
 the sweep that was meant to fix things.
@@ -294,15 +295,13 @@ which is set for "good enough to publish". A consumer that wants a genuinely
 better view holds out for a number; this node keeps no opinion about what any
 task needs.
 
-`cho_task_manager`'s `OcclusionSweepBehavior` is the consumer: it reads this
-topic, decides whether a sweep would help, and drives a wrist camera over the
-object until the decode is good enough.
+The occlusion recovery task that reads it, `OcclusionSweepBehavior`, is on the
+`auto_chem` branch; here `marker_memory` (the display) reads it.
 
 ## Seeing it
 
 Objects that declare a `shape` in the table are drawn at their detected pose on
-`/perception/object_markers`, so the beaker and the flask show up in rviz beside
-the robot model:
+`/perception/object_markers`, so they show up in rviz beside the robot model:
 
 ```bash
 ros2 launch cho_object_pose object_pose.launch.py rviz:=true   # rviz/objects.rviz
@@ -320,19 +319,18 @@ start the robot first or that one display stays empty while the rest works.
 ```yaml
     shape:
       type: mesh
-      resource: package://cho_task_manager/meshes/beaker.stl
+      resource: package://<your_package>/models/<part>.stl
       size: [0.050, 0.050, 0.070]      # still the BOUNDING BOX, in metres
       origin: [0.0, 0.0, -0.115]
 ```
 
 A mesh is held to the same contract as a primitive — `size` is the body's
 bounding box and `origin` is where its centre goes — so the file has to be
-normalised to a unit box centred on itself. `cho_task_manager/meshes/` does that
-on export, and the reason is that the alternative is a per-file scale factor
-derived from whatever units its author used, which is a number nobody can check
-by looking. A missing mesh draws nothing and logs only in rviz, so
-`test_fr5_vessel_detect.py` asserts every resource in the bench table resolves
-to a file that is actually installed.
+normalised to a unit box centred on itself, because the alternative is a per-file
+scale factor derived from whatever units its author used, which is a number nobody
+can check by looking. A missing mesh draws nothing and logs only in rviz. The
+glassware meshes, their USD-to-STL converter and the test that every resource in
+the bench table resolves to an installed file are on the `auto_chem` branch.
 
 ### The cameras are drawn too
 
@@ -415,12 +413,12 @@ ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py
 ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
 ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true -p blind:="['side_1:0']"
 ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
-    objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml \
+    objects_config:=<the bench's object table, on the auto_chem branch> \
     cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
 ```
 
 `blind` makes a camera miss a tag, standing in for an occlusion by the bench furniture the
-arm model does not contain — which is how the FR5 recovery sweep is exercised end to end.
+arm model does not contain — which is how the `auto_chem` branch's FR5 recovery sweep is exercised end to end.
 
 **`use_sim_time` has to match everywhere.** Every age on the visibility topic is this node's
 clock minus an image stamp, so a node on wall time against drivers on `/clock` reports every

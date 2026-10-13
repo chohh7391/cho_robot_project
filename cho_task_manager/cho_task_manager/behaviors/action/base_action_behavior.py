@@ -154,10 +154,10 @@ class BaseActionBehavior(py_trees.behaviour.Behaviour):
         """Cancel the goal this leaf sent if it may still be running.
 
         Called from terminate() for EVERY status, not only INVALID: a leaf that
-        returns SUCCESS or FAILURE while its goal is in flight (a sweep giving
-        up mid-motion, say) leaves a motion running that nothing will ever
-        cancel. Nothing happens when the goal has finished -- rejected, or its
-        result already in -- which is how every plain action leaf ends.
+        returns SUCCESS or FAILURE while its goal is in flight (a subclass giving
+        up on a deadline of its own, say) leaves a motion running that nothing
+        will ever cancel. Nothing happens when the goal has finished -- rejected,
+        or its result already in -- which is how every plain action leaf ends.
         """
         if self.goal_handle is not None:
             if self.get_result_future is not None and not self.get_result_future.done():

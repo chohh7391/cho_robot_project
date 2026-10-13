@@ -16,13 +16,16 @@
   <!-- Launch-only: run_task_manager.launch.py starts it when a task passes
        object_pose_config. Nothing in this package imports it. -->
   <exec_depend>cho_object_pose</exec_depend>
-  <!-- trajectory_replay reads this robot's joint VELOCITY ceiling from
-       cho_moveit_fr5/config/joint_limits.yaml. That file, and not the
-       scaling factor, is where the trajectory path is bounded:
+  <!-- trajectory_replay reads each robot's joint VELOCITY ceiling from its
+       MoveIt package's joint limits, through
+       cho_robot_config.motion_limit_parameters(). Those limits, and not the
+       scaling factor, are where the trajectory path is bounded:
        joint_trajectory_controller has no per-cycle clamp of its own, so a
-       replay with no ceiling to check against has none at all. It is a
-       config-only package, so this costs a share directory. -->
+       replay with no ceiling to check against has none at all. -->
+  <exec_depend>cho_moveit_franka</exec_depend>
   <exec_depend>cho_moveit_fr5</exec_depend>
+  <exec_depend>cho_moveit_openarm</exec_depend>
+  <exec_depend>cho_moveit_ur</exec_depend>
   <depend>action_msgs</depend>
   <depend>builtin_interfaces</depend>
   <depend>control_msgs</depend>
@@ -38,13 +41,12 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <!-- Reads /robot_description (utils/robot_description.py): SafetyMonitorBehavior's
-       kinematic guards and the FR5 replay's joint position limits. Imported
+       kinematic guards and trajectory_replay's joint position limits. Imported
        lazily, so a tree that uses neither never loads it; the rosdep key is in
        install_dependencies.bash SKIP_KEYS because libfranka and Pinocchio are
        pinned together as an ABI pair. -->
   <exec_depend>pinocchio</exec_depend>
 
-  <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>

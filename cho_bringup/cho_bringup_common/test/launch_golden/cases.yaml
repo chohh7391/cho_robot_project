@@ -60,6 +60,9 @@ cases:
       vla_controller_position: [controller_name:=vla_controller, control_mode:=position]
       mode_mismatch: [control_mode:=position]
       controller_mismatch: [controller_name:=joint_space_position_controller]
+      moveit_controller: [load_moveit_controller:=true, control_mode:=position,
+                          controller_name:=joint_space_position_controller]
+      moveit_controller_refused: [load_moveit_controller:=true]
     bringup_real_robot.launch.py:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
@@ -94,6 +97,7 @@ cases:
     bringup_mujoco_robot.launch.py:
       default: []
       ik_wrist: [controller_name:=task_space_ik_controller, ee_name:=wrist_3_link]
+      moveit_controller: [load_moveit_controller:=true]
       unknown_controller: [controller_name:=bogus]
     bringup_real_robot.launch.py:
       default: [robot_ip:=192.168.1.10]

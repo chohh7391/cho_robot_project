@@ -26,22 +26,22 @@ from cho_task_manager.tasks.franka import (
     create_franka_controller_check_position_tree,
     create_franka_controller_check_torque_tree,
     create_franka_controller_check_velocity_tree,
+    # recorded-trajectory replay
+    create_franka_trajectory_replay_tree,
 )
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
-    create_fr5_occlusion_recovery_tree,
-    create_fr5_occlusion_replay_tree,
-    create_fr5_perceived_replay_tree,
     create_fr5_trajectory_replay_tree,
-    create_fr5_vessel_detect_tree,
 )
 from cho_task_manager.tasks.openarm import (
     create_openarm_controller_check_torque_tree,
     create_openarm_mit_task_tuning_tree,
+    create_openarm_trajectory_replay_tree,
 )
 from cho_task_manager.tasks.ur import (
     create_ur_pick_place_tree,
     create_ur_multi_move_tree,
+    create_ur_trajectory_replay_tree,
 )
 
 
@@ -61,6 +61,9 @@ _TASK_REGISTRY = {
         'controller_check_position': create_franka_controller_check_position_tree,
         'controller_check_torque': create_franka_controller_check_torque_tree,
         'controller_check_velocity': create_franka_controller_check_velocity_tree,
+        # Replays a recording through the trajectory controller; see
+        # tasks/trajectory_replay.py (every robot builds the same tree).
+        'trajectory_replay': create_franka_trajectory_replay_tree,
     },
     'fr5': {
         # The plan is produced and executed by another workspace; this
@@ -68,33 +71,19 @@ _TASK_REGISTRY = {
         # tasks/fr5/fjt_handover.py.
         'fjt_handover': create_fr5_fjt_handover_tree,
         # Replays a trajectory recorded in a simulator: no planning, no
-        # perception, and a layout gate that refuses a cell laid out
-        # differently. See tasks/fr5/trajectory_replay.py.
+        # perception, and a layout gate when the recording assumes a cell
+        # layout. See tasks/trajectory_replay.py.
         'trajectory_replay': create_fr5_trajectory_replay_tree,
-        # The same replay, with the cameras checking the cell it assumes
-        # instead of a layout file kept in step by hand -- and optionally
-        # watching it while the arm runs. See tasks/fr5/perceived_replay.py.
-        'perceived_replay': create_fr5_perceived_replay_tree,
-        # Perception only: latches the beaker's and the flask's detected
-        # poses and moves nothing, so a camera setup can be commissioned with
-        # no bringup running. See tasks/fr5/vessel_detect.py.
-        'vessel_detect': create_fr5_vessel_detect_tree,
-        # The same latching, but it goes and LOOKS with the wrist camera at
-        # any vessel the standing camera cannot currently see. See
-        # tasks/fr5/occlusion_recovery.py.
-        'occlusion_recovery': create_fr5_occlusion_recovery_tree,
-        # occlusion_recovery's locating, then trajectory_replay's motion, in one
-        # mission. The perception is shown, not used: the declared layout still
-        # gates the replay. See tasks/fr5/occlusion_replay.py.
-        'occlusion_replay': create_fr5_occlusion_replay_tree,
     },
     'ur5e': {
         'pick_place': create_ur_pick_place_tree,
         'multi_move': create_ur_multi_move_tree,
+        'trajectory_replay': create_ur_trajectory_replay_tree,
     },
     'openarm': {
         'controller_check_torque': create_openarm_controller_check_torque_tree,
         'mit_task_tuning': create_openarm_mit_task_tuning_tree,
+        'trajectory_replay': create_openarm_trajectory_replay_tree,
     },
 }
 

@@ -34,7 +34,7 @@ import os
 
 import pytest
 
-from cho_task_manager.tasks import available_tasks, build_task_tree
+from cho_task_manager.tasks import build_task_tree
 from cho_task_manager.tasks.fr5 import trajectory_replay
 from cho_task_manager.utils.controller_names import (
     exclusive_arm_controllers,
@@ -104,12 +104,7 @@ def _ramp(count, op='Pick', step=0.0, start=0.0, dt=0.1):
 
 
 # --- registration ----------------------------------------------------------
-
-def test_the_task_is_registered_for_fr5_only():
-    assert 'trajectory_replay' in available_tasks('fr5')
-    for other in ('franka', 'ur5e', 'openarm'):
-        assert 'trajectory_replay' not in available_tasks(other)
-
+# Registration for all four robots is checked in test_trajectory_replay.py.
 
 def test_the_replay_controller_comes_from_the_registry():
     assert trajectory_replay.replay_controller(_config()) == 'joint_trajectory_controller'
@@ -188,6 +183,7 @@ def test_building_the_tree_accepts_a_matching_cell(tmp_path):
                    'replay_layout': layout})
 
     tree = build_task_tree('trajectory_replay', config)
+    assert tree.replay_summary['layout_checked'] is True
     names = {node.name for node in tree.iterate()}
     assert '1_Initialize' in names
     assert '2_Handover' in names
@@ -197,9 +193,23 @@ def test_building_the_tree_accepts_a_matching_cell(tmp_path):
     assert any('Abort' in name for name in names)
 
 
-def test_a_replay_without_its_paths_says_which_one(tmp_path):
-    with pytest.raises(ValueError, match='replay_trajectory'):
-        build_task_tree('trajectory_replay', _config())
+def test_an_assumed_layout_without_a_cell_file_is_refused(tmp_path):
+    """The layout file is required exactly when the recording assumes a layout."""
+    csv_path, meta_path = _write(tmp_path, _ramp(20))
+    config = _config()
+    config.update({'replay_trajectory': csv_path, 'replay_meta': meta_path})
+
+    with pytest.raises(ValueError, match='beaker'):
+        build_task_tree('trajectory_replay', config)
+
+
+def test_a_recording_that_assumes_no_layout_needs_no_cell_file(tmp_path):
+    csv_path, meta_path = _write(tmp_path, _ramp(20), {'layout_the_trajectory_assumes': {}})
+    config = _config()
+    config.update({'replay_trajectory': csv_path, 'replay_meta': meta_path})
+
+    tree = build_task_tree('trajectory_replay', config)
+    assert tree.replay_summary['layout_checked'] is False
 
 
 # --- gripper events --------------------------------------------------------
@@ -267,7 +277,7 @@ def test_the_gripper_settle_wait_outlasts_a_full_jaw_stroke():
     Sized rather than tuned: it only has to outlast what the jaws can take, and
     it is paid twice in a replay of several minutes.
     """
-    assert trajectory_replay.GRIPPER_SETTLE_SEC > 2.6
+    assert trajectory_replay.DEFAULTS.gripper_settle_sec > 2.6
 
 
 def test_an_unknown_gripper_event_is_refused(tmp_path):

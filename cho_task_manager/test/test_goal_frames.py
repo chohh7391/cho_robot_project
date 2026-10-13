@@ -65,8 +65,6 @@ from cho_robot_config import available_profiles, moveit_bridge_node
 from cho_robot_config import load_robot_config as load_registry_config
 from cho_task_manager.behaviors.action import (
     JointSpaceActionBehavior,
-    OcclusionSweepBehavior,
-    SinglePassSweepBehavior,
     TaskSpaceActionBehavior,
 )
 from cho_task_manager.tasks import available_tasks, build_task_tree
@@ -602,9 +600,9 @@ _TREES = {}
 _BUILD_ERRORS = {}
 
 #: What a tree that cannot be built from the registry alone says: it needs a
-#: task parameter (a recording, a sweep table). Those trees are checked in their
-#: own tests, with their fixtures (test_fr5_occlusion_recovery,
-#: test_fr5_trajectory_replay). ANY other ValueError is a failure, not a skip.
+#: task parameter (a recording, say). Those trees are checked in their own
+#: tests, with their fixtures (test_fr5_trajectory_replay). ANY other
+#: ValueError is a failure, not a skip.
 _NEEDS_A_PARAMETER = re.compile(r"^\w+ needs '\w+'")
 
 #: Trees that refuse a profile on purpose, with what they say.
@@ -656,8 +654,7 @@ def test_a_tree_refuses_a_profile_it_cannot_drive_and_says_why(key):
 
 def _goal_leaves(root):
     return [node for node in root.iterate()
-            if isinstance(node, (TaskSpaceActionBehavior, JointSpaceActionBehavior,
-                                 OcclusionSweepBehavior, SinglePassSweepBehavior))]
+            if isinstance(node, (TaskSpaceActionBehavior, JointSpaceActionBehavior))]
 
 
 @pytest.mark.parametrize('robot_type,profile,task', REGISTRY_ONLY_TASKS)
@@ -671,12 +668,10 @@ def test_every_goal_a_tree_sends_carries_the_registry_frame_and_names(
             if leaf.target_key is not None and task == 'tag_reach':
                 continue      # the latched pose's own frame; see the next test
             assert leaf.frame_id == goal_frame(config, leaf.relative), (task, leaf.name)
-        elif isinstance(leaf, JointSpaceActionBehavior):
+        else:
             assert leaf.joint_names == joints, (task, leaf.name)
             if leaf.target_joints is not None:
                 assert list(leaf.target_joints.name) == joints, (task, leaf.name)
-        else:
-            assert leaf.joint_names == joints, (task, leaf.name)
 
 
 def test_tag_reach_stamps_the_frame_its_pose_was_checked_in():

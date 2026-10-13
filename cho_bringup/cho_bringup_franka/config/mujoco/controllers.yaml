@@ -72,6 +72,11 @@
       vla_controller:
         type: cho_controller_franka/VLAController
 
+      # Standard FollowJointTrajectory backend (MoveIt execution, trajectory_replay).
+      # Only loaded with load_moveit_controller:=true, and then only in position mode.
+      moveit_joint_trajectory_controller:
+        type: joint_trajectory_controller/JointTrajectoryController
+
   joint_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
@@ -210,3 +215,18 @@
       # of toward rest: MuJoCo tracking 20.3 -> 4.4 mrad, lag 52 -> 5 ms, for more
       # vibration (0.25 -> 0.39). 0 is the old law.
       velocity_feedforward: 1.0
+
+  moveit_joint_trajectory_controller:
+    ros__parameters:
+      joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      command_interfaces: [position]
+      state_interfaces: [position, velocity]
+      allow_partial_joints_goal: false
+      # MuJoCo position actuators have a small steady gravity deflection between
+      # commanded and measured position. Seed each new trajectory from the last
+      # command so accepting a goal does not first command that deflected state
+      # (the same choice as cho_bringup_fr5's MuJoCo joint_trajectory_controller).
+      open_loop_control: true
+      constraints:
+        stopped_velocity_tolerance: 0.05
+        goal_time: 1.0

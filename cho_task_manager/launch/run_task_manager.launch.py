@@ -28,7 +28,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('task', default_value='pick_place'),
         DeclareLaunchArgument('robot_type', default_value='franka',
-                              description='Robot type: franka, ur5e or openarm'),
+                              description='Robot type: franka, ur5e, fr5 or openarm'),
         DeclareLaunchArgument(
             'arm', default_value='single',
             description='Arm profile: single, or an arm of a bimanual build (left/right). '
@@ -56,41 +56,38 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'probe_return', default_value='true',
             description='Run the reverse probe so the arm ends where it started.'),
-        # ---- recorded-trajectory replay (fr5 trajectory_replay) ----
+        # ---- recorded-trajectory replay (task:=trajectory_replay) ----
         # A recording is an artefact produced elsewhere, so these are paths.
-        # replay_layout is the CELL's own description of itself: the replay
-        # compares the recording's assumed layout against it and refuses to run
-        # when they disagree, because a blind replay against a cell laid out
+        # replay_layout is the CELL's own description of itself: when the
+        # recording assumes a layout, the replay compares the two and refuses to
+        # run when they disagree, because a blind replay against a cell laid out
         # differently puts the arm somewhere nobody chose.
         DeclareLaunchArgument(
             'replay_trajectory', default_value='',
-            description='Waypoint CSV to replay (t_s, j1..j6, operation). '
-                        'Empty for any task that is not a replay.'),
+            description="Waypoint CSV to replay (t_s, the robot's registry joints, "
+                        "operation). Empty replays the robot's example, "
+                        'cho_task_manager/config/replay/<robot>/example_waypoints.csv.'),
         DeclareLaunchArgument(
             'replay_meta', default_value='',
             description='Recording meta JSON. Empty derives it from the CSV name '
                         '(_waypoints.csv -> _meta.json).'),
         DeclareLaunchArgument(
             'replay_layout', default_value='',
-            description='Cell layout YAML the recording is checked against (see '
-                        'cho_task_manager/config/replay/).'),
+            description='Cell layout YAML the recording is checked against. Needed only '
+                        'when the recording assumes a layout (its meta '
+                        'layout_the_trajectory_assumes is not empty).'),
         DeclareLaunchArgument(
             'home_via', default_value='',
             description='How the arm reaches the start pose: direct (interpolate, '
                         'no collision checking) or moveit (planned; needs move_group '
-                        'and the MoveIt bridge). Empty keeps the task default, moveit; '
-                        'a bringup without MoveIt needs home_via:=direct.'),
+                        'and the MoveIt bridge). Empty keeps the task default, moveit '
+                        'on fr5 and direct elsewhere; an fr5 bringup without MoveIt '
+                        'needs home_via:=direct.'),
         DeclareLaunchArgument(
             'replay_speed_scale', default_value='0.0',
-            description='Fraction of the recorded clock to replay at; 0 keeps the '
-                        "task's own conservative default."),
-        DeclareLaunchArgument(
-            'replay_watch', default_value='',
-            description='perceived_replay only: vessels a camera watches while the arm '
-                        'runs, comma- or space-separated (e.g. "flask"). Empty means no '
-                        'watchdog. Name only vessels that should STAY PUT -- a transfer '
-                        'recording moves one on purpose, and watching that one aborts a '
-                        'good run.'),
+            description='Fraction of the recorded clock to replay at, in (0, 1]; 0 keeps '
+                        "the robot's default (0.25 on fr5, 1.0 elsewhere). The joint "
+                        'velocity ceiling stretches the clock further when it has to.'),
         # ---- perception, when the task needs a detected target ----
         # cho_object_pose is generic: it owns the pipeline, the gates and the
         # frame resolution, and knows nothing about any particular job. WHICH
@@ -121,27 +118,6 @@ def generate_launch_description():
             description='Camera table to fuse (cho_object_pose/config/cameras.yaml). It '
                         'MUST be the same file detectors.launch.py was given, or the pose '
                         'node looks up tag frames no detector publishes.'),
-        # ---- occlusion recovery (fr5 occlusion_recovery) ----
-        # WHERE to sweep is a bench's business: which joint configurations put
-        # the wrist camera over a beaker depends on where the beaker stands and
-        # which arm is holding the camera. WHETHER to sweep is decided at run
-        # time from what cho_object_pose publishes, so nothing here says it.
-        DeclareLaunchArgument(
-            'sweep_config', default_value='',
-            description='Sweep table for occlusion_recovery: the joint configurations '
-                        'that look at each object with the recovery camera (see '
-                        'cho_task_manager/config/sweep/). Empty for any task that does '
-                        'not recover.'),
-        DeclareLaunchArgument(
-            'sweep_mode', default_value='',
-            description='How the recovery looks for several objects: single_pass (the '
-                        'default when empty) drives the raster once for all of them, '
-                        'per_object sweeps and returns home once per object.'),
-        DeclareLaunchArgument(
-            'visibility_topic', default_value='',
-            description="Where cho_object_pose says what each camera can see. Empty "
-                        "keeps its default, /perception/object_visibility. Set it only "
-                        'if the pose node was started with a different one.'),
         DeclareLaunchArgument(
             'object_pose_min_cameras', default_value='1',
             description='How many different cameras must agree before a pose is '
@@ -173,21 +149,6 @@ def generate_launch_description():
                 'min_cameras': LaunchConfiguration('object_pose_min_cameras'),
                 'max_position_spread_m': LaunchConfiguration('object_pose_max_spread_m'),
                 'fusion_mode': LaunchConfiguration('object_pose_fusion_mode'),
-                # FORWARDED EXPLICITLY, and the empty default turned into the
-                # real one here rather than left to the included file.
-                #
-                # IncludeLaunchDescription does not scope launch configurations,
-                # so an argument declared in BOTH files takes the parent's value
-                # and the child's DeclareLaunchArgument default never applies.
-                # This one's parent default is '' -- meaning "whatever the pose
-                # node uses" -- and passing that through made the node try to
-                # create a publisher on the empty topic and die at startup with
-                # "topic name must not be empty string". It only shows up when
-                # this launch starts the pose node itself, which is why it
-                # survived every run that started the two separately.
-                'visibility_topic': PythonExpression([
-                    "'", LaunchConfiguration('visibility_topic'),
-                    "' or '/perception/object_visibility'"]),
             }.items(),
         ),
         Node(
@@ -217,10 +178,6 @@ def generate_launch_description():
                 'replay_speed_scale': ParameterValue(
                     LaunchConfiguration('replay_speed_scale'), value_type=float),
                 'home_via': LaunchConfiguration('home_via'),
-                'replay_watch': LaunchConfiguration('replay_watch'),
-                'sweep_config': LaunchConfiguration('sweep_config'),
-                'sweep_mode': LaunchConfiguration('sweep_mode'),
-                'visibility_topic': LaunchConfiguration('visibility_topic'),
             }]
         )
     ])

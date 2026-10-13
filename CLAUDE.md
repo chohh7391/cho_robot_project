@@ -112,6 +112,9 @@ ros2 run cho_control_tools vla_mit_probe
 
 # Behavior tree task
 ros2 launch cho_task_manager run_task_manager.launch.py task:=<task_name>
+# Replay a recording on the position trajectory controller (empty replay_trajectory = the
+# robot's example). Per-robot bringup commands: docs/tasks.md (Trajectory replay)
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=<franka|ur5e|fr5|openarm> task:=trajectory_replay use_sim_time:=true
 
 # Gazebo black screen fix
 export IGN_IP=127.0.0.1
@@ -221,26 +224,14 @@ cho_task_manager/
   cho_task_manager/
     behaviors/               # py_trees leaf nodes: action/, service/
     tasks/                   # Behavior trees, split per robot: franka/ (pick_and_place, forge), ur/ (pick_and_place, multi_move); __init__.py dispatches by robot_type via build_task_tree()
-    utils/occlusion.py       # ROS-free: when a recovery sweep is worth doing, when
-                             # it worked, and the sweep-table schema. Paired with
-                             # behaviors/action/occlusion_sweep.py, the leaf that
-                             # conducts it -- a LEAF and not something outside the
-                             # tree, because only a leaf can read the visibility
-                             # topic and judge its own success.
-    config/sweep/            # Where the wrist camera goes to look, per bench. A
-                             # boustrophedon raster at a fixed tool tilt, swept far
-                             # to near and repeated lower, stopping at the first
-                             # viewpoint whose decode clears min_decision_margin.
-                             # SIDEWAYS and not just downwards: the spacing is for
-                             # PARALLAX, not coverage (one viewpoint already covers
-                             # the area at this FOV), because a different line of
-                             # sight is the only thing that helps when something is
-                             # in the way. <bench>.raster.yaml is the spec a person
-                             # edits; <bench>.yaml is SOLVED from it by
-                             # scripts/solve_sweep_raster.py and is not hand-edited
-                             # -- every waypoint has to stay in one IK branch.
-                             # The task latches the pose BEFORE returning: a
-                             # recovered pose expires with the aggregation window.
+                             # trajectory_replay: ONE tree for franka, ur5e, fr5 and openarm in
+                             # tasks/trajectory_replay.py; tasks/<robot>/trajectory_replay.py holds only that
+                             # robot's ReplayDefaults and factory.
+    config/replay/<robot>/   # Recordings, one folder per robot (franka, ur, fr5, openarm):
+                             # <name>_waypoints.csv + <name>_meta.json; example_* is what
+                             # trajectory_replay plays when replay_trajectory is empty. README.md there.
+                             # The chemistry-bench application (glassware meshes, vessel detection,
+                             # occlusion sweeps, perception-gated replay) is on the `auto_chem` branch.
     task_manager_node.py     # ROS2 node that runs the selected tree
     utils/controller_names.py  # Compatibility view of cho_robot_config/config/<robot>.yaml
 
@@ -307,8 +298,8 @@ cho_perception/              # Perception that knows a robot; grouping directory
                              # every camera can see of every object -- the reasons
                              # the node always logged, in a form a behaviour tree can
                              # branch on, with each camera's decision_margin and
-                             # edge_px. That topic is the trigger for the FR5
-                             # occlusion recovery.
+                             # edge_px. The occlusion recovery task that consumed it is on
+                             # the `auto_chem` branch.
 
 extern/
   franka_ros2/               # Official Franka ROS2 driver (do not edit)
@@ -463,7 +454,7 @@ Shared tree fragments live in `cho_task_manager/subtrees/`, not copied per task:
 - `tare_ft_children()` — FT tare plus its settle wait, spliced ahead of the home
   block by the contact-rich forge tasks.
 
-Robot facts are never written into the task manager. The action leaves, the sweeps
+Robot facts are never written into the task manager. The action leaves
 and `VLACompletionWaiterBehavior` have no default controller (a tree passes the
 robot config's role), an exclusive switch without `robot_config` raises, and
 `ControllerNames` is Franka's names only, kept for the Franka trees and pinned to
@@ -488,14 +479,14 @@ KeyError escapes `update()` and takes the node down. Use
 
 `BaseActionBehavior.terminate()` cancels a goal that may still be running for EVERY
 status, not only INVALID: one already accepted at once, one still awaiting acceptance
-when it is accepted (a sweep can fail on the tick after it sent a waypoint). The leaf
+when it is accepted (a tree can fail on the tick after a leaf sent its goal). The leaf
 records the cancels it still owes (`cancels_outstanding()`), and
 `task_manager_node.shutdown_task_manager()` spins, at most 1 s, until none is left --
 also when the tree ended SUCCESS/FAILURE -- with Ctrl-C/SIGTERM held from before
 `tree.stop()` to the end of that flush (an interrupt that lands before the handlers
 are in place restarts the stop-and-flush).
-Every deadline a behaviour takes on the node clock -- goal timeouts, waits, sweep
-ceilings, dwells, latch windows, outage clocks -- goes through `utils/clock.py`: none
+Every deadline a behaviour takes on the node clock -- goal timeouts, waits,
+dwells, latch windows, outage clocks -- goes through `utils/clock.py`: none
 is set while the clock reads 0 (sim time before the first /clock), so it starts from
 the first real reading instead of being missed the moment /clock arrives.
 

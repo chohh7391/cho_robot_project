@@ -32,7 +32,7 @@ the noise. `min_cameras` (default 1) turns agreement from an opportunity into a
 requirement.
 
 ```bash
-TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
+TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_reach.yaml
 
 ros2 launch cho_oak       oak.launch.py  name:=side
 ros2 launch cho_realsense d435.launch.py camera_namespace:=rs_left  camera_name:=rs_left  serial_no:=_<serial>
@@ -55,8 +55,8 @@ is, not at the published pose — that pose is the standoff the arm drives to, a
 
 `shape.type` is `box`, `sphere`, `cylinder` or `mesh`. A mesh names a file
 (`resource: package://…`) and is drawn to the same `size` bounding box as a
-primitive, so the file has to be normalised to a unit box — see
-`cho_task_manager/meshes/README.md`, which also has the USD-to-STL converter.
+primitive, so the file has to be normalised to a unit box. The glassware meshes and
+the USD-to-STL converter are on the `auto_chem` branch.
 
 Cameras that declare a `visual` in `cho_object_pose/config/cameras.yaml` are
 drawn on the same topic, parented to their own TF frame. That is a check on the
@@ -114,27 +114,13 @@ ros2 launch cho_object_pose apriltag.launch.py objects_config:=$TABLE \
 ros2 launch cho_task_manager run_task_manager.launch.py task:=tag_reach object_pose_config:=$TABLE
 ```
 
-The FR5 bench, commissioning — detection only, nothing moves, no bringup:
-
-```bash
-TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
-
-ros2 launch cho_realsense d435.launch.py serial_no:=_332322072253
-ros2 launch cho_object_pose apriltag.launch.py objects_config:=$TABLE \
-  image_topic:=/camera/camera/infra1/image_rect_raw
-ros2 run tf2_ros static_transform_publisher X Y Z YAW PITCH ROLL base_link camera_link
-
-ros2 launch cho_task_manager run_task_manager.launch.py task:=vessel_detect robot_type:=fr5 \
-  object_pose_config:=$TABLE
-```
-
 Once more than one camera is plugged in, swap the single detector for
 `detectors.launch.py` and add the camera table so the views are fused:
 
 ```bash
 CAMERAS=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
 ros2 launch cho_object_pose detectors.launch.py objects_config:=$TABLE
-ros2 launch cho_task_manager run_task_manager.launch.py task:=vessel_detect robot_type:=fr5 \
+ros2 launch cho_task_manager run_task_manager.launch.py task:=tag_reach \
   object_pose_config:=$TABLE object_pose_cameras_config:=$CAMERAS
 ```
 

@@ -11,8 +11,10 @@
 #   ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
 #   ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true
 #   ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
-#       objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml \
+#       objects_config:=<the bench's object table> \
 #       cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
+#
+# The FR5 bench's object table is on the auto_chem branch (vessel_detect.yaml).
 #
 # USE_SIM_TIME HAS TO MATCH ON ALL OF THEM. Every age the pose node publishes is
 # its own clock minus an image stamp; a mismatch makes it report every camera
@@ -42,8 +44,8 @@ focal_px: 447.0
 # apparent edge, which is the right shape (a decode improves as the tag grows)
 # but is not a measurement. It is what decides how far into a recovery raster a
 # sweep has to go: at 1.80 a 39 mm tag clears a margin of 55 at about 0.56 m and
-# not at 0.59 m, which walks cho_task_manager's fr5_bench raster through its far
-# row and satisfies it in the middle one. Change it to exercise a different
+# not at 0.59 m, which walks the fr5_bench raster (auto_chem branch) through its
+# far row and satisfies it in the middle one. Change it to exercise a different
 # case; do not quote the result as what a real camera returns.
 margin_per_px: 1.80
 
@@ -108,9 +110,8 @@ cameras:
 #
 # The tag is NOT at the vessel. It stands on a stalk beside it, which is what
 # the object table records as a negative x offset -- beaker -70 mm, flask
-# -90 mm. So these are the vessel positions from
-# cho_task_manager/config/replay/mujoco_sdl_cell.yaml plus that stalk, read
-# forwards:
+# -90 mm. So these are the vessel positions from the MuJoCo cell layout
+# (auto_chem branch: mujoco_sdl_cell.yaml) plus that stalk, read forwards:
 #
 #   beaker  vessel (0.490, 0.175)  + 0.070  ->  tag (0.560, 0.175)
 #   flask   vessel (0.484, 0.332)  + 0.090  ->  tag (0.574, 0.332)
@@ -120,10 +121,9 @@ cameras:
 # 70 mm off in x is this file and the object table disagreeing about which of
 # the two the number is.
 #
-# z is the bench plane the FR5 extrinsics were surveyed against; the ids are
-# cho_task_manager/config/perception/vessel_detect.yaml's; and the same tag
-# positions are what cho_task_manager/config/sweep/fr5_bench.raster.yaml aims
-# the recovery raster at.
+# z is the bench plane the FR5 extrinsics were surveyed against. The ids are
+# the object table's, and the recovery raster is aimed at these positions; both
+# are on the auto_chem branch.
 tags:
   - id: 0
     name: beaker

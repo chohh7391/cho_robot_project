@@ -10,17 +10,18 @@ the robot:
 - **Home pose** — `poses.task_home`, read with `subtrees.home_joint_state(robot_config)`.
   Either a `poses.home` selector (FR5 and UR5e use `'1'`, OpenArm `'0'`) or a joint
   vector of its own (Franka). No tree spells a home out.
-- **Controllers** — the action leaves (`JointSpace`, `TaskSpace`, `Gripper`, the
-  sweeps) and `VLACompletionWaiterBehavior` have no default controller; a tree
+- **Controllers** — the action leaves (`JointSpace`, `TaskSpace`, `Gripper`) and
+  `VLACompletionWaiterBehavior` have no default controller; a tree
   passes the robot config's role (`robot_config['joint_space']`, `['gripper']`,
   `['vla']`, ...). `home_subtree()` opens `robot_config['gripper']`, so an OpenArm
   arm profile opens its own `left_`/`right_` gripper.
 - **Exclusive switches** need `robot_config`: the controllers they take down are the
   registry entry's roles, per-mode holds, `controllers.additional_arm` (the Franka
   arm controllers that hold no role) and direct action endpoints.
-- **Joint position limits** for the FR5 replay come from the running
-  `/robot_description`, read by the same Pinocchio reader as the safety monitor; a
-  segment is refused until it has arrived.
+- **Joint limits** for a replay: position limits come from the running
+  `/robot_description`, read by the same Pinocchio reader as the safety monitor (a
+  segment is refused until it has arrived); velocity limits from
+  `cho_robot_config.motion_limit_parameters()`.
 
 Waits in a tree use `behaviors/wait.WaitBehavior`, which runs on the node's clock
 (sim time under `use_sim_time`), not `py_trees.timers.Timer`, which counts wall time
@@ -45,7 +46,6 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 | `use_sim_time` | `false` | set `true` when running against a simulator |
 | `object_pose_config` | *(empty)* | task-owned object table; empty starts no perception node at all |
 | `object_pose_cameras_config` | *(empty)* | camera table to fuse (`cho_object_pose/config/cameras.yaml`); empty runs the single-camera path — one detector on `/detections`, unprefixed `tag_<id>` frames |
-| `replay_watch` | *(empty)* | `perceived_replay` only: vessels a camera watches while the arm runs |
 | `debug_tree` | `true` | print the unicode tree on every tick |
 | `print_tree` | `true` | print the final tree snapshot when the task finishes |
 
@@ -254,6 +254,7 @@ description, not from a run on the hardware with its actual payload.
 | `controller_check_position` | smoke check: every position-mode controller + gripper | `control_mode:=position` |
 | `controller_check_torque` | smoke check: every torque-mode controller + gripper | `control_mode:=torque` |
 | `controller_check_velocity` | smoke check: velocity controllers (+ VLA hold if present) | `control_mode:=velocity` (`vla:=true` optional) |
+| `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | MuJoCo: `control_mode:=position controller_name:=joint_space_position_controller load_moveit_controller:=true`. Real: no trajectory controller |
 
 `tag_reach` is the one task whose target is not in the tree. It waits for
 `cho_object_pose` to publish, which `run_task_manager.launch.py` starts when given
@@ -274,66 +275,122 @@ a rebuild or before real experiments.
 | --- | --- | --- |
 | `pick_place` | pick & place with the Robotiq 2F-85 | **`load_gripper:=true`** (it opens/closes the gripper) |
 | `multi_move` | visits several absolute task-space waypoints | any UR bringup, no gripper needed |
+| `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | MuJoCo: `load_moveit_controller:=true`. Real: the driver's `joint_trajectory_controller` |
 
 ## FR5 tasks
 
 | task | what it does | required bringup |
 | --- | --- | --- |
 | `fjt_handover` | homes, hands the arm to the trajectory controller for an external executor, supervises, takes it back | `controller_name:=joint_trajectory_controller` |
-| `trajectory_replay` | replays a recorded waypoint CSV; refuses a cell that does not match the declared layout | same, plus `replay_trajectory:=` and `replay_layout:=`; the home move plans through MoveIt by default, so a bringup without MoveIt needs `home_via:=direct` |
-| `perceived_replay` | the same replay, gated on what the cameras measure instead of a declared layout, optionally watched while it runs | same, plus `object_pose_config:=` and a running detector stack |
-| `vessel_detect` | latches the beaker's and the flask's detected poses. **Commands nothing** — no controller switch, no motion, no bringup needed | `object_pose_config:=` and a running detector stack |
-| `occlusion_recovery` | latches each vessel, sweeping the wrist camera over the bench for any the standing cameras cannot see -- one pass for all of them, or one sweep per vessel with `sweep_mode:=per_object` | the plain bringup, `object_pose_config:=`, `object_pose_cameras_config:=`, `sweep_config:=` and a running detector stack |
-| `occlusion_replay` | `occlusion_recovery`'s locating, then `trajectory_replay`'s motion, in one mission. The perception is shown, not used: the declared layout gates the replay | both sets of arguments, plus `home_via:=direct` on the plain bringup; `cho_object_pose display.launch.py` to watch it |
+| `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | the FR5 bringup (the trajectory controller is always loaded); `home_via:=direct` unless MoveIt runs. MuJoCo: `gripper:=ag95` for the example's gripper events |
 
 Every FR5 bringup is `control_mode:=position`, which is also the only mode
 `fr5.yaml` declares a hold controller for.
-
-The two perception tasks need the camera stack up — see
-[AprilTag targets](apriltag_perception.md) for the camera bringup and the
-transforms you have to supply.
-
-`vessel_detect` is where a bench is commissioned, and it is deliberately inert:
-it switches no controller and sends no goal, so it needs no bringup and cannot
-move anything. What it proves is the consumer's half of the contract, which is
-where a perception setup actually fails — the pose has to arrive **in the
-robot's base frame** (nothing transforms frames, so a camera-frame pose fails
-here rather than being driven to later), within the timeout from a cold start,
-and under the blackboard key a motion leaf would read. A pass means a motion
-task would have worked; a failure says which of the three it was.
-
-`perceived_replay` is `trajectory_replay` with that measurement used as the
-gate. The motion is imported from `trajectory_replay` unchanged — the same
-start-pose move, segments, gripper settle and ceilings — and what this tree adds
-is:
-
-| | |
-| --- | --- |
-| `replay_layout` | now **optional**. Given, the build-time gate still runs first, which refuses before a node is spun up. Omitted, the cameras are the gate. |
-| the measured check | runs after the home move and before the handover, so a refusal lands while the arm is still held |
-| unverified objects | an object the recording assumes that no camera tracks is named in the log, not silently passed |
-| `replay_watch` | names vessels a camera keeps watching during the replay; one that moves fails the mission branch and the standard abort takes the arm to its hold controller |
-
-`replay_watch` is empty by default and has to name objects explicitly, because a
-transfer recording **moves a vessel on purpose** — a watchdog that did not know
-which one is being carried would abort the run it exists to protect. Name the
-ones that should stay put (`replay_watch:=flask`).
-
-It does not re-aim the trajectory at where a vessel actually is. The waypoints
-are replayed exactly as recorded; the measurement only decides whether they may
-be replayed at all.
 
 ## OpenArm tasks
 
 | task | what it does | required bringup |
 | --- | --- | --- |
 | `controller_check_torque` | smoke check: switches to the joint impedance controller and drives a small motion through its action server | `control_mode:=torque` |
+| `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | MuJoCo: `control_mode:=position controller_name:=joint_space_position_controller`. Real: no trajectory controller |
 
-Only the torque smoke check is wired so far, and only for the **single-arm** build.
+The torque smoke check and `trajectory_replay` are wired so far, both only for the **single-arm** build.
 There is no `openarm_bimanual` robot config, so a bimanual torso is driven by sending
 action goals directly (see the OpenArm bringup section in the top-level README).
-Position/velocity task trees and the gripper/task-space roles are still open — see
+Other position/velocity task trees and the gripper/task-space roles are still open — see
 `todo/OPENARM_TODO.md`.
+
+## Trajectory replay
+
+`task:=trajectory_replay` plays a joint trajectory recorded elsewhere (a simulator)
+through the robot's position trajectory controller (the registry's
+`controllers.moveit_trajectory`), on `franka`, `ur5e`, `fr5` and `openarm`. It plans
+nothing and perceives nothing: the waypoints are replayed as recorded and only the
+clock may be stretched. One tree, `tasks/trajectory_replay.py`, serves every robot;
+`tasks/<robot>/trajectory_replay.py` holds that robot's defaults.
+
+1. `1_Initialize` takes the arm to the recording's start pose (`home_via`).
+2. `2_Handover` switches to the trajectory controller and verifies it is active.
+3. `3_Replay` sends the waypoints, cut only at the recording's gripper events, where
+   the gripper controller is commanded and the tree waits for the jaws to settle.
+4. `4_Finish` returns to the start pose and parks on the position hold controller.
+
+The tree needs a position bringup (`control_mode:=position`) and refuses any other
+mode. It runs on a single-arm profile only: `openarm` `left` and `right` are refused
+(their joints have no velocity limits in the MoveIt files) and so is `both` (two
+arms).
+
+| arg | default | description |
+| --- | --- | --- |
+| `replay_trajectory` | *(empty)* | waypoint CSV; empty plays the robot's example (`config/replay/<robot>/example_waypoints.csv`) |
+| `replay_meta` | *(empty)* | meta JSON; empty derives it from the CSV name (`<name>_waypoints.csv` → `<name>_meta.json`) |
+| `replay_layout` | *(empty)* | cell layout file; needed only when the recording's meta assumes a layout |
+| `home_via` | per robot | `direct` interpolates through the hold controller's joint action (no collision checking); `moveit` plans through the MoveIt bridge (needs `move_group`) |
+| `replay_speed_scale` | per robot | fraction of the recorded clock to replay at, in (0, 1] |
+
+| robot | `home_via` | `replay_speed_scale` | wait after a gripper event |
+| --- | --- | --- | --- |
+| `franka`, `ur5e`, `openarm` | `direct` | 1.0 | 1.0 s |
+| `fr5` | `moveit` | 0.25 | 4.0 s |
+
+The ceiling on joint speed is each joint's `max_velocity` from
+`cho_robot_config.motion_limit_parameters(robot)` times the registry's
+`moveit.execution.max_velocity_scaling_factor` (0.25 when undeclared). A recording
+faster than that has its clock stretched; the node logs the recording, the clock
+factor and whether a layout was checked when it starts. A joint with no velocity limit
+is refused when the tree is built.
+
+### Data
+
+Recordings live in `cho_task_manager/config/replay/<robot>/` (`franka`, `ur`, `fr5`,
+`openarm`) and are installed under `share/cho_task_manager/config/replay/<robot>/`.
+A recording is a pair, `<name>_waypoints.csv` and `<name>_meta.json`;
+`example_*` is the robot's example, a 14.5 s wrist-only out-and-back from the
+registry's `poses.task_home` with one gripper close and one open (none on `ur5e`: its
+MuJoCo bringup has no gripper). Put your own recordings in the same folder and pass
+`replay_trajectory:=<path>`; the folder's `README.md` has the format.
+
+- CSV: header `t_s,<joint names>,operation`. The joints are the registry's
+  `model.joints` for the profile, in order; `t_s` starts at 0 and increases;
+  `operation` is a free label that shows in the log.
+- Meta: `joint_names` (required, same as the CSV), `waypoints` (checked against the
+  CSV), `home_arm_rad` (the start pose; the first waypoint when absent),
+  `gripper_events` (`[{t_s, event: open|close}]`; the CSV has no gripper column),
+  `layout_the_trajectory_assumes`.
+- Cell layout: a recording planned against objects lists them under
+  `layout_the_trajectory_assumes` as `{name: {xy: [x, y], yaw_deg}}`. Only then does the
+  replay need `replay_layout` (YAML or JSON with a `layout:` mapping of the same
+  shape). Without the file the tree is not built, and the error names the objects; a
+  cell that differs by more than 15 mm or 10 degrees is refused at build time. `{}` or
+  a missing key assumes nothing, so no check runs (a file given anyway is only
+  format-checked); `null` is refused.
+
+### Running it in MuJoCo
+
+Each robot's bringup, then the task on the same `ROS_DOMAIN_ID`:
+
+```bash
+# Franka (needs the position bringup and the trajectory controller loaded inactive)
+ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=position controller_name:=joint_space_position_controller load_moveit_controller:=true
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=franka task:=trajectory_replay use_sim_time:=true
+
+# UR5e
+ros2 launch cho_bringup_ur bringup_mujoco_robot.launch.py load_moveit_controller:=true
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=ur5e task:=trajectory_replay use_sim_time:=true
+
+# FR5 (the trajectory controller is always there; home_via:=direct because no MoveIt runs)
+ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py gripper:=ag95
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=fr5 task:=trajectory_replay use_sim_time:=true home_via:=direct
+
+# OpenArm (single arm)
+ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py control_mode:=position controller_name:=joint_space_position_controller
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=openarm task:=trajectory_replay use_sim_time:=true
+```
+
+Your own recording: add `replay_trajectory:=/path/to/<name>_waypoints.csv`.
+
+On hardware the FR5 and UR bringups have the trajectory controller. The Franka and
+OpenArm real bringups have none, so `trajectory_replay` is simulation-only there.
 
 ## Examples
 
@@ -350,15 +407,10 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=controller_check_t
 # UR5e pick & place (bringup with load_gripper:=true)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_type:=ur5e use_sim_time:=true
 
-# FR5 perception commissioning: no robot, nothing moves
-TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
-ros2 launch cho_task_manager run_task_manager.launch.py task:=vessel_detect robot_type:=fr5 \
-  object_pose_config:=$TABLE
+# Replay the robot's example recording (MuJoCo bringup from the Trajectory replay section)
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=franka task:=trajectory_replay use_sim_time:=true
 
-# FR5 replay, gated on what three cameras measure, watching the flask while it runs
-CAMERAS=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
-TABLE=$(ros2 pkg prefix --share cho_task_manager)/config/perception/vessel_detect.yaml
-ros2 launch cho_task_manager run_task_manager.launch.py task:=perceived_replay robot_type:=fr5 \
-  replay_trajectory:=/path/to/transfer_seed5_waypoints.csv \
-  object_pose_config:=$TABLE object_pose_cameras_config:=$CAMERAS replay_watch:=flask
+# Replay your own recording
+ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=fr5 task:=trajectory_replay home_via:=direct \
+  replay_trajectory:=/path/to/<name>_waypoints.csv
 ```

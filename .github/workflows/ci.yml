@@ -30,8 +30,8 @@ defaults:
 # ROSDEP_SKIP_KEYS answers), while colcon refuses a workspace dependency that is
 # neither selected nor installed (that is what --packages-ignore answers). A
 # key that is not in the source tree at all (franka_hardware, ...) needs
-# ROSDEP_SKIP_KEYS alone. That is why cho_moveit_fr5 is listed below
-# (cho_task_manager exec_depends on it).
+# ROSDEP_SKIP_KEYS alone. That is why the four cho_moveit_* robot packages are
+# listed below (cho_task_manager exec_depends on all of them).
 #
 # All four bringups and their MoveIt packages are here for cho_bringup_common's
 # launch golden test (test/test_launch_golden.py), which evaluates every launch

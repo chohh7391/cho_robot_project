@@ -15,7 +15,6 @@
 from .ee_state_sample import EeStateSampleBehavior
 from .external_session import ExternalSessionBehavior
 from .joint_state_check import JointStateCheckBehavior
-from .object_layout import ObjectLayoutCheckBehavior, ObjectLayoutMonitorBehavior
 from .pose_target import PoseTargetBehavior
 from .safety_monitor import SafetyMonitorBehavior
 
@@ -23,8 +22,6 @@ __all__ = [
     'EeStateSampleBehavior',
     'ExternalSessionBehavior',
     'JointStateCheckBehavior',
-    'ObjectLayoutCheckBehavior',
-    'ObjectLayoutMonitorBehavior',
     'PoseTargetBehavior',
     'SafetyMonitorBehavior',
 ]

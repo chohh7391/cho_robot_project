@@ -1,0 +1,34 @@
+{
+ "joint_names": [
+  "openarm_joint1",
+  "openarm_joint2",
+  "openarm_joint3",
+  "openarm_joint4",
+  "openarm_joint5",
+  "openarm_joint6",
+  "openarm_joint7"
+ ],
+ "waypoints": 291,
+ "duration_s": 14.5,
+ "home_arm_rad": [
+  0.0,
+  0.0,
+  0.0,
+  0.3,
+  0.0,
+  0.0,
+  0.0
+ ],
+ "gripper_events": [
+  {
+   "t_s": 7.0,
+   "event": "close"
+  },
+  {
+   "t_s": 13.75,
+   "event": "open"
+  }
+ ],
+ "layout_the_trajectory_assumes": {},
+ "description": "Wrist-only out-and-back (openarm_joint5, 6, 7) from task_home, with one gripper close and one open."
+}

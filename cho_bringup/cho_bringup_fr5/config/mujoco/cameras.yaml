@@ -16,7 +16,7 @@
 #   ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py \
 #       extrinsics_config:=<this directory>/camera_extrinsics.yaml
 #   ros2 launch cho_object_pose detectors.launch.py cameras_config:=<this file> \
-#       objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/mujoco_sdl_cell.yaml
+#       objects_config:=<the cell's object table; auto_chem branch: mujoco_sdl_cell.yaml>
 #
 # use_sim_time:=true on everything downstream. The pose node measures every
 # visibility age as its own clock minus an image stamp, and it says so loudly

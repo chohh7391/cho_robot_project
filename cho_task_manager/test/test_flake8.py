@@ -21,8 +21,7 @@ import pytest
 # cho_object_pose's test does: `colcon test` runs pytest with the build
 # directory as cwd, where a --symlink-install tree only partly mirrors the
 # sources. And the paths come BEFORE --exclude, which takes any number of
-# values: listed after it, they were all swallowed as excludes and only
-# scripts/ and meshes/ were ever checked.
+# values: listed after it, they would all be swallowed as excludes.
 PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGETS = [os.path.join(PACKAGE_ROOT, name)
            for name in ('cho_task_manager', 'launch', 'setup.py', 'test')]

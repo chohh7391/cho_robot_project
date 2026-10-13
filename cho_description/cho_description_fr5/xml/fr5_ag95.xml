@@ -64,10 +64,9 @@
                 <geom type="mesh" rgba="0.89804 0.91765 0.92941 1" mesh="wrist3_link"/>
                 <site name="attachment_site" pos="0 0 0.1"/>
 
-                <!-- Wrist camera, emulated. THE RECOVERY INSTRUMENT: when the
-                     standing camera loses a vessel behind the arm,
-                     cho_task_manager's occlusion_recovery sweeps this one over
-                     the bench until the tag decodes well enough.
+                <!-- Wrist camera, emulated: the close view for when the
+                     standing camera loses a vessel behind the arm (the
+                     occlusion recovery is on the auto_chem branch).
 
                      POSE AND AIM ARE THE MEASURED MOUNT, converted rather than
                      re-invented: cho_bringup_fr5/config/real/camera_extrinsics.yaml
@@ -76,8 +75,8 @@
                      MuJoCo's camera convention is -z forward, +y up. The quat
                      here is that extrinsic composed with the rotation between
                      the two, so the simulated camera sits exactly where the
-                     real one is bolted and the sweep waypoints solved against
-                     the extrinsic aim at the same thing here as on the bench.
+                     real one is bolted and a pose aimed with the extrinsic
+                     looks at the same thing here as on the bench.
                      cho_bringup_fr5/config/mujoco/camera_extrinsics.yaml
                      publishes the matching optical frame; the two are derived
                      from the same numbers, so re-derive both if the mount moves.
@@ -87,7 +86,7 @@
                      fy = (1/tan(29 deg)) * 240 = 433 px against the real
                      stream's ~447. Close enough that a tag spans the same
                      number of pixels here as it will on the bench, which is
-                     what min_edge_px and the sweep's decode threshold read.
+                     what min_edge_px and the decode-margin gates read.
 
                      IT RENDERS ON EVERY SCENE THAT INCLUDES THIS FILE, because
                      mujoco_ros2_control registers every camera in the model.
@@ -165,7 +164,7 @@
          ctrl="0 0 0 0 0 0 0"/>
     <!-- The pose cho_robot_config/config/fr5.yaml calls poses.home['1'], and
          the one the recorded trajectories start from
-         (cho_task_manager/config/replay/traj_level_seed2.csv). THE THREE HAVE
+         (cho_task_manager/config/replay/fr5/traj_level_seed2.csv). THE THREE HAVE
          TO AGREE: the bringup selects a keyframe by name and the task manager
          drives to the registry's numbers, so a simulator that starts elsewhere
          lurches to the registry pose on the first goal. -->

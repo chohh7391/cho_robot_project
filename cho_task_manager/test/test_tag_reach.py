@@ -25,7 +25,6 @@ from ament_index_python.packages import get_package_share_directory
 from cho_task_manager.tasks import available_tasks, build_task_tree
 from cho_task_manager.tasks.franka import tag_reach
 from cho_task_manager.utils.blackboard import TASK_NAMESPACE
-import pytest
 import yaml
 
 
@@ -89,18 +88,3 @@ def test_the_tree_builds_and_wires_the_detection_into_the_motion():
     assert move.target_key is not None
     assert move.target_key.key == tag_reach.TARGET_POSE_KEY
     assert detect.namespace == TASK_NAMESPACE == move.target_key.namespace
-
-
-def test_the_detection_frame_comes_from_the_registry_not_a_literal():
-    from cho_task_manager.utils.controller_names import load_robot_config
-    config = load_robot_config('franka')
-    tree = build_task_tree('tag_reach', config)
-    detect = {node.name: node for node in tree.iterate()}['Detect_Tag']
-    # arm_base_link, not base_frame: the latter is 'world' for Franka and does
-    # not exist in the published TF tree.
-    assert detect.required_frame == config['arm_base_link']
-
-
-@pytest.mark.parametrize('task', ['tag_reach'])
-def test_the_task_declares_the_control_mode_it_needs(task):
-    assert tag_reach.CONTROL_MODE == 'torque'

@@ -124,7 +124,7 @@ def test_a_shape_colour_must_be_four_unit_values():
 
 def test_a_mesh_shape_carries_the_resource_rviz_has_to_load():
     spec, = parse_objects(_entry_with_shape(
-        type='mesh', resource='package://cho_task_manager/meshes/beaker.stl',
+        type='mesh', resource='package://some_package/models/beaker.stl',
         size=[0.05, 0.05, 0.07]))
     assert spec.shape.type == 'mesh'
     assert spec.shape.resource.endswith('beaker.stl')

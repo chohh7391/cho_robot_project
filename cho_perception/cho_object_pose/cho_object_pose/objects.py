@@ -32,7 +32,7 @@ DEFAULT_TOPIC_PREFIX = '/perception/object_pose'
 #
 # A mesh is held to the SAME contract as the primitives -- `size` is the body's
 # bounding box in metres and `origin` is where its centre goes -- so the file
-# has to be normalised to a unit box centred on itself. cho_task_manager's
+# has to be normalised to a unit box centred on itself. The auto_chem branch's
 # meshes/usd_to_stl.py does that on export, and the reason is that otherwise
 # every mesh would need its own scale factor derived from whatever units its
 # author happened to use, which is a number nobody can check by looking.

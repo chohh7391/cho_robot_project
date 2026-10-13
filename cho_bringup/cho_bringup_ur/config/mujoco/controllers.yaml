@@ -11,6 +11,11 @@ controller_manager:
     task_space_ik_controller:
       type: cho_controller_ur/TaskSpaceIKController
 
+    # Standard FollowJointTrajectory backend (trajectory_replay). Only loaded with
+    # load_moveit_controller:=true.
+    joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
 joint_space_position_controller:
   ros__parameters:
     joints:
@@ -36,3 +41,27 @@ task_space_ik_controller:
       - wrist_3_joint
     lambda: 0.02
     max_delta_q: 0.02
+
+joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    allow_partial_joints_goal: false
+    # MuJoCo position actuators have a small steady gravity deflection between
+    # commanded and measured position. Seed each new trajectory from the last
+    # command so accepting a goal does not first command that deflected state
+    # (the same choice as cho_bringup_fr5's MuJoCo joint_trajectory_controller).
+    open_loop_control: true
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 1.0

@@ -86,7 +86,7 @@
          ctrl="0 0 0 0 0 0"/>
     <!-- The pose cho_robot_config/config/fr5.yaml calls poses.home['1'], and
          the one the recorded trajectories start from
-         (cho_task_manager/config/replay/traj_level_seed2.csv). THE THREE HAVE
+         (cho_task_manager/config/replay/fr5/). THE THREE HAVE
          TO AGREE: the bringup selects a keyframe by name and the task manager
          drives to the registry's numbers, so a simulator that starts elsewhere
          lurches to the registry pose on the first goal. -->

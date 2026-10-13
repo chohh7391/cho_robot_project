@@ -8,6 +8,7 @@ LAUNCH cho_bringup_franka/bringup_mujoco_robot.launch.py ['control_mode:=positio
   ARG xacro_file default='<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf' choices=None
   ARG controllers_file default='<share:cho_bringup_franka>/config/mujoco/controllers.yaml' choices=None
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
+  ARG load_moveit_controller default='false' choices=None
   NODE cho_bringup_franka/mock_franka_gripper.py [cond=True]
     name=None namespace=None
     args=[]

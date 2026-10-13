@@ -24,6 +24,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 from cho_bringup_common import (
+    as_bool,
     create_controller_spawners,
     load_package_utils,
     runtime_param_cleanup,
@@ -85,7 +86,13 @@ def generate_launch_description():
             description="Controllers' end-effector frame; empty means fr3_hand_tcp with "
                         'the hand and fr3_link8 without it',
             choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
-        )
+        ),
+        DeclareLaunchArgument(
+            'load_moveit_controller',
+            default_value='false',
+            description='Load moveit_joint_trajectory_controller (inactive), the backend of '
+                        'MoveIt execution and trajectory_replay; control_mode:=position only'
+        ),
     ]
 
     robot_description = {
@@ -132,6 +139,9 @@ def generate_launch_description():
         ee_name = launch_utils.resolve_ee_name(
             LaunchConfiguration('ee_name').perform(context), True)
         launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
+        load_moveit_controller = as_bool(
+            LaunchConfiguration('load_moveit_controller').perform(context))
+        launch_utils.check_moveit_controller_matches_mode(load_moveit_controller, mode)
         always_active_controllers = launch_utils.always_active_controllers(load_gripper)
 
         initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_vla)
@@ -140,9 +150,13 @@ def generate_launch_description():
             use_vla=use_vla,
             requested_controller=ctrl_name,
         )
+        # Loaded inactive, like Gazebo's, and kept out of the runtime parameter file:
+        # it takes none of the cho parameters (its own are in controllers_file).
         all_runtime_param_controllers = (
             always_active_controllers + switchable_controllers
         )
+        if load_moveit_controller:
+            switchable_controllers.append(launch_utils.MOVEIT_TRAJECTORY_CONTROLLER)
         runtime_param_file = launch_utils.create_runtime_param_file(
             payload_config_path=payload_config_file,
             controller_names=all_runtime_param_controllers,

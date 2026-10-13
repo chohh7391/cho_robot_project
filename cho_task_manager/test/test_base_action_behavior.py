@@ -297,8 +297,8 @@ def test_terminate_invalid_after_completion_does_nothing():
 
 # ------------------------------------------- ending with the goal still out
 #
-# A subclass may end SUCCESS or FAILURE while its goal is still pending -- the
-# sweeps give up mid-motion on their own deadline. The base class has to cancel
+# A subclass may end SUCCESS or FAILURE while its goal is still pending -- one
+# that gives up on a deadline of its own, say. The base class has to cancel
 # that goal whatever the status, including one still awaiting acceptance.
 
 def test_terminate_failure_before_goal_accepted_cancels_on_acceptance():

@@ -8,7 +8,7 @@
 # cho_bringup_fr5/config/isaac/robot_profile.json's arm_home.
 #
 # It is the pose the recorded trajectories start from
-# (cho_task_manager/config/replay/traj_level_seed2.csv). Leaning forward over
+# (cho_task_manager/config/replay/fr5/). Leaning forward over
 # the bench rather than folded behind the base: the tool sits 0.40 m above the
 # table with the elbow bent, and it is better conditioned than the textbook
 # ready pose it replaced (smallest singular value 0.21 against 0.09). The

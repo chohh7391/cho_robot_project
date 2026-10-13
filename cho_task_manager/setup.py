@@ -18,6 +18,21 @@ from glob import glob
 
 package_name = 'cho_task_manager'
 
+
+def replay_data_files():
+    """config/replay/<robot dir>/ -> share/<package>/config/replay/<robot dir>/, one entry per folder."""
+    entries = []
+    for folder in sorted(glob(os.path.join('config', 'replay', '*', ''))):
+        files = sorted(
+            path for pattern in ('*.csv', '*.json', '*.yaml')
+            for path in glob(os.path.join(folder, pattern)))
+        if files:
+            robot_dir = os.path.basename(os.path.normpath(folder))
+            entries.append(
+                (os.path.join('share', package_name, 'config', 'replay', robot_dir), files))
+    return entries
+
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -29,18 +44,8 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config', 'perception'),
             glob('config/perception/*.yaml')),
-        (os.path.join('share', package_name, 'config', 'replay'),
-            glob('config/replay/*.yaml')),
-        # Where the wrist camera goes to look at an occluded object. A bench's
-        # joint configurations, passed to occlusion_recovery as sweep_config:=.
-        (os.path.join('share', package_name, 'config', 'sweep'),
-            glob('config/sweep/*.yaml')),
-        # Display meshes for the bench's glassware, named by config/perception
-        # as package://cho_task_manager/meshes/<file>. rviz resolves that
-        # through the ament index, so they have to be installed, not just
-        # present in the source tree.
-        (os.path.join('share', package_name, 'meshes'), glob('meshes/*.stl')),
-    ],
+        # Recordings trajectory_replay finds by robot (tasks/trajectory_replay.py).
+    ] + replay_data_files(),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='home',

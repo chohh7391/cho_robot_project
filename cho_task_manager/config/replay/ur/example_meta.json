@@ -1,0 +1,23 @@
+{
+ "joint_names": [
+  "shoulder_pan_joint",
+  "shoulder_lift_joint",
+  "elbow_joint",
+  "wrist_1_joint",
+  "wrist_2_joint",
+  "wrist_3_joint"
+ ],
+ "waypoints": 291,
+ "duration_s": 14.5,
+ "home_arm_rad": [
+  0.0,
+  -1.5708,
+  1.5708,
+  -1.5708,
+  -1.5708,
+  0.0
+ ],
+ "gripper_events": [],
+ "layout_the_trajectory_assumes": {},
+ "description": "Wrist-only out-and-back (wrist_1, wrist_2, wrist_3) from task_home. No gripper events: the UR MuJoCo bringup has no gripper."
+}

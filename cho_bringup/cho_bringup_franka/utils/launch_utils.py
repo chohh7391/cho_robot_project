@@ -72,6 +72,12 @@ CONTROLLERS_BY_MODE = {
 
 VLA_CONTROLLER = 'vla_controller'
 
+# The standard JointTrajectoryController behind MoveIt execution and the task
+# manager's trajectory replay (the registry's controllers.moveit_trajectory).
+# It is never in the runtime parameter file: it takes none of the cho
+# parameters, and its own come from the config's controllers.yaml.
+MOVEIT_TRAJECTORY_CONTROLLER = 'moveit_joint_trajectory_controller'
+
 
 # What the controllers' ee_name may be. '' picks the TCP when the hand is in the
 # description and fr3_link8 otherwise.
@@ -142,6 +148,23 @@ def check_controller_matches_mode(controller_name, control_mode, use_vla):
     raise RuntimeError(
         f"Unknown controller_name '{controller_name}' for control_mode:={control_mode}. "
         f"Valid options: {allowed + [VLA_CONTROLLER]} (or vla:=true).")
+
+
+def check_moveit_controller_matches_mode(load_moveit_controller, control_mode):
+    """
+    Refuse load_moveit_controller:=true outside position mode (MuJoCo).
+
+    The trajectory controller commands the position interface, which the
+    description exports only for control_mode:=position; in the other modes it
+    would claim an interface that does not exist and fail to configure.
+    """
+    if as_bool(load_moveit_controller) and control_mode != 'position':
+        raise RuntimeError(
+            f"load_moveit_controller:=true needs control_mode:=position, but "
+            f"control_mode:={control_mode}: {MOVEIT_TRAJECTORY_CONTROLLER} commands the "
+            "position interface, which only a position-mode description exports. Pass "
+            "control_mode:=position controller_name:=joint_space_position_controller "
+            "(or another position controller), or drop load_moveit_controller.")
 
 
 def get_switchable_controllers(

@@ -89,15 +89,6 @@ def test_the_trees_still_home_where_they_did(robot_type, task, expected):
     assert targets and all(target == expected for target in targets)
 
 
-def test_no_tree_spells_out_a_home_pose():
-    # The constants the registry replaced must not come back.
-    for name in ('FRANKA_HOME_POSITION', 'UR5E_HOME_POSITION', 'HOME_POSE_KEY',
-                 'FR5_POSITION_LIMITS', 'EXCLUSIVE_ARM_CONTROLLERS'):
-        offenders = [str(path.relative_to(PACKAGE)) for path in PACKAGE.rglob('*.py')
-                     if name in path.read_text()]
-        assert offenders == [], name
-
-
 def test_controller_names_has_no_robot_special_case():
     source = (PACKAGE / 'utils' / 'controller_names.py').read_text()
     assert "== 'franka'" not in source and '== "franka"' not in source

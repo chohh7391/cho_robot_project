@@ -23,6 +23,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 from cho_bringup_common import (
+    as_bool,
     chain_spawners,
     make_spawner_node,
     runtime_param_cleanup,
@@ -36,6 +37,11 @@ SWITCHABLE_CONTROLLERS = [
     'task_space_ik_controller',
 ]
 
+# The standard JointTrajectoryController behind trajectory_replay (the registry's
+# controllers.moveit_trajectory). Not a cho controller, so it is not in
+# SWITCHABLE_CONTROLLERS, which also names what controller_name may be.
+TRAJECTORY_CONTROLLER = 'joint_trajectory_controller'
+
 
 def setup_control_environment(context):
     controller_name = LaunchConfiguration('controller_name').perform(context)
@@ -43,6 +49,8 @@ def setup_control_environment(context):
     bringup_type = LaunchConfiguration('bringup_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
     controller_manager_timeout = LaunchConfiguration('controller_manager_timeout').perform(context)
+    load_moveit_controller = as_bool(
+        LaunchConfiguration('load_moveit_controller').perform(context))
 
     if controller_name not in SWITCHABLE_CONTROLLERS:
         raise RuntimeError(
@@ -97,9 +105,11 @@ def setup_control_environment(context):
     }
     active_spawner = make_spawner_node(
         ['joint_state_broadcaster', controller_name], **spawner_kwargs)
-    inactive_spawner = make_spawner_node(
-        [controller for controller in SWITCHABLE_CONTROLLERS if controller != controller_name],
-        active=False, **spawner_kwargs)
+    inactive_controllers = [
+        controller for controller in SWITCHABLE_CONTROLLERS if controller != controller_name]
+    if load_moveit_controller:
+        inactive_controllers.append(TRAJECTORY_CONTROLLER)
+    inactive_spawner = make_spawner_node(inactive_controllers, active=False, **spawner_kwargs)
 
     event_handlers = [
         RegisterEventHandler(
@@ -160,6 +170,12 @@ def generate_launch_description():
             'controller_manager_timeout',
             default_value='30',
             description='Controller manager service timeout for spawners',
+        ),
+        DeclareLaunchArgument(
+            'load_moveit_controller',
+            default_value='false',
+            description='Load joint_trajectory_controller (inactive), the backend of '
+                        'trajectory_replay',
         ),
         OpaqueFunction(function=setup_control_environment),
     ])
