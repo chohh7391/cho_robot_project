@@ -153,9 +153,8 @@ numeric_policy:
         state_stale_cycles: null
         bimanual_send_skew_us: null
         bimanual_send_skew_gate: measure_before_enforcement
-    # The real profile selected by a real bringup invocation. This remains
-    # commissioning-only and has not been
-    # physically exercised in this repository.
+    # The real profile selected by a real bringup invocation; commissioning-only.
+    # Hardware status: docs/openarm_real_bringup.md.
     real_conservative_commissioning:
       status: commissioning_experiment_allowed
       backend: real

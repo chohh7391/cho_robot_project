@@ -4,6 +4,8 @@
 hardware adapter ([cho_hardware_openarm_mit_real](../cho_hardware/cho_hardware_openarm_mit_real/README.md)).
 It is in commissioning: the task-space controller has been run and tuned on hardware, with the
 measurements recorded next to the values in `cho_bringup_openarm/config/real/controllers_mit*.yaml`.
+Those runs used earlier code; the current controllers and adapter have not been run on hardware yet
+(to check: [Re-check on hardware](#re-check-on-hardware)).
 Not run on hardware: VLA joint chunks, and paired 14-axis MoveIt ownership, which the real bringup
 does not offer. Nothing here is a production safety approval.
 
@@ -136,3 +138,16 @@ commissioning handles for model error; their identified values and how they
 were found are in the same YAML comments. `base_rpy` must match how the arm is
 mounted: the MIT motor has no gravity model, so a wrong value inverts the
 compensation.
+
+## Re-check on hardware
+
+Behaviour of the current code on the real path that has not been run on hardware:
+
+- Re-enabling one arm: the other arm keeps running (its watchdog does not trip, it does not sag)
+  while the re-enabled arm goes through ENABLING.
+- Final-torque bound: every tuple on the bus stays within the profile's final torque; compare the
+  measured joint torque with the bound (it is approximate by about `kp·|dq|·(read age + one cycle)`).
+- Drive-side `reference_offset_weight` (single arm): the null-space joint motion under a load at the
+  hand, against the weight-1 behaviour.
+- `return_to_zero` on `vla_mit_controller`: it runs with the startup gains.
+- The tuned task-space behaviour above: tracking and holding as recorded in the YAML comments.

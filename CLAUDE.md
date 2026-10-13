@@ -6,6 +6,8 @@ comment beside that code, the client contract in [cho_interfaces/CONTRACT.md](ch
 a package's internals in its README.md or DESIGN.md, operating procedures in [docs/](docs/). Change a fact
 there, not here.
 
+How the main agent splits work among subagents and has it reviewed: [AGENTS.md](AGENTS.md).
+
 ## Build & Test
 
 Run from workspace root (`~/ros2_ws`):
@@ -277,9 +279,5 @@ you can use this alias when you need to build some packages or entire packages.
 alias cbr='MAKEFLAGS="-j2 -l2" colcon build --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release --symlink-install'
 alias cbp='MAKEFLAGS="-j2 -l2" colcon build --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select'
 
-Do not raise these limits. This machine has 6 GB of RAM, and 4 workers at
-`-j4` puts up to 16 concurrent `g++` processes on the Cho controller
-packages, which exhausts memory and locks the machine up hard enough to
-need a reboot. The `-l2` load limit matters as much as the job count.
-Prefer scoping the package set (`--packages-select`, `--packages-above`)
+Do not raise these limits. Prefer scoping the package set (`--packages-select`, `--packages-above`)
 to keep a wide rebuild short instead of adding parallelism.

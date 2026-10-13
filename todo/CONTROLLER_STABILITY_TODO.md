@@ -1,8 +1,9 @@
 # Controller Stability — Remaining TODO
 
 Unresolved items only. Everything from the 2026-07 stability review that has been
-fixed and verified in MuJoCo has been removed from this list; what remains is either
-(a) blocked on real-hardware validation or (b) small, deliberately deferred tuning work.
+fixed and verified in MuJoCo has been removed from this list; what remains is
+(a) blocked on real-hardware validation, (b) small, deliberately deferred tuning work, or
+(c) a deferred code fix.
 
 Resolved-and-shipped so far (for context, see git history): RT-safe goal state
 machine in all four action servers, VLA chunk-buffering/QoS fixes, absolute
@@ -50,6 +51,17 @@ real/gazebo = OFF until hardware validation.
   `target_joints` outside the model position limits; the trajectory then tracks
   toward them (position-mode `clip_position` only rate-limits). Validate targets
   against `model_.lower/upperPositionLimit` in `handle_goal` and REJECT.
+
+## Deferred code fixes
+
+- **Action-server activity pointer lifetime** — `GoalPhaseActionServer::attach_activity()` stores
+  a raw `const ControllerActivity *`
+  (`cho_controller/cho_controller_base/include/cho_controller_base/goal_phase_action_server.hpp:212, :467`),
+  read by the executor-side `admit_goal()` / `controller_ready()` and the finisher. A callback that
+  `weak.lock()`s the server while its controller is destroyed keeps the server alive past the
+  `ControllerActivity` the controller owns, and the pointer dangles. Every arm base and chain
+  generator owns one and its controllers attach it (20 call sites), so the fix spans all of them: own the activity through a `shared_ptr` the server
+  holds weakly, or detach it before the controller releases the server.
 
 ## External / on-hold
 

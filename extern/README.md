@@ -41,10 +41,10 @@ therefore needs CLI11.  On Ubuntu 22.04 install it before building:
 sudo apt-get install libcli11-dev
 ```
 
-The upstream `openarm_can/package.xml` does not currently declare CLI11, so
-`rosdep` alone does not install this system dependency. `install_dependencies.bash`
-installs `libcli11-dev` by apt for that reason, so the command above is only
-needed when building this vendor checkout without having run that script.  The hardware library
+The upstream `openarm_can/package.xml` does not declare CLI11, so
+`cho_hardware_openarm_mit_real/package.xml` declares the rosdep key `cli11` for it:
+`rosdep install` (and `install_dependencies.bash`) installs it, and the command above is only
+needed when building this vendor checkout on its own.  The hardware library
 itself uses Linux SocketCAN and has no additional ROS package dependency.
 `openarm_hardware` directly needs `hardware_interface`, `pluginlib`, `rclcpp`,
 `rclcpp_lifecycle`, and the CMake target exported by `openarm_can`.

@@ -1,6 +1,6 @@
 # Real OpenArm MIT commissioning controller map. Values are bounded by
-# real_conservative_commissioning and have not been physically
-# validated; do not treat them as a production tuning recommendation.
+# real_conservative_commissioning; their hardware status is in
+# docs/openarm_real_bringup.md. Not a production tuning recommendation.
 /**:
   controller_manager:
     ros__parameters:

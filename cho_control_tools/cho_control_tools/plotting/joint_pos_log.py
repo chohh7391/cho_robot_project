@@ -25,6 +25,7 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 from cho_control_tools.plotting.bag_io import BagError, read_topic
+from cho_control_tools.plotting.mpl import import_pyplot
 
 CONTROLLER_STATE_TYPE = 'control_msgs/msg/JointTrajectoryControllerState'
 
@@ -72,7 +73,7 @@ def get_joint_data(db_path, topic, start_t=None, end_t=None):
 
 def build_figures(data, title):
     """(position figure, velocity figure) for get_joint_data()'s columns."""
-    import matplotlib.pyplot as plt
+    plt = import_pyplot()
 
     t, d_pos, c_pos, c_vel = data
     num_joints = d_pos.shape[1]
@@ -125,7 +126,7 @@ def build_figures(data, title):
 def plot_results(bag_db_path, topic, start_t, end_t):
     data = get_joint_data(bag_db_path, topic, start_t, end_t)
     # Imported once the bag has been read: a bag error needs no plotting stack.
-    import matplotlib.pyplot as plt
+    plt = import_pyplot()
 
     build_figures(data, f'{bag_db_path} {topic}')
     plt.show()

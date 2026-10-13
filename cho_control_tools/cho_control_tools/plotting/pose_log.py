@@ -27,6 +27,7 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 from cho_control_tools.plotting.bag_io import BagError, read_topic
+from cho_control_tools.plotting.mpl import import_pyplot
 
 POSE_LOG_TYPE = 'cho_interfaces/msg/PoseLog'
 
@@ -110,7 +111,7 @@ def tracking_errors(d_pos, c_pos, d_q, c_q):
 
 def build_figure(data, title):
     """The tracking figure for get_pose_data()'s columns: X, Y, Z and the orientation error."""
-    import matplotlib.pyplot as plt
+    plt = import_pyplot()
 
     t, d_pos, c_pos, d_q, c_q = data
     d_pos, c_pos, error_rot = tracking_errors(d_pos, c_pos, d_q, c_q)
@@ -139,7 +140,7 @@ def build_figure(data, title):
 def plot_results(bag_db_path, topic, start_t, end_t):
     data = get_pose_data(bag_db_path, topic, start_t, end_t)
     # Imported once the bag has been read: a bag error needs no plotting stack.
-    import matplotlib.pyplot as plt
+    plt = import_pyplot()
 
     t = data[0]
     build_figure(data, f'Tracking Performance: {bag_db_path} {topic}\n'

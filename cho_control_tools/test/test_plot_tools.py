@@ -30,6 +30,7 @@ from rosidl_runtime_py.utilities import get_message
 
 from cho_control_tools.plotting import joint_pos_log, pose_log
 from cho_control_tools.plotting.bag_io import BagError, read_topic
+from cho_control_tools.plotting.mpl import import_pyplot
 
 POSE_LOG = 'cho_interfaces/msg/PoseLog'
 CONTROLLER_STATE = 'control_msgs/msg/JointTrajectoryControllerState'
@@ -92,12 +93,9 @@ def _serialized_state(reference, feedback, velocities):
 
 def _pyplot():
     try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
+        return import_pyplot('Agg')
     except ImportError as error:
         pytest.skip(f'matplotlib cannot be imported here: {error}')
-    return plt
 
 
 # --- the columns the tools plot ------------------------------------------------------------------

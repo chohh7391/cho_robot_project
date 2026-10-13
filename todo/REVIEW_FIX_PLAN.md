@@ -317,7 +317,7 @@ CallbackReturn VLAController::on_deactivate(const rclcpp_lifecycle::State & prev
 | C10 | `cho_vla_core/DESIGN.md:14-17` | 패키지 분리 근거를 지금 package.xml 에 맞춘다 |
 | C6 | `ci.yml:91-94` 주석 | `cho_description_ur` 의 pytest 2개를 TEST_PACKAGES 에 넣거나, 주석을 고친다 |
 | C8 | `cho_robot_config/config/openarm.yaml:205-231` | 'both' 프로필이 접두어 없는 역할 이름을 물려받는다. 역할을 재정의한다(코드가 아닌 설정 수정) |
-| — | `CLAUDE.md` "Build Alias" | 리뷰 머신은 46 GB / 10코어로 보고됐다. 6 GB 문구가 다른 머신 기준이라면 그렇게 적는다. 제한 값은 바꾸지 않는다 |
+| — | `CLAUDE.md` "Build Alias" | 해결: 6 GB 설명을 지웠다(2026-10-14). 제한 값은 그대로 |
 
 ---
 
