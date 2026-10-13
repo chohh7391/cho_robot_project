@@ -39,10 +39,11 @@ change behaviour fails it until the expected files are regenerated and the diff 
 bringup needs cases. `test_golden_registry_names.py` checks the spawned controllers against the registry. Procedure: [test_launch_golden.py](cho_bringup/cho_bringup_common/test/test_launch_golden.py);
 what is printed: [launch_golden.py](cho_bringup/cho_bringup_common/cho_bringup_common/launch_golden.py).
 
-**CI.** [ci.yml](.github/workflows/ci.yml) builds and tests `BUILD_PACKAGES`. Every workspace package a listed
-package depends on (any dependency type) is listed too, or named in both `NOT_BUILT_PACKAGES` and
-`ROSDEP_SKIP_KEYS`; a key not in the source tree at all goes in `ROSDEP_SKIP_KEYS` alone. Why, and the
-`rosdep --simulate` check for a list change: ci.yml's header comment. Style and headers: [lint.yml](.github/workflows/lint.yml).
+**CI.** [ci.yml](.github/workflows/ci.yml) builds and tests every package in its checkout (of the submodules only
+`extern/openarm_can`) except `NOT_BUILT_PACKAGES`, each listed there with the reason; a new package needs no entry.
+A package in the checkout that is not built goes in both `NOT_BUILT_PACKAGES` and `ROSDEP_SKIP_KEYS`; a key not in
+the checkout at all goes in `ROSDEP_SKIP_KEYS` alone. A run that tests nothing fails. Why, and the
+`rosdep --simulate` check for a change: ci.yml's header comment. Style and headers: [lint.yml](.github/workflows/lint.yml).
 
 ## Launch
 

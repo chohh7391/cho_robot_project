@@ -78,9 +78,8 @@ from cho_task_manager.utils.controller_names import (
 #: Set to 1 to SKIP, instead of fail, where a prerequisite is missing.
 ALLOW_MISSING_ENV = 'CHO_GOAL_FRAMES_ALLOW_MISSING'
 
-#: The bringups are read from the source tree, like their goldens: CI builds
-#: neither cho_bringup_franka nor cho_bringup_openarm (extern/ sources), and
-#: nothing here needs them built -- only their launch files and configs.
+#: The bringups are read from the source tree, like their goldens: nothing here
+#: needs them built -- only their launch files and configs.
 BRINGUP_SOURCES = Path(__file__).resolve().parents[2] / 'cho_bringup'
 GOLDENS = BRINGUP_SOURCES / 'cho_bringup_common' / 'test' / 'launch_golden' / 'expected'
 

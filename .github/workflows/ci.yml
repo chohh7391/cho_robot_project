@@ -13,91 +13,55 @@ defaults:
   run:
     shell: bash
 
-# Only the packages that build from binary (apt) dependencies alone are covered.
-# cho_controller_franka, bota_ft_sensor and the OpenArm hardware packages are not
-# built: they need extern/ sources built from source (franka_ros2 + libfranka,
-# bota_driver_ros2, openarm_can + mujoco_ros2_control). franka_gripper,
-# franka_hardware, franka_ign_ros2_control and franka_robot_state_broadcaster
-# have rosdep rules, but the Humble debs they name are not published (only
-# franka_msgs and franka_description are). Adding them means a source build of
-# libfranka in CI - deferred, tracked separately.
+# Package selection is opt-out. The build set is every package colcon finds in
+# this checkout except NOT_BUILT_PACKAGES ("Select packages" below), and rosdep,
+# Build and Test all take that one set, so a new package is built and tested
+# without being named here. Of the submodules only extern/openarm_can is checked
+# out; the packages in the others are not in this checkout at all.
 #
-# Every workspace package a listed package depends on (any dependency type) must
-# be listed too, or be named in NOT_BUILT_PACKAGES (colcon --packages-ignore)
-# AND in ROSDEP_SKIP_KEYS. Both, because they are two different checks:
-# `rosdep install --ignore-src` treats only the packages under --from-paths as
-# source and fails on any other workspace name as an unknown key (that is what
-# ROSDEP_SKIP_KEYS answers), while colcon refuses a workspace dependency that is
-# neither selected nor installed (that is what --packages-ignore answers). A
-# key that is not in the source tree at all (franka_hardware, ...) needs
-# ROSDEP_SKIP_KEYS alone. That is why the four cho_moveit_* robot packages are
-# listed below (cho_task_manager exec_depends on all of them).
+# A package in the checkout that is not built goes in NOT_BUILT_PACKAGES AND in
+# ROSDEP_SKIP_KEYS, because they answer two different checks: colcon refuses a
+# workspace dependency that is neither selected nor installed (Build and Test
+# pass NOT_BUILT_PACKAGES as --packages-ignore), and `rosdep install
+# --ignore-src` reports any workspace name outside --from-paths as an unknown
+# key. A key that is not in the checkout at all (a Franka deb that was never
+# published) goes in ROSDEP_SKIP_KEYS alone.
 #
-# Check a list change from the workspace root, in a shell that has sourced only
-# /opt/ros/humble:
+# Check a change in a checkout like this one (a clone with only
+# extern/openarm_can initialized, at <ws>/src/cho_robot_project), from <ws>, in
+# a shell that has sourced only /opt/ros/humble:
 #   rosdep install --simulate --rosdistro humble --ignore-src --from-paths \
-#     $(colcon list --paths-only --packages-select <BUILD_PACKAGES>) \
+#     $(colcon list --paths-only --base-paths src --packages-ignore <NOT_BUILT_PACKAGES>) \
 #     --skip-keys "<ROSDEP_SKIP_KEYS>"
-# That does not catch a missing NOT_BUILT_PACKAGES entry, and neither does a
-# local build when the package is already installed; the Build step here does.
+# In a full workspace the other submodules' packages count as source and hide
+# keys CI has to install. Neither that check nor a local build catches a missing
+# NOT_BUILT_PACKAGES entry; the Build step here does.
 #
-# All four bringups and their MoveIt packages are here for cho_bringup_common's
-# launch golden test (test/test_launch_golden.py), which evaluates every launch
-# file and follows its cho_moveit_* includes; nothing is started, so the
-# bringups' exec_depends on the packages above are ignored (NOT_BUILT_PACKAGES
-# and ROSDEP_SKIP_KEYS) rather than built, and the two Franka packages the
-# launch files look up by path are registered as empty stand-ins
-# (tools/ci/stub_ament_packages.sh).
+# All four bringups are built for cho_bringup_common's launch golden test
+# (test/test_launch_golden.py), which evaluates every launch file and starts
+# nothing; the two Franka packages the launch files look up by path are
+# registered as empty stand-ins (tools/ci/stub_ament_packages.sh).
 env:
-  BUILD_PACKAGES: >-
-    cho_interfaces
-    cho_controller_common
-    cho_controller_base
-    cho_vla_core
-    cho_controller_gripper
-    cho_controller_ur
-    cho_controller_fr5
-    cho_openarm_mit_core
-    cho_hardware_openarm_mit_test
-    cho_controller_openarm_mit
-    cho_description_franka
-    cho_description_fr5
-    cho_description_ur
-    cho_description_openarm
-    cho_robot_config
-    cho_bringup_common
-    cho_bringup_ur
-    cho_bringup_fr5
-    cho_bringup_franka
-    cho_bringup_openarm
-    cho_simulation_isaac
-    cho_moveit_common
-    cho_moveit_ur
-    cho_moveit_fr5
-    cho_moveit_franka
-    cho_moveit_openarm
-    cho_control_tools
-    cho_task_manager
-    cho_object_pose
-    cho_realsense
-    cho_oak
-  # In the source tree but not built here (Franka's source-only deps, real
-  # hardware). Ignored, not just skipped by rosdep: colcon refuses a workspace
-  # dependency that is neither selected nor installed. Passed to both
-  # `colcon build` and `colcon test` as --packages-ignore, and repeated in
-  # ROSDEP_SKIP_KEYS below, where rosdep still sees them as unknown keys.
+  # In the checkout but neither built nor tested, and why:
+  # - bota_ft_sensor: exec_depends on bota_driver and bota_driver_example,
+  #   submodules not checked out here and without a rosdep rule.
+  # - cho_hardware_openarm_mit_mujoco: built on the extern/mujoco_ros2_control
+  #   pin, not checked out here; the Humble deb is another upstream version.
+  # - fairino_hardware_v3_8_0, fairino_msgs: vendored sources in extern/, which
+  #   are not edited, and their ament_lint tests fail on them.
   NOT_BUILT_PACKAGES: >-
-    cho_controller_franka
+    bota_ft_sensor
     cho_hardware_openarm_mit_mujoco
-    cho_hardware_openarm_mit_real
-  # Dependencies of BUILD_PACKAGES that are not installed here; see above.
-  # The NOT_BUILT_PACKAGES names (rosdep --ignore-src reports a workspace name
-  # outside --from-paths as an unknown key), then the Franka keys whose debs do
-  # not exist. Those are not in the source tree, so nothing else names them.
+    fairino_hardware_v3_8_0
+    fairino_msgs
+  # The NOT_BUILT_PACKAGES names, then the Franka keys the Franka bringup
+  # exec_depends on whose Humble debs are not published (franka_msgs and
+  # franka_description are, and rosdep installs them).
   ROSDEP_SKIP_KEYS: >-
-    cho_controller_franka
+    bota_ft_sensor
     cho_hardware_openarm_mit_mujoco
-    cho_hardware_openarm_mit_real
+    fairino_hardware_v3_8_0
+    fairino_msgs
     franka_gripper
     franka_hardware
     franka_ign_ros2_control
@@ -108,35 +72,6 @@ env:
   STUB_PACKAGES: >-
     franka_gripper
     franka_ign_ros2_control
-  # Built but not tested here: the cho_description_* forks other than franka
-  # and openarm, and the MoveIt configuration packages, have no tests of their
-  # own; their launch files are covered by the golden test.
-  TEST_PACKAGES: >-
-    cho_interfaces
-    cho_controller_common
-    cho_controller_base
-    cho_vla_core
-    cho_controller_gripper
-    cho_controller_ur
-    cho_controller_fr5
-    cho_openarm_mit_core
-    cho_hardware_openarm_mit_test
-    cho_controller_openarm_mit
-    cho_description_franka
-    cho_description_openarm
-    cho_robot_config
-    cho_bringup_common
-    cho_bringup_ur
-    cho_bringup_fr5
-    cho_bringup_franka
-    cho_bringup_openarm
-    cho_simulation_isaac
-    cho_moveit_common
-    cho_control_tools
-    cho_task_manager
-    cho_object_pose
-    cho_realsense
-    cho_oak
 
 jobs:
   build-and-test:
@@ -151,9 +86,10 @@ jobs:
         with:
           path: src/cho_robot_project
 
-      # cho_description_openarm's MIT contract tests read their pinned DM motor
-      # header from extern/openarm_can, a source-only dependency: initialize it
-      # before building or testing.
+      # The one submodule checked out. cho_description_openarm's MIT contract
+      # tests read their pinned DM motor header from it, and openarm_can is a
+      # package of the build set (cho_hardware_openarm_mit_real links it), so
+      # it is initialized before the packages are selected.
       - name: Initialize extern/openarm_can
         shell: bash
         run: |
@@ -162,6 +98,17 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
           git submodule update --init --depth 1 extern/openarm_can
 
+      # The build set (see the header), as BUILD_SET for the steps below.
+      - name: Select packages
+        shell: bash
+        run: |
+          set -eo pipefail
+          source /opt/ros/humble/setup.bash
+          packages=$(colcon list --names-only --base-paths src \
+            --packages-ignore ${{ env.NOT_BUILT_PACKAGES }})
+          echo "$packages"
+          echo "BUILD_SET=$(paste -sd ' ' <<< "$packages")" >> "$GITHUB_ENV"
+
       - name: Install ROS dependencies
         shell: bash
         run: |
@@ -169,12 +116,12 @@ jobs:
           apt-get update
           rosdep update --rosdistro humble
           source /opt/ros/humble/setup.bash
-          # The paths come from BUILD_PACKAGES, so the two lists cannot drift: a
-          # hand-kept copy here still named cho_controller_openarm after that
-          # package was merged away, and rosdep failed every run on it.
           rosdep install -y --rosdistro humble --ignore-src --from-paths \
-            $(colcon list --paths-only --packages-select ${{ env.BUILD_PACKAGES }}) \
+            $(colcon list --paths-only --packages-select ${{ env.BUILD_SET }}) \
             --skip-keys "${{ env.ROSDEP_SKIP_KEYS }}"
+          # openarm_can's command-line tools need CLI11, which its package.xml
+          # does not declare, so rosdep does not install it (extern/README.md).
+          apt-get install -y --no-install-recommends libcli11-dev
           # The flake8 plugins a ROS 2 development machine has (the Humble
           # source-install instructions list them). Each package pins which of
           # their rules it follows, so the lint tests below give the verdict
@@ -191,15 +138,17 @@ jobs:
         run: |
           set -eo pipefail
           source /opt/ros/humble/setup.bash
-          colcon build --symlink-install \
+          # Two workers: cho_controller_franka, _openarm_mit, _ur and _fr5 each
+          # run make at the runner's job count, and one Franka file peaks near 2 GB.
+          colcon build --symlink-install --parallel-workers 2 \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
-            --packages-select ${{ env.BUILD_PACKAGES }} \
+            --packages-select ${{ env.BUILD_SET }} \
             --packages-ignore ${{ env.NOT_BUILT_PACKAGES }}
 
       - name: Test
         shell: bash
         # The bringups the launch golden test must find here (a missing one
-        # fails rather than skips); see BUILD_PACKAGES.
+        # fails rather than skips); all four are in the build set.
         env:
           CHO_LAUNCH_GOLDEN_REQUIRE: cho_bringup_ur cho_bringup_fr5 cho_bringup_franka cho_bringup_openarm
         run: |
@@ -210,7 +159,7 @@ jobs:
             "${RUNNER_TEMP:-/tmp}/stub_packages" ${{ env.STUB_PACKAGES }})
           export AMENT_PREFIX_PATH="${stubs}:${AMENT_PREFIX_PATH}"
           colcon test \
-            --packages-select ${{ env.TEST_PACKAGES }} \
+            --packages-select ${{ env.BUILD_SET }} \
             --packages-ignore ${{ env.NOT_BUILT_PACKAGES }} \
             --return-code-on-test-failure
 
