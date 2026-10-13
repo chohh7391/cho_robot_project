@@ -102,20 +102,26 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
     ``joints`` are this profile's arm joints (``model.joints``, per-arm
     prefixed on a bimanual build), the names a JointSpace target carries.
 
+    A role is None where the profile has no such controller: the registry's
+    role is null, or a ``compatibility.task_manager`` entry is (an explicit
+    null there is not a fallback to the role). The OpenArm ``both`` profile has
+    none of the four, since each arm has its own; a tree that needs one refuses
+    the profile, and the action leaves refuse None as their controller.
+
     Raises ValueError for unknown robot types.
     """
     raw = load_registry_config(robot_type, profile)
-    controllers = raw['controllers']
-    compatibility = raw.get('compatibility', {}).get('task_manager', {})
+    controllers = raw.get('controllers') or {}
+    compatibility = (raw.get('compatibility') or {}).get('task_manager') or {}
     return {
         'robot_type': raw['robot_type'],
         'profile': raw.get('profile', 'single'),
         'arm_base_link': raw['model']['arm_base_link'],
         'joints': list(raw['model']['joints']),
-        'joint_space': compatibility.get('joint_space', controllers['direct_joint']),
-        'task_space': compatibility.get('task_space', controllers['direct_task']),
-        'gripper': compatibility.get('gripper', controllers['gripper']),
-        'vla': compatibility.get('vla', controllers['vla']),
+        'joint_space': compatibility.get('joint_space', controllers.get('direct_joint')),
+        'task_space': compatibility.get('task_space', controllers.get('direct_task')),
+        'gripper': compatibility.get('gripper', controllers.get('gripper')),
+        'vla': compatibility.get('vla', controllers.get('vla')),
     }
 
 
@@ -172,7 +178,8 @@ def _arm_controllers_of(registry):
     The roles, the per-control-mode holds, ``controllers.additional_arm`` (the
     controllers a bringup loads that hold no role) and the controllers behind
     the direct action preferences. Never the gripper, and never the MoveIt
-    bridge, which serves actions but is not a controller.
+    bridge, which serves actions but is not a controller. A null role (one the
+    profile has no controller for) contributes nothing.
     """
     names = []
 

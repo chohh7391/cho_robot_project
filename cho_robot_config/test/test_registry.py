@@ -468,6 +468,160 @@ def test_profile_compatibility_is_replaced_not_merged():
 
 
 # ---------------------------------------------------------------------------
+# AC7 / C8: a non-single profile never carries an unprefixed arm controller name
+#
+# `controllers` is merged per key across a profile overlay, so a profile that
+# restates only some roles inherits the single arm's bare names for the rest --
+# names `launch_utils.per_arm()` never spawns on a bimanual build. The 'both'
+# profile drives two arms; a role that means "one arm" has no meaning there and
+# is declared absent (None) instead.
+# ---------------------------------------------------------------------------
+
+def _controller_names(config):
+    """Every non-null controller name a registry document carries, as (path, name)."""
+    found = []
+    for key, value in config['controllers'].items():
+        if key == 'hold_by_control_mode':
+            for mode, names in value.items():
+                for name in ([names] if isinstance(names, str) else names):
+                    found.append((f'controllers.hold_by_control_mode.{mode}', name))
+        elif isinstance(value, str):
+            found.append((f'controllers.{key}', value))
+        elif isinstance(value, list):
+            found.extend((f'controllers.{key}', name) for name in value)
+        else:
+            assert value is None, f'controllers.{key} is neither a name, a list nor null: {value!r}'
+    for section, mapping in config['compatibility'].items():
+        for role, name in mapping.items():
+            if name is not None:
+                found.append((f'compatibility.{section}.{role}', name))
+    return found
+
+
+@pytest.mark.parametrize('profile', ['left', 'right', 'both'])
+def test_ac7_every_non_null_name_of_a_bimanual_profile_has_an_arm_prefix(profile):
+    config = load_robot_config('openarm', profile)
+    names = _controller_names(config)
+    assert names, f'openarm/{profile} resolved no controller names at all'
+    prefixes = ('left_', 'right_') if profile == 'both' else (f'{profile}_',)
+    for path, name in names:
+        assert name.startswith(prefixes), f'openarm/{profile} {path} = {name!r} has no {prefixes} prefix'
+
+
+def test_ac7_the_both_profile_declares_the_single_arm_roles_absent():
+    config = load_robot_config('openarm', 'both')
+    controllers = config['controllers']
+    for role in ('direct_joint', 'direct_task', 'gripper', 'vla'):
+        assert role in controllers, f'{role} must be stated as null, not dropped'
+        assert controllers[role] is None, f'openarm/both {role} = {controllers[role]!r}'
+    assert config['compatibility']['task_manager']['joint_space'] is None
+
+
+def test_ac7_the_both_profile_keeps_a_hold_and_a_moveit_trajectory_controller():
+    # The schema still asks a string for these; they were never single-arm roles.
+    config = load_robot_config('openarm', 'both')
+    assert isinstance(config['controllers']['hold'], str) and config['controllers']['hold']
+    assert isinstance(config['controllers']['moveit_trajectory'], str)
+    assert config['controllers']['moveit_trajectory']
+    assert declared_hold_control_modes(config)
+
+
+def test_ac7_left_and_right_keep_all_their_roles():
+    for profile in ('left', 'right'):
+        controllers = load_robot_config('openarm', profile)['controllers']
+        for role in ('direct_joint', 'direct_task', 'gripper', 'vla', 'hold', 'moveit_trajectory'):
+            assert controllers[role].startswith(f'{profile}_'), (profile, role)
+
+
+def test_ac7_the_single_profile_keeps_its_unprefixed_names_and_loads():
+    config = load_robot_config('openarm', 'single')
+    assert config['controllers']['vla'] == 'vla_mit_controller'
+    assert config['controllers']['gripper'] == 'gripper_controller'
+    assert config['compatibility']['task_manager']['joint_space'] == 'joint_space_impedance_controller'
+
+
+@pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
+def test_ac7_single_arm_robots_still_require_a_hold_controller(robot_type):
+    # Null is allowed where a profile has no such role, not for the roles a single arm must have.
+    config = deepcopy(load_robot_config(robot_type))
+    config['controllers']['hold'] = None
+    with pytest.raises(ValueError):
+        validate_robot_config(config, robot_type)
+
+
+def _openarm_registry_with(tmp_path, monkeypatch, profile, edit):
+    """Load openarm/<profile> from a copy of the registry that `edit(profile_document)` changed."""
+    source = Path(__file__).resolve().parents[1] / 'config'
+    for path in source.glob('*.yaml'):
+        shutil.copy(path, tmp_path / path.name)
+    document = yaml.safe_load((tmp_path / 'openarm.yaml').read_text())
+    edit(document if profile == 'single' else document['profiles'][profile])
+    (tmp_path / 'openarm.yaml').write_text(yaml.safe_dump(document))
+    monkeypatch.setenv('CHO_ROBOT_CONFIG_DIR', str(tmp_path))
+    return load_robot_config('openarm', profile)
+
+
+_UNPREFIXED = 'unprefixed_probe_controller'
+
+
+def _set_role(role):
+    def edit(profile_document):
+        profile_document.setdefault('controllers', {})[role] = _UNPREFIXED
+    return edit
+
+
+def _set_hold_mode(profile_document):
+    modes = profile_document.setdefault('controllers', {}).setdefault('hold_by_control_mode', {})
+    modes['position'] = [_UNPREFIXED]
+
+
+def _set_additional_arm(profile_document):
+    profile_document.setdefault('controllers', {})['additional_arm'] = [_UNPREFIXED]
+
+
+def _set_compatibility(profile_document):
+    profile_document['compatibility'] = {'task_manager': {'joint_space': _UNPREFIXED}}
+
+
+@pytest.mark.parametrize('profile', ['left', 'right', 'both'])
+@pytest.mark.parametrize('key, edit', [
+    ('direct_joint', _set_role('direct_joint')),
+    ('direct_task', _set_role('direct_task')),
+    ('gripper', _set_role('gripper')),
+    ('vla', _set_role('vla')),
+    ('hold', _set_role('hold')),
+    ('moveit_trajectory', _set_role('moveit_trajectory')),
+    ('hold_by_control_mode', _set_hold_mode),
+    ('additional_arm', _set_additional_arm),
+    ('joint_space', _set_compatibility),
+],
+    ids=['direct_joint', 'direct_task', 'gripper', 'vla', 'hold', 'moveit_trajectory',
+         'hold_by_control_mode', 'additional_arm', 'compat_joint_space'])
+def test_ac7_an_unprefixed_name_in_a_bimanual_profile_is_a_load_error(
+        tmp_path, monkeypatch, profile, key, edit):
+    with pytest.raises(ValueError) as error:
+        _openarm_registry_with(tmp_path, monkeypatch, profile, edit)
+    message = str(error.value)
+    assert _UNPREFIXED in message, message
+    assert key in message, message
+
+
+def test_ac7_an_unprefixed_name_in_the_single_profile_is_still_fine(tmp_path, monkeypatch):
+    config = _openarm_registry_with(
+        tmp_path, monkeypatch, 'single', lambda document: document.setdefault(
+            'controllers', {}).__setitem__('gripper', _UNPREFIXED))
+    assert config['controllers']['gripper'] == _UNPREFIXED
+
+
+def test_ac7_the_both_profile_may_name_either_arm_in_a_role(tmp_path, monkeypatch):
+    # "left_ or right_" is what both accepts; a role naming one arm's instance is not an error.
+    config = _openarm_registry_with(
+        tmp_path, monkeypatch, 'both', lambda document: document.setdefault(
+            'controllers', {}).__setitem__('moveit_trajectory', 'right_joint_trajectory_controller'))
+    assert config['controllers']['moveit_trajectory'] == 'right_joint_trajectory_controller'
+
+
+# ---------------------------------------------------------------------------
 # controllers.hold_by_control_mode
 #
 # `controllers.hold` alone cannot say which controller can hold the arm: a

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FR5-specific launch helpers: grippers, their tool envelopes, the runtime params.
+"""FR5-specific launch helpers: grippers, their tool envelopes, the parameter files.
 
 Installed to lib/, not as an importable package, and loaded by path (with
 cho_bringup_common.load_package_utils) the way cho_bringup_franka and
@@ -20,6 +20,9 @@ cho_bringup_openarm load theirs. Everything robot-independent is
 cho_bringup_common's.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 # strict_bool is re-exported: the FR5 launch files take it from here.
 from cho_bringup_common import strict_bool, write_position_arm_param_file  # noqa: F401
 from cho_robot_config import motion_limit_parameters
@@ -111,6 +114,15 @@ def resolve_gripper(gripper_arg, load_gripper_arg, config_value):
 
     # An explicit argument beats the config file; either spelling counts.
     return named or from_load or from_config
+
+
+def controllers_base_file():
+    """config/common/controllers.yaml, the controller parameters every backend shares.
+
+    Every FR5 bringup hands it to the controller_manager first and
+    config/<backend>/controllers.yaml after it; the later file wins per name.
+    """
+    return os.path.join(get_package_share_directory('cho_bringup_fr5'), 'config', 'common', 'controllers.yaml')
 
 
 def create_runtime_param_file(bringup_type, ee_name, gripper='none', prefix='cho_fr5_runtime_params_'):

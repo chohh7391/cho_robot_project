@@ -41,6 +41,7 @@ LAUNCH cho_bringup_fr5/bringup_mujoco_moveit.launch.py []
             remap=[('~/robot_description', '/robot_description')]
             param {use_sim_time: True}
             param {robot_description: <description #1 fr5>}
+            param FILE <share:cho_bringup_fr5>/config/common/controllers.yaml
             param FILE <share:cho_bringup_fr5>/config/mujoco/controllers.yaml
             param FILE <RT:cho_fr5_mujoco_runtime_params_#0>
             param {bringup_type: 'mujoco', ee_name: 'wrist3_link'}

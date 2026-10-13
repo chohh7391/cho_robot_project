@@ -6,12 +6,17 @@
 
     MuJoCo and Isaac bringups expand this file with xacro.process_file(...,
     mappings={'hardware': ...}); the Gazebo bringup passes hardware:=gazebo plus
-    simulation_controllers:=<controllers.yaml>; the real bringup passes
+    simulation_controllers_base:=<shared controllers.yaml> and
+    simulation_controllers:=<gz controllers.yaml>; the real bringup passes
     hardware:=fairino plus robot_ip:=<FR5 IP>.
   -->
   <xacro:arg name="prefix" default=""/>
   <xacro:arg name="hardware" default="mujoco"/>
   <xacro:arg name="robot_ip" default="192.168.58.2"/>
+  <!-- Gazebo only: controller parameter files for the in-Gazebo
+       controller_manager, the base before the overlay (the later wins per name).
+       An empty base emits no tag: the plugin refuses an empty <parameters>. -->
+  <xacro:arg name="simulation_controllers_base" default=""/>
   <xacro:arg name="simulation_controllers" default=""/>
   <xacro:arg name="initial_positions_file"
              default="$(find cho_description_fr5)/config/initial_positions.yaml"/>
@@ -84,6 +89,10 @@
     <gazebo>
       <plugin filename="libgz_ros2_control-system.so"
               name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <!-- Each tag is one params file, read in order. -->
+        <xacro:if value="${'$(arg simulation_controllers_base)' != ''}">
+          <parameters>$(arg simulation_controllers_base)</parameters>
+        </xacro:if>
         <parameters>$(arg simulation_controllers)</parameters>
         <controller_manager_node_name>controller_manager</controller_manager_node_name>
       </plugin>

@@ -35,6 +35,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_real_mit_launch_boundaries
     test/test_real_mit_launch_boundaries.py
     ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  ament_add_pytest_test(test_bimanual_symmetry
+    test/test_bimanual_symmetry.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
 endif()
 
 install(

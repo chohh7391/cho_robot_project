@@ -24,8 +24,8 @@ to ``task_space_ik_controller`` and sending a task-space ``reach`` goal.
 fr5.urdf.xacro is expanded with hardware:=gazebo, which emits the
 gz_ros2_control/GazeboSimSystem ros2_control block plus the Gazebo system
 plugin; the plugin hosts the controller_manager inside Gazebo and loads
-config/gz/controllers.yaml. The spawners then talk to that controller_manager
-once the entity is in the world.
+config/common/controllers.yaml, then config/gz/controllers.yaml. The spawners
+then talk to that controller_manager once the entity is in the world.
 """
 
 import os
@@ -57,7 +57,7 @@ from cho_bringup_common import (
 
 launch_utils = load_package_utils('cho_bringup_fr5')
 
-# What config/gz/controllers.yaml sets as well; this bringup has no arguments
+# What the controller config sets as well; this bringup has no arguments
 # for them. The description's default gripper is none, so there is no tool
 # envelope either.
 BRINGUP_TYPE = 'gz'
@@ -97,6 +97,8 @@ def launch_setup(context, *args, **kwargs):
     fr5_desc = get_package_share_directory('cho_description_fr5')
     bringup = get_package_share_directory('cho_bringup_fr5')
     urdf_path = os.path.join(fr5_desc, 'urdf', 'fr5.urdf.xacro')
+    # The shared base first, then the Gazebo overlay: the later file wins per name.
+    controllers_base = launch_utils.controllers_base_file()
     controllers_file = os.path.join(bringup, 'config', 'gz', 'controllers.yaml')
 
     # sdformat converts package://cho_description_fr5/... mesh URIs to
@@ -106,8 +108,8 @@ def launch_setup(context, *args, **kwargs):
     resource_path_actions = prepend_to_search_paths(
         ['IGN_GAZEBO_RESOURCE_PATH', 'GZ_SIM_RESOURCE_PATH'], os.path.dirname(fr5_desc))
 
-    # The controller_manager lives inside the Gazebo plugin and loads
-    # config/gz/controllers.yaml from the description, so the runtime
+    # The controller_manager lives inside the Gazebo plugin and loads the
+    # controller files named in the description, so the runtime
     # parameters (the MoveIt motion limits, mainly) reach the controllers
     # through the spawners' -p, as in cho_bringup_ur's Gazebo bringup.
     runtime_param_file = launch_utils.create_runtime_param_file(
@@ -115,7 +117,11 @@ def launch_setup(context, *args, **kwargs):
 
     robot_description_content = xacro.process_file(
         urdf_path,
-        mappings={'hardware': 'gazebo', 'simulation_controllers': controllers_file},
+        mappings={
+            'hardware': 'gazebo',
+            'simulation_controllers_base': controllers_base,
+            'simulation_controllers': controllers_file,
+        },
     ).toxml()
     robot_description = {'robot_description': robot_description_content}
 

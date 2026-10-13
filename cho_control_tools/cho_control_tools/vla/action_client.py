@@ -19,6 +19,9 @@
     ros2 run cho_control_tools vla_action_client --robot openarm --arm left
     ros2 run cho_control_tools vla_action_client --controller my_vla_controller
 
+``--arm both`` is refused: each OpenArm arm has its own VLA controller, so run
+one client per arm.
+
 The action is the controller's own ``/<controller>/vla`` (cho_interfaces/CONTRACT.md).
 Chunks go to the topic the controller reads them from: its ``chunk_topic``
 parameter, asked of it at start-up, unless ``--chunk-topic`` names one. A
@@ -67,6 +70,11 @@ def resolve_controller(controller=None, robot=None, arm='single', load_robot_con
 
     *controller* as given; else the registry's ``controllers.vla`` role for
     *robot* and its profile *arm*; else Franka's ``vla_controller``.
+
+    A profile of several arms (the registry's ``arms``, OpenArm ``both``) has
+    no VLA role: each arm runs its own controller on its own chunk topic. That
+    is a wrong ``--arm``, not a missing controller, so it ends the program
+    (SystemExit) naming the arms to run one client each for.
     """
     if controller:
         return controller
@@ -75,7 +83,14 @@ def resolve_controller(controller=None, robot=None, arm='single', load_robot_con
             raise ValueError('--arm selects a registry profile and needs --robot')
         return DEFAULT_CONTROLLER
     loader = load_robot_config or _registry_loader()
-    name = (loader(robot, arm or 'single').get('controllers') or {}).get('vla')
+    config = loader(robot, arm or 'single')
+    name = (config.get('controllers') or {}).get('vla')
+    arms = config.get('arms') or []
+    if not name and len(arms) > 1:
+        raise SystemExit(
+            f"vla_action_client: {robot} profile '{arm}' drives the arms {arms} and has no "
+            'VLA controller (controllers.vla is null): a VLA controller drives one arm. Run '
+            'one client per arm: ' + ', '.join(f'--arm {side}' for side in arms))
     if not name:
         raise ValueError(
             f"{robot} ({arm or 'single'}) has no VLA controller in cho_robot_config "

@@ -7,7 +7,10 @@
 #         <case name>: [name:=value, ...]
 #
 # Each case's expected output is expected/<package>/<launch stem>/<case>.txt.
-# Every launch file a bringup package installs must have at least one case.
+# Every launch file a bringup package installs must have at least one case, and
+# every controller name cho_robot_config gives a robot must be spawned by one of
+# its cases (test_golden_registry_names.py; a bimanual:=true case serves the
+# robot's arm profiles, every other case its single profile).
 #
 # $FAKE is a scratch directory holding a stub isaacsim/python.sh (never run;
 # check_isaac_install only looks for it) and an empty usd/robot/robot.usda (two
@@ -161,6 +164,9 @@ cases:
                                  return_to_zero:=true]
       mit_task_return_to_zero: [mujoco_mit_prototype:=true,
                                 mit_controller_name:=task_space_impedance_mit_controller, return_to_zero:=true]
+      mit_task_bimanual: [mujoco_mit_prototype:=true, mit_controller_name:=task_space_impedance_mit_controller,
+                          bimanual:=true]
+      mit_vla: [mujoco_mit_prototype:=true, mit_controller_name:=vla_mit_controller]
       mit_vla_bimanual: [mujoco_mit_prototype:=true, mit_controller_name:=vla_mit_controller, bimanual:=true]
       mit_fjt_both: [mujoco_mit_prototype:=true, bimanual:=true,
                      mit_controller_name:=bimanual_follow_joint_trajectory_mit_controller, mit_arm:=both]

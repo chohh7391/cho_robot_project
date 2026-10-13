@@ -123,6 +123,41 @@ def test_a_refused_resolution_exits_before_ros_starts(monkeypatch, capsys):
     assert 'no VLA controller' in capsys.readouterr().err
 
 
+# ------------------------------------------- AC7: the 'both' profile has no VLA role
+
+def test_ac7_the_both_profile_has_no_vla_role_in_the_registry():
+    registry = _registry()
+    assert registry.load_robot_config('openarm', 'both')['controllers']['vla'] is None
+
+
+def test_ac7_resolving_openarm_both_is_refused_and_says_vla():
+    # Two arms stream two chunk topics to two controllers; "the" VLA controller does not exist.
+    _registry()
+    with pytest.raises((SystemExit, ValueError)) as error:
+        MODULE.resolve_controller(robot='openarm', arm='both')
+    assert 'vla' in str(error.value).lower()
+
+
+def test_ac7_main_for_openarm_both_exits_with_a_vla_message_before_ros_starts(monkeypatch):
+    _registry()
+
+    def must_not_run(**_kwargs):
+        raise AssertionError('rclpy.init reached with no VLA controller to drive')
+
+    monkeypatch.setattr(MODULE.rclpy, 'init', must_not_run)
+    with pytest.raises(SystemExit) as error:
+        MODULE.main(['--robot', 'openarm', '--arm', 'both'])
+    # A message, not a bare status code: SystemExit(0)/SystemExit(2) would say nothing about why.
+    assert isinstance(error.value.code, str), error.value.code
+    assert 'vla' in error.value.code.lower()
+
+
+def test_ac7_the_per_arm_profiles_still_resolve():
+    _registry()
+    assert MODULE.resolve_controller(robot='openarm', arm='left') == 'left_vla_mit_controller'
+    assert MODULE.resolve_controller(robot='openarm', arm='right') == 'right_vla_mit_controller'
+
+
 # ------------------------------------------------------------ chunk topic
 
 class _Future:

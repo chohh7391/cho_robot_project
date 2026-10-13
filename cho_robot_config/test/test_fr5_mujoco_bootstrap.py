@@ -80,17 +80,33 @@ def test_fr5_moveit_mujoco_defaults_to_home1_keyframe():
     assert "'mujoco_initial_keyframe': LaunchConfiguration('mujoco_initial_keyframe')" in source
 
 
+def _merge_params(base, over):
+    """What rcl hands a node given [base, overlay]: dicts merge, the later wins, a list is replaced."""
+    merged = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_params(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _fr5_controller_params(backend):
+    """The controller parameters a backend receives: config/common (base) then its overlay."""
+    base = yaml.safe_load((BRINGUP / 'config' / 'common' / 'controllers.yaml').read_text())
+    overlay = yaml.safe_load((BRINGUP / 'config' / backend / 'controllers.yaml').read_text())
+    return _merge_params(base, overlay)
+
+
 def test_fr5_mujoco_jtc_continues_from_last_command_without_affecting_other_backends():
-    mujoco = yaml.safe_load(
-        (BRINGUP / 'config' / 'mujoco' / 'controllers.yaml').read_text())
+    mujoco = _fr5_controller_params('mujoco')
     assert mujoco['joint_trajectory_controller']['ros__parameters'][
         'open_loop_control'] is True
 
     # The setting compensates MuJoCo position-actuator gravity deflection.  It
     # must not silently change feedback seeding on unvalidated backends.
     for backend in ('gz', 'isaac', 'real'):
-        config = yaml.safe_load(
-            (BRINGUP / 'config' / backend / 'controllers.yaml').read_text())
+        config = _fr5_controller_params(backend)
         jtc = config['joint_trajectory_controller']['ros__parameters']
         assert 'open_loop_control' not in jtc
 

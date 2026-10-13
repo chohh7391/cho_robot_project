@@ -210,6 +210,10 @@ profiles:
         '3': {relative: false, position: [0.353214573, 0.001852869, 0.330270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
   both:
     supports_task: false
+    # The torso is these two arms, so every controller this profile names is
+    # one of theirs, left_ or right_ prefixed (cho_robot_config checks it; the
+    # other profiles default to their own name).
+    arms: [left, right]
     model:
       arm_base_link: openarm_body_link0
       ee_link: openarm_left_hand_tcp
@@ -226,6 +230,18 @@ profiles:
         velocity: [left_joint_space_velocity_controller, right_joint_space_velocity_controller]
         torque: [left_joint_space_impedance_controller, right_joint_space_impedance_controller]
       moveit_trajectory: left_joint_trajectory_controller
+      # One-arm roles: each arm has its own (the left/right profiles), the
+      # torso has none. Left unsaid, the per-key merge would hand this profile
+      # the single arm's bare names, which a bimanual build never spawns.
+      direct_joint: null
+      direct_task: null
+      gripper: null
+      vla: null
+    # Replaced, not merged; without it the single arm's name was inherited.
+    # The torso as a whole has no task-manager joint controller.
+    compatibility:
+      task_manager:
+        joint_space: null
     moveit:
       planning_group: both_arms
       controllers: [left_joint_trajectory_controller, right_joint_trajectory_controller]

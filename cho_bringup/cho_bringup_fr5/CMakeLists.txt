@@ -54,6 +54,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_camera_extrinsics
     test/test_camera_extrinsics.py
     ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
+  ament_add_pytest_test(test_controller_overlays
+    test/test_controller_overlays.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1)
 endif()
 
 ament_package()

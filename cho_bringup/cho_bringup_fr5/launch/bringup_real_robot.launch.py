@@ -135,6 +135,8 @@ def setup_control_environment(context):
         )
 
     urdf_path = os.path.join(fr5_desc, 'urdf', 'fr5.urdf.xacro')
+    # The shared base first, then the real overlay: the later file wins per name.
+    controllers_base = launch_utils.controllers_base_file()
     controllers_file = os.path.join(bringup, 'config', 'real', 'controllers.yaml')
     runtime_param_file = launch_utils.create_runtime_param_file(
         bringup_type, ee_name, gripper, prefix='cho_fr5_real_runtime_params_')
@@ -152,6 +154,7 @@ def setup_control_environment(context):
         executable='ros2_control_node',
         output='screen',
         parameters=[
+            controllers_base,
             controllers_file,
             runtime_param_file,
             robot_description,

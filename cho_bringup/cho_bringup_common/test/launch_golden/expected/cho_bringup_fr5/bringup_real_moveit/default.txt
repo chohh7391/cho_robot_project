@@ -35,6 +35,7 @@ LAUNCH cho_bringup_fr5/bringup_real_moveit.launch.py []
           NODE controller_manager/ros2_control_node
             name=None namespace=None
             args=[]
+            param FILE <share:cho_bringup_fr5>/config/common/controllers.yaml
             param FILE <share:cho_bringup_fr5>/config/real/controllers.yaml
             param FILE <RT:cho_fr5_real_runtime_params_#0>
             param {robot_description: <description #1 fr5>}

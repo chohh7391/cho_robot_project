@@ -149,6 +149,8 @@ def setup_control_environment(context):
         parameters=[
             {'use_sim_time': use_sim_time},
             robot_description,
+            # The shared base first, then the overlay: the later file wins per name.
+            launch_utils.controllers_base_file(),
             controller_config,
             runtime_param_file,
             {'ee_name': ee_name, 'bringup_type': bringup_type},
@@ -200,6 +202,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controllers_file',
             default_value=os.path.join(bringup, 'config', 'isaac', 'controllers.yaml'),
+            description=(
+                'Controller YAML loaded after config/common/controllers.yaml, '
+                'which it overrides per name'
+            ),
         ),
         DeclareLaunchArgument('controller_manager_timeout', default_value='60'),
         DeclareLaunchArgument(

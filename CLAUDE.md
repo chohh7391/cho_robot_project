@@ -36,7 +36,7 @@ have those plugins installed. A new Python package copies the pin, as in
 **Launch goldens.** Every bringup launch file is compared, per argument set in
 `cho_bringup_common/test/launch_golden/cases.yaml`, against committed expected output. A launch change meant to
 change behaviour fails it until the expected files are regenerated and the diff reviewed; a new launch file or
-bringup needs cases. Procedure: [test_launch_golden.py](cho_bringup/cho_bringup_common/test/test_launch_golden.py);
+bringup needs cases. `test_golden_registry_names.py` checks the spawned controllers against the registry. Procedure: [test_launch_golden.py](cho_bringup/cho_bringup_common/test/test_launch_golden.py);
 what is printed: [launch_golden.py](cho_bringup/cho_bringup_common/cho_bringup_common/launch_golden.py).
 
 **CI.** [ci.yml](.github/workflows/ci.yml) builds and tests `BUILD_PACKAGES`. Every workspace package a listed

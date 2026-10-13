@@ -106,6 +106,8 @@ def setup_control_environment(context):
         parameters=[
             {'use_sim_time': use_sim_time},
             robot_description,
+            # The shared base first, then the overlay: the later file wins per name.
+            launch_utils.controllers_base_file(),
             controller_config,
             runtime_param_file,
             {
@@ -210,7 +212,10 @@ def generate_launch_description():
                 'mujoco',
                 'controllers.yaml',
             ),
-            description='Controller YAML file loaded by mujoco_ros2_control',
+            description=(
+                'Controller YAML loaded by mujoco_ros2_control after '
+                'config/common/controllers.yaml, which it overrides per name'
+            ),
         ),
         DeclareLaunchArgument(
             'gripper',

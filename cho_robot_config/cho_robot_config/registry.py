@@ -36,7 +36,10 @@ One registry document per robot, ``config/<robot_type>.yaml``; the schema is
   ``poses`` and ``motions`` key by key (a key the overlay names replaces the
   base's whole value) and replaces ``actions`` and ``compatibility``, so a
   profile restates every key whose names differ, ``hold_by_control_mode``
-  included.
+  included, and sets a role it has no controller for to null. A profile's
+  ``arms`` (default: its own name) are the arms it drives: every non-null
+  role, per-mode hold, ``additional_arm`` and ``compatibility`` name in it
+  must start with ``<arm>_`` for one of them.
 """
 
 from copy import deepcopy
@@ -253,6 +256,70 @@ def _validate_additional_arm(value, controllers, robot_type):
         raise ValueError(f'{label} must not name the gripper controller ({gripper})')
 
 
+def _profile_arm_prefixes(config):
+    """The prefixes every controller name of this robot profile starts with.
+
+    ``()`` for ``'single'``, whose names are bare. Any other profile is a build
+    whose controllers each carry their arm's prefix (OpenArm:
+    ``launch_utils.per_arm()``): ``<arm>_`` for each of its ``arms``, which
+    default to the profile's own name (``left`` -> ``left_``).
+    """
+    profile = config.get('profile', 'single')
+    if profile == 'single':
+        return ()
+    return tuple(f'{arm}_' for arm in config.get('arms') or [profile])
+
+
+def _profile_controller_names(controllers, compatibility):
+    """(key, name) for every non-null controller name the roles and compatibility give."""
+    named = []
+    for role, value in controllers.items():
+        if role == 'hold_by_control_mode':
+            for mode, names in (value or {}).items():
+                for name in (names if isinstance(names, list) else [names]):
+                    named.append((f'controllers.hold_by_control_mode.{mode}', name))
+        elif role == 'additional_arm':
+            named += [('controllers.additional_arm', name) for name in value or []]
+        elif value is not None:
+            named.append((f'controllers.{role}', value))
+    for section, mapping in (compatibility or {}).items():
+        if isinstance(mapping, dict):
+            named += [(f'compatibility.{section}.{role}', name)
+                      for role, name in mapping.items() if name is not None]
+    return named
+
+
+def _validate_profile_arms(config, robot_type):
+    """A non-single profile names only its own arms' controllers.
+
+    ``controllers`` merges per key, so a role the profile does not restate
+    inherits the single arm's bare name, which that build never spawns: a task
+    or client that picks it addresses a controller that does not exist. A role
+    the profile has no controller for is null instead.
+    """
+    profile = config.get('profile', 'single')
+    arms = config.get('arms')
+    if profile == 'single':
+        if arms is not None:
+            raise ValueError(f'{robot_type}: arms is declared per profile, not for the single arm')
+        return
+    if arms is not None and (
+            not isinstance(arms, list) or not arms
+            or not all(isinstance(arm, str) and arm and '/' not in arm for arm in arms)
+            or len(arms) != len(set(arms))):
+        raise ValueError(
+            f"{robot_type}: profiles.{profile}.arms must be a unique list of non-empty "
+            'ROS-name segments')
+    prefixes = _profile_arm_prefixes(config)
+    for key, name in _profile_controller_names(
+            config['controllers'], config.get('compatibility')):
+        if not name.startswith(prefixes):
+            raise ValueError(
+                f"{robot_type}: profile '{profile}' {key} names '{name}', not one of its "
+                f"arms' controllers (on this build each starts with {' or '.join(prefixes)}). "
+                'Name the arm\'s own instance, or null where the profile has none.')
+
+
 def _validate_task_home(value, home, joint_count, home_safety, robot_type):
     """Validate the optional ``poses.task_home``.
 
@@ -447,6 +514,7 @@ def validate_robot_config(config, expected_robot_type=None):
         for role, controller in task_manager.items():
             _optional_name(
                 controller, f'{robot_type}: compatibility.task_manager.{role}')
+    _validate_profile_arms(config, robot_type)
     return config
 
 
@@ -591,6 +659,16 @@ def load_robot_config(robot_type, profile=None):
                     config[section].update(deepcopy(overlay[section]))
         config['profile'] = profile
         config['supports_task'] = overlay.get('supports_task', True)
+        # The arms whose prefixes this build's controller names carry. Their
+        # shape is validated below; that each is a profile of the robot, here.
+        arms = deepcopy(overlay.get('arms', [profile]))
+        config['arms'] = arms
+        unknown_arms = [arm for arm in (arms if isinstance(arms, list) else [])
+                        if isinstance(arm, str) and arm not in profiles]
+        if unknown_arms:
+            raise ValueError(
+                f"{robot_type}: profiles.{profile}.arms names {unknown_arms}, which are not "
+                f'profiles of this robot; declared: {sorted(profiles)}')
     else:
         config['profile'] = 'single'
         config['supports_task'] = True

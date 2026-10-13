@@ -30,6 +30,7 @@ LAUNCH cho_bringup_fr5/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/rob
       remap=[('~/robot_description', '/robot_description')]
       param {use_sim_time: True}
       param {robot_description: <description #1 fr5>}
+      param FILE <share:cho_bringup_fr5>/config/common/controllers.yaml
       param FILE <share:cho_bringup_fr5>/config/isaac/controllers.yaml
       param FILE <RT:cho_fr5_isaac_runtime_params_#0>
       param {bringup_type: 'isaac', ee_name: 'wrist3_link'}

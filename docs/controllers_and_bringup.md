@@ -8,9 +8,10 @@ workspace sourced with `source ~/ros2_ws/install/setup.bash` after
 **The configuration files are the authority, not this page.** A controller
 exists on a backend if and only if
 `cho_bringup_<robot>/config/<backend>/controllers*.yaml` declares it under
-`controller_manager`. A plugin type resolves if and only if the owning
-package's plugin description registers it. When this page and a config
-disagree, the config wins and this page is stale.
+`controller_manager` (for FR5, together with `config/common/controllers.yaml`;
+see [its section](#fairino-fr5--cho_controller_fr5)). A plugin type resolves
+if and only if the owning package's plugin description registers it. When this
+page and a config disagree, the config wins and this page is stale.
 
 ## Bringup launch matrix
 
@@ -99,6 +100,12 @@ broadcaster). Those are vendor controllers, not project ones.
 
 Real controller_manager runs at 125 Hz; the simulators at 500 (Gazebo, MuJoCo)
 and 250 (Isaac).
+
+The controller parameters are a base and one overlay per backend: every bringup
+loads `cho_bringup_fr5/config/common/controllers.yaml` (only what all four
+backends share) and then `config/<backend>/controllers.yaml` (what differs), and
+the later file wins per name. Gazebo gets both as the description's
+`<parameters>` tags (`simulation_controllers_base`, `simulation_controllers`).
 
 ### OpenArm — `cho_controller_openarm_mit`
 
