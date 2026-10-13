@@ -78,6 +78,17 @@
       moveit_joint_trajectory_controller:
         type: joint_trajectory_controller/JointTrajectoryController
 
+      # Chained prototype (cho_controller_chain), torque mode: loaded by hand, not
+      # spawned by any bringup (cho_controller/cho_controller_chain/README.md).
+      chain_impedance_law:
+        type: cho_controller_chain/JointImpedanceLaw
+
+      chain_joint_space_generator:
+        type: cho_controller_chain/JointSpaceGenerator
+
+      chain_task_space_generator:
+        type: cho_controller_chain/TaskSpaceGenerator
+
   joint_state_broadcaster:
     ros__parameters:
       robot_type: "fr3"
@@ -231,3 +242,25 @@
       constraints:
         stopped_velocity_tolerance: 0.05
         goal_time: 1.0
+
+  # Chained prototype (cho_controller/cho_controller_chain/README.md). The
+  # generators' motion limits come with the spawner's -p file, as the README shows.
+  chain_impedance_law:
+    ros__parameters:
+      joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      # [1/s^2] and [1/s], scaled by M(q): critically damped at 30 rad/s.
+      kp: [900.0, 900.0, 900.0, 900.0, 900.0, 900.0, 900.0]
+      kd: [60.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+      compensate_gravity: true  # MuJoCo: nothing else compensates gravity
+      rotor_inertia: [0.195, 0.195, 0.195, 0.195, 0.074, 0.074, 0.074]  # [kg m^2] fr3.xml's armature; the URDF has none
+
+  chain_joint_space_generator:
+    ros__parameters:
+      joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      law_name: chain_impedance_law
+
+  chain_task_space_generator:
+    ros__parameters:
+      joints: [fr3_joint1, fr3_joint2, fr3_joint3, fr3_joint4, fr3_joint5, fr3_joint6, fr3_joint7]
+      law_name: chain_impedance_law
+      ee_frame: fr3_hand_tcp

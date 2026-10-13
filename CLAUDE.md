@@ -100,6 +100,9 @@ What each package is, and where its own documentation is. `extern/` holds the pi
 - `cho_controller_openarm_mit` — every OpenArm arm controller plugin, two families: `cho_controller::openarm` (joint-space
   controllers, `ee_state_broadcaster`) and `cho_controller_openarm_mit` (the MIT drive-protocol producers)
   ([DESIGN.md, Package layout](cho_controller/cho_controller_openarm_mit/DESIGN.md#package-layout)).
+- `cho_controller_chain` — chained-control prototype: a robot-independent chainable joint impedance law and the
+  JointSpace / TaskSpace reference generators in front of it; Franka MuJoCo torque, loaded by hand
+  ([README.md](cho_controller/cho_controller_chain/README.md)).
 - `utils/cho_vla_core` — the VLA action-chunk pipeline, free of ROS, hosted by Franka's `vla_controller` (through
   its `VLAActionServer`) and OpenArm's `VlaController` ([DESIGN.md](cho_controller/utils/cho_vla_core/DESIGN.md)).
   Both hosts use `cho_vla_core::Session` (chunk ingest, the per-cycle reference, the goal's lifetime, the telemetry
@@ -200,7 +203,8 @@ golden test in CI) and `ci/check_copyright_headers.py`. **dds/** — the Fast DD
 ## Control period
 
 Code that advances its own trajectory clock or integrates an open-loop reference takes the period from its base
-class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`): never
+class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`,
+`cho_controller_chain::ReferenceGenerator`): never
 `1 / get_update_rate()` (0 here, no config sets a per-controller rate), a literal `dt`, or the raw `period`
 (jitters, and is 0 on a cycle with no new state). Audit a new controller for all three forms (`get_update_rate`,
 a literal such as `dt = 0.001`, `period.seconds()`); a search for one misses the others. The reasons are in the

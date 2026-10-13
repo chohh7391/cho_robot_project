@@ -12,6 +12,8 @@
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>cho_bringup_common</exec_depend>
+  <!-- the chained prototype's types in config/mujoco/controllers.yaml -->
+  <exec_depend>cho_controller_chain</exec_depend>
   <exec_depend>cho_controller_franka</exec_depend>
   <exec_depend>cho_description_franka</exec_depend>
   <exec_depend>cho_moveit_franka</exec_depend>

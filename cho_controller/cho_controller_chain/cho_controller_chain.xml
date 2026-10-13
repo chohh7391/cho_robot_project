@@ -1,0 +1,31 @@
+<library path="cho_controller_chain">
+  <class name="cho_controller_chain/JointImpedanceLaw"
+         type="cho_controller_chain::JointImpedanceLaw"
+         base_class_type="controller_interface::ChainableControllerInterface">
+    <description>
+      Chainable joint impedance law on the robot description's Pinocchio model:
+      tau = M(q) (a_ref + Kp (q_ref - q) + Kd (v_ref - dq)) + C(q, dq) dq + g(q)
+      on the effort interfaces. Exports a position, velocity and acceleration
+      reference interface per joint; holds its activation pose when not chained.
+    </description>
+  </class>
+  <class name="cho_controller_chain/JointSpaceGenerator"
+         type="cho_controller_chain::JointSpaceGenerator"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      JointSpace action (~/joint_space) as a reference generator: a Ruckig
+      point-to-point trajectory written to the impedance law's reference
+      interfaces; the last reference is held when no goal runs.
+    </description>
+  </class>
+  <class name="cho_controller_chain/TaskSpaceGenerator"
+         type="cho_controller_chain::TaskSpaceGenerator"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      TaskSpace action (~/task_space) as a reference generator: a Cartesian
+      Ruckig trajectory turned into joint references by damped-least-squares
+      differential IK and written to the impedance law's reference interfaces;
+      the last reference is held when no goal runs.
+    </description>
+  </class>
+</library>

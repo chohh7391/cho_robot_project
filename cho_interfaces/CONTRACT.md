@@ -105,8 +105,8 @@ An **absolute** TaskSpace goal is the EE pose in the server's base frame.
   one stamped goal means the same pose to the bridge and to the controllers.
 
 A **relative** goal's `frame_id` must be empty or the EE frame: the
-controller's `ee_name` (`ee_frame` on the OpenArm MIT controllers), the
-bridge's `ee_link`.
+controller's `ee_name` (`ee_frame` on the OpenArm MIT controllers and on
+`cho_controller_chain`'s TaskSpace generator), the bridge's `ee_link`.
 
 An empty relative frame means *each server's own* EE frame, and those are
 not one setting: the bridge composes in its `ee_link`, which its launch takes
@@ -230,6 +230,13 @@ The arm controllers built on a robot base class -- `FrankaBaseController`,
 | `~/ee_state` | `cho_interfaces/PoseLog` | reference / desired / current EE pose, stamped with the model's root frame |
 
 `ee_state_broadcaster` and the gripper controllers publish neither.
+
+The chained prototype (`cho_controller_chain`,
+[README](../cho_controller/cho_controller_chain/README.md)): its generators
+(`chain_joint_space_generator`, `chain_task_space_generator`) serve `~/joint_space` and
+`~/task_space` under this contract and publish no state topic; its law
+(`chain_impedance_law`) serves no action and publishes `~/controller_state` alone
+(reference = what it tracks, feedback = measured, `output.effort` = its torque).
 
 The OpenArm MIT controllers (`cho_controller_openarm_mit`: `joint_*_mit_controller`,
 `task_space_impedance_mit_controller`, `vla_mit_controller` and the
