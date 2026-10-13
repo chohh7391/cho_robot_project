@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import importlib.util
+import math
+import re
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,7 @@ REAL_BIMANUAL_CONFIG = PACKAGE / 'config' / 'real' / 'controllers_mit_bimanual.y
 REAL_LAUNCH = PACKAGE / 'launch' / 'bringup_real_robot.launch.py'
 DESCRIPTION = (PACKAGE.parents[1] / 'cho_description' / 'cho_description_openarm' /
                'robots' / 'openarm_v10' / 'openarm_v10.ros2_control.xacro')
+URDF_XACRO = DESCRIPTION.with_name('openarm_v10.urdf.xacro')
 SAFETY = (PACKAGE.parents[1] / 'cho_description' / 'cho_description_openarm' /
           'config' / 'mit_safety_profiles_v1.yaml')
 RVIZ_CONFIG = (PACKAGE.parents[1] / 'cho_description' / 'cho_description_openarm' /
@@ -172,11 +175,28 @@ def _real_task_profiles(config):
     }
 
 
+def drive_side_joint_torque_limits(block):
+    """The most impedance torque kp * |q_des - q| a drive-side block can ask of each joint.
+
+    max_reference_offset bounds |q_des - q|; where it is unset (0) the controller
+    derives 0.5 * torque_limit / kp, so the limit is half the motor peak.
+    """
+    limits = []
+    for kp, torque, bound in zip(
+            block['kp'], block['torque_limit'],
+            block.get('max_reference_offset', [0.0] * 7)):
+        offset = bound if bound > 0.0 else 0.5 * abs(torque) / kp
+        limits.append(kp * offset)
+    return limits
+
+
 def test_real_task_tuning_stays_inside_profile_boundaries_and_matches_its_law():
     profiles = yaml.safe_load(SAFETY.read_text())['profiles']
     commissioning = profiles['real_conservative_commissioning']
     expected_wrench = [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
     expected_torque = [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
+    # What the drive-side law can ask of each joint: half the motor peak.
+    expected_drive_torque = [20.0, 20.0, 13.5, 13.5, 3.5, 3.5, 3.5]
     task_profiles = {}
     for config in (REAL_CONFIG, REAL_BIMANUAL_CONFIG):
         task_profiles.update(_real_task_profiles(config))
@@ -186,7 +206,6 @@ def test_real_task_tuning_stays_inside_profile_boundaries_and_matches_its_law():
         assert len(task['kd']) == 7, name
         assert len(task['kp_task']) == 6 and len(task['kd_task']) == 6, name
         assert all(value >= 0.0 for value in task['kp_task'] + task['kd_task']), name
-        assert task['max_task_wrench'] == expected_wrench, name
         assert task['torque_limit'] == expected_torque, name
         # The real adapter rejects the whole arm tuple above these ceilings.
         assert all(value <= ceiling for value, ceiling in zip(
@@ -199,12 +218,48 @@ def test_real_task_tuning_stays_inside_profile_boundaries_and_matches_its_law():
             # Cartesian error would ride q_des and nothing would act on it. The
             # controller refuses to configure that combination.
             assert all(value > 0.0 for value in task['kp']), name
+            # max_task_wrench is inert here (the controller only requires six
+            # positive values), so it is not the force limit. The limit is the
+            # joint torque kp * max|q_des - q|, which is what to pin.
+            assert len(task['max_task_wrench']) == 6, name
+            assert all(value > 0.0 for value in task['max_task_wrench']), name
+            limits = drive_side_joint_torque_limits(task)
+            assert limits == pytest.approx(expected_drive_torque), name
+            assert all(limit <= 0.5 * final + 1e-9 for limit, final in zip(
+                limits, commissioning['torque']['final_magnitude'])), name
         else:
+            assert task['max_task_wrench'] == expected_wrench, name
             # The tau_ff law carries the stiffness itself, and with kd_task
             # zero the drive kd is the only damping in the loop. Both must be
             # present or the arm has either no spring or no dissipation.
             assert all(value > 0.0 for value in task['kp_task'][:3]), name
             assert all(value > 0.0 for value in task['kd']), name
+
+
+def test_real_drive_side_blocks_weight_the_reference_offset_by_kp():
+    # With reference_offset_weight proportional to kp the drive-side law's
+    # Cartesian stiffness is (J K^-1 J^T)^-1, K = diag(kp), instead of whatever
+    # the least-norm split happens to give. Geometric-mean normalisation (the
+    # solve's damping term is not rescaled with the weight) keeps it from
+    # attenuating the offset as a whole. MuJoCo: achieved motion within 1.3% of
+    # unit weights, null-direction joint motion 31% lower. The legacy law (kp 0)
+    # never reads the weight, so it must not carry one.
+    drive_side = []
+    for config in (REAL_CONFIG, REAL_BIMANUAL_CONFIG):
+        params = yaml.safe_load(config.read_text())['/**']
+        for name in params['controller_manager']['ros__parameters']:
+            if not name.endswith(('task_space_impedance_mit_controller', 'vla_mit_controller')):
+                continue
+            block = params[name]['ros__parameters']
+            if not block['drive_side_impedance']:
+                assert 'reference_offset_weight' not in block, name
+                continue
+            drive_side.append(name)
+            kp = block['kp']
+            geomean = math.exp(sum(math.log(value) for value in kp) / len(kp))
+            assert block['reference_offset_weight'] == pytest.approx(
+                [value / geomean for value in kp], abs=1e-3), name
+    assert sorted(drive_side) == ['task_space_impedance_mit_controller', 'vla_mit_controller']
 
 
 def test_real_bimanual_task_tuning_is_symmetric_between_the_arms():
@@ -516,3 +571,45 @@ def test_commissioning_profiles_are_explicit_and_derated():
     assert return_zero['torque'] == commissioning['torque']
     assert return_zero['joint_limits']['physical_torque'] == upstream_torque
     assert return_zero['gains']['kp_max'] == [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+
+
+def test_real_vla_controller_gets_the_task_space_startup_gains_for_return_to_zero():
+    # VlaController derives from TaskSpaceImpedanceController, which reads
+    # startup_kp/kd; return_to_zero_kp/kd is read only by a joint-space action
+    # controller. Overriding the latter on a VLA left the YAML startup gains in
+    # force. The launch golden case vla_return_to_zero evaluates the result.
+    source = REAL_LAUNCH.read_text()
+    guarded = source[:source.index("'startup_kp': [70.0")]
+    guard = guarded[guarded.rindex('if controller_name'):]
+    assert "'task_space_impedance_mit_controller'" in guard
+    assert "'vla_mit_controller'" in guard
+    assert "'joint_impedance_mit_controller'" not in guard
+
+
+def test_no_openarm_controller_config_carries_the_unread_startup_posture_key():
+    # The return-to-zero phase targets the nominal zero posture and the measured
+    # pose is latched otherwise; no controller reads a startup_posture parameter.
+    def keys(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield key
+                yield from keys(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from keys(value)
+
+    files = sorted((PACKAGE / 'config').rglob('*.yaml'))
+    assert files
+    for path in files:
+        assert 'startup_posture' not in set(keys(yaml.safe_load(path.read_text()))), path.name
+
+
+def test_xacro_default_expected_update_rate_is_the_real_profile_rate():
+    # A direct xacro run (without the launch, which passes 750) used to default
+    # to 200, which the adapter refuses at configure against the 750 Hz profile.
+    rate = yaml.safe_load(SAFETY.read_text())['profiles'][
+        'real_conservative_commissioning']['update_rate_hz']
+    urdf = re.search(r'name="mit_expected_update_rate_hz" default="(\d+)"', URDF_XACRO.read_text())
+    assert urdf and int(urdf.group(1)) == rate
+    macro = re.search(r'mit_expected_update_rate_hz:=(\d+)', DESCRIPTION.read_text())
+    assert macro and int(macro.group(1)) == rate

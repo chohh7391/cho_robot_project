@@ -182,6 +182,7 @@ cases:
       task_return_to_zero: [controller_name:=task_space_impedance_mit_controller, return_to_zero:=true,
                             gravity_compensation:=true, gravity_scale:=1.2]
       vla_right: [bimanual:=true, mit_arm:=right, controller_name:=vla_mit_controller, return_to_zero:=true]
+      vla_return_to_zero: [controller_name:=vla_mit_controller, return_to_zero:=true]
       rviz: [use_rviz:=true]
     bringup_isaac_robot.launch.py:
       default_usd: []

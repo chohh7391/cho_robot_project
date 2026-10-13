@@ -144,7 +144,7 @@ numeric_policy:
         tau_ff_slew_per_s: null
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: null
-        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+        ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: null
         lease_cap_cycles: null
@@ -189,7 +189,7 @@ numeric_policy:
         tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
-        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+        ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: 38
         lease_cap_cycles: 75
@@ -232,7 +232,7 @@ numeric_policy:
         tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
-        ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
+        ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: 38
         lease_cap_cycles: 75

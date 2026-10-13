@@ -35,7 +35,7 @@ limitations under the License.
       real_mit_hardware:=false
       real_mit_arm:=both_independent
       real_mit_safety_profile:=real_conservative_commissioning
-      mit_expected_update_rate_hz:=200
+      mit_expected_update_rate_hz:=750
       bimanual:=false
       arm_prefix:=''
       hand:=true

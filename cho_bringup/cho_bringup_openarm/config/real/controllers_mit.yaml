@@ -58,8 +58,7 @@
 
   # Task space serves the existing /task_space action endpoint and remains
   # inactive unless selected. With return_to_zero its start-up target is the
-  # nominal-zero posture; without it the measured Cartesian pose is latched
-  # (the startup_posture parameter is not read).
+  # nominal-zero posture; without it the measured Cartesian pose is latched.
   task_space_impedance_mit_controller:
     ros__parameters:
       arm: single
@@ -115,27 +114,35 @@
       # reference = sign(dq_des), pure feed-forward, cannot self-excite. Hand
       # guiding overrides this to 'measured' because dq_des is zero there.
       friction_velocity_source: reference
-      # `kp` is used only by the activation seed and the return-to-zero phase;
-      # the Cartesian mode sends zero MIT stiffness. `kd` however is applied
-      # throughout Cartesian control as actuator-side joint damping, which is
-      # the only damping the arm's null space receives - J^T*Dx*J reaches just
-      # the range space of the Jacobian. It is also evaluated inside the motor
-      # rather than across the 750 Hz CAN cycle, so it does not pay the
-      # transport delay that caps `kd_task`.
-      # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
+      # `kd` is applied throughout Cartesian control as actuator-side joint
+      # damping, which is the only damping the arm's null space receives -
+      # J^T*Dx*J reaches just the range space of the Jacobian. It is also
+      # evaluated inside the motor rather than across the 750 Hz CAN cycle, so
+      # it does not pay the transport delay that caps `kd_task`.
+      # Drive-side Cartesian impedance: the drive applies kp * (q_des - q), where
+      # q_des - q is the joint offset that resolves the Cartesian error
+      # (weighted by reference_offset_weight, below). So `kp` IS the stiffness,
       # not a posture spring underneath a tau_ff law. Sized as the largest kp
       # each joint can still damp to zeta = 0.7 through the drive at its
       # WORST-case inertia, since kd is capped at 5 by the MIT packet:
       # kp_i = (kd_i / 1.4)^2 / M_ii,p95, then clipped by the profile ceiling.
       # Joints 1-4 are damping-limited, the wrist is ceiling-limited.
-      # Mapped through diag(J^T Kx J) this guarantees >= 86 N/m of Cartesian
-      # stiffness anywhere in the workspace - one kilogram sags 11 cm.
+      # The Cartesian stiffness is not a per-joint number and varies with the
+      # pose. reference_offset_weight is kp / geomean(kp), so it is
+      # proportional to kp and the stiffness is (J K^-1 J^T)^-1, K = diag(kp):
+      # the offset is shared out by joint stiffness instead of by least norm.
+      # The geometric-mean normalisation keeps the solve's fixed damping term
+      # from attenuating the offset as a whole. Recompute it whenever kp changes.
+      # Measured in MuJoCo (+-3 cm x steps through vla_mit_controller, this kp
+      # with joint 5 at the sim profile's 10): achieved motion within 1.3% of
+      # unit weights, null-direction joint 3 range 0.194 -> 0.134 rad (-31%).
+      # Displacement under load on the arm is not measured.
       # Fixed rather than scheduled per pose: kp_slew_per_s is 10/s while the
-      # mapped stiffness moves 3.4x across the workspace on joint 1, so a
-      # scheduled gain would only ever chase its own reference.
+      # Cartesian stiffness moves with the pose, so a scheduled gain would only
+      # ever chase its own reference.
       kp: [32.0, 30.0, 50.0, 49.0, 15.0, 10.0, 5.0]
+      reference_offset_weight: [1.528, 1.433, 2.388, 2.340, 0.716, 0.478, 0.239]
       kd: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
-      startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
       startup_kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
       startup_kd: [1.00, 1.00, 0.80, 0.80, 0.30, 0.25, 0.20]
       startup_duration: 15.0
@@ -146,28 +153,17 @@
       # packet's fixed-point encoding range and not a torque rating, so the
       # wrist was allowed 43% and the shoulder 35% above motor peak.
       torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
-      # Stage 4, measured 2026-09-04 on hardware. At kp_task=110 a 30.4 mm
-      # probe reached 8.31 mm (27.3%) with no oscillation and a peak Cartesian
-      # wrench of only 2.4 N against the 25 N bound, so the loop had roughly a
-      # factor of ten of unused force authority. 140 raises the elbow torque at
-      # a 60 mm probe to ~3.3 N*m, about four times its measured ~0.79 N*m
-      # breakaway. Implied damping ratio falls to ~0.59 for a ~1.5 kg apparent
-      # TCP mass, still far above the ~0.37 that oscillated at kd_task=9.
-      # Stage 3, measured 2026-09-04 on hardware. At kp_task=70 a 35 mm
-      # Cartesian error put only ~1.1 N*m on joint 4, right at its measured
-      # ~0.79 N*m breakaway, so a 39 mm probe stalled after 7.8 mm while the
-      # much lighter joint 7 absorbed three times the elbow's motion. 110 puts
-      # ~1.7 N*m on joint 4. With kd_task=17 the implied damping ratio is
-      # ~0.66 for a ~1.5 kg apparent TCP mass, well above the ~0.37 that
-      # oscillated at the old kp_task=100 / kd_task=9 pairing.
-      # Stiffness was previously held at the stage-1 value: kp_task=100 has
-      # oscillated on this arm before, so it is re-approached only after the
-      # actuator-side MIT `kd` above is confirmed on hardware. Damping is not
-      # scaled back down with it - at kp_task=50 the values below sit near
-      # zeta = 1.0 for a ~1.5 kg apparent TCP mass, which is the intended
-      # conservative starting point. Raise kp_task in steps (50 -> 70 -> 100)
-      # and re-check `~/task_diagnostics` peak_wrench at each step; if
-      # translation oscillates, lower kp_task before touching kd_task.
+      # `kp_task`, `kd_task` and `max_task_wrench` do not act while
+      # drive_side_impedance is true: the Cartesian error rides q_des, the
+      # drive's own kp closes it, and a runtime set of kp_task/kd_task is
+      # refused. kp_task/kd_task only feed the diagnostic wrench readout here
+      # (the drive_side_impedance: false law is what reads them), and
+      # max_task_wrench must still be six positive values or configure fails.
+      # The bound that does apply is the joint torque kp * |q_des - q|, capped by
+      # max_reference_offset. Unset, that is 0.5 * torque_limit / kp =
+      # [0.625 0.667 0.270 0.276 0.233 0.350 0.700] rad, so the impedance torque
+      # is at most half of each motor's peak, [20 20 13.5 13.5 3.5 3.5 3.5] N*m,
+      # which leaves the other half for gravity and friction feed-forward.
       kp_task: [20.0, 20.0, 20.0, 2.0, 2.0, 2.0]
       kd_task: [10.0, 10.0, 10.0, 0.6, 0.6, 0.6]
       max_task_wrench: [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
@@ -280,27 +276,35 @@
       # reference = sign(dq_des), pure feed-forward, cannot self-excite. Hand
       # guiding overrides this to 'measured' because dq_des is zero there.
       friction_velocity_source: reference
-      # `kp` is used only by the activation seed and the return-to-zero phase;
-      # the Cartesian mode sends zero MIT stiffness. `kd` however is applied
-      # throughout Cartesian control as actuator-side joint damping, which is
-      # the only damping the arm's null space receives - J^T*Dx*J reaches just
-      # the range space of the Jacobian. It is also evaluated inside the motor
-      # rather than across the 750 Hz CAN cycle, so it does not pay the
-      # transport delay that caps `kd_task`.
-      # Drive-side Cartesian impedance: these ARE the Cartesian stiffness now,
+      # `kd` is applied throughout Cartesian control as actuator-side joint
+      # damping, which is the only damping the arm's null space receives -
+      # J^T*Dx*J reaches just the range space of the Jacobian. It is also
+      # evaluated inside the motor rather than across the 750 Hz CAN cycle, so
+      # it does not pay the transport delay that caps `kd_task`.
+      # Drive-side Cartesian impedance: the drive applies kp * (q_des - q), where
+      # q_des - q is the joint offset that resolves the Cartesian error
+      # (weighted by reference_offset_weight, below). So `kp` IS the stiffness,
       # not a posture spring underneath a tau_ff law. Sized as the largest kp
       # each joint can still damp to zeta = 0.7 through the drive at its
       # WORST-case inertia, since kd is capped at 5 by the MIT packet:
       # kp_i = (kd_i / 1.4)^2 / M_ii,p95, then clipped by the profile ceiling.
       # Joints 1-4 are damping-limited, the wrist is ceiling-limited.
-      # Mapped through diag(J^T Kx J) this guarantees >= 86 N/m of Cartesian
-      # stiffness anywhere in the workspace - one kilogram sags 11 cm.
+      # The Cartesian stiffness is not a per-joint number and varies with the
+      # pose. reference_offset_weight is kp / geomean(kp), so it is
+      # proportional to kp and the stiffness is (J K^-1 J^T)^-1, K = diag(kp):
+      # the offset is shared out by joint stiffness instead of by least norm.
+      # The geometric-mean normalisation keeps the solve's fixed damping term
+      # from attenuating the offset as a whole. Recompute it whenever kp changes.
+      # Measured in MuJoCo (+-3 cm x steps through vla_mit_controller, this kp
+      # with joint 5 at the sim profile's 10): achieved motion within 1.3% of
+      # unit weights, null-direction joint 3 range 0.194 -> 0.134 rad (-31%).
+      # Displacement under load on the arm is not measured.
       # Fixed rather than scheduled per pose: kp_slew_per_s is 10/s while the
-      # mapped stiffness moves 3.4x across the workspace on joint 1, so a
-      # scheduled gain would only ever chase its own reference.
+      # Cartesian stiffness moves with the pose, so a scheduled gain would only
+      # ever chase its own reference.
       kp: [32.0, 30.0, 50.0, 49.0, 15.0, 10.0, 5.0]
+      reference_offset_weight: [1.528, 1.433, 2.388, 2.340, 0.716, 0.478, 0.239]
       kd: [5.00, 5.00, 5.00, 5.00, 0.70, 0.60, 0.50]
-      startup_posture: [0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0]
       startup_kp: [3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5]
       startup_kd: [1.00, 1.00, 0.80, 0.80, 0.30, 0.25, 0.20]
       startup_duration: 15.0
@@ -311,28 +315,12 @@
       # packet's fixed-point encoding range and not a torque rating, so the
       # wrist was allowed 43% and the shoulder 35% above motor peak.
       torque_limit: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
-      # Stage 4, measured 2026-09-04 on hardware. At kp_task=110 a 30.4 mm
-      # probe reached 8.31 mm (27.3%) with no oscillation and a peak Cartesian
-      # wrench of only 2.4 N against the 25 N bound, so the loop had roughly a
-      # factor of ten of unused force authority. 140 raises the elbow torque at
-      # a 60 mm probe to ~3.3 N*m, about four times its measured ~0.79 N*m
-      # breakaway. Implied damping ratio falls to ~0.59 for a ~1.5 kg apparent
-      # TCP mass, still far above the ~0.37 that oscillated at kd_task=9.
-      # Stage 3, measured 2026-09-04 on hardware. At kp_task=70 a 35 mm
-      # Cartesian error put only ~1.1 N*m on joint 4, right at its measured
-      # ~0.79 N*m breakaway, so a 39 mm probe stalled after 7.8 mm while the
-      # much lighter joint 7 absorbed three times the elbow's motion. 110 puts
-      # ~1.7 N*m on joint 4. With kd_task=17 the implied damping ratio is
-      # ~0.66 for a ~1.5 kg apparent TCP mass, well above the ~0.37 that
-      # oscillated at the old kp_task=100 / kd_task=9 pairing.
-      # Stiffness was previously held at the stage-1 value: kp_task=100 has
-      # oscillated on this arm before, so it is re-approached only after the
-      # actuator-side MIT `kd` above is confirmed on hardware. Damping is not
-      # scaled back down with it - at kp_task=50 the values below sit near
-      # zeta = 1.0 for a ~1.5 kg apparent TCP mass, which is the intended
-      # conservative starting point. Raise kp_task in steps (50 -> 70 -> 100)
-      # and re-check `~/task_diagnostics` peak_wrench at each step; if
-      # translation oscillates, lower kp_task before touching kd_task.
+      # `kp_task`, `kd_task` and `max_task_wrench` do not act while
+      # drive_side_impedance is true: the Cartesian error rides q_des, the
+      # drive's own kp closes it, and a runtime set of kp_task/kd_task is
+      # refused. kp_task/kd_task only feed the diagnostic wrench readout here,
+      # and max_task_wrench must still be six positive values or configure
+      # fails. The bound that applies is max_reference_offset, set below.
       kp_task: [20.0, 20.0, 20.0, 2.0, 2.0, 2.0]
       kd_task: [10.0, 10.0, 10.0, 0.6, 0.6, 0.6]
       max_task_wrench: [10.0, 10.0, 10.0, 1.5, 1.5, 1.5]
@@ -401,11 +389,13 @@
       # REQUIRED here, unlike the TaskSpace controller which derives a default.
       # The drive adds kp*(q_des - q) downstream of torque_limit, so this is the
       # only bound on the impedance torque and the input driving it is untrusted
-      # policy output. min(0.25 * torque_limit / kp, 0.15): with the real kp the
-      # torque bound binds everywhere except the wrist, giving
-      # kp * offset = [2.5 2.5 3.4 3.4 1.1 0.75 0.375] Nm. Deliberately tighter
-      # than the derived default (0.5 * torque_limit / kp), which would allow
-      # 0.625 rad on joint 1.
+      # policy output. Hand-set per joint, each at or under the envelope
+      # min(0.25 * torque_limit / kp, 0.15 rad) = [0.15 0.15 0.135 0.138 0.117
+      # 0.15 0.15], where the 0.15 rad ceiling limits joints 1, 2, 6 and 7.
+      # Joints 6 and 7 sit on the ceiling, the others at 50-64% of the envelope.
+      # With the real kp, kp * offset = [2.50 2.49 3.40 3.38 1.125 1.50 0.75] N*m,
+      # 6-21% of torque_limit. Deliberately tighter than the derived default
+      # (0.5 * torque_limit / kp), which would allow 0.625 rad on joint 1.
       max_reference_offset: [0.078, 0.083, 0.068, 0.069, 0.075, 0.15, 0.15]
       chunk_topic: /vla/action/ee_pose
       # 'arrival' until the bridge echoes the stamp of the joint state it built

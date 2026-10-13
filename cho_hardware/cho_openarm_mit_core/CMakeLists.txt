@@ -23,7 +23,7 @@ find_package(ament_cmake REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
-add_library(${PROJECT_NAME} SHARED src/mit_protocol.cpp)
+add_library(${PROJECT_NAME} SHARED src/mit_protocol.cpp src/mit_limiter.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -39,11 +39,16 @@ install(FILES DESIGN.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  # Build-file and manifest lint only: the C++ predates any formatter here.
+  # Build-file and manifest lint; clang-format only on the limiter (the MuJoCo
+  # safety boundary, moved here formatted). The rest predates any formatter.
   find_package(ament_cmake_lint_cmake REQUIRED)
   find_package(ament_cmake_xmllint REQUIRED)
+  find_package(ament_cmake_clang_format REQUIRED)
   ament_lint_cmake()
   ament_xmllint()
+  ament_clang_format(
+    include/${PROJECT_NAME}/mit_limiter.hpp src/mit_limiter.cpp
+    test/test_mit_limiter.cpp test/test_limiter_vs_consumer.cpp)
   find_package(cho_description_openarm REQUIRED)
   # The description's installed share directory (symlinked to the source
   # under --symlink-install), not a path back into the source tree.
@@ -54,8 +59,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_arm_consumer ${PROJECT_NAME})
   ament_add_gtest(test_switch_gate test/test_switch_gate.cpp)
   target_link_libraries(test_switch_gate ${PROJECT_NAME})
-  target_compile_definitions(test_safety_profile PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
+  ament_add_gtest(test_mit_limiter test/test_mit_limiter.cpp)
+  target_link_libraries(test_mit_limiter ${PROJECT_NAME})
+  # The MuJoCo limiter against the real consumer, on the same SEEDING commits.
+  ament_add_gtest(test_limiter_vs_consumer test/test_limiter_vs_consumer.cpp)
+  target_link_libraries(test_limiter_vs_consumer ${PROJECT_NAME})
+  foreach(profile_test test_safety_profile test_mit_limiter test_limiter_vs_consumer)
+    target_compile_definitions(${profile_test} PRIVATE
+      OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
+  endforeach()
 endif()
 
 ament_export_include_directories(include)

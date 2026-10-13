@@ -20,7 +20,7 @@ find_package(ament_cmake REQUIRED)
 find_package(cho_openarm_mit_core REQUIRED)
 find_package(mujoco_ros2_control REQUIRED)
 find_package(pluginlib REQUIRED)
-add_library(${PROJECT_NAME} SHARED src/mit_limiter.cpp src/mit_mujoco_system.cpp)
+add_library(${PROJECT_NAME} SHARED src/mit_mujoco_system.cpp)
 target_include_directories(${PROJECT_NAME} PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 ament_target_dependencies(${PROJECT_NAME}
@@ -34,8 +34,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_xmllint REQUIRED)
   ament_lint_cmake()
   ament_xmllint()
-  # The limiter is the MuJoCo safety boundary; it has to stay reviewable. These
-  # sources used to be whole functions on one line.
+  # These sources have to stay reviewable: they used to be whole functions on
+  # one line. The limiter (cho_openarm_mit_core) is checked there.
   find_package(ament_cmake_clang_format REQUIRED)
   ament_clang_format(src include test)
 
@@ -46,12 +46,6 @@ if(BUILD_TESTING)
   set(OPENARM_SAFETY_PROFILE "${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
   set(OPENARM_XACRO "${OPENARM_DESCRIPTION_SHARE}/robots/openarm_v10/openarm_v10.urdf.xacro")
   find_program(XACRO_EXECUTABLE NAMES xacro REQUIRED)
-
-  ament_add_gtest(test_mit_limiter test/test_mit_limiter.cpp)
-  target_link_libraries(test_mit_limiter ${PROJECT_NAME})
-  target_include_directories(test_mit_limiter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_compile_definitions(test_mit_limiter PRIVATE
-    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_SAFETY_PROFILE}")
 
   ament_add_gtest(test_plugin_load test/test_plugin_load.cpp)
   target_link_libraries(test_plugin_load ${PROJECT_NAME})

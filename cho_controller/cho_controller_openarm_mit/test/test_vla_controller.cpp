@@ -32,7 +32,9 @@
 // with the previous cycle's time (AC18); and the 2026-10-13 stream rules: the
 // watchdog waits out the buffered horizon (AC10, S15), the observation-stamp
 // window and chunks with nothing left to play (AC5, S8), control_dt <= 0
-// refused (AC6, C16). Expected values come from
+// refused (AC6, C16), the relative-chunk anchor taken from the command as
+// emitted, against a kinematic wall (S14, WallPlant), and bounded_dt()'s
+// period rule (BoundedDt_). Expected values come from
 // hand-worked kinematics of the test URDF (tcp_pose(), tcp_twist()), not from
 // the controller's own model.
 #include <algorithm>
@@ -58,8 +60,14 @@
 #include <controller_manager/controller_manager.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <gtest/gtest.h>
+#include <hardware_interface/component_parser.hpp>
 #include <hardware_interface/resource_manager.hpp>
+#include <hardware_interface/system_interface.hpp>
+#include <hardware_interface/types/lifecycle_state_names.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
+#include <pluginlib/class_loader.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <rclcpp_lifecycle/state.hpp>
 #include <rcutils/logging.h>
 #include <std_srvs/srv/trigger.hpp>
 
@@ -125,6 +133,12 @@ struct VlaControllerTestAccess
   static bool drive_side_impedance(const VlaController & controller)
   {
     return controller.drive_side_impedance_;
+  }
+  // The commanded Cartesian reference (TaskSpaceImpedanceController::idle_pose_),
+  // base-frame z. Control thread only (Fixture::record_cycle()).
+  static double reference_z(const VlaController & controller)
+  {
+    return controller.idle_pose_.translation().z();
   }
 };
 }  // namespace cho_controller_openarm_mit
@@ -350,14 +364,134 @@ PlanarTwist tcp_twist(const Joints & q, const Joints & dq)
 }
 
 // One control cycle as the worker saw it right after write(): the MIT tuple's
-// q_des and dq_des, the measurement the fake mirrored from it, and the
-// controller's accepted-chunk count at that moment.
+// q_des, dq_des and tau_ff, the measurement the fake mirrored from it, the
+// controller's accepted-chunk count at that moment, the commanded Cartesian
+// reference's z, and the update count before this cycle's increment.
 struct CycleSample
 {
   Joints q_cmd;
   Joints dq_cmd;
+  Joints tau_cmd;
   Joints q_meas;
   std::uint64_t accepted;
+  double reference_z;
+  unsigned long long update;
+};
+
+// A kinematic wall in front of FakeMitSystem (imported into the resource
+// manager directly, not loaded from the URDF). The fake mirrors every accepted
+// q_des into its measured state; this wrapper reports that as the measurement
+// unless the TCP (tcp_pose()) would cross below the plane z = `wall_z`. Then
+// the measured joints stop where the straight joint path from the last
+// measurement meets the plane (bisection), with zero velocity. NaN is no wall.
+// The 39 command interfaces, the protocol state and the switch rule are the
+// fake's own.
+class WallPlant : public hardware_interface::SystemInterface
+{
+public:
+  explicit WallPlant(std::atomic<double> & wall_z)
+  : wall_z_(wall_z) {}
+
+  CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override
+  {
+    if (SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {return CallbackReturn::ERROR;}
+    inner_ = loader_.createUniqueInstance(info.hardware_class_type);
+    return inner_->on_init(info);
+  }
+  CallbackReturn on_configure(const rclcpp_lifecycle::State & s) override {return inner_->on_configure(s);}
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State & s) override {return inner_->on_cleanup(s);}
+  CallbackReturn on_activate(const rclcpp_lifecycle::State & s) override {return inner_->on_activate(s);}
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & s) override
+  {
+    return inner_->on_deactivate(s);
+  }
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State & s) override {return inner_->on_shutdown(s);}
+  CallbackReturn on_error(const rclcpp_lifecycle::State & s) override {return inner_->on_error(s);}
+
+  std::vector<hardware_interface::StateInterface> export_state_interfaces() override
+  {
+    std::vector<hardware_interface::StateInterface> out;
+    for (auto & state : inner_->export_state_interfaces()) {
+      std::size_t joint = 7;
+      for (std::size_t j = 0; j < 7 && j < info_.joints.size(); ++j) {
+        if (state.get_prefix_name() == info_.joints[j].name) {joint = j;}
+      }
+      const auto & name = state.get_interface_name();
+      const std::size_t field = name == "position" ? 0 : (name == "velocity" ? 1 : 2);
+      if (joint == 7) {
+        out.push_back(state);
+        continue;
+      }
+      inner_joint_[joint][field] = std::make_unique<hardware_interface::StateInterface>(state);
+      state_[joint][field] = state.get_value();
+      out.emplace_back(state.get_prefix_name(), name, &state_[joint][field]);
+    }
+    return out;
+  }
+  std::vector<hardware_interface::CommandInterface> export_command_interfaces() override
+  {
+    return inner_->export_command_interfaces();
+  }
+  hardware_interface::return_type prepare_command_mode_switch(
+    const std::vector<std::string> & start, const std::vector<std::string> & stop) override
+  {
+    return inner_->prepare_command_mode_switch(start, stop);
+  }
+  hardware_interface::return_type perform_command_mode_switch(
+    const std::vector<std::string> & start, const std::vector<std::string> & stop) override
+  {
+    return inner_->perform_command_mode_switch(start, stop);
+  }
+  hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration & period)
+  override
+  {
+    return inner_->write(time, period);
+  }
+
+  hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period)
+  override
+  {
+    const auto result = inner_->read(time, period);
+    Joints mirrored {}, previous {};
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      mirrored[joint] = inner_joint_[joint][0]->get_value();
+      previous[joint] = state_[joint][0];
+    }
+    const double wall = wall_z_.load(std::memory_order_acquire);
+    const bool free = std::isnan(wall) || tcp_pose(mirrored).z >= wall;
+    double reached = 1.0;
+    if (!free) {
+      // `previous` is on the free side (it was measured there); find how far
+      // along the step the TCP can go.
+      double low = 0.0;
+      double high = 1.0;
+      for (int i = 0; i < 50; ++i) {
+        const double mid = 0.5 * (low + high);
+        Joints q {};
+        for (std::size_t joint = 0; joint < 7; ++joint) {
+          q[joint] = previous[joint] + mid * (mirrored[joint] - previous[joint]);
+        }
+        (tcp_pose(q).z >= wall ? low : high) = mid;
+      }
+      reached = low;
+    }
+    for (std::size_t joint = 0; joint < 7; ++joint) {
+      state_[joint][0] = free ? mirrored[joint] :
+        previous[joint] + reached * (mirrored[joint] - previous[joint]);
+      state_[joint][1] = free ? inner_joint_[joint][1]->get_value() : 0.0;
+      state_[joint][2] = inner_joint_[joint][2]->get_value();
+    }
+    return result;
+  }
+
+private:
+  std::atomic<double> & wall_z_;
+  // Declared before inner_, which it must outlive.
+  pluginlib::ClassLoader<hardware_interface::SystemInterface> loader_ {
+    "hardware_interface", "hardware_interface::SystemInterface"};
+  pluginlib::UniquePtr<hardware_interface::SystemInterface> inner_;
+  std::array<std::array<std::unique_ptr<hardware_interface::StateInterface>, 3>, 7> inner_joint_;
+  std::array<std::array<double, 3>, 7> state_ {};
 };
 
 class Fixture : public ::testing::Test
@@ -370,6 +504,12 @@ protected:
   virtual double initial_position() const {return 0.0;}
   // FakeMitSystem's mirror_position_offset [rad]: measured = q_des + this.
   virtual double mirror_position_offset() const {return 0.0;}
+  // The hardware: FakeMitSystem from urdf(), every component active.
+  virtual std::unique_ptr<hardware_interface::ResourceManager> make_resources()
+  {
+    return std::make_unique<hardware_interface::ResourceManager>(
+      urdf(initial_position(), mirror_position_offset()), true, true);
+  }
 
   static void SetUpTestSuite()
   {
@@ -387,8 +527,7 @@ protected:
   void SetUp() override
   {
     executor = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
-    auto resources = std::make_unique<hardware_interface::ResourceManager>(
-      urdf(initial_position(), mirror_position_offset()), true, true);
+    auto resources = make_resources();
     manager = std::make_shared<controller_manager::ControllerManager>(
       std::move(resources), executor, "controller_manager", kNamespace);
     controller = std::make_shared<VlaController>();
@@ -428,7 +567,8 @@ protected:
     worker = std::thread([this] {
         while (running) {
           const auto now = manager->now();
-          const auto period = rclcpp::Duration::from_seconds(0.001);
+          const auto period =
+            rclcpp::Duration::from_seconds(worker_period.load(std::memory_order_acquire));
           manager->read(now, period);
           manager->update(now, period);
           manager->write(now, period);
@@ -729,9 +869,12 @@ protected:
     for (std::size_t joint = 0; joint < 7; ++joint) {
       sample.q_cmd[joint] = Access::position_command(*controller, joint);
       sample.dq_cmd[joint] = Access::velocity_command(*controller, joint);
+      sample.tau_cmd[joint] = Access::effort(*controller, joint);
       sample.q_meas[joint] = Access::measured(*controller, joint);
     }
     sample.accepted = Access::accepted(*controller);
+    sample.reference_z = Access::reference_z(*controller);
+    sample.update = update_count.load(std::memory_order_acquire);
     std::lock_guard<std::mutex> lock(trace_mutex);
     if (trace.size() < 50000) {trace.push_back(sample);}
   }
@@ -796,6 +939,8 @@ protected:
   controller_interface::return_type configured {controller_interface::return_type::OK};
   std::atomic<bool> running {false};
   std::atomic<unsigned long long> update_count {0};
+  // The period the worker passes to every read/update/write [s].
+  std::atomic<double> worker_period {0.001};
   std::thread worker;
   std::atomic<bool> recording {false};
   std::mutex trace_mutex;
@@ -1142,6 +1287,62 @@ protected:
     ObservationFixture::extra_parameters();
     set("chunk_max_observation_age", 0.3);
   }
+};
+
+// The curled start (every joint at 0.3 rad) behind WallPlant, with the real
+// single-arm VLA block's chunk shaping (blend 0.2 s, 0.10 m/s, 0.4 m/s^2) and
+// a 5 mrad reference-offset bound. That bound is what the anti-windup leaves
+// between the anchor and the measurement: at this posture the solve maps 1 m
+// of z error to at most 1.87 rad on one joint, so it saturates at about
+// 2.7 mm of Cartesian error.
+class WallFixture : public Fixture
+{
+protected:
+  double initial_position() const override {return 0.3;}
+  std::unique_ptr<hardware_interface::ResourceManager> make_resources() override
+  {
+    auto resources = std::make_unique<hardware_interface::ResourceManager>();
+    const auto infos = hardware_interface::parse_control_resources_from_urdf(urdf(initial_position()));
+    resources->import_component(std::make_unique<WallPlant>(wall_z), infos.at(0));
+    rclcpp_lifecycle::State active(
+      lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
+      hardware_interface::lifecycle_state_names::ACTIVE);
+    EXPECT_EQ(
+      resources->set_component_state(infos.at(0).name, active),
+      hardware_interface::return_type::OK);
+    return resources;
+  }
+  void extra_parameters() override
+  {
+    set("max_reference_offset", std::vector<double>(7, kOffsetBound));
+    set("stream_timeout_sec", 10.0);
+    set("hold_timeout_sec", 20.0);
+    set("chunk_blend_duration", 0.2);
+    set("max_task_lin_vel", 0.10);
+    set("max_task_lin_acc", 0.4);
+    set("max_task_ang_vel", 0.5);
+  }
+
+  static constexpr double kOffsetBound = 0.005;  // rad, every joint
+
+  // A from_anchor base-frame task chunk from a policy that sees only the
+  // MEASURED pose: 10 steps of at most 2 mm (30 mm/s at 15 Hz) along base z
+  // from the observed height toward `target_z`.
+  cho_interfaces::msg::ActionChunk policy_chunk(const double observed_z, const double target_z) const
+  {
+    std::vector<std::array<double, 6>> rows;
+    double offset = 0.0;
+    for (int step = 0; step < 10; ++step) {
+      offset += std::clamp(target_z - observed_z - offset, -kPolicyStep, kPolicyStep);
+      rows.push_back({0.0, 0.0, offset, 0.0, 0.0, 0.0});
+    }
+    return task_chunk("from_anchor", rows, "base", kPolicyPeriod);
+  }
+
+  static constexpr double kPolicyPeriod = 1.0 / 15.0;  // chunk period and control_dt [s]
+  static constexpr double kPolicyStep = 0.002;  // m per waypoint
+
+  std::atomic<double> wall_z {std::numeric_limits<double>::quiet_NaN()};
 };
 }  // namespace
 
@@ -2802,4 +3003,140 @@ TEST_F(StreamFixture, AC6_AnUnsetStampIsZero)
 
   ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.stream_state == "waiting_first_chunk";}));
   EXPECT_EQ(telemetry().last_chunk_stamp, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// bounded_dt() (2026-10-13) is the gripper's rule. The model
+// feed-forward slews at the profile's tau_ff_slew_per_s, 17.5 N m/s on joint 5
+// in mujoco_sim_safe, per bounded_dt(): a zero period moves it not at all (the
+// former 1e-4 s floor moved it 1.75 mN m per cycle), a 1 s one by 0.1 s worth,
+// 1.75 N m (the former uncapped step crossed the whole 3 N m in one cycle).
+TEST_F(Fixture, BoundedDt_TheModelSlewGetsNoTimeFromAZeroPeriodAndAtMostATenthOfASecond)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  // Joint 5 carries three 1 kg links 0.1-0.5 m out, 8.8 N m at q = 0, so its
+  // model term rises to the 3 N m torque_limit within 0.2 s and stays there.
+  cycle(400);
+  const double held = Access::effort(*controller, 4);
+  ASSERT_NEAR(std::abs(held), 3.0, 1e-9);
+  constexpr double kSlew = 17.5;  // N m/s, joint 5
+
+  worker_period.store(0.0, std::memory_order_release);
+  cycle(5);
+  set("gravity_scale", 0.0);
+  start_recording();
+  cycle(100);
+  auto trace = stop_recording();
+  ASSERT_GE(trace.size(), 50u);
+  for (const auto & sample : trace) {
+    ASSERT_EQ(sample.tau_cmd[4], held) << "a zero period moved the model term";
+  }
+
+  start_recording();
+  worker_period.store(1.0, std::memory_order_release);
+  cycle(20);
+  worker_period.store(0.001, std::memory_order_release);
+  trace = stop_recording();
+  ASSERT_GE(trace.size(), 3u);
+  double previous = held;
+  double largest_step = 0.0;
+  for (const auto & sample : trace) {
+    largest_step = std::max(largest_step, std::abs(sample.tau_cmd[4] - previous));
+    previous = sample.tau_cmd[4];
+  }
+  EXPECT_NEAR(largest_step, 0.1 * kSlew, 1e-9) << "a 1 s period was not capped at 0.1 s";
+  EXPECT_NEAR(trace.back().tau_cmd[4], 0.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// S14 (2026-10-13): the relative-chunk anchor is the command as emitted.
+//
+// The kinematic wall of review 20261007-212552 (scratch/repro_S14_all.cpp),
+// here through the controller: a policy that sees only the measured pose
+// presses 10 mm into a wall 10 mm below the start for 5 s, then asks for 50 mm
+// above it. Anchored on the commanded reference, every chunk built on a
+// reference already past the wall, which walked on at the policy's speed: this
+// test measured it 207 mm past the wall at the reversal and the arm 5.1 s
+// leaving it (the repro: 181 mm, 4.9 s). Anchored on the command as emitted,
+// the reference stays within the offset bound (~2.7 mm here) plus one chunk's
+// 10 mm of the wall, and the arm leaves about as soon as with a measured
+// anchor (8.5 mm and 339 ms here; the repro's measured anchor: 332-353 ms).
+TEST_F(WallFixture, S14_PressingAWallDoesNotWindTheRelativeAnchorPastIt)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  ASSERT_NE(send_goal(vla_goal()), nullptr);
+  const double wall = tcp_pose(measured_q()).z - 0.010;
+  wall_z.store(wall, std::memory_order_release);
+
+  constexpr double kPress = 5.0;   // s of control time from the first chunk
+  constexpr double kWindow = 2.5;  // s after the reversal before giving up
+  start_recording();
+  const auto first = update_count.load(std::memory_order_acquire);
+  const auto elapsed = [&]() {
+      return 1e-3 * static_cast<double>(update_count.load(std::memory_order_acquire) - first);
+    };
+  double next_chunk = 0.0;
+  unsigned long long reversal = 0;  // update count at the first retreat chunk
+  unsigned long long left = 0;  // update count once the arm is off the wall
+  while (elapsed() < kPress + kWindow) {
+    const double now = elapsed();
+    const double z = tcp_pose(measured_q()).z;
+    if (now >= next_chunk) {
+      const bool press = now < kPress;
+      if (!press && reversal == 0) {reversal = update_count.load(std::memory_order_acquire);}
+      chunk_pub->publish(policy_chunk(z, press ? wall - 0.010 : wall + 0.050));
+      next_chunk = std::max(next_chunk + kPolicyPeriod, now);
+    }
+    if (reversal != 0 && z > wall + 1e-4) {
+      left = update_count.load(std::memory_order_acquire);
+      break;
+    }
+    cycle();
+  }
+  const auto trace = stop_recording();
+  ASSERT_NE(reversal, 0u);
+  ASSERT_FALSE(trace.empty());
+
+  // The scenario held: the arm reached the wall and stayed on it, and the
+  // command was saturated against it, not merely tracking.
+  double lowest = std::numeric_limits<double>::infinity();
+  double widest_offset = 0.0;
+  double depth_at_reversal = std::numeric_limits<double>::quiet_NaN();
+  double z_at_reversal = std::numeric_limits<double>::quiet_NaN();
+  for (const auto & sample : trace) {
+    const double z = tcp_pose(sample.q_meas).z;
+    lowest = std::min(lowest, z);
+    if (sample.update < reversal) {
+      for (std::size_t joint = 0; joint < 7; ++joint) {
+        widest_offset = std::max(widest_offset, std::abs(sample.q_cmd[joint] - sample.q_meas[joint]));
+      }
+    }
+    if (sample.update == reversal) {
+      depth_at_reversal = wall - sample.reference_z;
+      z_at_reversal = z;
+    }
+  }
+  EXPECT_GE(lowest, wall - 1e-6) << "the plant let the TCP through the wall";
+  ASSERT_TRUE(std::isfinite(depth_at_reversal)) << "no sample at the reversal cycle";
+  EXPECT_NEAR(z_at_reversal, wall, 1e-4) << "the arm was not on the wall when the policy reversed";
+  EXPECT_NEAR(widest_offset, kOffsetBound, 0.1 * kOffsetBound)
+    << "the command never saturated against the wall";
+
+  const double delay = left != 0 ? 1e-3 * static_cast<double>(left - reversal) :
+    std::numeric_limits<double>::infinity();
+  std::printf(
+    "[S14] after %.1f s against the wall: commanded reference %.1f mm past it at the reversal, "
+    "off the wall %.0f ms after the reversal (offset bound %.3f rad)\n",
+    kPress, 1e3 * depth_at_reversal, 1e3 * delay, kOffsetBound);
+  RecordProperty("reference_depth_at_reversal_mm", std::to_string(1e3 * depth_at_reversal));
+  RecordProperty("release_delay_ms", std::to_string(1e3 * delay));
+  // One chunk's 10 mm and the ~2.7 mm saturation distance, with room for the
+  // limiter's overshoot; wound up, it is over 100 mm.
+  EXPECT_LT(depth_at_reversal, 0.020) << "the reference wound up past the wall";
+  // The measured-anchor level is ~0.34 s; wound up, it is several seconds.
+  EXPECT_LT(delay, 0.8) << "the arm stayed on the wall after the policy reversed";
 }

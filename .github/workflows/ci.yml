@@ -119,9 +119,6 @@ jobs:
           rosdep install -y --rosdistro humble --ignore-src --from-paths \
             $(colcon list --paths-only --packages-select ${{ env.BUILD_SET }}) \
             --skip-keys "${{ env.ROSDEP_SKIP_KEYS }}"
-          # openarm_can's command-line tools need CLI11, which its package.xml
-          # does not declare, so rosdep does not install it (extern/README.md).
-          apt-get install -y --no-install-recommends libcli11-dev
           # The flake8 plugins a ROS 2 development machine has (the Humble
           # source-install instructions list them). Each package pins which of
           # their rules it follows, so the lint tests below give the verdict
@@ -140,8 +137,14 @@ jobs:
           source /opt/ros/humble/setup.bash
           # Two workers: cho_controller_franka, _openarm_mit, _ur and _fr5 each
           # run make at the runner's job count, and one Franka file peaks near 2 GB.
+          #
+          # REQUIRE_VENDOR: without OpenArmCAN, cho_hardware_openarm_mit_real
+          # configures with a warning and builds no plugin, and its gtests
+          # vanish with it. Here that is a configure failure. Every package gets
+          # the flag; only that one reads it.
           colcon build --symlink-install --parallel-workers 2 \
             --cmake-args -DCMAKE_BUILD_TYPE=Release \
+              -DCHO_OPENARM_MIT_REAL_REQUIRE_VENDOR=ON \
             --packages-select ${{ env.BUILD_SET }} \
             --packages-ignore ${{ env.NOT_BUILT_PACKAGES }}
 

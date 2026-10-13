@@ -13,12 +13,13 @@
 // limitations under the License.
 
 #pragma once
+#include <cho_openarm_mit_core/mit_limiter.hpp>
 #include <memory>
 #include <mujoco_ros2_control/mujoco_system_interface.hpp>
-
-#include "cho_hardware_openarm_mit_mujoco/mit_limiter.hpp"
 namespace cho_hardware_openarm_mit_mujoco
 {
+constexpr std::size_t N = cho_openarm_mit_core::kJointsPerArm;
+using cho_openarm_mit_core::Limiter;
 class MitMujocoSystem : public mujoco_ros2_control::MujocoSystemInterface
 {
 public:

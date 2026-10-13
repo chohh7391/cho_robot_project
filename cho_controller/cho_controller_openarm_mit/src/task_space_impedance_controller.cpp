@@ -29,6 +29,7 @@
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/jacobian.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/spatial/explog.hpp>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace cho_controller_openarm_mit
@@ -72,13 +73,14 @@ bool valid_gravity_joint_scale(const std::vector<double> & values)
 // goal was rejected; duration_sec is a minimum, so it is now a stretch.
 constexpr double kMinimumTaskDurationSec = 0.25;
 
-// The step the model feed-forward slew and the idle-release blend advance by:
-// the measured period, floored at 1e-4 s (also for a zero, negative or
-// non-finite one) and not capped. The controller clock and the start-up and
-// hand-off timers do not use it; see update().
+// The step the model feed-forward slew and the idle-release blend advance by,
+// the gripper's rule: the measured period capped at 0.1 s, and 0 for a zero,
+// negative or non-finite one (no time passed, so neither moves; neither
+// divides by it). The controller clock and the start-up and hand-off timers do
+// not use it; see update().
 double bounded_dt(const double dt)
 {
-  return (std::isfinite(dt) && dt > 0.0) ? std::max(dt, 1e-4) : 1e-4;
+  return (std::isfinite(dt) && dt > 0.0) ? std::min(dt, 0.1) : 0.0;
 }
 }  // namespace
 
@@ -89,7 +91,6 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_init()
   auto_declare<std::vector<double>>("kd_task", std::vector<double>(6, 0.0));
   auto_declare<std::vector<double>>("max_task_wrench", std::vector<double>(6, 0.0));
   auto_declare<std::string>("ee_frame", "openarm_hand_tcp");
-  auto_declare<std::vector<double>>("startup_posture", std::vector<double>(7, 0.0));
   auto_declare<std::vector<double>>("startup_kp", std::vector<double>(7, 0.0));
   auto_declare<std::vector<double>>("startup_kd", std::vector<double>(7, 0.0));
   auto_declare<double>("startup_duration", 0.0);
@@ -450,9 +451,10 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
               " is inert while drive_side_impedance is true: the Cartesian error is applied as a "
               "joint reference offset (q_des) and the drive closes the impedance in its own "
               "current loop, so this parameter never reaches the commanded torque. The effective "
-              "knobs in this mode are the per-joint kp - which IS the Cartesian stiffness, only "
-              "diag(J^T Kx J) being representable per joint - and max_reference_offset, which "
-              "bounds it. Reconfigure with drive_side_impedance: false to use the "
+              "knobs in this mode are the per-joint kp - the Cartesian stiffness is "
+              "(J K^-1 J^T)^-1, K = diag(kp), when reference_offset_weight is proportional to kp "
+              "- and max_reference_offset, which bounds it. Reconfigure with "
+              "drive_side_impedance: false to use the "
               "J^T (Kx e + Dx (v_des - J dq)) law that kp_task/kd_task drive.";
             break;
           }
@@ -511,9 +513,8 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
     return CallbackReturn::ERROR;
   }
   // This controller has exactly one joint-space initialization path:
-  // return_to_zero. Opting out means latching the measured Cartesian pose and
-  // holding it under the configured law; the `startup_posture` parameter is
-  // not read.
+  // return_to_zero, to return_to_zero_target_. Opting out means latching the
+  // measured Cartesian pose and holding it under the configured law.
   if (return_to_zero_) {
     startup_duration_ = return_to_zero_duration_;
     startup_tolerance_ = return_to_zero_tolerance_;
@@ -540,7 +541,6 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
           i + 1, startup_kp[i], profile_rtz_kp_max_[i], startup_kd[i], profile_rtz_kd_max_[i]);
         return CallbackReturn::ERROR;
       }
-      startup_posture_[i] = target;
       startup_kp_[i] = startup_kp[i];
       startup_kd_[i] = startup_kd[i];
       // The real adapter rejects any tuple above the per-joint TASK ceiling,
@@ -601,8 +601,8 @@ controller_interface::CallbackReturn TaskSpaceImpedanceController::on_configure(
         "(q_des = q + J^+ e) and the drive closes the impedance with its own gains, so these three "
         "are read only by the drive_side_impedance: false law (kp_task/kd_task additionally feed "
         "the diagnostic equivalent-wrench readout). What sets the Cartesian stiffness in this mode "
-        "is the per-joint kp = [%g %g %g %g %g %g %g], of which only diag(J^T Kx J) is "
-        "representable per joint, bounded by max_reference_offset = "
+        "is the per-joint kp = [%g %g %g %g %g %g %g] ((J K^-1 J^T)^-1, K = diag(kp), when "
+        "reference_offset_weight is proportional to kp), bounded by max_reference_offset = "
         "[%g %g %g %g %g %g %g] rad. Tune those, or set drive_side_impedance: false.",
         kp_[0], kp_[1], kp_[2], kp_[3], kp_[4], kp_[5], kp_[6],
         reference_offset_limit_[0], reference_offset_limit_[1], reference_offset_limit_[2],
@@ -880,8 +880,10 @@ namespace
 // Translation and rotation are scaled as separate 3-vectors: they carry
 // different units, so one common factor would let a saturating torque throttle
 // an unsaturated force for no physical reason.
+//
+// Returns the factor applied, in [0, 1].
 template<typename Vector>
-void scale_into_limits(Vector & v, const double * limit, std::size_t offset)
+double scale_into_limits(Vector & v, const double * limit, std::size_t offset)
 {
   double scale = 1.0;
   for (std::size_t k = 0; k < 3; ++k) {
@@ -896,8 +898,23 @@ void scale_into_limits(Vector & v, const double * limit, std::size_t offset)
   if (scale < 1.0) {
     for (std::size_t k = 0; k < 3; ++k) v[offset + k] *= scale;
   }
+  return scale;
 }
 }  // namespace
+
+pinocchio::SE3 TaskSpaceImpedanceController::emitted_pose(
+  const pinocchio::SE3 & measured, const pinocchio::SE3 & desired,
+  const double linear_scale, const double angular_scale)
+{
+  // Exactly `desired` when nothing saturated, so an unsaturated cycle records
+  // what it did before.
+  if (linear_scale >= 1.0 && angular_scale >= 1.0) return desired;
+  const Eigen::Vector3d rotation =
+    pinocchio::log3(measured.rotation().transpose() * desired.rotation());
+  return pinocchio::SE3(
+    measured.rotation() * pinocchio::exp3(angular_scale * rotation),
+    measured.translation() + linear_scale * (desired.translation() - measured.translation()));
+}
 
 void TaskSpaceImpedanceController::friction_torque(
   const std::array<double, 7> & dq, const std::array<double, 7> & dq_des,
@@ -988,11 +1005,11 @@ void TaskSpaceImpedanceController::joint_velocity_reference(
   }
 }
 
-void TaskSpaceImpedanceController::joint_reference_offset(
+double TaskSpaceImpedanceController::joint_reference_offset(
   const Jacobian & jacobian, const Vector6 & pose_error, Vector7 & offset) const
 {
   offset.setZero();
-  if (pose_error.squaredNorm() == 0.0) return;
+  if (pose_error.squaredNorm() == 0.0) return 1.0;
   // Weighted damped least squares: dq = W^-1 J^T (J W^-1 J^T + lambda I)^-1 e,
   // which minimises dq^T W dq instead of ||dq||^2 and so expresses a preference
   // over which joints resolve the error. W = I recovers the unweighted solution
@@ -1010,9 +1027,9 @@ void TaskSpaceImpedanceController::joint_reference_offset(
   // Degrade to "no offset" rather than aborting: q_des then equals measured q
   // and the arm holds on gravity alone, which is the same failure the velocity
   // reference already chooses near a singularity.
-  if (llt.info() != Eigen::Success) return;
+  if (llt.info() != Eigen::Success) return 0.0;
   const Vector7 dq = weighted_jt * llt.solve(pose_error);
-  if (!dq.allFinite()) return;
+  if (!dq.allFinite()) return 0.0;
   // One scale for all seven, for the same reason the wrench is scaled rather
   // than clipped: this offset IS a Cartesian direction expressed in joint
   // coordinates, and clipping one joint against its own bound tilts it.
@@ -1028,6 +1045,7 @@ void TaskSpaceImpedanceController::joint_reference_offset(
     }
   }
   offset = scale * dq;
+  return scale;
 }
 
 void TaskSpaceImpedanceController::clamp_command_positions(ArmCommand & command) const
@@ -1068,7 +1086,8 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   const double dt,
   DirectMitTarget & target,
   Vector6 * pose_error_out,
-  pinocchio::SE3 * measured_pose_out)
+  pinocchio::SE3 * measured_pose_out,
+  pinocchio::SE3 * emitted_pose_out)
 {
   target = {};
   const auto q = measured();
@@ -1092,6 +1111,9 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   if ((task_inertia_weighting_ || use_nullspace_posture_) && !task_dynamics(jacobian)) return false;
 
   Vector7 feedback;
+  // How much of pose_error the emitted command carries (emitted_pose()).
+  double linear_scale = 1.0;
+  double angular_scale = 1.0;
   if (drive_side_impedance_) {
     // The drive owns the impedance. q_des carries the Cartesian error as a
     // joint offset and the fixed kp/kd close the loop inside the current loop,
@@ -1099,13 +1121,15 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
     // transport sits inside it. tau_ff is left to the terms the drive cannot know about: the model
     // term, the null-space posture and the joint-limit spring.
     //
-    // Only diag(J^T Kx J) is representable as a per-joint scalar. The
-    // off-diagonal coupling is dropped rather than added to tau_ff, which
-    // would put a fraction of the stiffness back on the delayed path and
-    // reintroduce the phase lag in a form that is harder to reason about than
-    // simply not having it.
+    // The joint stiffness is K = diag(kp), one scalar per joint. With
+    // reference_offset_weight proportional to kp, kp * offset lies in the
+    // range of J^T and the Cartesian stiffness is (J K^-1 J^T)^-1; with other
+    // weights part of it lies in J's null space. Nothing beyond K is added to
+    // tau_ff, which would put a fraction of the stiffness back on the delayed
+    // path and reintroduce the phase lag in a form that is harder to reason
+    // about than simply not having it.
     Vector7 offset;
-    joint_reference_offset(jacobian, pose_error, offset);
+    linear_scale = angular_scale = joint_reference_offset(jacobian, pose_error, offset);
     Vector7 impedance_torque;
     for (std::size_t i = 0; i < 7; ++i) {
       target.position[i] = q[i] + offset[i];
@@ -1149,8 +1173,8 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
       law = task_lambda_ * law;
     }
     Vector6 wrench = law;
-    scale_into_limits(wrench, wrench_limit_.data(), 0);
-    scale_into_limits(wrench, wrench_limit_.data(), 3);
+    linear_scale = scale_into_limits(wrench, wrench_limit_.data(), 0);
+    angular_scale = scale_into_limits(wrench, wrench_limit_.data(), 3);
     for (std::size_t i = 0; i < 6; ++i) {
       task_peak_wrench_[i].store(
         std::max(task_peak_wrench_[i].load(std::memory_order_relaxed), std::abs(wrench[i])),
@@ -1192,6 +1216,9 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   }
   if (pose_error_out) *pose_error_out = pose_error;
   if (measured_pose_out) *measured_pose_out = measured_pose;
+  if (emitted_pose_out) {
+    *emitted_pose_out = emitted_pose(measured_pose, desired, linear_scale, angular_scale);
+  }
   return true;
 }
 
@@ -1337,7 +1364,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
       return controller_interface::return_type::OK;
     }
     for (std::size_t i = 0; i < 7; ++i) {
-      const double peak = 1.5 * std::abs(startup_posture_[i] - startup_start_[i]) / startup_duration_;
+      const double peak = 1.5 * std::abs(return_to_zero_target_[i] - startup_start_[i]) / startup_duration_;
       if (!std::isfinite(startup_start_[i]) || !std::isfinite(peak) || peak > command_velocity_[i]) {
         if (!request_safe()) return controller_interface::return_type::ERROR;
         return controller_interface::return_type::OK;
@@ -1355,7 +1382,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
     const double s = u * u * (3.0 - 2.0 * u);
     const double ds = 6.0 * u * (1.0 - u) / startup_duration_;
     for (std::size_t i = 0; i < 7; ++i) {
-      const double delta = startup_posture_[i] - startup_start_[i];
+      const double delta = return_to_zero_target_[i] - startup_start_[i];
       target.position[i] = startup_start_[i] + s * delta;
       target.velocity[i] = std::clamp(ds * delta, -command_velocity_[i], command_velocity_[i]);
       task_q_ref_[i] = target.position[i];
@@ -1370,7 +1397,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
     for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity_scale_.load(std::memory_order_acquire) * gravity_joint_scale_[i].load(std::memory_order_acquire) * nle[i], slew_dt);
     if (u >= 1.0) {
       bool converged = true;
-      for (std::size_t i = 0; i < 7; ++i) converged = converged && std::abs(q[i] - startup_posture_[i]) <= startup_tolerance_;
+      for (std::size_t i = 0; i < 7; ++i) converged = converged && std::abs(q[i] - return_to_zero_target_[i]) <= startup_tolerance_;
       if (converged) {
         if (return_to_zero_) {
           ramped_return_to_zero_gains(startup_kp_, startup_kd_, startup_elapsed_,

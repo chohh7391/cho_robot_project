@@ -165,11 +165,23 @@ SafetyProfile load_safety_profile_yaml(
   out.kd_slew = vector7(gains["kd_slew_per_s"], "kd_slew_per_s");
   out.safe_stiffness = vector7(gains["safe_hold_stiffness"], "safe_hold_stiffness");
   out.safe_damping = vector7(gains["safe_hold_damping"], "safe_hold_damping");
+  // What the backend's consumer does (see the header): the MuJoCo limiter
+  // saturates, slews and ramps its SAFE hold; the real adapter rejects, bounds
+  // the final torque by clipping targets, and slews nothing.
+  const bool mujoco = backend == SafetyBackend::MUJOCO;
+  const std::string expected_ordering = mujoco ?
+    "tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew" :
+    "reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive";
+  const std::string expected_slew_reference = mujoco ?
+    "last_successfully_submitted_command" : "producer_side_no_consumer_slew";
+  const std::string expected_normal_policy = mujoco ?
+    "measured_position_hold_uses_same_gain_and_torque_slew" :
+    "measured_position_and_torque_hold_at_safe_gains_no_slew";
   const auto torque = profile["torque"];
   exact_keys(torque, {"tau_ff_magnitude", "tau_ff_slew_per_s", "final_magnitude", "final_slew_per_s", "ordering", "slew_reference"}, "torque");
-  if (scalar(torque["ordering"], "ordering") != "tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew" ||
-      scalar(torque["slew_reference"], "slew_reference") != "last_successfully_submitted_command") {
-    throw std::invalid_argument("invalid torque ordering enum");
+  if (scalar(torque["ordering"], "ordering") != expected_ordering ||
+      scalar(torque["slew_reference"], "slew_reference") != expected_slew_reference) {
+    throw std::invalid_argument("invalid torque ordering enum for this backend");
   }
   out.tau_ff_max = vector7(torque["tau_ff_magnitude"], "tau_ff_magnitude");
   out.tau_ff_slew = vector7(torque["tau_ff_slew_per_s"], "tau_ff_slew_per_s");
@@ -190,9 +202,9 @@ SafetyProfile load_safety_profile_yaml(
   out.watchdog_ms = positive_integer(timing["controller_write_watchdog_ms"], "controller_write_watchdog_ms");
   out.stale_cycles = positive_integer(timing["state_stale_cycles"], "state_stale_cycles");
   exact_keys(profile["safe_transition"], {"normal_policy", "fault_exception"}, "safe_transition");
-  if (scalar(profile["safe_transition"]["normal_policy"], "normal_policy") != "measured_position_hold_uses_same_gain_and_torque_slew" ||
+  if (scalar(profile["safe_transition"]["normal_policy"], "normal_policy") != expected_normal_policy ||
       scalar(profile["safe_transition"]["fault_exception"], "fault_exception") != "immediate_transport_disable_no_slew") {
-    throw std::invalid_argument("invalid safe transition enum");
+    throw std::invalid_argument("invalid safe transition enum for this backend");
   }
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     if (!(out.position_lower[i] < out.position_upper[i]) || out.command_velocity[i] <= 0.0 ||
@@ -303,6 +315,52 @@ bool validate_tuple(const JointTuple & t, const ValidationLimits & l)
          std::abs(t.position) <= l.max_abs_position &&
          std::abs(t.velocity) <= l.max_abs_velocity && t.stiffness <= l.max_stiffness &&
          t.damping <= l.max_damping && std::abs(t.effort) <= l.max_abs_effort;
+}
+
+namespace
+{
+// The point between 0 and `error` nearest [lower, upper]: an error shrunk
+// toward the measurement, never past it.
+double shrink_into(const double error, const double lower, const double upper)
+{
+  return std::clamp(std::clamp(error, lower, upper), std::min(0.0, error), std::max(0.0, error));
+}
+}  // namespace
+
+JointTuple bound_final_torque(
+  const JointTuple & tuple, const double position, const double velocity, const double final_torque)
+{
+  const auto torque = [position, velocity](const JointTuple & t) {
+      return t.stiffness * (t.position - position) + t.damping * (t.velocity - velocity) + t.effort;
+    };
+  const std::array<double, 7> inputs{
+    tuple.position, tuple.velocity, tuple.stiffness, tuple.damping, tuple.effort, position, velocity};
+  if (!std::all_of(inputs.begin(), inputs.end(), [](double x) {return std::isfinite(x);}) ||
+      !(final_torque >= 0.0) || std::abs(torque(tuple)) <= final_torque) {
+    return tuple;
+  }
+  const double limit = final_torque;
+  JointTuple out = tuple;
+  out.effort = std::clamp(tuple.effort, -limit, limit);
+  // The spring first: a large target error is what makes a validated tuple
+  // exceed the bound.
+  if (tuple.stiffness > 0.0) {
+    const double rest = tuple.damping * (tuple.velocity - velocity) + out.effort;
+    const double error = tuple.position - position;
+    const double bounded = shrink_into(
+      error, (-limit - rest) / tuple.stiffness, (limit - rest) / tuple.stiffness);
+    if (bounded != error) out.position = position + bounded;
+  }
+  // Then dq_des, only where the spring alone could not (a fast joint). With
+  // |tau_ff| <= limit this always brings tau inside.
+  if (std::abs(torque(out)) > limit && tuple.damping > 0.0) {
+    const double rest = tuple.stiffness * (out.position - position) + out.effort;
+    const double error = tuple.velocity - velocity;
+    const double bounded = shrink_into(
+      error, (-limit - rest) / tuple.damping, (limit - rest) / tuple.damping);
+    if (bounded != error) out.velocity = velocity + bounded;
+  }
+  return out;
 }
 
 namespace

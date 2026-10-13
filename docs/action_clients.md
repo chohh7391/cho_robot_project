@@ -92,7 +92,8 @@ rejected task goal every 0.5 s until 15 s after it started, printing
 `return_to_zero` defaults to `false` on the MuJoCo and the real bringup; the
 launch argument's `--show-args` text says why. With it off, a task-space
 controller latches its measured TCP pose once the MIT session is seeded and
-holds it; the `startup_posture` key is not used on this path. In MuJoCo
+holds it (the idle latch). There is no `startup_posture` parameter: the
+nominal-zero target is fixed in the controller. In MuJoCo
 `return_to_zero:=true` is accepted only with `joint_impedance_mit_controller`
 and runs a 5 s phase (2 s on the real bringup). The phase itself - gains,
 joint 4 at `0.001 rad`, the gain handoff that keeps actions rejected, SAFE on

@@ -23,6 +23,17 @@
 namespace cho_controller {
 namespace openarm {
 
+void joint_impedance_torque(
+    const Eigen::MatrixXd & M, const Eigen::VectorXd & nle, const Eigen::VectorXd & qdd_des,
+    const Eigen::VectorXd & kp, const Eigen::VectorXd & e,
+    const Eigen::VectorXd & kd, const Eigen::VectorXd & dv,
+    const Eigen::VectorXd & ki, const Eigen::VectorXd & integral,
+    Eigen::VectorXd & tau)
+{
+    tau = M * (qdd_des + kp.cwiseProduct(e) + kd.cwiseProduct(dv) + ki.cwiseProduct(integral));
+    tau += nle;
+}
+
 controller_interface::InterfaceConfiguration
 JointSpaceImpedanceController::command_interface_configuration() const
 {
@@ -74,6 +85,7 @@ CallbackReturn JointSpaceImpedanceController::on_configure(
     kp_joint_ = Eigen::Map<const Eigen::VectorXd>(kp_joint.data(), num_dof_);
     kd_joint_ = Eigen::Map<const Eigen::VectorXd>(kd_joint.data(), num_dof_);
     torque_desired_.setZero(num_dof_);
+    acc_des_.setZero(num_dof_);
     dq_filtered_.setZero(num_dof_);
 
     const auto ki_joint = get_node()->get_parameter("ki_joint").as_double_array();
@@ -142,6 +154,7 @@ CallbackReturn JointSpaceImpedanceController::on_activate(
     }
     state_.q_arm_des = state_.q_arm_init;
     state_.v_arm_des.setZero();
+    acc_des_.setZero();
     dq_filtered_.setZero();
     integral_error_.setZero();
 
@@ -173,21 +186,26 @@ controller_interface::return_type JointSpaceImpedanceController::update(
         const auto sample = action_server_->trajectory_->computeNext();
         state_.q_arm_des = sample.pos;
         state_.v_arm_des = sample.vel;
+        acc_des_ = sample.acc;
     } else if (homing_) {
         home_trajectory_->setCurrentTime(time.seconds());
         const auto sample = home_trajectory_->computeNext();
         state_.q_arm_des = sample.pos;
         state_.v_arm_des = sample.vel;
+        acc_des_ = sample.acc;
         // At least home_duration_; longer if the joint limits require it.
         if ((time - home_start_time_).seconds() > home_trajectory_->getDuration()) {
             homing_ = false;
             state_.v_arm_des.setZero();
+            acc_des_.setZero();
         }
     } else {
         // Holding: keep q_arm_des where the last goal left it, but zero the
         // desired velocity. A stale non-zero v_arm_des (e.g. after a mid-motion
-        // cancel) would keep feeding kd*(v_des - dq) and drive a slow drift.
+        // cancel) would keep feeding kd*(v_des - dq) and drive a slow drift; a
+        // stale acc_des_ would push M*acc_des_ with no trajectory to follow.
         state_.v_arm_des.setZero();
+        acc_des_.setZero();
     }
 
     const double kAlpha = 0.99;
@@ -209,9 +227,14 @@ controller_interface::return_type JointSpaceImpedanceController::update(
     // Multiplying by M(q) makes the closed loop
     //     e_ddot + kd * e_dot + kp * e = 0
     // for every mode regardless of how M is conditioned, so one gain pair works
-    // across the whole workspace. The price is that this cancels the arm's
-    // natural inertia rather than shaping it, so kp is a squared natural
-    // frequency [1/s^2] and kd is 2*zeta*wn [1/s] - not stiffness and damping.
+    // across the whole workspace. The trajectory's acceleration qdd_des is fed
+    // forward inside the same bracket; without it the loop would be
+    //     e_ddot + kd * e_dot + kp * e = qdd_des
+    // i.e. a tracking lag of qdd_des / kp while the trajectory accelerates. (The
+    // loop holds with ki = 0, dq_filtered_ = the measured velocity and no
+    // clipping.) The price is that this cancels the arm's natural inertia rather
+    // than shaping it, so kp is a squared natural frequency [1/s^2] and kd is
+    // 2*zeta*wn [1/s] - not stiffness and damping.
     position_error_ = state_.q_arm_des - state_.q_arm;
 
     // Integral action against Coulomb friction; see the header for why only
@@ -233,14 +256,13 @@ controller_interface::return_type JointSpaceImpedanceController::update(
         }
     }
 
-    torque_desired_ = state_.M_arm *
-        (kp_joint_.cwiseProduct(position_error_) +
-         kd_joint_.cwiseProduct(state_.v_arm_des - dq_filtered_) +
-         ki_joint_.cwiseProduct(integral_error_));
-
-    // Gravity and Coriolis feed-forward. Nothing downstream compensates gravity
-    // on OpenArm, so this term carries the whole arm weight.
-    torque_desired_ += state_.nle;
+    // The gravity and Coriolis feed-forward (state_.nle) is added inside the
+    // helper. Nothing downstream compensates gravity on OpenArm, so that term
+    // carries the whole arm weight.
+    joint_impedance_torque(
+        state_.M_arm, state_.nle, acc_des_, kp_joint_, position_error_,
+        kd_joint_, state_.v_arm_des - dq_filtered_, ki_joint_, integral_error_,
+        torque_desired_);
 
     torque_unclipped_ = torque_desired_;
     clip_torque(torque_desired_);

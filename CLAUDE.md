@@ -107,8 +107,8 @@ What each package is, and where its own documentation is. `extern/` holds the pi
 
 **cho_hardware/** — the OpenArm MIT `ros2_control` side ([protocol](docs/openarm_mit_contract_v1.md);
 the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))
-- `cho_openarm_mit_core` — the MIT tuple, session/lease/SAFE primitives, `SwitchGate`, safety-profile loading; no
-  plugin ([DESIGN.md](cho_hardware/cho_openarm_mit_core/DESIGN.md)).
+- `cho_openarm_mit_core` — the MIT tuple, session/lease/SAFE primitives, `SwitchGate`, safety-profile loading, the
+  MuJoCo backend's tuple `Limiter`; no plugin ([DESIGN.md](cho_hardware/cho_openarm_mit_core/DESIGN.md)).
 - `cho_hardware_openarm_mit_real` — `OpenArmMitRealSystem`, SocketCAN through the vendor `openarm_can`, one component
   per arm, the hand with `hand:=true` ([README.md](cho_hardware/cho_hardware_openarm_mit_real/README.md)).
 - `cho_hardware_openarm_mit_mujoco` — `MitMujocoSystem` over `mujoco_ros2_control`: the per-arm safety limiter and
@@ -210,8 +210,9 @@ Exceptions, with no `nominal_period()`:
 - `cho_controller_gripper` uses the measured period capped at 0.1 s; a zero or non-finite period advances nothing
   (`bounded_dt()`, [gripper_controller.cpp](cho_controller/cho_controller_gripper/src/gripper_controller.cpp)).
 - OpenArm MIT: `DirectControllerBase` and `TaskSpaceImpedanceController` add the measured period to their clock and
-  timers only when it is in (0, 0.1 s); their feed-forward slew and idle-release blend take `bounded_dt()` (floor
-  1e-4 s); the FollowJointTrajectory pair samples by update time
+  timers only when it is in (0, 0.1 s); their feed-forward slew and idle-release blend take `bounded_dt()`, the
+  gripper's rule (capped at 0.1 s, 0 for a zero or non-finite period); the FollowJointTrajectory pair samples by
+  update time
   ([DESIGN.md, Control time](cho_controller/cho_controller_openarm_mit/DESIGN.md#control-time)).
 
 A command write that a divide or an unbounded solve can reach has an `allFinite()` guard before it, like

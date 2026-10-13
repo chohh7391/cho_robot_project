@@ -14,10 +14,12 @@
 
 #include <gtest/gtest.h>
 
-#include "cho_hardware_openarm_mit_mujoco/mit_limiter.hpp"
-using namespace cho_hardware_openarm_mit_mujoco;
+#include "cho_openarm_mit_core/mit_limiter.hpp"
+using cho_openarm_mit_core::Limiter;
 namespace
 {
+constexpr std::size_t N = cho_openarm_mit_core::kJointsPerArm;
+using Tuple = Limiter::Tuple;
 auto profile()
 {
   return cho_openarm_mit_core::load_safety_profile_file(

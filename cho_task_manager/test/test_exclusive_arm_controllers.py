@@ -93,6 +93,48 @@ def test_bimanual_profile_yields_its_own_prefixed_controllers(profile):
     assert f'{profile}_gripper_controller' not in names
 
 
+def test_both_profile_takes_down_the_controllers_of_both_arms():
+    # 'both' names no direct role of its own, so a hold switch there used to
+    # leave right_joint_trajectory_controller and every MIT controller running.
+    both = exclusive_arm_controllers(_config('openarm', 'both'))
+
+    for arm in ('left', 'right'):
+        for controller in ('joint_space_position_controller',
+                           'joint_space_velocity_controller',
+                           'joint_space_impedance_controller',
+                           'joint_trajectory_controller',
+                           'joint_impedance_mit_controller',
+                           'task_space_impedance_mit_controller',
+                           'vla_mit_controller'):
+            assert f'{arm}_{controller}' in both
+    # Exactly the two arms' sets: nothing the arms do not already name, and no
+    # unprefixed single-arm name.
+    left = exclusive_arm_controllers(_config('openarm', 'left'))
+    right = exclusive_arm_controllers(_config('openarm', 'right'))
+    assert set(both) == set(left) | set(right)
+    assert len(both) == len(set(both))
+    # The grippers claim the finger interfaces and stay active.
+    assert not any('gripper' in name for name in both)
+    # The bridge serves actions but is not a controller.
+    assert not any('moveit_action_bridge' in name for name in both)
+
+
+def test_both_profile_hold_switch_deactivates_both_arms_trajectory_controllers():
+    config = _config('openarm', 'both')
+    behaviour = SwitchControllerServiceBehavior(
+        name='Switch', activate=['left_joint_space_position_controller',
+                                 'right_joint_space_position_controller'],
+        robot_config=config)
+
+    deactivate = behaviour.make_request().deactivate_controllers
+
+    assert 'left_joint_trajectory_controller' in deactivate
+    assert 'right_joint_trajectory_controller' in deactivate
+    assert 'right_task_space_impedance_mit_controller' in deactivate
+    assert 'left_joint_space_position_controller' not in deactivate
+    assert 'right_joint_space_position_controller' not in deactivate
+
+
 def test_franka_set_is_exactly_its_registry_entry():
     """Same set as before the Franka branch moved into franka.yaml.
 

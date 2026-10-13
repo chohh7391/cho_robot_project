@@ -38,22 +38,10 @@ BIMANUAL_FILES = [
     'real/controllers_mit_bimanual.yaml',
 ]
 
-_STARTUP_POSTURE_REASON = (
-    'Each arm starts from its own FK-checked, non-singular posture that converges from the '
-    'simulator / hardware initial state; the right arm is not the left posture mirrored.')
-
 # (file, block name without the side prefix, key) -> why the two arms differ on purpose.
 # The key is compared by presence only: both sides must carry it, with different values.
-INTENDED_DIFFERENCES = {
-    ('mujoco/controllers_mit_direct_bimanual.yaml', 'task_space_impedance_mit_controller',
-     'startup_posture'): _STARTUP_POSTURE_REASON,
-    ('mujoco/controllers_mit_direct_bimanual.yaml', 'vla_mit_controller',
-     'startup_posture'): _STARTUP_POSTURE_REASON,
-    ('real/controllers_mit_bimanual.yaml', 'task_space_impedance_mit_controller',
-     'startup_posture'): _STARTUP_POSTURE_REASON,
-    ('real/controllers_mit_bimanual.yaml', 'vla_mit_controller',
-     'startup_posture'): _STARTUP_POSTURE_REASON,
-}
+# Empty: the arms differed only in startup_posture, which no controller reads.
+INTENDED_DIFFERENCES = {}
 
 _SIDE_RE = re.compile(r'left|right')
 _SWAP = {'left': 'right', 'right': 'left'}

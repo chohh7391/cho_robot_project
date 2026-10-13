@@ -220,7 +220,15 @@ The real consumer validates the same snapshot and, instead of clamping, rejects 
 joint outside the profile's position window, command velocity, `kp_max`, `kd_max` or
 `tau_ff_magnitude` (measured SAFE). It applies no slew: the motor evaluates the MIT equation, and
 the direct producers slew their return-to-zero gain ramps and model feed-forward with the profile's
-`kp_slew_per_s`, `kd_slew_per_s` and `tau_ff_slew_per_s`.
+`kp_slew_per_s`, `kd_slew_per_s` and `tau_ff_slew_per_s`; `final_slew_per_s` has no effect there.
+It does keep `final_magnitude`, through what it sends: every tuple that goes out (a commit, its
+ACTIVE re-sends, every SAFE hold, the write watchdog's last hold) has `q_des`, then `dq_des` if the
+spring alone cannot, moved toward the latest measured state until
+`|kp*(q_des - q) + kd*(dq_des - dq) + tau_ff| <= final_magnitude`
+(`cho_openarm_mit_core::bound_final_torque`). The motor uses its own, newer state, so the bound is
+one cycle late. The accepted tuple and its acknowledgement are unchanged. The real profiles' torque
+`ordering`, `slew_reference` and SAFE `normal_policy` say this, the MuJoCo profile's say what the
+limiter does, and the loader rejects a profile that names the other backend's.
 
 Lease expiry or invalid input transitions to measured-position SAFE, or disables on hardware
 fault. Lease and stale counters advance only on a successful consumer write cycle; slew in the

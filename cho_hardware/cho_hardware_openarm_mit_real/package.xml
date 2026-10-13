@@ -10,8 +10,11 @@
   <!-- extern/openarm_can (package.xml, build_type cmake). Declared so colcon
        builds it first: without the edge this package could be configured before
        it, find OpenArmCAN missing, and silently skip the plugin. openarm_can
-       itself needs libcli11-dev, which its package.xml does not declare. -->
+       does find_package(CLI11 REQUIRED) for its command-line tools but its
+       package.xml declares nothing, so the rosdep key is declared here (extern/
+       is not edited). CLI11 is header-only: build time only. -->
   <depend>openarm_can</depend>
+  <build_depend>cli11</build_depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>

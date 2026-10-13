@@ -225,7 +225,6 @@ def test_direct_bimanual_yaml_has_two_disjoint_one_arm_task_and_joint_plugins():
             assert params[name]['ros__parameters']['arm'] == side
         task_params = params[task]['ros__parameters']
         assert task_params['ee_frame'] == f'openarm_{side}_hand_tcp'
-        assert len(task_params['startup_posture']) == 7
         for retired in ('max_delta_q', 'max_goal_translation', 'max_goal_rotation',
                         'max_absolute_radius', 'max_cartesian_velocity',
                         'max_angular_velocity', 'use_cartesian_speed_limits',
@@ -471,6 +470,13 @@ def test_real_vla_block_keeps_every_hardware_identified_value():
     for kp, limit, bound in zip(vla['kp'], vla['torque_limit'],
                                 vla['max_reference_offset']):
         assert kp * bound < 0.30 * limit
+        # The envelope the YAML comment names: a quarter of the motor peak, and
+        # never more than 0.15 rad. The values are hand-set at or under it.
+        assert bound <= min(0.25 * limit / kp, 0.15) + 1e-9
+    # kp * max_reference_offset is the most impedance torque the drive can add
+    # per joint; the YAML comment states these numbers.
+    assert [kp * bound for kp, bound in zip(vla['kp'], vla['max_reference_offset'])] == \
+        pytest.approx([2.50, 2.49, 3.40, 3.38, 1.125, 1.50, 0.75], abs=0.01)
 
 
 def test_vla_controller_is_selectable_on_real_hardware_for_the_task_path():
@@ -505,12 +511,6 @@ def test_bimanual_vla_controllers_are_per_arm_and_independent():
     assert left['ee_frame'] == 'openarm_left_hand_tcp'
     assert right['ee_frame'] == 'openarm_right_hand_tcp'
     assert left['chunk_topic'] != right['chunk_topic']
-
-    # The right chain is mirrored in the torso MJCF, so the symmetric-looking
-    # left home is outside its validated startup envelope and would time out
-    # into SAFE. Inherited from the task-space blocks; guard it here so a future
-    # edit cannot quietly symmetrise them.
-    assert left['startup_posture'] != right['startup_posture']
 
 
 @pytest.mark.parametrize('config', ['mujoco/controllers_mit.yaml',

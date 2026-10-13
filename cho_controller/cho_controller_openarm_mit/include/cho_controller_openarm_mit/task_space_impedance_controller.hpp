@@ -107,13 +107,28 @@ protected:
   // shared. Overriding this is how a derived controller changes where the
   // reference comes from without touching the drive-side law or the protocol.
   virtual bool write_task_target(double control_time, double dt, DirectMitTarget & target);
+  // `emitted_pose_out`: the Cartesian reference the emitted command carries
+  // after its saturation, emitted_pose(measured, desired, s_lin, s_ang) with the
+  // reference-offset scale (drive-side law, s_lin = s_ang) or the two wrench
+  // scales (legacy law). `desired` itself when nothing saturated.
   bool write_cartesian_torque_target(
     const pinocchio::SE3 & desired,
     const Vector6 & desired_twist,
     double dt,
     DirectMitTarget & target,
     Vector6 * pose_error_out = nullptr,
-    pinocchio::SE3 * measured_pose_out = nullptr);
+    pinocchio::SE3 * measured_pose_out = nullptr,
+    pinocchio::SE3 * emitted_pose_out = nullptr);
+  // measured (+) s * (desired (-) measured) in the pose-error convention of
+  // write_cartesian_torque_target(): the translation error scaled by
+  // `linear_scale`, the world-aligned rotation error by `angular_scale`.
+  // Exactly `desired` when both are 1. Under the drive-side law this is the
+  // pose whose error the same solve maps to the bounded offset it emitted; under
+  // the legacy law the wrench scale is applied to the pose error, which ignores
+  // the damping term and Lambda weighting the wrench also carries.
+  static pinocchio::SE3 emitted_pose(
+    const pinocchio::SE3 & measured, const pinocchio::SE3 & desired,
+    double linear_scale, double angular_scale);
   bool latch_idle_pose();
   // Release the commanded Cartesian reference toward the measured pose with a
   // cubic blend over `release_duration`.  This replaces both the former
@@ -200,12 +215,14 @@ protected:
   // uses the Jacobian where the goal starts, not along the path.
   double minimum_task_duration(
     const Jacobian & jacobian, const pinocchio::SE3 & start, const pinocchio::SE3 & goal) const;
-  // dq = J^+ (x_des ominus x) (damped least squares), clamped per joint by
-  // reference_offset_limit_.  Added to measured q it becomes the MIT q_des, so
-  // the drive's own kp closes the Cartesian loop inside its current loop
-  // instead of the controller synthesising the same force into tau_ff one CAN
-  // cycle later.
-  void joint_reference_offset(
+  // dq = J^+ (x_des ominus x) (damped least squares), scaled as a whole so no
+  // joint exceeds reference_offset_limit_.  Added to measured q it becomes the
+  // MIT q_des, so the drive's own kp closes the Cartesian loop inside its
+  // current loop instead of the controller synthesising the same force into
+  // tau_ff one CAN cycle later.  Returns that scale s in [0, 1]
+  // (offset = s * dq): 1 unsaturated or for a zero error, 0 when the solve
+  // failed and the offset is zero.
+  double joint_reference_offset(
     const Jacobian & jacobian, const Vector6 & pose_error, Vector7 & offset) const;
   void clamp_command_positions(ArmCommand & command) const;
   // Rate limit for the model feed-forward (nle) only, tracked from the value
@@ -247,13 +264,17 @@ protected:
   // config run true; the real bimanual config runs false, and the real
   // launch's gravity_compensation mode forces false with kp = 0.
   //
-  // kp/kd are FIXED rather than scheduled from diag(J^T Kx J) per pose.  The
-  // profile slews kp at 10/s while the mapped stiffness moves 3.4x across the
-  // workspace on joint 1 alone, so a scheduled gain would simply lag its own
-  // reference.  The off-diagonal coupling of J^T Kx J is dropped for the same
-  // reason it is not scheduled: the drive takes a scalar per joint, and
-  // routing the remainder through tau_ff would restore the very path this
-  // design exists to leave.
+  // kp/kd are FIXED per joint, not scheduled per pose: the profile slews kp at
+  // 10/s while the joint stiffness one Cartesian stiffness maps to moves 3.4x
+  // across the workspace on joint 1 alone, so a scheduled gain would lag its
+  // own reference.  With K = diag(kp), the Cartesian stiffness is
+  // (J K^-1 J^T)^-1 when reference_offset_weight is proportional to kp: then
+  // kp * offset = J^T (J K^-1 J^T + lambda' I)^-1 e lies wholly in the range of
+  // J^T (lambda' = task_velocity_reference_damping * weight_i / kp_i).  With
+  // any other weight (all ones by default) part of kp * offset lies in J's null
+  // space and no closed form holds.  What the diagonal K cannot express is not
+  // routed through tau_ff, which would restore the very path this design
+  // exists to leave.
   bool drive_side_impedance_{true};
   // Per-joint bound on that reference offset, and the ONLY bound on the
   // impedance torque.  torque_limit_ clamps the effort field alone; the drive
@@ -266,10 +287,9 @@ protected:
   // because that is the form the solve needs. See joint_reference_offset().
   std::array<double, 7> reference_offset_weight_inverse_{{1.0, 1.0, 1.0, 1.0,
                                                           1.0, 1.0, 1.0}};
-  // The return-to-zero phase, the only joint-space start-up: startup_posture_
-  // is the nominal-zero target (the `startup_posture` parameter is declared but
-  // not read) and startup_kp_/startup_kd_ its homing gains.
-  std::array<double, 7> startup_posture_{}, startup_start_{}, startup_kp_{}, startup_kd_{};
+  // The return-to-zero phase, the only joint-space start-up: from startup_start_
+  // to return_to_zero_target_ with startup_kp_/startup_kd_ as homing gains.
+  std::array<double, 7> startup_start_{}, startup_kp_{}, startup_kd_{};
   double startup_duration_{0.0};
   double startup_tolerance_{0.05};
   double startup_elapsed_{0.0};

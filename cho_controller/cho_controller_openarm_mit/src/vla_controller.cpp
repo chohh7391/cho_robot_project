@@ -358,6 +358,8 @@ controller_interface::CallbackReturn VlaController::on_activate(
   // task_q_ref_'s rate counterpart; the base class has just set task_q_ref_ to
   // the measurement, at rest.
   commanded_dq_des_.fill(0.0);
+  // Until the first command, the anchor ring records idle_pose_.
+  emitted_pose_valid_ = false;
   return CallbackReturn::SUCCESS;
 }
 
@@ -864,16 +866,22 @@ bool VlaController::write_task_target(
   task_capacity_rejected_ = false;
 
   // Anchor ring: fed every ACTIVE cycle so a chunk arriving at any point has
-  // history behind it. The commanded Cartesian reference is idle_pose_ (the
-  // inherited "what we are currently commanding" field), and the joint reference
-  // is the MIT q_des the drive is holding (task_q_ref_, which
-  // note_commanded_joints() keeps current on every path below).
+  // history behind it. What it records is the command as EMITTED, after its
+  // saturation: the pose is emitted_pose_ (the commanded reference idle_pose_
+  // while nothing saturates, else the part of its error the bounded command
+  // carries), the joints the MIT q_des the drive is holding (task_q_ref_, which
+  // note_commanded_joints() keeps current on every path below, the offset bound
+  // already applied). A relative chunk therefore builds on what the arm is
+  // being pushed toward, and a policy pressing against an obstacle does not
+  // wind the reference up past it chunk after chunk.
   Vector7 anchor_joints;
   for (std::size_t joint = 0; joint < 7; ++joint) {
     anchor_joints(static_cast<Eigen::Index>(joint)) = task_q_ref_[joint];
   }
   session_.record(
-    control_time, idle_pose_valid_ ? idle_pose_ : pinocchio::SE3::Identity(),
+    control_time,
+    emitted_pose_valid_ ? emitted_pose_
+                        : (idle_pose_valid_ ? idle_pose_ : pinocchio::SE3::Identity()),
     anchor_joints);
 
   const cho_vla_core::Step step = session_.step(control_time, commanded_seed_);
@@ -915,10 +923,13 @@ bool VlaController::write_task_target(
           idle_release_active_ = false;
         }
       }
-      if (!write_cartesian_torque_target(idle_pose_, twist, dt, target)) {
+      if (!write_cartesian_torque_target(
+          idle_pose_, twist, dt, target, nullptr, nullptr, &emitted_pose_))
+      {
         task_compute_failed_ = true;
         return false;
       }
+      emitted_pose_valid_ = true;
       note_commanded_joints(target);
       return true;
     };
@@ -940,10 +951,13 @@ bool VlaController::write_task_target(
             idle_release_active_ = false;
           }
         }
-        if (!write_cartesian_torque_target(idle_pose_, twist, dt, target)) {
+        if (!write_cartesian_torque_target(
+            idle_pose_, twist, dt, target, nullptr, nullptr, &emitted_pose_))
+        {
           task_compute_failed_ = true;
           return false;
         }
+        emitted_pose_valid_ = true;
         note_commanded_joints(target);
         return true;
       }
@@ -980,12 +994,18 @@ bool VlaController::write_task_target(
         idle_pose_ = pose;
         idle_pose_valid_ = true;
       }
+      // The joint path's pose field stays the measured pose, as before; its
+      // joint field (task_q_ref_) is the bounded q_des.
+      emitted_pose_ = idle_pose_;
+      emitted_pose_valid_ = idle_pose_valid_;
     }
   } else {
-    ok = write_cartesian_torque_target(reference.pose, reference.twist, dt, target);
+    ok = write_cartesian_torque_target(
+      reference.pose, reference.twist, dt, target, nullptr, nullptr, &emitted_pose_);
     if (ok) {
       idle_pose_ = reference.pose;
       idle_pose_valid_ = true;
+      emitted_pose_valid_ = true;
       note_commanded_joints(target);
     }
   }

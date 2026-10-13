@@ -47,7 +47,7 @@ limitations under the License.
   <xacro:arg name="real_mit_hardware" default="false"/>
   <xacro:arg name="real_mit_arm" default="both_independent"/>
   <xacro:arg name="real_mit_safety_profile" default="real_conservative_commissioning"/>
-  <xacro:arg name="mit_expected_update_rate_hz" default="200"/>
+  <xacro:arg name="mit_expected_update_rate_hz" default="750"/>
   <xacro:arg name="bimanual"      default="false"/>
   <xacro:arg name="arm_prefix"    default=""/>
   <xacro:arg name="hand"          default="true"/>

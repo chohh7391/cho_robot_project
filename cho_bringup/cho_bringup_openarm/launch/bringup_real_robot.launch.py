@@ -330,7 +330,11 @@ def generate_launch_description():
                     'return_to_zero_duration': 2.0,
                     'return_to_zero_tolerance': 0.05,
                 })
-                if controller_name == 'task_space_impedance_mit_controller':
+                # VlaController derives from TaskSpaceImpedanceController: it
+                # reads startup_kp/kd and ignores return_to_zero_kp/kd, which
+                # only a joint-space action controller reads.
+                if controller_name in ('task_space_impedance_mit_controller',
+                                       'vla_mit_controller'):
                     runtime_overrides[name].update({
                         'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
                         'startup_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],

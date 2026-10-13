@@ -22,6 +22,20 @@
 namespace cho_controller {
 namespace openarm {
 
+// The torque law of JointSpaceImpedanceController, before clipping:
+//     tau = M * (qdd_des + kp .* e + kd .* dv + ki .* integral) + nle
+// with e = q_des - q, dv = v_des - dq and `integral` the integrated e. M cancels the
+// arm's inertia, so the closed loop is  e_ddot + kd * e_dot + kp * e = 0  (ki = 0,
+// dq = measured velocity, no clipping): the trajectory's own acceleration qdd_des is
+// fed forward and the gains only act on the deviation from it. Free of ROS so a test
+// can evaluate it on a sampled trajectory.
+void joint_impedance_torque(
+    const Eigen::MatrixXd & M, const Eigen::VectorXd & nle, const Eigen::VectorXd & qdd_des,
+    const Eigen::VectorXd & kp, const Eigen::VectorXd & e,
+    const Eigen::VectorXd & kd, const Eigen::VectorXd & dv,
+    const Eigen::VectorXd & ki, const Eigen::VectorXd & integral,
+    Eigen::VectorXd & tau);
+
 // Joint-space impedance control with gravity/Coriolis feed-forward, driven by a
 // cho_interfaces/JointSpace action server.
 class JointSpaceImpedanceController : public OpenArmBaseController
@@ -39,6 +53,9 @@ public:
 private:
     std::shared_ptr<JointSpaceActionServer> action_server_;
     Eigen::VectorXd torque_desired_;
+    // Acceleration of the sampled trajectory (goal or homing), fed forward through
+    // M; zero while holding.
+    Eigen::VectorXd acc_des_;
 
     // Integral action, off by default (ki_joint empty or zero).
     //

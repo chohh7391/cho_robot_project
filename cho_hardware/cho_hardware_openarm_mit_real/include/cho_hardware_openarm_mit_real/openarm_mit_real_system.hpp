@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -71,9 +72,9 @@ struct TransportConfig
 // Every Damiao motor answers both with one state frame. With
 // state_from_command_reply the refresh is dropped -- but a reply to a command
 // exists only once an arm command has gone out since the motors were last
-// (re)enabled: enable() drains whatever was pending, and a disabled motor
-// answers nothing. This is VendorCanTransport's decision, kept here so a test
-// transport can make the same one.
+// (re)enabled: finish_enable() drains whatever was pending, and a disabled
+// motor answers nothing. This is VendorCanTransport's decision, kept here so a
+// test transport can make the same one.
 class StateQuery
 {
 public:
@@ -122,12 +123,19 @@ bool is_bus_off_error_frame(std::uint32_t can_id);
 
 // The vendor object opens a SocketCAN descriptor in its constructor.  Keeping
 // it behind this interface makes configuration failure paths unit-testable.
+// No call waits for the motors: the adapter runs every wait over its read()
+// cycles (OpenArmMitRealSystem::Activation).
 class MitTransport
 {
 public:
   virtual ~MitTransport() = default;
   virtual bool initialize() = 0;
+  // Hands the enable frames to the bus and returns; false if one could not be
+  // sent. The motors take them within enable_settle_time(); then the adapter
+  // calls finish_enable() once, before the first state read.
   virtual bool enable() = 0;
+  virtual std::chrono::milliseconds enable_settle_time() const {return std::chrono::milliseconds{0};}
+  virtual bool finish_enable() {return true;}
   // False when a disable frame could not be handed to the bus (the adapter
   // retries, then says the motors may still be running their last frame).
   virtual bool disable() noexcept = 0;
@@ -148,10 +156,19 @@ public:
   }
   // Whether the gripper motor answered during the last read(); same convention.
   virtual bool gripper_replied() const {return true;}
-  // Register 9 of every motor (the gripper's too, with a hand). A transport
-  // that cannot ask reports none, and activation then refuses unless
+  // Register 9 of every motor (the gripper's too, with a hand), over calls that
+  // do not wait: begin_can_timeout_read() sends the parameter reads, and each
+  // poll_can_timeout_read() takes the replies received since and returns true
+  // once the read is over (every motor answered, or the transport stopped
+  // asking), with the values in `timeouts`. A transport that cannot ask
+  // reports none at once, and activation then refuses unless
   // mit_allow_no_can_timeout is set.
-  virtual CanTimeouts read_can_timeouts() {return {};}
+  virtual void begin_can_timeout_read() {}
+  virtual bool poll_can_timeout_read(CanTimeouts & timeouts)
+  {
+    timeouts = CanTimeouts{};
+    return true;
+  }
   // Whether the CAN controller reported bus-off (or a restart after one) since
   // the last enable(). A transport that cannot tell reports false.
   virtual bool bus_off() const {return false;}
@@ -183,6 +200,10 @@ public:
 
   hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override;
   hardware_interface::CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
+  // Out of the supervised hold (the motors are enabled and holding): the seed
+  // read, the new session and its first SAFE hold, all here (a few ms).
+  // Otherwise it starts the activation and returns; read() carries it on
+  // (Activation).
   hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State & previous_state) override;
@@ -190,7 +211,8 @@ public:
   // does; on_error() -- reached only through a failure: a read()/write() that
   // returned ERROR, which Humble turns straight into on_error() and, on
   // SUCCESS, UNCONFIGURED, or a failed transition -- disables the motors like
-  // any other fault. Neither throws.
+  // any other fault, unless this transport never sent an enable. Neither
+  // throws.
   hardware_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State & previous_state) override;
   hardware_interface::CallbackReturn on_error(const rclcpp_lifecycle::State & previous_state) override;
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
@@ -202,6 +224,8 @@ public:
   // and test backends: prepare rejects a partial claim of this arm and asks
   // write() to put the arm in measured SAFE, accepting no commit until perform;
   // perform discards the commit the outgoing producer left unacknowledged.
+  // Until an activation has finished, prepare refuses any switch that names
+  // this component's interfaces.
   hardware_interface::return_type prepare_command_mode_switch(
     const std::vector<std::string> & start_interfaces,
     const std::vector<std::string> & stop_interfaces) override;
@@ -235,8 +259,9 @@ private:
   // write watchdog running. Otherwise (cleanup, shutdown, destruction) the
   // hold is the LAST frame: the Damiao motors keep executing it until their
   // own CAN timeout (register 9) ends it. With "disable" the motors are
-  // disabled instead. A no-op unless active or holding; a failed read or send
-  // falls back to a FAULT stop.
+  // disabled instead. An activation in progress is abandoned instead
+  // (abort_activation()). A no-op unless active or holding; a failed read or
+  // send falls back to a FAULT stop.
   void stop_with_final_frame(const char * occasion, bool supervise) noexcept;
   // Closes the CAN socket and forgets the session. Sends nothing.
   void close_transport() noexcept;
@@ -257,16 +282,43 @@ private:
   // way the consumer and protocol state are left to the control thread.
   void trip_watchdog() noexcept;
   bool dispatch_safe_hold(bool force_new_generation = false);
+  // The one path a commit, an ACTIVE re-send and a SAFE hold take to the bus.
+  // What goes out is bound_to_final_torque() of the command; the consumer keeps
+  // the tuple it accepted (and acknowledged).
   bool dispatch(const cho_openarm_mit_core::ArmCommand & command);
+  // Each joint's tuple bounded to the profile's final_magnitude at the latest
+  // measured state (cho_openarm_mit_core::bound_final_torque: q_des, then
+  // dq_des, moved toward the measurement). The drive evaluates the MIT equation
+  // with its own, newer state, so this is a one-cycle-late approximation.
+  // `moved`, if given, says which joints it changed.
+  std::array<cho_openarm_mit_core::JointTuple, kArmDof> bound_to_final_torque(
+    const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & joints,
+    std::array<bool, kArmDof> * moved = nullptr) const;
   // The hold the watchdog thread sends if writes stop: the hold the consumer
   // last dispatched, or, while it is ACTIVE, a measured SAFE hold built from
-  // the latest read. Under transport_mutex_.
+  // the latest read -- bounded to the final torque at the read it is stored
+  // after, as dispatch() would. Under transport_mutex_.
   void remember_fallback_hold(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & hold);
   void remember_measured_fallback_hold();
-  // Before an activation that enables the motors: reads every motor's CAN
-  // timeout and returns false (logged, with how to set it) when one is 0 or
-  // did not answer, unless mit_allow_no_can_timeout.
+  // Before an activation enables the motors: false (logged, with how to set
+  // it) when a motor's CAN timeout in can_timeouts_ is 0 or did not answer,
+  // unless mit_allow_no_can_timeout.
   bool can_timeouts_allow_activation();
+  // One step of a fresh activation, from read(). False: it failed (the FAULT
+  // has been entered; read() returns ERROR).
+  bool advance_activation();
+  // One seed read: each motor that answered keeps its state in state_. False:
+  // the read failed or the bus went off.
+  bool seed_read();
+  bool seed_complete() const;
+  // From the seed in state_: the new session, the gripper's command seed, the
+  // first SAFE hold, ACTIVE. False: FAULT (transition_to_safe has run).
+  bool finish_activation();
+  // A stop before finish_activation(): the motors, if enabled already, are
+  // disabled (there is no measured hold to leave them in).
+  void abort_activation(const char * occasion) noexcept;
+  // Whether a switch list names any of this component's command interfaces.
+  bool names_this_component(const std::vector<std::string> & interfaces) const;
   // The controller-switch fence: whatever the commit handle holds now is never
   // evaluated, and the ack advances past it (ArmConsumer::discard_commit).
   void discard_leftover_commit();
@@ -313,6 +365,9 @@ private:
   // See remember_fallback_hold(). Under transport_mutex_.
   std::array<cho_openarm_mit_core::JointTuple, kArmDof> fallback_hold_{};
   bool fallback_hold_valid_{false};
+  // When dispatch() last logged that the final torque bound moved a tuple (at
+  // most once a second). Control thread.
+  std::chrono::steady_clock::time_point final_bound_logged_{};
   std::string gripper_joint_;
   double gripper_joint_closed_{0.0};
   double gripper_joint_open_{0.044};
@@ -340,11 +395,13 @@ private:
   std::chrono::steady_clock::time_point last_write_{};
   mutable std::mutex transport_mutex_;
   mutable std::mutex watchdog_mutex_;
+  // With watchdog_mutex_: what the watchdog thread sleeps on between checks.
+  std::condition_variable watchdog_wake_;
   std::atomic<bool> watchdog_stop_{true};
-  // Activation may legitimately block while another hardware component is
-  // configured (the vendor enable sequence alone waits 100 ms).  The write
-  // watchdog therefore starts measuring only after controller_manager has
-  // delivered this component's first write cycle.
+  // The write watchdog starts measuring only after controller_manager has
+  // delivered this component's first write cycle as an active arm: at start-up
+  // every component is activated before the update loop exists, and an
+  // activation in progress (Activation) writes nothing.
   std::atomic<bool> watchdog_armed_{false};
   std::thread watchdog_thread_;
   // Set by the watchdog thread; the control thread turns it into a FAULT.
@@ -360,6 +417,30 @@ private:
   // nothing while it is false, so a write() racing the watchdog's disable
   // cannot put one more MIT frame on the bus after it.
   bool transport_enabled_{false};
+  // Under transport_mutex_: an enable has gone out through this transport.
+  // on_error() disables only then, so a refused activation, which enabled
+  // nothing, sends nothing to motors this transport never commanded.
+  bool enable_sent_{false};
+  // A fresh activation (the motors were not enabled), carried on by read()
+  // one step per cycle. on_activate() runs under the ResourceManager lock that
+  // every component's read()/write() also takes, so a wait there would stall
+  // the other arm's writes past its write watchdog. Until it ends the arm is
+  // not ACTIVE: write() sends nothing, the status reads DISABLED (never SAFE),
+  // and prepare refuses a switch that names this component.
+  //   CHECKING  register 9 of every motor (begin/poll_can_timeout_read); a
+  //             refusal is a FAULT with nothing sent
+  //   ENABLING  the enable frames are out; waits enable_settle_time()
+  //   SEEDING   one state read per cycle until every motor has answered, at
+  //             most kSeedReadAttempts; then finish_activation()
+  // A failure is read() ERROR (Humble runs on_error(), which disables).
+  enum class Activation : std::uint8_t {NONE, CHECKING, ENABLING, SEEDING};
+  std::atomic<Activation> activation_{Activation::NONE};
+  std::chrono::steady_clock::time_point activation_started_{};
+  std::chrono::steady_clock::time_point enable_deadline_{};
+  // The seed: reads taken, and which motors have answered one.
+  std::size_t seed_reads_{0};
+  std::array<bool, kArmDof> seed_answered_{};
+  bool seed_gripper_answered_{false};
   // The controller-switch rule shared by every OpenArm MIT backend; it expires
   // a switch the controller_manager abandons after one second of cycles.
   cho_openarm_mit_core::SwitchGate switch_gate_;

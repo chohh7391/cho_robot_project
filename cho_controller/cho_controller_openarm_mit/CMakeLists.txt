@@ -151,7 +151,7 @@ if(BUILD_TESTING)
   target_compile_definitions(test_impedance_action_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
-  ament_add_gtest(test_vla_controller test/test_vla_controller.cpp)
+  ament_add_gtest(test_vla_controller test/test_vla_controller.cpp TIMEOUT 120)
   target_link_libraries(test_vla_controller ${PROJECT_NAME})
   ament_target_dependencies(test_vla_controller
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
@@ -183,6 +183,14 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_joint_space_reactivation
     ament_index_cpp cho_controller_base cho_interfaces controller_manager hardware_interface
     rclcpp rclcpp_action)
+
+  # JointSpaceImpedanceController's torque law (M * (qdd_des + ...) + nle) on a
+  # sampled trajectory. ROS-free: it calls joint_impedance_torque() from the shared
+  # library and needs no controller_manager.
+  ament_add_gtest(test_joint_space_impedance_ff test/test_joint_space_impedance_ff.cpp)
+  target_link_libraries(test_joint_space_impedance_ff ${OPENARM_SHARED_LIB})
+  ament_target_dependencies(test_joint_space_impedance_ff
+    cho_controller_common controller_interface hardware_interface pinocchio rclcpp)
 
   foreach(arm_side left right)
     ament_add_gtest(test_single_${arm_side}_controller_manager_action

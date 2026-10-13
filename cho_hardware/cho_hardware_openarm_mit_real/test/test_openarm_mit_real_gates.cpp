@@ -18,15 +18,19 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <fcntl.h>
+#include <fstream>
+#include <functional>
 #include <gtest/gtest.h>
 #include <limits>
 #include <linux/can.h>
 #include <linux/can/error.h>
 #include <linux/can/raw.h>
 #include <set>
+#include <sstream>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -48,6 +52,12 @@ public:
     timeouts.arm.fill(100);
     timeouts.gripper = 100;
   }
+  ~CountingTransport() override
+  {
+    if (on_destroy) {
+      on_destroy(*this);
+    }
+  }
   bool initialize() override {return true;}
   bool enable() override
   {
@@ -66,7 +76,7 @@ public:
     return delivered;
   }
   bool read(
-    std::array<double, 7> & position, std::array<double, 7> &,
+    std::array<double, 7> & position, std::array<double, 7> & velocity,
     std::array<double, 7> & effort) override
   {
     events.push_back("read");
@@ -75,6 +85,7 @@ public:
       scripted_replies.pop_front();
     }
     position = next_position;
+    velocity = next_velocity;
     effort = next_effort;
     if (read_nan) {
       position[0] = std::numeric_limits<double>::quiet_NaN();
@@ -83,11 +94,13 @@ public:
   }
   std::array<bool, 7> replied() const override {return replies;}
   bool gripper_replied() const override {return gripper_reply;}
-  CanTimeouts read_can_timeouts() override
+  void begin_can_timeout_read() override {++timeout_reads;}
+  bool poll_can_timeout_read(CanTimeouts & out) override
   {
-    ++timeout_reads;
-    return timeouts;
+    out = timeouts;
+    return timeouts_answered;
   }
+  std::chrono::milliseconds enable_settle_time() const override {return settle;}
   bool bus_off() const override {return bus_off_reported;}
   bool
   send(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuple) override
@@ -129,12 +142,17 @@ public:
   bool read_nan{false};
   bool bus_off_reported{false};
   std::array<double, 7> next_position{};
+  std::array<double, 7> next_velocity{};
   // The joint torque each read reports.
   std::array<double, 7> next_effort{};
   // Consumed one per disable(); true once empty.
   std::deque<bool> disable_results;
   CanTimeouts timeouts;
+  // Register-9 reads begun; false keeps every poll of one unfinished.
   int timeout_reads{0};
+  bool timeouts_answered{true};
+  // What the motors need after the enable frames (the vendor's is 100 ms).
+  std::chrono::milliseconds settle{0};
   // Incremented after the frame is recorded, so a thread that sees it sees
   // the frame too (the watchdog thread sends).
   std::atomic<int> send_calls{0};
@@ -151,6 +169,8 @@ public:
   std::vector<std::array<cho_openarm_mit_core::JointTuple, 7>> sent;
   // {motor position [rad], per-unit current cap}
   std::vector<std::array<double, 2>> gripper_sent;
+  // For a test that outlives the transport (on_error() closes it).
+  std::function<void(const CountingTransport &)> on_destroy;
 };
 
 hardware_interface::HardwareInfo
@@ -278,6 +298,35 @@ state_interface(
   return found == interfaces.end() ? nullptr : &*found;
 }
 
+const auto kCycle = rclcpp::Duration::from_seconds(1.0 / 750.0);
+constexpr double kActive = static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE);
+constexpr double kSafe = static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE);
+constexpr double kFault = static_cast<double>(cho_openarm_mit_core::MitStatus::FAULT);
+constexpr double kDisabled = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
+
+// The arm's published mit_status.
+double status_of(OpenArmMitRealSystem & system)
+{
+  for (const auto & state : system.export_state_interfaces()) {
+    if (state.get_interface_name() == "mit_status") {
+      return state.get_value();
+    }
+  }
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+// A fresh activation is carried on by read() -- the register-9 check, the
+// enable and its settle time, the seed -- as controller_manager's loop would:
+// cycles until the arm reports its first SAFE hold. (Out of the supervised
+// hold it is SAFE already.)
+void run_activation(OpenArmMitRealSystem & system)
+{
+  for (int cycle = 0; cycle < 20 && status_of(system) == kDisabled; ++cycle) {
+    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+  }
+  ASSERT_EQ(status_of(system), kSafe);
+}
+
 void activate(OpenArmMitRealSystem & system, CountingTransport * & transport)
 {
   ASSERT_EQ(
@@ -290,6 +339,7 @@ void activate(OpenArmMitRealSystem & system, CountingTransport * & transport)
   ASSERT_EQ(
     system.on_activate(rclcpp_lifecycle::State{}),
     hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(system);
 }
 }  // namespace
 
@@ -591,6 +641,7 @@ TEST(OpenArmMitRealSafety, WithTheDisableStopBehaviourTheWatchdogDisables)
   ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(system);
   ASSERT_EQ(
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
     hardware_interface::return_type::OK);
@@ -618,9 +669,14 @@ TEST(OpenArmMitRealSafety, InvalidPostEnableStateDisablesTransport) {
     hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_NE(transport, nullptr);
   transport->read_nan = true;
-  EXPECT_EQ(
+  ASSERT_EQ(
     system.on_activate(rclcpp_lifecycle::State{}),
-    hardware_interface::CallbackReturn::ERROR);
+    hardware_interface::CallbackReturn::SUCCESS);
+  // The seed is read by the activation's read() cycle; a non-finite one is a
+  // FAULT there (read() ERROR, which Humble turns into on_error()).
+  EXPECT_EQ(
+    system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.005)),
+    hardware_interface::return_type::ERROR);
   EXPECT_EQ(
     transport->events,
     (std::vector<std::string>{"enable", "read", "disable"}));
@@ -668,6 +724,7 @@ void activate_with_hand(
   ASSERT_EQ(
     system.on_activate(rclcpp_lifecycle::State{}),
     hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(system);
 }
 }  // namespace
 
@@ -990,11 +1047,6 @@ void commit(
   }
   command_interface(commands, "openarm_arm/mit_commit_generation")->set_value(generation);
 }
-
-const auto kCycle = rclcpp::Duration::from_seconds(1.0 / 750.0);
-constexpr double kActive = static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE);
-constexpr double kSafe = static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE);
-constexpr double kFault = static_cast<double>(cho_openarm_mit_core::MitStatus::FAULT);
 
 TEST(OpenArmMitRealSafety, ASafeRequestHoldsThePoseMeasuredLastNotTheActivationPose) {
   CountingTransport * transport = nullptr;
@@ -1322,9 +1374,17 @@ TEST(OpenArmMitRealSafety, ActivationSeedsOnlyFromMotorsThatAnswered) {
     ASSERT_EQ(system.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
     ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
     transport->replies[5] = false;
-    EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::ERROR);
+    ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    // One seed read per cycle; the tenth without joint 6 is a FAULT.
+    int cycles = 0;
+    while (cycles < 20 && system.read(rclcpp::Time(0), kCycle) == hardware_interface::return_type::OK) {
+      ++cycles;
+    }
+    EXPECT_EQ(cycles, 9);
+    EXPECT_EQ(std::count(transport->events.begin(), transport->events.end(), "read"), 10);
     EXPECT_TRUE(transport->sent.empty());
     EXPECT_GE(transport->disable_calls.load(), 1);
+    EXPECT_EQ(status_of(system), kFault);
   }
   {
     // A reply that missed the first receive window arrives on a later read.
@@ -1339,7 +1399,12 @@ TEST(OpenArmMitRealSafety, ActivationSeedsOnlyFromMotorsThatAnswered) {
     transport->next_position.fill(0.2);
     transport->scripted_replies.push_back({true, true, true, true, true, false, true});
     transport->scripted_replies.push_back({false, false, false, false, false, true, false});
-    EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_TRUE(transport->sent.empty());  // still seeding
+    EXPECT_EQ(status_of(system), kDisabled);
+    ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    EXPECT_EQ(status_of(system), kSafe);
     ASSERT_FALSE(transport->sent.empty());
     for (const auto & joint : transport->sent.front()) {
       EXPECT_DOUBLE_EQ(joint.position, 0.2);
@@ -1522,16 +1587,17 @@ TEST(OpenArmMitRealSwitch, AStaleSafeRequestDoesNotSwallowTheIncomingSeed) {
 namespace
 {
 // Motors that answer only what was sent to them since the last receive -- a
-// state query or an MIT command -- as on the real bus, where enable() also
-// drains whatever was pending. It decides when to query with the vendor
-// transport's own StateQuery.
+// state query or an MIT command -- as on the real bus, where finishing the
+// enable also drains whatever was pending. It decides when to query with the
+// vendor transport's own StateQuery.
 class BusTransport final : public MitTransport
 {
 public:
   explicit BusTransport(bool from_command_reply)
   : query_(from_command_reply) {}
   bool initialize() override {return true;}
-  bool enable() override
+  bool enable() override {return true;}
+  bool finish_enable() override
   {
     pending_ = false;
     query_.enabled();
@@ -1555,11 +1621,10 @@ public:
     return true;
   }
   std::array<bool, 7> replied() const override {return replies_;}
-  cho_hardware_openarm_mit_real::CanTimeouts read_can_timeouts() override
+  bool poll_can_timeout_read(cho_hardware_openarm_mit_real::CanTimeouts & timeouts) override
   {
-    cho_hardware_openarm_mit_real::CanTimeouts timeouts;
     timeouts.arm.fill(100);
-    return timeouts;
+    return true;
   }
   bool send(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuple) override
   {
@@ -1596,6 +1661,7 @@ TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCyc
     ASSERT_EQ(system.on_init(info), hardware_interface::CallbackReturn::SUCCESS);
     ASSERT_EQ(system.on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
     ASSERT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    run_activation(system);
     for (int cycle = 0; cycle < 20; ++cycle) {
       ASSERT_EQ(system.read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
       ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
@@ -1603,6 +1669,7 @@ TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCyc
     ASSERT_EQ(system.on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
     EXPECT_EQ(system.on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS)
       << behaviour;
+    run_activation(system);
     // The new session's first hold carries the torque the seed read measured.
     ASSERT_FALSE(sent->empty());
     EXPECT_DOUBLE_EQ(sent->back()[0].effort, 0.3) << behaviour;
@@ -1616,11 +1683,6 @@ TEST(OpenArmMitRealSafety, StateFromCommandRepliesSurvivesADeactivateActivateCyc
 // shutdown and destruction send one more measured SAFE hold as the LAST frame
 // and nothing after it. A FAULT, and on_error(), still disable at once.
 // ---------------------------------------------------------------------------
-namespace
-{
-constexpr double kDisabled = static_cast<double>(cho_openarm_mit_core::MitStatus::DISABLED);
-}  // namespace
-
 TEST(OpenArmMitRealStop, ADeactivateLeavesTheMotorsHoldingTheMeasuredPoseUnderSupervision) {
   CountingTransport * transport = nullptr;
   auto system = counting_system(transport);
@@ -1691,6 +1753,7 @@ TEST(OpenArmMitRealStop, TheDisableStopBehaviourDisablesInstead) {
   ASSERT_EQ(system->on_init(info), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(*system);
   const auto sent = transport->sent.size();
   ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_GE(transport->disable_calls.load(), 1);
@@ -1904,14 +1967,24 @@ TEST(OpenArmMitRealCanTimeout, ActivationRefusesAMotorWithoutACanTimeoutBeforeEn
     ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
     ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
     transport->timeouts.arm[2] = value;
-    // FAILURE, not ERROR: nothing was enabled, and on_error() would send a
-    // disable to motors this process never commanded.
-    EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::FAILURE);
+    ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    // The activation's first read() cycle checks the registers, before anything
+    // is enabled: the refusal is a FAULT with nothing enabled or sent.
+    EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
+    EXPECT_EQ(status_of(*system), kFault);
     EXPECT_TRUE(transport->events.empty()) << value;
     EXPECT_EQ(transport->timeout_reads, 1);
-    // Set on the bench (openarm-can-cli write_param --rid 9), then activate again.
-    transport->timeouts.arm[2] = 50;
-    EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    // Humble runs on_error() next, and that sends nothing either: no disable to
+    // motors this transport never commanded.
+    std::vector<std::string> final_events{"not destroyed"};
+    transport->on_destroy = [&final_events](const CountingTransport & gone) {final_events = gone.events;};
+    EXPECT_EQ(system->on_error(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    EXPECT_TRUE(final_events.empty()) << value;
+    // Set on the bench (openarm-can-cli write_param --rid 9), then activate
+    // again: from UNCONFIGURED, with a new transport.
+    ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+    run_activation(*system);
   }
 }
 
@@ -1921,7 +1994,8 @@ TEST(OpenArmMitRealCanTimeout, TheGripperMotorNeedsOneToo) {
   ASSERT_EQ(system->on_init(hardware_info_with_hand()), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   transport->timeouts.gripper = 0;
-  EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::FAILURE);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::ERROR);
   EXPECT_TRUE(transport->events.empty());
 }
 
@@ -1933,7 +2007,8 @@ TEST(OpenArmMitRealCanTimeout, AnExplicitParameterAcceptsMotorsWithoutOne) {
   ASSERT_EQ(system->on_init(info), hardware_interface::CallbackReturn::SUCCESS);
   ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
   transport->timeouts.arm.fill(0);
-  EXPECT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(*system);
   // An ambiguous spelling is refused at init, like every boolean here.
   OpenArmMitRealSystem strict;
   info.hardware_parameters["mit_allow_no_can_timeout"] = "1";
@@ -2082,4 +2157,398 @@ TEST(OpenArmMitRealTransport, AParameterReplyIsParsedOnlyFromItsOwnMotor) {
   const std::uint8_t state[8] = {0x13, 0x80, 0x00, 0x80, 0x07, 0xFF, 30, 30};
   EXPECT_FALSE(parse_param_reply(0x13, state, 8, 0x13, 9, value));  // a state frame
   EXPECT_FALSE(parse_param_reply(CAN_ERR_FLAG | 0x13, reply, 8, 0x13, 9, value));
+}
+
+// ---------------------------------------------------------------------------
+// A fresh activation runs over read() cycles (OpenArmMitRealSystem::Activation):
+// on_activate() waits for nothing. Until the first SAFE hold the arm sends no
+// MIT frame, never reads SAFE, and refuses a switch that names it. The cycles
+// against another arm under one ResourceManager: test_bimanual_reactivation.
+// ---------------------------------------------------------------------------
+TEST(OpenArmMitRealActivation, WhileEnablingNothingIsSentNothingReadsSafeAndSwitchesNamingTheArmAreRefused)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->settle = std::chrono::seconds(30);  // longer than this test
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_TRUE(transport->events.empty());  // the register read only
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->events, (std::vector<std::string>{"enable"}));
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  // A producer writing anyway is not evaluated.
+  commit(commands, states, 1.0, 0.05);
+  for (int cycle = 0; cycle < 50; ++cycle) {
+    ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK) << cycle;
+    EXPECT_EQ(status_of(*system), kDisabled) << cycle;
+  }
+  EXPECT_EQ(transport->events, (std::vector<std::string>{"enable"}));  // no state read, no frame
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_safe_ack_generation")->get_value(), 0.0);
+  // No session for a producer to start on yet, so no switch that names this
+  // arm; the other arm's switches go through.
+  const auto claims = all_claims(commands);
+  EXPECT_EQ(system->prepare_command_mode_switch(claims, {}), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(system->prepare_command_mode_switch({}, claims), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(
+    system->prepare_command_mode_switch({"openarm_joint3/stiffness"}, {}), hardware_interface::return_type::ERROR);
+  const std::vector<std::string> other_arm{"openarm_right_joint1/position", "openarm_right_arm/mit_lease_cycles"};
+  EXPECT_EQ(system->prepare_command_mode_switch(other_arm, {}), hardware_interface::return_type::OK);
+  EXPECT_EQ(system->perform_command_mode_switch(other_arm, {}), hardware_interface::return_type::OK);
+  // A deactivation before the first hold has no measured hold to leave the
+  // motors in: they are disabled.
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(transport->events, (std::vector<std::string>{"enable", "disable"}));
+  EXPECT_EQ(status_of(*system), kDisabled);
+  EXPECT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(transport->events.size(), 2u);
+  // A switch naming the arm is the SwitchGate's business again.
+  EXPECT_EQ(system->prepare_command_mode_switch(claims, {}), hardware_interface::return_type::OK);
+}
+
+TEST(OpenArmMitRealActivation, TheSeedIsReadOnlyOnceTheEnableHasSettled)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->settle = std::chrono::milliseconds(30);
+  transport->next_position.fill(0.1);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(transport->events, (std::vector<std::string>{"enable"}));
+  const auto enabled = std::chrono::steady_clock::now();
+  commit(commands, states, 1.0, 0.05);  // written while activating
+  int cycles = 0;
+  while (status_of(*system) == kDisabled && cycles < 1000) {
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ++cycles;
+  }
+  ASSERT_EQ(status_of(*system), kSafe);
+  EXPECT_GE(std::chrono::steady_clock::now() - enabled, std::chrono::milliseconds(30));
+  ASSERT_EQ(transport->events, (std::vector<std::string>{"enable", "read", "send"}));
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.1);  // the measured SAFE hold
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].stiffness, 3.0);
+  // What a producer wrote meanwhile was cleared with the new session, not run.
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status_of(*system), kSafe);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].position, 0.1);
+}
+
+TEST(OpenArmMitRealActivation, ADeactivationDuringTheRegisterReadSendsNothing)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->timeouts_answered = false;  // a read still waiting for replies
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  }
+  EXPECT_EQ(status_of(*system), kDisabled);
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_TRUE(transport->events.empty());
+  // A later activation starts the read over.
+  transport->timeouts_answered = true;
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  run_activation(*system);
+  EXPECT_EQ(transport->timeout_reads, 2);
+}
+
+TEST(OpenArmMitRealActivation, AnErrorWhileEnablingDisables)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  ASSERT_EQ(system->on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->on_configure(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  transport->settle = std::chrono::seconds(30);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  std::vector<std::string> final_events;
+  transport->on_destroy = [&final_events](const CountingTransport & gone) {final_events = gone.events;};
+  EXPECT_EQ(system->on_error(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(final_events, (std::vector<std::string>{"enable", "disable"}));
+  EXPECT_FALSE(system->socket_opened_for_test());
+}
+
+// ---------------------------------------------------------------------------
+// The final torque bound. The motor evaluates the MIT equation, so the adapter
+// keeps the profile's final_magnitude by what it sends: q_des (then dq_des)
+// moved toward the last measured state. A validated commit with kp 32 used to
+// put 210 N*m on a 40 N*m joint.
+// ---------------------------------------------------------------------------
+namespace
+{
+using cho_openarm_mit_core::JointTuple;
+
+// real_conservative_commissioning's final_magnitude.
+constexpr std::array<double, 7> kFinal{40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0};
+constexpr double kTorqueTolerance = 1e-9;
+
+// What the motor computes from a tuple at the measured state.
+double mit_torque(const JointTuple & tuple, const double q, const double dq)
+{
+  return tuple.stiffness * (tuple.position - q) + tuple.damping * (tuple.velocity - dq) + tuple.effort;
+}
+
+void expect_same(const JointTuple & actual, const JointTuple & expected, const std::string & what)
+{
+  EXPECT_EQ(actual.position, expected.position) << what;
+  EXPECT_EQ(actual.velocity, expected.velocity) << what;
+  EXPECT_EQ(actual.stiffness, expected.stiffness) << what;
+  EXPECT_EQ(actual.damping, expected.damping) << what;
+  EXPECT_EQ(actual.effort, expected.effort) << what;
+}
+
+// A whole valid commit of these tuples for generation `generation`.
+void commit_tuples(
+  std::vector<hardware_interface::CommandInterface> & commands,
+  std::vector<hardware_interface::StateInterface> & states, const double generation,
+  const std::array<JointTuple, 7> & joints)
+{
+  command_interface(commands, "openarm_arm/mit_session_echo")
+  ->set_value(state_interface(states, "openarm_arm/mit_session_id")->get_value());
+  command_interface(commands, "openarm_arm/mit_lease_cycles")->set_value(38.0);
+  for (int index = 0; index < 7; ++index) {
+    const auto joint = "openarm_joint" + std::to_string(index + 1);
+    command_interface(commands, joint + "/position")->set_value(joints[index].position);
+    command_interface(commands, joint + "/velocity")->set_value(joints[index].velocity);
+    command_interface(commands, joint + "/stiffness")->set_value(joints[index].stiffness);
+    command_interface(commands, joint + "/damping")->set_value(joints[index].damping);
+    command_interface(commands, joint + "/effort")->set_value(joints[index].effort);
+  }
+  command_interface(commands, "openarm_arm/mit_commit_generation")->set_value(generation);
+}
+
+std::string profile_text()
+{
+  std::ifstream stream(OPENARM_SAFETY_PROFILE_SOURCE);
+  std::ostringstream text;
+  text << stream.rdbuf();
+  return text.str();
+}
+
+std::string replace_all(std::string text, const std::string & from, const std::string & to)
+{
+  for (auto at = text.find(from); at != std::string::npos; at = text.find(from, at + to.size())) {
+    text.replace(at, from.size(), to);
+  }
+  return text;
+}
+}  // namespace
+
+TEST(OpenArmMitRealFinalTorque, TheBoundMovesOnlyWhatItMustAndNeverPastTheMeasurement)
+{
+  using cho_openarm_mit_core::bound_final_torque;
+  // Inside the bound: unchanged, bit for bit.
+  const JointTuple inside{0.5, 0.0, 32.0, 5.0, 10.0};  // 26 N*m at q = 0
+  expect_same(bound_final_torque(inside, 0.0, 0.0, 40.0), inside, "inside");
+  const JointTuple at_bound{1.25, 0.0, 32.0, 5.0, 0.0};  // exactly 40
+  expect_same(bound_final_torque(at_bound, 0.0, 0.0, 40.0), at_bound, "at the bound");
+
+  // A spring too strong for the joint: q_des moves toward q until tau is the
+  // bound. Nothing else changes.
+  const JointTuple strong{2.0, 0.0, 32.0, 5.0, 0.0};  // 64 N*m
+  const auto bounded = bound_final_torque(strong, 0.0, 0.0, 40.0);
+  EXPECT_NEAR(mit_torque(bounded, 0.0, 0.0), 40.0, kTorqueTolerance);
+  EXPECT_NEAR(bounded.position, 1.25, 1e-12);
+  EXPECT_EQ(bounded.velocity, strong.velocity);
+  EXPECT_EQ(bounded.stiffness, strong.stiffness);
+  EXPECT_EQ(bounded.damping, strong.damping);
+  EXPECT_EQ(bounded.effort, strong.effort);
+  // With the feed-forward against it, the spring keeps the room that leaves.
+  const JointTuple against{-2.0, 0.0, 32.0, 5.0, 10.0};  // -54 N*m
+  const auto against_bounded = bound_final_torque(against, 0.0, 0.0, 40.0);
+  EXPECT_NEAR(mit_torque(against_bounded, 0.0, 0.0), -40.0, kTorqueTolerance);
+  EXPECT_NEAR(against_bounded.position, -50.0 / 32.0, 1e-12);
+  // A feed-forward at the bound leaves the spring on its side nothing: q_des = q.
+  const JointTuple full{0.3, 0.0, 32.0, 5.0, 40.0};
+  const auto full_bounded = bound_final_torque(full, 0.1, 0.0, 40.0);
+  EXPECT_EQ(full_bounded.position, 0.1);
+  EXPECT_NEAR(mit_torque(full_bounded, 0.1, 0.0), 40.0, kTorqueTolerance);
+
+  // A fast joint whose damping alone exceeds the bound: dq_des moves toward dq.
+  const JointTuple fast{0.0, 0.0, 32.0, 5.0, 0.0};
+  const auto fast_bounded = bound_final_torque(fast, 0.0, 10.0, 40.0);  // -50 N*m
+  EXPECT_EQ(fast_bounded.position, 0.0);
+  EXPECT_NEAR(fast_bounded.velocity, 2.0, 1e-12);
+  EXPECT_NEAR(mit_torque(fast_bounded, 0.0, 10.0), -40.0, kTorqueTolerance);
+  // A spring that opposes the damping is kept, and the damping gives up only
+  // what the bound needs.
+  const JointTuple opposed{0.5, 0.0, 32.0, 5.0, 0.0};
+  const auto opposed_bounded = bound_final_torque(opposed, 0.0, 12.0, 40.0);  // 16 - 60
+  EXPECT_EQ(opposed_bounded.position, 0.5);
+  EXPECT_NEAR(opposed_bounded.velocity, 0.8, 1e-12);
+  EXPECT_NEAR(mit_torque(opposed_bounded, 0.0, 12.0), -40.0, kTorqueTolerance);
+
+  // Never past the measurement, over a sweep of targets, rates and feed-forwards.
+  for (double q_des = -3.0; q_des <= 3.0; q_des += 0.25) {
+    for (double dq = -15.0; dq <= 15.0; dq += 2.5) {
+      for (double tau_ff : {-40.0, -12.5, 0.0, 7.5, 40.0}) {
+        const JointTuple tuple{q_des, 0.0, 32.0, 5.0, tau_ff};
+        const double q = 0.2;
+        const auto out = bound_final_torque(tuple, q, dq, 40.0);
+        EXPECT_LE(std::abs(mit_torque(out, q, dq)), 40.0 + kTorqueTolerance) << q_des << " " << dq << " " << tau_ff;
+        EXPECT_GE(out.position, std::min(q, q_des));
+        EXPECT_LE(out.position, std::max(q, q_des));
+        EXPECT_GE(out.velocity, std::min(dq, 0.0));
+        EXPECT_LE(out.velocity, std::max(dq, 0.0));
+      }
+    }
+  }
+
+  // Nothing to bound against: the tuple as it is.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  expect_same(bound_final_torque(strong, nan, 0.0, 40.0), strong, "non-finite state");
+  expect_same(bound_final_torque(strong, 0.0, 0.0, nan), strong, "NaN bound");
+}
+
+TEST(OpenArmMitRealFinalTorque, ASeedingCommitWithALargeTargetErrorGoesOutInsideTheFinalTorque)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);  // measured 0 everywhere
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  // The SEEDING gains of the real config, every target inside the profile's
+  // windows and gain ceilings: valid, so accepted. The springs want
+  // [48, 45, 50, 49, 15, 5, 5] N*m against final [40, 40, 27, 27, 7, 7, 7].
+  const std::array<double, 7> kp{32.0, 30.0, 50.0, 49.0, 15.0, 10.0, 5.0};
+  const std::array<double, 7> kd{5.0, 5.0, 5.0, 5.0, 0.7, 0.6, 0.5};
+  const std::array<double, 7> q_des{1.5, 1.5, 1.0, 1.0, 1.0, 0.5, 1.0};
+  std::array<JointTuple, 7> tuples{};
+  for (std::size_t index = 0; index < 7; ++index) {
+    tuples[index] = {q_des[index], 0.0, kp[index], kd[index], 0.0};
+  }
+  commit_tuples(commands, states, 1.0, tuples);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status_of(*system), kActive);  // bounded, not rejected
+  EXPECT_EQ(state_interface(states, "openarm_arm/mit_ack_generation")->get_value(), 1.0);
+  const auto sent = transport->sent.back();
+  for (std::size_t index = 0; index < 7; ++index) {
+    const auto joint = "joint " + std::to_string(index + 1);
+    const double wanted = kp[index] * q_des[index];
+    EXPECT_LE(std::abs(mit_torque(sent[index], 0.0, 0.0)), kFinal[index] + kTorqueTolerance) << joint;
+    if (wanted > kFinal[index]) {
+      EXPECT_NEAR(mit_torque(sent[index], 0.0, 0.0), kFinal[index], kTorqueTolerance) << joint;
+      EXPECT_GT(sent[index].position, 0.0) << joint;
+      EXPECT_LT(sent[index].position, q_des[index]) << joint;
+    } else {
+      EXPECT_EQ(sent[index].position, q_des[index]) << joint;
+    }
+    EXPECT_EQ(sent[index].velocity, 0.0) << joint;
+    EXPECT_EQ(sent[index].stiffness, kp[index]) << joint;
+    EXPECT_EQ(sent[index].damping, kd[index]) << joint;
+    EXPECT_EQ(sent[index].effort, 0.0) << joint;
+  }
+  // The arm comes halfway: every ACTIVE re-send is bounded at the newest
+  // read, so the joints the bound no longer binds get their target back.
+  transport->next_position = {0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  EXPECT_EQ(status_of(*system), kActive);
+  const auto resent = transport->sent.back();
+  for (const std::size_t index : {0u, 1u, 2u, 3u, 5u, 6u}) {
+    EXPECT_EQ(resent[index].position, q_des[index]) << index + 1;
+  }
+  EXPECT_NEAR(resent[4].position, 0.5 + 7.0 / 15.0, 1e-12);  // 15 * 0.5 is still above 7
+  EXPECT_NEAR(mit_torque(resent[4], 0.5, 0.0), 7.0, kTorqueTolerance);
+}
+
+TEST(OpenArmMitRealFinalTorque, ASafeHoldOnAFastJointIsBoundedButKeepsTheMeasuredFeedForward)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  // Joint 5 (final 7 N*m) is moving at -10 rad/s with 6.5 N*m: the hold's
+  // safe damping, 0.1 * 10, would add 1 N*m on top.
+  transport->next_velocity[4] = -10.0;
+  transport->next_effort[4] = 6.5;
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  const auto hold = transport->sent.back();
+  EXPECT_NEAR(mit_torque(hold[4], 0.0, -10.0), 7.0, kTorqueTolerance);
+  EXPECT_NEAR(hold[4].velocity, -5.0, 1e-12);  // toward the measured -10
+  EXPECT_EQ(hold[4].position, 0.0);
+  EXPECT_EQ(hold[4].stiffness, 0.5);
+  EXPECT_EQ(hold[4].damping, 0.10);
+  EXPECT_EQ(hold[4].effort, 6.5);
+  EXPECT_EQ(hold[0].velocity, 0.0);  // the other joints' holds are inside the bound
+  // The effort commands still read the hold's feed-forward, which the bound
+  // did not have to touch.
+  EXPECT_DOUBLE_EQ(effort_command(commands, 5), 6.5);
+}
+
+TEST(OpenArmMitRealFinalTorque, TheWatchdogsLastFrameIsBoundedToo)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_velocity[4] = -10.0;
+  transport->next_effort[4] = 6.5;
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  // controller_manager stops writing: the watchdog thread sends the measured
+  // hold it was left, which the control thread bounded at that read.
+  const int sends = transport->send_calls.load();
+  ASSERT_TRUE(wait_for([&] {return transport->send_calls.load() > sends;}));
+  const auto last = transport->sent.back();
+  EXPECT_EQ(last[4].stiffness, 0.5);  // the profile's safe gains: the hold
+  EXPECT_NEAR(mit_torque(last[4], 0.0, -10.0), 7.0, kTorqueTolerance);
+  EXPECT_EQ(last[4].effort, 6.5);
+  for (std::size_t index = 0; index < 7; ++index) {
+    EXPECT_LE(
+      std::abs(mit_torque(last[index], 0.0, transport->next_velocity[index])),
+      kFinal[index] + kTorqueTolerance) << index + 1;
+  }
+}
+
+TEST(OpenArmMitRealProfile, EachBackendsProfileMustNameWhatItsConsumerDoes)
+{
+  using cho_openarm_mit_core::SafetyBackend;
+  using cho_openarm_mit_core::load_safety_profile_yaml;
+  const auto text = profile_text();
+  ASSERT_FALSE(text.empty());
+  EXPECT_NO_THROW(load_safety_profile_yaml(text, "real_conservative_commissioning", SafetyBackend::REAL, "single"));
+  EXPECT_NO_THROW(load_safety_profile_yaml(text, "real_return_to_zero_commissioning", SafetyBackend::REAL, "single"));
+  EXPECT_NO_THROW(load_safety_profile_yaml(text, "mujoco_sim_safe", SafetyBackend::MUJOCO, "single"));
+  // {MuJoCo limiter, real consumer}: a profile stating the other backend's
+  // shaping is not loaded, in either direction.
+  const std::array<std::array<std::string, 2>, 3> enums{{
+    {"ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew",
+      "ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive"},
+    {"slew_reference: last_successfully_submitted_command", "slew_reference: producer_side_no_consumer_slew"},
+    {"normal_policy: measured_position_hold_uses_same_gain_and_torque_slew",
+      "normal_policy: measured_position_and_torque_hold_at_safe_gains_no_slew"}}};
+  for (const auto & pair : enums) {
+    ASSERT_NE(text.find(pair[0]), std::string::npos) << pair[0];
+    ASSERT_NE(text.find(pair[1]), std::string::npos) << pair[1];
+    EXPECT_THROW(
+      load_safety_profile_yaml(
+        replace_all(text, pair[1], pair[0]), "real_conservative_commissioning", SafetyBackend::REAL, "single"),
+      std::invalid_argument) << pair[0];
+    EXPECT_THROW(
+      load_safety_profile_yaml(replace_all(text, pair[0], pair[1]), "mujoco_sim_safe", SafetyBackend::MUJOCO, "single"),
+      std::invalid_argument) << pair[1];
+  }
 }

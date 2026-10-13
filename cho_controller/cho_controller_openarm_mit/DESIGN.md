@@ -96,19 +96,21 @@ clamped to the profile command velocity, so the in-motor damping tracks the comm
 of braking it; the null space sees `-kd*dq` because `J^+` has no null-space component, and its
 stiffness comes from `nullspace_posture` through `tau_ff` when enabled.
 
-The gains are FIXED, not scheduled from `diag(J^T Kx J)` per pose, and only that diagonal is
-representable at all. The profile slews `kp` at 10/s while the mapped stiffness moves 3.4x across
-the workspace on joint 1, so a scheduled gain would only chase its own reference; and the drive takes
-one scalar per joint, so routing the off-diagonal remainder through `tau_ff` would put a fraction of
-the stiffness back on the delayed path. They are sized as the largest `kp` each joint can still damp
-to zeta = 0.7 at its worst-case inertia, because the MIT packet caps `kd` at 5
-(`dm_motor_control.cpp:136`): `kp_i = (kd_i/1.4)^2 / M_ii,p95`, then clipped by the profile ceiling.
-In the real single-arm config that is `[32, 30, 50, 49, 15, 10, 5]`, at least 86 N/m of Cartesian
-stiffness anywhere in the workspace.
+The gains are FIXED per joint, not scheduled per pose: the profile slews `kp` at 10/s while the
+joint stiffness one Cartesian stiffness maps to moves 3.4x across the workspace on joint 1, so a
+scheduled gain would only chase its own reference. With `K = diag(kp)` the Cartesian stiffness is
+`(J K^-1 J^T)^-1` when `reference_offset_weight` is proportional to `kp`: `kp*offset` then lies
+wholly in the range of `J^T`. With any other weight (all ones by default) part of it lies in the
+null space of `J` and no closed form holds. What the diagonal cannot express is not routed through
+`tau_ff`, which would put a fraction of the stiffness back on the delayed path. The gains are sized
+as the largest `kp` each joint can still damp to zeta = 0.7 at its worst-case inertia, because the
+MIT packet caps `kd` at 5 (`dm_motor_control.cpp:136`): `kp_i = (kd_i/1.4)^2 / M_ii,p95`, then
+clipped by the profile ceiling. In the real single-arm config that is `[32, 30, 50, 49, 15, 10, 5]`.
 
 `max_reference_offset` bounds `|q_des - q|` per joint and is **the only bound on the impedance
 torque**: `torque_limit` clamps the effort field alone, and the drive adds `kp*(q_des - q)`
-downstream of anything this controller can clamp. Unset, it derives as `0.5 * torque_limit / kp`, so
+downstream of anything this controller can clamp. (On real hardware the consumer bounds the sum once more, to the
+profile's `final_magnitude`.) Unset, it derives as `0.5 * torque_limit / kp`, so
 tracking error can claim at most half the torque budget and gravity keeps the rest.
 
 `kp_task`, `kd_task` and `max_task_wrench` apply **only to the legacy law**. Under the drive-side law
@@ -170,9 +172,9 @@ After the MIT session seed is acknowledged the controller has one joint-space in
   holds (`kp` under the drive-side law, 0 under the legacy law; `kd` in both), then the TCP pose is
   latched. TaskSpace goals are rejected until then.
 
-`startup_posture` is declared but unused; `startup_duration`/`startup_tolerance` are replaced by the
-`return_to_zero_*` values. Idle retains the last commanded Cartesian reference and uses the same
-zero-velocity task impedance plus `nle`; a successful action keeps its terminal reference. Relative
+`startup_duration`/`startup_tolerance` are replaced by the `return_to_zero_*` values. Idle retains
+the last commanded Cartesian reference and uses the same zero-velocity task impedance plus `nle`; a
+successful action keeps its terminal reference. Relative
 and absolute goals use the same Cartesian trajectory law without a separate workspace/displacement
 admission cap.
 
@@ -225,4 +227,6 @@ clock (`action_control_time_`) and the start-up and hand-off timers by adding th
 only when it is finite and in `(0, 0.1)` s; a zero, negative, non-finite or longer period advances
 none of them. The model feed-forward slew and the Cartesian idle-release blend of
 `TaskSpaceImpedanceController` and `VlaController` instead take `bounded_dt()`
-(`task_space_impedance_controller.cpp`), which floors the step at `1e-4` s and has no upper bound.
+(`task_space_impedance_controller.cpp`), the gripper controller's rule: the measured period capped
+at 0.1 s, and 0 for a zero, negative or non-finite one, so neither moves on a cycle in which no time
+passed.

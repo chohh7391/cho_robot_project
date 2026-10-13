@@ -67,6 +67,12 @@ struct SafetyProfile
 // rejected. Callers must still impose their own explicit runtime
 // acknowledgements before opening a transport.
 //
+// The torque `ordering`, `slew_reference` and SAFE `normal_policy` enums are
+// per backend, each naming what that backend's consumer does: the MuJoCo
+// limiter saturates and slews (mit_limiter.hpp); the real adapter rejects,
+// bounds only the final torque (bound_final_torque()) and leaves every slew to
+// the producers. A profile naming the other backend's behaviour is rejected.
+//
 // `arm_side` selects which mount's joint-position window is loaded: "single"
 // (or "") for the one-arm mount, "left"/"right" for the bimanual torso, whose
 // joints 1 and 2 have different windows because the torso rolls each arm's
@@ -147,6 +153,19 @@ struct ValidationLimits
 
 bool is_exact_nonnegative_integer(double value);
 bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
+
+// The real consumer's final torque bound. The drive evaluates
+//   tau = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
+// itself, so a consumer can bound only the tuple it sends. With the measured
+// `position` (q) and `velocity` (dq): a tuple whose tau lies in
+// [-final_torque, final_torque] is returned unchanged. Otherwise q_des moves
+// toward q, and dq_des toward dq only if the spring alone cannot do it, until
+// it does (never past the measurement); tau_ff is clamped to the bound (a
+// validated tuple's already is) and the gains are kept. The drive uses its own,
+// newer q and dq, so the bound is one cycle late. A non-finite input, or a
+// negative or NaN final_torque, returns the tuple unchanged.
+JointTuple bound_final_torque(
+  const JointTuple & tuple, double position, double velocity, double final_torque);
 
 // The hardware-owned SAFE hold is
 //   q_des = q_measured, dq_des = 0, kp = safe_hold_stiffness, kd = safe_hold_damping,

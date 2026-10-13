@@ -20,7 +20,8 @@ are how every backend gets its profile. There is no default: the file's
 side (`single`, `left` or `right`, which selects the mount's joint-position
 window). The loader rejects missing or unknown keys, wrong scalar types and
 enums, null required simulation values, a backend mismatch, and non-finite or
-misordered limits. Of the four profiles in
+misordered limits. The torque `ordering`, `slew_reference` and SAFE `normal_policy` enums are
+per backend: each names what that backend's consumer does. Of the four profiles in
 `cho_description_openarm/config/mit_safety_profiles_v1.yaml`,
 `real_conservative_unapproved` is always rejected; `real_conservative_commissioning`
 and `real_return_to_zero_commissioning` are the only real profiles that load.

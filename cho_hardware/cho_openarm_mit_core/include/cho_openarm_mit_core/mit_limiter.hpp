@@ -14,36 +14,39 @@
 
 #pragma once
 #include <array>
-#include <cho_openarm_mit_core/mit_protocol.hpp>
 #include <cstdint>
-namespace cho_hardware_openarm_mit_mujoco
+
+#include "cho_openarm_mit_core/mit_protocol.hpp"
+namespace cho_openarm_mit_core
 {
-constexpr std::size_t N = 7;
-struct Tuple
-{
-  double q, dq, kp, kd, tau;
-};
-struct Limits
-{
-  std::array<double, N> q_lo, q_hi, dq, kp, kd, kp_slew, kd_slew, safe_kp, safe_kd, tau_ff,
-    tau_ff_slew, tau, tau_slew;
-  std::uint64_t lease_cap;
-};
+// The MuJoCo backend's per-arm consumer (cho_hardware_openarm_mit_mujoco). It
+// shapes a commit: targets, gains and tau_ff are clamped to the profile and
+// slewed, then the MIT equation is evaluated and the final torque saturated
+// and slewed. The real adapter validates and rejects instead (ArmConsumer);
+// test_limiter_vs_consumer measures the difference. Only a MUJOCO profile, at
+// its own update rate, is accepted.
 class Limiter
 {
 public:
-  explicit Limiter(const cho_openarm_mit_core::SafetyProfile & profile, std::size_t actual_rate_hz);
+  // One joint's MIT tuple: q_des, dq_des, kp, kd, tau_ff.
+  struct Tuple
+  {
+    double q, dq, kp, kd, tau;
+  };
+  explicit Limiter(const SafetyProfile & profile, std::size_t actual_rate_hz);
   // A new session's measured SAFE hold at `measured`. Its tau_ff is the torque
   // this limiter applied last -- the simulator's measured joint torque, as on
-  // the real adapter (cho_openarm_mit_core::ArmConsumer): about the gravity
-  // torque when the arm was being held (an INACTIVE hold, a reactivation),
-  // zero before the first activation and after a fault. The final-torque slew
-  // continues from that torque instead of restarting from zero.
-  void reset(const std::array<double, N> & measured);
+  // the real adapter (ArmConsumer): about the gravity torque when the arm was
+  // being held (an INACTIVE hold, a reactivation), zero before the first
+  // activation and after a fault. The final-torque slew continues from that
+  // torque instead of restarting from zero.
+  void reset(const std::array<double, kJointsPerArm> & measured);
   bool submit(
-    const std::array<Tuple, N> & requested, std::uint64_t generation, std::uint64_t lease);
-  std::array<double, N> update(
-    const std::array<double, N> & q, const std::array<double, N> & dq, double dt);
+    const std::array<Tuple, kJointsPerArm> & requested, std::uint64_t generation,
+    std::uint64_t lease);
+  std::array<double, kJointsPerArm> update(
+    const std::array<double, kJointsPerArm> & q, const std::array<double, kJointsPerArm> & dq,
+    double dt);
   void fault()
   {
     fault_ = true;
@@ -65,10 +68,16 @@ public:
   std::uint64_t ack() const { return ack_; }
 
 private:
+  struct Limits
+  {
+    std::array<double, kJointsPerArm> q_lo, q_hi, dq, kp, kd, kp_slew, kd_slew, safe_kp, safe_kd,
+      tau_ff, tau_ff_slew, tau, tau_slew;
+    std::uint64_t lease_cap;
+  };
   Limits limits_;
-  std::array<Tuple, N> command_{}, applied_{};
-  std::array<double, N> last_tau_{};
+  std::array<Tuple, kJointsPerArm> command_{}, applied_{};
+  std::array<double, kJointsPerArm> last_tau_{};
   std::uint64_t ack_{0}, lease_{0}, age_{0};
   bool safe_{true}, fault_{false}, capture_safe_position_{false};
 };
-}  // namespace cho_hardware_openarm_mit_mujoco
+}  // namespace cho_openarm_mit_core

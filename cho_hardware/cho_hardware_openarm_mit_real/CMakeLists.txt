@@ -70,6 +70,14 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_openarm_mit_real_gates hardware_interface)
   target_compile_definitions(test_openarm_mit_real_gates PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
+  # Two arms under a real hardware_interface::ResourceManager, its read()/write()
+  # driven at 750 Hz by a thread: about 2 s of wall time.
+  ament_add_gtest(test_bimanual_reactivation test/test_bimanual_reactivation.cpp TIMEOUT 60)
+  target_link_libraries(test_bimanual_reactivation ${PROJECT_NAME})
+  target_include_directories(test_bimanual_reactivation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  ament_target_dependencies(test_bimanual_reactivation hardware_interface rclcpp rclcpp_lifecycle)
+  target_compile_definitions(test_bimanual_reactivation PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 endif()
 
 ament_export_dependencies(cho_openarm_mit_core hardware_interface pluginlib rclcpp rclcpp_lifecycle)

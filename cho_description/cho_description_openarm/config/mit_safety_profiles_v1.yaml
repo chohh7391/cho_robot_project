@@ -98,9 +98,9 @@ profiles:
       # Manufacturer PEAK torque; see mujoco_sim_safe.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], return_to_zero_kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], return_to_zero_kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
-    torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew, slew_reference: last_successfully_submitted_command}
+    torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive, slew_reference: producer_side_no_consumer_slew}
     timing: {priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease, lease_default_cycles: null, lease_cap_cycles: null, producer_refresh_cycles: null, controller_write_watchdog_ms: null, state_stale_cycles: null, counters_advance_on: successful_consumer_write_cycle, bimanual_send_skew_us: null, bimanual_send_skew_gate: measure_before_enforcement, skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us}
-    safe_transition: {normal_policy: measured_position_hold_uses_same_gain_and_torque_slew, fault_exception: immediate_transport_disable_no_slew}
+    safe_transition: {normal_policy: measured_position_and_torque_hold_at_safe_gains_no_slew, fault_exception: immediate_transport_disable_no_slew}
   # This is deliberately a commissioning-only operating envelope, not a
   # production approval. bringup_real_robot.launch.py selects it, with or
   # without return_to_zero; the adapter validates this profile before creating
@@ -167,8 +167,16 @@ profiles:
       tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
-      ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
-      slew_reference: last_successfully_submitted_command
+      # What the real consumer does, which the loader requires a REAL profile
+      # to state: a commit with any joint outside the bounds above is rejected
+      # (measured SAFE), nothing is clamped or slewed, and the motor evaluates
+      # the MIT equation. The one bound it adds is final_magnitude: q_des, then
+      # dq_des if needed, of every tuple it sends is moved toward the last
+      # measured state (one cycle late: the motor uses its own, newer state).
+      # The slews above are the producers' (gain ramps, model feed-forward);
+      # final_slew_per_s has no effect on hardware.
+      ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
+      slew_reference: producer_side_no_consumer_slew
     timing:
       priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
       # These are CYCLE counts, so they scale with update_rate_hz: at 750 Hz
@@ -185,7 +193,9 @@ profiles:
       bimanual_send_skew_gate: measure_before_enforcement
       skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us
     safe_transition:
-      normal_policy: measured_position_hold_uses_same_gain_and_torque_slew
+      # The hold goes out at once: the measured pose and joint torque at the
+      # safe gains, no ramp from the tuple before it.
+      normal_policy: measured_position_and_torque_hold_at_safe_gains_no_slew
       fault_exception: immediate_transport_disable_no_slew
   # A narrow variant of real_conservative_commissioning: it differs only in
   # kp_max/kd_max (upstream OpenArm's homing gains) and kp_slew_per_s. The real
@@ -236,8 +246,9 @@ profiles:
       tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
-      ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
-      slew_reference: last_successfully_submitted_command
+      # The real consumer's ordering; see real_conservative_commissioning.
+      ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
+      slew_reference: producer_side_no_consumer_slew
     timing:
       priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease
       # These are CYCLE counts, so they scale with update_rate_hz: at 750 Hz
@@ -254,5 +265,5 @@ profiles:
       bimanual_send_skew_gate: measure_before_enforcement
       skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us
     safe_transition:
-      normal_policy: measured_position_hold_uses_same_gain_and_torque_slew
+      normal_policy: measured_position_and_torque_hold_at_safe_gains_no_slew
       fault_exception: immediate_transport_disable_no_slew

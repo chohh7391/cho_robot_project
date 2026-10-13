@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "cho_hardware_openarm_mit_mujoco/mit_limiter.hpp"
+#include "cho_openarm_mit_core/mit_limiter.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-namespace cho_hardware_openarm_mit_mujoco
+namespace cho_openarm_mit_core
 {
 namespace
 {
@@ -27,22 +27,20 @@ double slew(double x, double old, double rate, double dt)
   return clamp(x, old - rate * dt, old + rate * dt);
 }
 }  // namespace
-Limiter::Limiter(const cho_openarm_mit_core::SafetyProfile & p, std::size_t rate)
+Limiter::Limiter(const SafetyProfile & p, std::size_t rate)
 : limits_{p.position_lower, p.position_upper, p.command_velocity, p.kp_max,       p.kd_max,
           p.kp_slew,        p.kd_slew,        p.safe_stiffness,   p.safe_damping, p.tau_ff_max,
           p.tau_ff_slew,    p.final_torque,   p.final_slew,       p.lease_cap}
 {
-  if (
-    p.backend != cho_openarm_mit_core::SafetyBackend::MUJOCO || p.name.empty() ||
-    rate != p.update_rate_hz)
+  if (p.backend != SafetyBackend::MUJOCO || p.name.empty() || rate != p.update_rate_hz)
     throw std::invalid_argument("explicit MuJoCo safety profile/update rate mismatch");
 }
-void Limiter::reset(const std::array<double, N> & q)
+void Limiter::reset(const std::array<double, kJointsPerArm> & q)
 {
   // last_tau_ is kept: it is the torque being applied, the reference of the
   // final slew, and (clamped) the new hold's tau_ff. Zeroing both dropped an
   // arm that was being held, for as long as the slew took to bring it back.
-  for (std::size_t i = 0; i < N; ++i) {
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     const double held = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
     command_[i] = applied_[i] = {q[i], 0, limits_.safe_kp[i], limits_.safe_kd[i], held};
   }
@@ -51,10 +49,11 @@ void Limiter::reset(const std::array<double, N> & q)
   fault_ = false;
   capture_safe_position_ = false;
 }
-bool Limiter::submit(const std::array<Tuple, N> & r, std::uint64_t gen, std::uint64_t lease)
+bool Limiter::submit(
+  const std::array<Tuple, kJointsPerArm> & r, std::uint64_t gen, std::uint64_t lease)
 {
   if (fault_ || gen == 0 || gen <= ack_ || lease == 0 || lease > limits_.lease_cap) return false;
-  for (std::size_t i = 0; i < N; ++i)
+  for (std::size_t i = 0; i < kJointsPerArm; ++i)
     if (
       !std::isfinite(r[i].q) || !std::isfinite(r[i].dq) || !std::isfinite(r[i].kp) ||
       !std::isfinite(r[i].kd) || !std::isfinite(r[i].tau) || r[i].kp < 0 || r[i].kd < 0)
@@ -66,10 +65,11 @@ bool Limiter::submit(const std::array<Tuple, N> & r, std::uint64_t gen, std::uin
   safe_ = false;
   return true;
 }
-std::array<double, N> Limiter::update(
-  const std::array<double, N> & q, const std::array<double, N> & dq, double dt)
+std::array<double, kJointsPerArm> Limiter::update(
+  const std::array<double, kJointsPerArm> & q, const std::array<double, kJointsPerArm> & dq,
+  double dt)
 {
-  std::array<double, N> out{};
+  std::array<double, kJointsPerArm> out{};
   if (fault_) {
     last_tau_.fill(0);
     return out;
@@ -83,13 +83,13 @@ std::array<double, N> Limiter::update(
     // previous cycle as tau_ff -- the gravity torque of an arm at rest, which
     // the MIT motor has no model of. Not the last accepted tau_ff, which left
     // whatever the producer's spring had carried to sag away at the safe gains.
-    for (std::size_t i = 0; i < N; ++i) {
+    for (std::size_t i = 0; i < kJointsPerArm; ++i) {
       command_[i].q = q[i];
       command_[i].tau = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
     }
     capture_safe_position_ = false;
   }
-  for (std::size_t i = 0; i < N; ++i) {
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     auto target = command_[i];
     // SAFE keeps the latched tau_ff: the MIT motor has no gravity model of its own.
     if (safe_) target = {command_[i].q, 0, limits_.safe_kp[i], limits_.safe_kd[i], command_[i].tau};
@@ -112,4 +112,4 @@ std::array<double, N> Limiter::update(
   last_tau_ = out;
   return out;
 }
-}  // namespace cho_hardware_openarm_mit_mujoco
+}  // namespace cho_openarm_mit_core

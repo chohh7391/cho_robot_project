@@ -493,7 +493,7 @@ hardware_interface::return_type MitMujocoSystem::write(
                     g <= cho_openarm_mit_core::kMaxExactInteger &&
                     l <= cho_openarm_mit_core::kMaxExactInteger && std::floor(g) == g &&
                     std::floor(l) == l && a.protocol[5] == a.protocol[0];
-    std::array<Tuple, N> c{};
+    std::array<Limiter::Tuple, N> c{};
     for (std::size_t j = 0; j < N; ++j)
       c[j] = {a.command[j][0], a.command[j][1], a.command[j][2], a.command[j][3], a.command[j][4]};
     if (

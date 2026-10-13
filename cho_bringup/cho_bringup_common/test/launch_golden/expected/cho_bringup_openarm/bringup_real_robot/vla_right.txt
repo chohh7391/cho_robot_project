@@ -177,11 +177,11 @@ RUNTIME_FILE <RT:cho_openarm_runtime_params_#0> aliases=False
         arm: right
         return_to_zero: true
         return_to_zero_duration: 2.0
-        return_to_zero_kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
-        return_to_zero_kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
         return_to_zero_tolerance: 0.05
         safety_profile_file: <share:cho_description_openarm>/config/mit_safety_profiles_v1.yaml
         safety_profile_name: real_conservative_commissioning
+        startup_kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]
+        startup_kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
   /** (every controller):
     bringup_type: real
     control_mode: effort

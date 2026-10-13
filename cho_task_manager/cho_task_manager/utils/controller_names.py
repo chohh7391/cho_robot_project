@@ -172,6 +172,12 @@ def _registry_entry(robot_config):
         robot_config['robot_type'], robot_config.get('profile', 'single'))
 
 
+def _member_arms(registry):
+    """The other profiles a multi-arm profile drives (``both``: left, right); [] for a one-arm one."""
+    profile = registry.get('profile', 'single')
+    return [arm for arm in registry.get('arms') or [] if arm != profile]
+
+
 def _arm_controllers_of(registry):
     """Every arm controller one registry entry names, in a stable order.
 
@@ -180,6 +186,12 @@ def _arm_controllers_of(registry):
     the direct action preferences. Never the gripper, and never the MoveIt
     bridge, which serves actions but is not a controller. A null role (one the
     profile has no controller for) contributes nothing.
+
+    A profile that drives several arms (``arms: [left, right]``, OpenArm
+    ``both``) has no direct role of its own, so it also takes each member
+    arm's whole set and the ``moveit.controllers`` MoveIt executes through. A
+    single-arm profile does not: its other arm's trajectory controller is not
+    its to deactivate.
     """
     names = []
 
@@ -206,6 +218,17 @@ def _arm_controllers_of(registry):
             node = _serving_node(action_name)
             if node != bridge:
                 add(node)
+    members = _member_arms(registry)
+    for arm in members:
+        member = load_registry_config(registry['robot_type'], arm)
+        for name in _arm_controllers_of(member):
+            add(name)
+        # What the arm's own task tree activates (compatibility.task_manager).
+        for name in ((member.get('compatibility') or {}).get('task_manager') or {}).values():
+            add(name)
+    if members:
+        for name in (registry.get('moveit') or {}).get('controllers') or []:
+            add(name)
     gripper = controllers.get('gripper')
     return [name for name in names if name != gripper]
 
@@ -226,9 +249,12 @@ def exclusive_arm_controllers(robot_config) -> List[str]:
     compatibility.task_manager overrides), the raw roles and per-mode holds,
     ``controllers.additional_arm`` and the direct action endpoints of the
     loaded profile, which is what makes a bimanual (``left_`` / ``right_``
-    prefixed) profile come out right. There is no robot-independent default;
-    one used to exist and it was Franka's list, which deactivates nothing that
-    holds any other arm. The gripper is never included.
+    prefixed) profile come out right. A profile that drives several arms
+    (OpenArm ``both``) gets every member arm's set (:func:`_arm_controllers_of`);
+    ``left`` and ``right`` alone never take the other arm down. There is no
+    robot-independent default; one used to exist and it was Franka's list,
+    which deactivates nothing that holds any other arm. The gripper is never
+    included.
     """
     if not robot_config or not robot_config.get('robot_type'):
         raise ValueError(

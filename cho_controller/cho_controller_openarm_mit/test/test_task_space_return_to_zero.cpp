@@ -468,7 +468,7 @@ protected:
     set("arm", "single"); set("kp", std::vector<double>(7, 5.0)); set("kd", std::vector<double>(7, 0.4)); set("torque_limit", std::vector<double>(7, 3.0));
     set("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE); set("safety_profile_name", "mujoco_sim_safe"); set("robot_description", urdf()); set("ee_frame", "openarm_hand_tcp");
     set("kp_task", std::vector<double>(6, 1.0)); set("kd_task", std::vector<double>(6, 0.1)); set("max_task_wrench", std::vector<double>(6, 1.0));
-    set("startup_posture", std::vector<double>{0.0, -0.5, 0.0, 1.2, 0.0, 0.4, 0.0}); set("startup_kp", std::vector<double>{70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0}); set("startup_kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
+    set("startup_kp", std::vector<double>{70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0}); set("startup_kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
     set("startup_duration", 0.30); set("startup_tolerance", 0.05); set("return_to_zero", true); set("return_to_zero_duration", 0.30); set("return_to_zero_tolerance", 0.05);
     set("release_duration", 0.3);
     ASSERT_EQ(manager_->configure_controller("task_space_impedance_mit_controller"), controller_interface::return_type::OK);
@@ -603,7 +603,6 @@ TEST_F(ConfigureFixture, ExactRealRightReturnToZeroParametersConfigureAgainstBim
   set("kp_task", std::vector<double>{50.0, 50.0, 50.0, 5.0, 5.0, 5.0});
   set("kd_task", std::vector<double>{6.32, 6.32, 6.32, 0.45, 0.45, 0.45});
   set("max_task_wrench", std::vector<double>{8.0, 8.0, 8.0, 1.0, 1.0, 1.0});
-  set("startup_posture", std::vector<double>{0.0, -0.15, 0.0, 1.14, 0.0, 0.38, 0.0});
   set("startup_kp", std::vector<double>{70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0});
   set("startup_kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
   set("startup_duration", 15.0);
@@ -897,9 +896,8 @@ protected:
     set("kp_task", std::vector<double>{50.0, 50.0, 50.0, 5.0, 5.0, 5.0});
     set("kd_task", std::vector<double>{6.32, 6.32, 6.32, 0.45, 0.45, 0.45});
     set("max_task_wrench", std::vector<double>{8.0, 8.0, 8.0, 1.0, 1.0, 1.0});
-    // These legacy posture values remain in the YAML for compatibility, but
-    // opting out of RTZ must not validate or execute them.
-    set("startup_posture", std::vector<double>{0.0, -0.15, 0.0, 1.14, 0.0, 0.38, 0.0});
+    // The startup gains and timing remain in the YAML, but opting out of RTZ
+    // must not validate or execute them.
     set("startup_kp", std::vector<double>{3.0, 3.0, 3.0, 2.0, 0.5, 0.5, 0.5});
     set("startup_kd", std::vector<double>{0.4, 0.4, 0.3, 0.3, 0.1, 0.1, 0.08});
     set("startup_duration", 15.0);
@@ -1699,7 +1697,6 @@ protected:
     set("kp_task", std::vector<double>{40.0, 40.0, 40.0, 3.0, 3.0, 3.0});
     set("kd_task", std::vector<double>(6, 0.0));
     set("max_task_wrench", std::vector<double>{10.0, 10.0, 10.0, 1.5, 1.5, 1.5});
-    set("startup_posture", std::vector<double>{0.0, -0.15, 0.0, 1.14, 0.0, 0.38, 0.0});
     set("startup_kp", std::vector<double>{70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0});
     set("startup_kd", std::vector<double>{2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5});
     set("startup_duration", 0.30); set("startup_tolerance", 0.05);

@@ -47,16 +47,30 @@ non-blocking (a `write()` into a full transmit queue fails at once -- and faults
 the arm -- instead of blocking the control loop while it holds the transport
 lock) and subscribed to bus-off error frames (`CAN_RAW_ERR_FILTER`), both from
 this side: `extern/openarm_can` opens it blocking and asks for no error frames.
-`on_activate` enables motors only after a finite measured state and sends a
-measured-position safe hold. NaN/read/write faults, a bus-off, a stale motor and
-the 100 ms profile write watchdog fault the arm and disable the motors, and the
-reason is logged.
+NaN/read/write faults, a bus-off, a stale motor and the 100 ms profile write
+watchdog fault the arm and disable the motors, and the reason is logged.
 
-The activation seed is measured, by every motor: the first SAFE hold is
-commanded to the state read at activation, so every arm motor (and the
-gripper, with `hand`) must have answered that read; one that has not still
-reads the vendor's initial zero. Up to ten reads are allowed for a reply that
-missed a receive window; activation fails otherwise.
+Humble's ResourceManager runs lifecycle transitions and every component's
+`read()`/`write()` under one lock, so anything `on_activate` waited for would
+stall the other arm's writes too (past 100 ms its write watchdog trips). A
+fresh activation (motors not enabled) therefore only starts in `on_activate`;
+`read()` carries it on, one step per cycle:
+
+1. register 9 of every motor (see the CAN timeout below);
+2. the enable frames, then the motors' 100 ms settle time;
+3. the seed: one state read per cycle until every arm motor (and the gripper,
+   with `hand`) has answered one, at most ten. The first SAFE hold is commanded
+   to it, and a motor that has not answered still reads the vendor's initial
+   zero;
+4. the new session's first SAFE hold, then ACTIVE.
+
+Until then `write()` sends nothing, `mit_status` reads DISABLED (never SAFE),
+and `prepare_command_mode_switch` refuses a switch that names this component
+(the other arm's switches go through). A failure is a FAULT (`read()` returns
+ERROR, Humble runs `on_error()`, which disables). A stop before step 4 disables
+the motors if the enable went out, and sends nothing otherwise.
+`test/test_bimanual_reactivation.cpp` runs both arms under a real
+ResourceManager at 750 Hz and re-activates one while the other is driven.
 
 ## The motors' CAN timeout
 
@@ -64,10 +78,13 @@ A Damiao motor keeps executing its last MIT frame for as long as it is powered,
 unless its "CAN Timeout" register (`RID::TIMEOUT`, 9) is set: then it stops on
 its own when no frame arrives for that long. That is the only thing that ends a
 hold once this process can no longer send (a crash, a kill, a dead PC, or after
-cleanup/shutdown). Before an activation that enables the motors, `on_activate`
-reads register 9 on every motor (and the gripper's, with `hand`) and
-**refuses** -- `FAILURE`, nothing enabled or sent -- when one reads 0 or does not
-answer, naming the motors and the commands to fix it:
+cleanup/shutdown). Before an activation enables the motors, it reads register 9
+on every motor (and the gripper's, with `hand`; three rounds of 30 ms, polled
+by `read()`) and **refuses** when one reads 0 or does not answer, naming the
+motors and the commands to fix it. The refusal is a FAULT with nothing enabled
+or sent, and `on_error()` sends nothing either (it disables only motors this
+transport has enabled); the component is then UNCONFIGURED, and activating it
+again configures it first:
 
 ```bash
 openarm-can-cli -i can0 show_param --id 1,2,3,4,5,6,7,8      # read every register
@@ -76,9 +93,9 @@ openarm-can-cli -i can0 write_param --id 3 --rid 9 --value <timeout> --save
 
 The unit is the firmware's; `extern/openarm_can` does not document it, so set a
 value and measure the resulting timeout on the bench (stop a running hold and
-time the drop). Keep it above this adapter's 100 ms silent wait after
-`enable()`, or the motors time out during activation. `mit_allow_no_can_timeout:
-true` accepts motors without one, with a warning.
+time the drop). Keep it above the 100 ms settle time after the enable frames,
+during which nothing is sent, or the motors time out during activation.
+`mit_allow_no_can_timeout: true` accepts motors without one, with a warning.
 
 ## Stopping
 
@@ -102,11 +119,13 @@ The arm has no brakes. With `mit_stop_behavior: hold` (the default):
   The watchdog checks again after each sleep that no stop has begun.
 - `on_cleanup`, `on_shutdown` and the destructor send the hold one last time and
   nothing after it; the motors' CAN timeout ends it.
-- Reactivating out of the supervised hold does not call `enable()` (the motors
-  are enabled, and its 100 ms of silence could only let their CAN timeout drop
-  the arm) and does not read register 9 again. If a motor misses the seed read
-  then, activation is refused with `FAILURE` and the arm stays in its supervised
-  hold; the stale-state limit decides whether the motor is really gone.
+- Reactivating out of the supervised hold neither enables the motors (they are
+  enabled, and 100 ms of silence could only let their CAN timeout drop the arm)
+  nor reads register 9 again: `on_activate` takes the seed (a few reads, each
+  at most the 500 us receive wait), starts the session and sends its first SAFE
+  hold itself. If a motor misses the seed read then, activation is refused with
+  `FAILURE` and the arm stays in its supervised hold; the stale-state limit
+  decides whether the motor is really gone.
 
 `mit_stop_behavior: disable` disables the motors at every orderly stop and on a
 write-watchdog trip (the arm drops). A fault and `on_error()` disable at once
@@ -117,7 +136,7 @@ what is left.
 
 The write watchdog runs on its own thread and only holds (or disables)
 transport there; the protocol state is faulted by the control thread on its
-next cycle. Every disable, and the watchdog's last hold, marks the transport
+next cycle. A stop wakes its 25 ms wait, so no lifecycle callback waits it out. Every disable, and the watchdog's last hold, marks the transport
 disabled under the transport lock, so neither a `write()` nor a `read()` (its
 state query) racing it puts one more frame on the bus afterwards. The trip and
 a stop exclude each other under the watchdog lock: either the trip completes
@@ -159,6 +178,12 @@ endpoints (`gripper_motor_closed`/`_open`, `gripper_joint_closed`/`_open`) and
   profile's per-joint position window, command velocity, `kp_max`, `kd_max` and
   `tau_ff_magnitude`; a commit with any joint outside is rejected. The motor
   evaluates the MIT equation itself; this adapter applies no slew.
+- **What goes out is bounded to the final torque.** Every tuple sent (commit,
+  ACTIVE re-send, SAFE hold, the write watchdog's last hold) has `q_des`, then
+  `dq_des`, moved toward the latest measured state until
+  `|kp(q_des−q) + kd(dq_des−dq) + tau_ff| ≤ final_magnitude`
+  (`cho_openarm_mit_core::bound_final_torque()`); one cycle late, logged at most
+  once a second. The accepted tuple, its ack and the effort commands are unchanged.
 - **A commit is evaluated once.** A rejected commit puts the arm in SAFE once,
   with one new SAFE generation; while the producer leaves that same generation
   in place (a faulted Direct producer leaves it forever) the hold is retransmitted
@@ -186,14 +211,15 @@ endpoints (`gripper_motor_closed`/`_open`, `gripper_joint_closed`/`_open`) and
   [SwitchGate](../cho_openarm_mit_core/DESIGN.md#switchgate).
 - **`mit_state_from_command_reply` across a reactivation.** Without the per-cycle
   refresh, state comes from the replies to the previous cycle's commands, and
-  `enable()` drains whatever was pending; `enable()`/`disable()` therefore reset
-  that decision (`StateQuery`, which a test transport shares) and the seed read
-  refreshes.
+  finishing the enable drains whatever was pending; `finish_enable()` and
+  `disable()` therefore reset that decision (`StateQuery`, which a test
+  transport shares) and the seed read refreshes.
 
 ## Test coverage
 
 Everything above is exercised against a fake transport
-(`test/test_openarm_mit_real_gates.cpp`), including what the motors do with the
+(`test/test_openarm_mit_real_gates.cpp`; two arms under a real ResourceManager
+in `test/test_bimanual_reactivation.cpp`), including what the motors do with the
 final hold and with their CAN timeout, which is the firmware's behaviour, not
 this adapter's. Of the vendor transport (`VendorCanTransport`) only the socket
 options (on an unbound `CAN_RAW` socket) and the register-9 reply parsing are

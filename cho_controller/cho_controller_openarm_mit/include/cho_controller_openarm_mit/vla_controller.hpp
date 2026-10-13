@@ -103,6 +103,12 @@ namespace cho_controller_openarm_mit
 // session runs on the action clock (action_control_time_, seconds since
 // activation); telemetry stamps are published in ROS time.
 //
+// A relative chunk is anchored on the command as emitted, after the offset
+// bound (drive-side law) or the wrench limit (legacy law): emitted_pose_ and
+// task_q_ref_. Unsaturated, that is the commanded reference itself; blocked by
+// an obstacle, it stays within the bound of the measurement, so a policy that
+// keeps pressing does not wind the reference up past the obstacle.
+//
 // Chunk stream parameters (cho_vla_core's rules, shared with the Franka host):
 //  - stream_timeout_sec [s, > 0]: least quiet time since the last accepted chunk
 //    before hold (a goal's stream_timeout > 0 overrides it). While the buffer
@@ -249,6 +255,13 @@ private:
   // The MIT dq_des of the last target this controller wrote; see
   // note_commanded_joints(). task_q_ref_ is its position counterpart.
   std::array<double, 7> commanded_dq_des_ {};
+  // The anchor ring's pose (Session::record()): the Cartesian reference the
+  // last command carried after its saturation, i.e. write_cartesian_torque_target()'s
+  // emitted pose on the Cartesian paths (idle_pose_ itself while nothing
+  // saturates) and the measured pose on the joint path. False from activation
+  // to the first command, when the ring records idle_pose_.
+  pinocchio::SE3 emitted_pose_ {pinocchio::SE3::Identity()};
+  bool emitted_pose_valid_ {false};
 
   // ---- parameters -------------------------------------------------------
   std::string chunk_topic_ {"/vla/action/ee_pose"};
