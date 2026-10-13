@@ -103,6 +103,22 @@ namespace cho_controller_openarm_mit
 //     edges are only logged. A hand is driven by cho_controller_gripper's
 //     GripperController on its own interfaces (on the real adapter, hand:=true:
 //     an eighth motor on the arm's CAN socket).
+//
+// Chunk stream parameters (cho_vla_core's rules, shared with the Franka host):
+//  - stream_timeout_sec [s, > 0]: least quiet time since the last accepted chunk
+//    before hold (a goal's stream_timeout > 0 overrides it). While the buffer
+//    still has horizon, hold waits for its end, so a policy that re-infers every
+//    0.5 s with a 1 s horizon never holds.
+//  - stream_horizon_credit_sec [s, > 0, default 1.0]: the longest that horizon
+//    keeps the stream out of hold, counted from the last accepted chunk; it
+//    bounds the open-loop replay once the policy is dead.
+//  - chunk_max_observation_age [s, > 0, default 1.0] and chunk_max_future_skew
+//    [s, >= 0, default 0.05]: with chunk_time_source "observation", a chunk
+//    whose stamp is older than that before arrival, or later than that after it,
+//    is refused (last_reject observation_too_old / observation_in_future).
+//  - control_dt <= 0 is refused (last_reject control_dt); nothing stands in for it.
+//  - a chunk none of whose waypoints is still ahead of the playback clock counts
+//    as dropped, not accepted, and does not feed the stream watchdog.
 class VlaController final : public TaskSpaceImpedanceController
 {
 public:
@@ -221,7 +237,8 @@ private:
   std::atomic<bool> vla_success_flag_ {false};
   // Bumped once per ACCEPTED chunk. The watchdog runs on the control loop, so it
   // cannot be poked from the subscription callback; the loop compares this
-  // against its own last-seen value. Rejected chunks do not bump it.
+  // against its own last-seen value. Rejected chunks, and ones with no waypoint
+  // left to play, do not bump it.
   std::atomic<std::uint64_t> accepted_count_ {0};
   std::atomic<int> pending_gripper_ {0};
   std::atomic<bool> gripper_rejected_ {false};
@@ -261,7 +278,6 @@ private:
   // ---- parameters -------------------------------------------------------
   std::string chunk_time_source_ {"arrival"};
   std::string chunk_topic_ {"/vla/action/ee_pose"};
-  double inference_dt_ {0.0};
   double ema_factor_ {1.0};
   double goal_timeout_sec_ {0.0};
   double stream_timeout_sec_ {0.2};

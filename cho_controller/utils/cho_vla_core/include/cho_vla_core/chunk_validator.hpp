@@ -51,6 +51,15 @@ struct ValidationLimits
   // because chunks keep arriving.
   double max_control_dt {1.0};
 
+  // Observation window [s], checked only when Chunk::t_arrival is finite:
+  // t_obs > t_arrival + max_future_skew is kObservationInFuture, t_arrival -
+  // t_obs > max_observation_age is kObservationTooOld. Such a stamp is from
+  // another clock or a replay; timed from it the chunk lands at the wrong
+  // playback time (or entirely in the past), anchored to whatever the history
+  // ring falls back to. NaN or +inf turns that check off.
+  double max_observation_age {1.0};
+  double max_future_skew {0.05};
+
   // Reject a chunk whose seq is not newer than the last accepted one. Guards
   // against a transport that reorders or replays; off by default because a
   // bridge that leaves seq at 0 is still supported.
@@ -58,10 +67,13 @@ struct ValidationLimits
   bool check_seq {false};
 };
 
-// Structural checks only: chunk_size, control_dt, array sizes, finiteness of
-// every element, joint_order really being a permutation, seq monotonicity, and
-// the rotation_type and relative_frame enums being in range (kUnparseableField
-// for the latter, in every space). Nothing here needs the anchor.
+// Structural checks only: a finite t_obs inside the observation window (when
+// t_arrival is set), chunk_size, control_dt (finite, > 0 and at most
+// max_control_dt; nothing stands in for a missing one), array sizes, finiteness
+// of every element, joint_order really being a permutation, seq monotonicity,
+// and the rotation_type and relative_frame enums being in range
+// (kUnparseableField for the latter, in every space). Nothing here needs the
+// anchor.
 Reject validate(const Chunk & chunk, const ValidationLimits & limits);
 
 // Resolve `chunk` against `anchor` into absolute waypoints on the host clock.

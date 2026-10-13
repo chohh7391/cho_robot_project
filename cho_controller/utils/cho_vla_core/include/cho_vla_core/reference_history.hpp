@@ -49,14 +49,16 @@ public:
   // Control loop. Times must be non-decreasing; a non-finite time is ignored.
   void push(double time, const SE3 & pose, const Vector7 & joints);
 
-  // Newest entry at or before `time`.
+  // Newest entry at or before `time`, with `exact` true. A `time` newer than
+  // the whole ring is no exception: it gets the newest entry, also exact.
   //
-  // Falls back to the OLDEST entry when `time` precedes the whole ring (a chunk
-  // observed before the history started, or an inference so slow its observation
-  // has aged out) and to the newest when the ring is entirely older. Both
-  // fallbacks are reported through `exact`: an inexact anchor still beats no
-  // anchor, but the host should count it, because a persistent stream of them
-  // means the ring is too short for the measured latency.
+  // The one fallback is a `time` that precedes the whole ring (a chunk observed
+  // before the history started -- or before the host's reset() --, or an
+  // inference so slow its observation has aged out): the OLDEST entry, with
+  // `exact` false. An inexact anchor still beats no anchor, but the host should
+  // count it, because a persistent stream of them means the ring is too short
+  // for the measured latency. Returns false, `exact` false, when nothing
+  // readable is in the ring.
   bool at(double time, Anchor & out, bool * exact = nullptr) const;
 
   bool newest(Anchor & out) const;

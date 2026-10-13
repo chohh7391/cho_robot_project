@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace cho_vla_core
 {
@@ -59,6 +60,11 @@ double StreamWatchdog::quiet_for(const double now) const
 
 StreamState StreamWatchdog::update(const double now)
 {
+  return update(now, -std::numeric_limits<double>::infinity());
+}
+
+StreamState StreamWatchdog::update(const double now, const double horizon_end)
+{
   if (state_ == StreamState::kAborted) {return state_;}
   if (!(params_.stream_timeout > 0.0)) {return state_;}
 
@@ -68,7 +74,14 @@ StreamState StreamWatchdog::update(const double now)
   const double quiet = now - reference;
 
   if (state_ == StreamState::kWaitingFirstChunk || state_ == StreamState::kRunning) {
-    if (quiet > params_.stream_timeout) {
+    // The buffered horizon keeps the stream running past the timeout, up to the
+    // credit. Not before the first chunk: nothing is buffered from this goal.
+    const double credit = params_.max_horizon_credit;
+    bool horizon_over = true;
+    if (have_chunk_ && std::isfinite(credit) && credit > 0.0 && !std::isnan(horizon_end)) {
+      horizon_over = now >= std::min(horizon_end, last_chunk_ + credit);
+    }
+    if (quiet > params_.stream_timeout && horizon_over) {
       state_ = StreamState::kHold;
       hold_entered_ = now;
     }

@@ -73,6 +73,9 @@ controller_interface::CallbackReturn VlaController::on_init()
   auto_declare<double>("chunk_blend_duration", 0.1);
   auto_declare<std::string>("chunk_interpolation", "spline");
   auto_declare<double>("chunk_max_control_dt", 1.0);
+  auto_declare<double>("chunk_max_observation_age", 1.0);
+  auto_declare<double>("chunk_max_future_skew", 0.05);
+  auto_declare<double>("stream_horizon_credit_sec", 1.0);
   auto_declare<bool>("enable_gripper", false);
   auto_declare<std::vector<double>>("max_joint_ref_vel", std::vector<double>{});
   auto_declare<std::vector<double>>("max_joint_ref_acc", std::vector<double>{});
@@ -213,6 +216,14 @@ controller_interface::CallbackReturn VlaController::on_configure(
   cho_vla_core::StreamWatchdog::Params watchdog;
   watchdog.stream_timeout = stream_timeout_sec_;
   watchdog.hold_timeout = hold_timeout_sec_;
+  watchdog.max_horizon_credit = get_node()->get_parameter("stream_horizon_credit_sec").as_double();
+  if (!std::isfinite(watchdog.max_horizon_credit) || watchdog.max_horizon_credit <= 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "stream_horizon_credit_sec must be finite and > 0 (got %g): it bounds how long a "
+      "buffered horizon keeps a dead stream out of hold",
+      watchdog.max_horizon_credit);
+    return CallbackReturn::ERROR;
+  }
   // On by default. With it off, a single gap longer than stream_timeout_sec ends
   // the rollout even when chunks resume right after, because kHold only leaves
   // via hold_timeout -> abort. Measured in MuJoCo, which is how this default was
@@ -229,6 +240,18 @@ controller_interface::CallbackReturn VlaController::on_configure(
   }
   limits_.check_joint_window = true;
   limits_.max_control_dt = get_node()->get_parameter("chunk_max_control_dt").as_double();
+  limits_.max_observation_age =
+    get_node()->get_parameter("chunk_max_observation_age").as_double();
+  limits_.max_future_skew = get_node()->get_parameter("chunk_max_future_skew").as_double();
+  if (!std::isfinite(limits_.max_observation_age) || limits_.max_observation_age <= 0.0 ||
+    !std::isfinite(limits_.max_future_skew) || limits_.max_future_skew < 0.0)
+  {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "chunk_max_observation_age must be finite and > 0 and chunk_max_future_skew finite "
+      "and >= 0 (got %g and %g)",
+      limits_.max_observation_age, limits_.max_future_skew);
+    return CallbackReturn::ERROR;
+  }
   const auto workspace_min =
     get_node()->get_parameter("chunk_workspace_min").as_double_array();
   const auto workspace_max =
@@ -298,10 +321,11 @@ controller_interface::CallbackReturn VlaController::on_configure(
 
   RCLCPP_INFO(get_node()->get_logger(),
     "VLA MIT reference source ready: chunk_topic=%s time_source=%s stream_timeout=%.3f "
-    "hold_timeout=%.3f blend=%.3f interpolation=%s ema=%.3f max_task_ang_acc=%g. %s",
+    "horizon_credit=%.3f hold_timeout=%.3f blend=%.3f interpolation=%s ema=%.3f "
+    "max_task_ang_acc=%g. %s",
     chunk_topic_.c_str(), chunk_time_source_.c_str(), stream_timeout_sec_,
-    hold_timeout_sec_, buffer.blend_duration, interpolation.c_str(), ema_factor_,
-    max_task_ang_acc,
+    watchdog.max_horizon_credit, hold_timeout_sec_, buffer.blend_duration,
+    interpolation.c_str(), ema_factor_, max_task_ang_acc,
     drive_side_impedance_
       ? "Both action spaces are impedance."
       : "Legacy law: task space only.");
@@ -403,7 +427,6 @@ rclcpp_action::CancelResponse VlaController::vla_cancel_callback(
 void VlaController::vla_accepted_callback(const std::shared_ptr<VlaGoalHandle> & handle)
 {
   const std::uint64_t id = vla_next_id_.fetch_add(1);
-  inference_dt_ = 1.0 / static_cast<double>(handle->get_goal()->inference_frequency);
 
   const double requested = handle->get_goal()->stream_timeout;
   cho_vla_core::StreamWatchdog::Params watchdog = watchdog_.params();
@@ -640,17 +663,13 @@ cho_vla_core::Reject VlaController::build_chunk(
   chunk.t_obs = use_observation
     ? action_time_from_node(rclcpp::Time(message.header.stamp).seconds())
     : arrival;
+  // Only a stamp the chunk brought is judged against the arrival (the observation
+  // window in validate()); an arrival-timed chunk has nothing to compare.
+  if (use_observation) {chunk.t_arrival = arrival;}
   chunk.seq = message.seq;
   chunk.chunk_size = message.chunk_size;
+  // Taken as sent: validate() refuses control_dt <= 0, nothing stands in for it.
   chunk.control_dt = message.control_dt;
-  if (!(std::isfinite(chunk.control_dt) && chunk.control_dt > 0.0) &&
-    message.chunk_size > 0 && inference_dt_ > 0.0)
-  {
-    chunk.control_dt = inference_dt_ / static_cast<double>(message.chunk_size);
-    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
-      "ActionChunk.control_dt unset; assuming the chunk spans one inference period "
-      "(%.4f s per waypoint). Bridges should set it explicitly.", chunk.control_dt);
-  }
 
   chunk.arm_actions.assign(message.arm_actions.begin(), message.arm_actions.end());
   chunk.arm_velocities.assign(
@@ -740,12 +759,24 @@ void VlaController::on_action_chunk(
     buffer_.splice(waypoints, chunk.space, arrival, chunk.control_dt);
   timeline_buffer_.writeFromNonRT(buffer_.timeline());
 
+  telemetry_.waypoints_dropped_past += spliced.dropped_past;
+  telemetry_.queue_depth = buffer_.size();
+  if (spliced.admitted == 0) {
+    // Every waypoint was already due on arrival (the observation was older than
+    // the chunk's span, or inference outran it): nothing in it can be played, so
+    // it is not an accepted chunk and does not tell the watchdog the stream is
+    // alive -- a bridge stuck emitting such chunks would keep the watchdog happy
+    // while the arm stands still on the last waypoint.
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 2000,
+      "VLA chunk dropped: all %zu waypoints were already in the past on arrival "
+      "(inference latency exceeds the chunk horizon).", waypoints.size());
+    return;
+  }
+
   ++telemetry_.chunks_accepted;
   telemetry_.last_reject = cho_vla_core::Reject::kNone;
-  telemetry_.waypoints_dropped_past += spliced.dropped_past;
   telemetry_.last_chunk_stamp = chunk.t_obs;
   telemetry_.last_chunk_latency = arrival - chunk.t_obs;
-  telemetry_.queue_depth = buffer_.size();
   accepted_count_.fetch_add(1);
 }
 
@@ -985,7 +1016,15 @@ bool VlaController::write_task_target(
     watchdog_.note_chunk(control_time);
     releasing_on_hold_ = false;
   }
-  const cho_vla_core::StreamState stream = watchdog_.update(control_time);
+  // The buffered horizon counts as liveness (StreamWatchdog::update()): hold
+  // comes once the last waypoint has been played, not stream_timeout after the
+  // last chunk. Read before the update, from the same timeline sampled below.
+  const cho_vla_core::Timeline * timeline = timeline_buffer_.readFromRT();
+  const double horizon_end =
+    (timeline != nullptr && !timeline->waypoints.empty())
+    ? timeline->waypoints.back().t
+    : -std::numeric_limits<double>::infinity();
+  const cho_vla_core::StreamState stream = watchdog_.update(control_time, horizon_end);
   rt_stream_state_.store(static_cast<int>(stream));
 
   if (stream == cho_vla_core::StreamState::kAborted) {
@@ -997,7 +1036,6 @@ bool VlaController::write_task_target(
 
   if (gripper_rejected_.exchange(false)) {gripper_dispatch_.retry();}
 
-  const cho_vla_core::Timeline * timeline = timeline_buffer_.readFromRT();
   cho_vla_core::Reference reference;
   const bool have_reference =
     timeline != nullptr &&
@@ -1021,8 +1059,9 @@ bool VlaController::write_task_target(
   // stale pose - a backwards step under kp_task, and now a backwards dq_des
   // too, which points the friction feed-forward the wrong way. Re-seeding from
   // idle_pose_ makes the resume continuous with what the arm is actually
-  // holding. hold_timeout_sec 3.0 over stream_timeout_sec 0.2 means a real
-  // bringup passes through here whenever three chunks in a row are dropped.
+  // holding. A real bringup passes through here whenever the stream stays quiet
+  // past its buffered horizon (and stream_timeout_sec), well inside
+  // hold_timeout_sec.
   //
   // Both seed at rest: the arm is being held.
   //

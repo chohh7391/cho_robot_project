@@ -117,6 +117,20 @@ public:
     // joint -> task seed needs it; see commanded_now().
     void set_arm_kinematics(ArmKinematics kinematics) { arm_kinematics_ = std::move(kinematics); }
 
+    // The joint window the reference limiter clamps every joint-space cycle
+    // (the hold included) and every seed into: the controller's model limits,
+    // 0.05 rad inside the URDF's (FrankaBaseController::q_lower/upper_limits_).
+    // Call before init(), which applies it. A window with a NaN or lower > upper
+    // is refused with an ERROR and the clamp stays off.
+    void set_joint_window(const Vector7d & lower, const Vector7d & upper);
+
+    // Empties the anchor ring, so a chunk observed before this activation gets
+    // the inexact fallback anchor rather than a reference from the previous
+    // activation. From the controller's on_activate(), after its activity is
+    // marked active: compute() is not running then, and process_vla_action()
+    // looks nothing up without an active goal of this activation.
+    void reset_history() { history_.reset(); }
+
 protected:
     // `reason` must be a string literal: this runs on the control thread.
     void finish_goal_rt(GoalPhase terminal, State & state, const char * reason = "");
@@ -140,11 +154,12 @@ private:
     void call_gripper(bool grasp);
 
     // ---- RT side -----------------------------------------------------------
-    // Hold target while a goal is active but no chunk has arrived yet, and while
-    // the watchdog is holding. Latched from the reference the controller is
-    // already commanding rather than read live: in velocity and effort modes the
-    // *_ref fields track the MEASURED state, so holding to them directly would
-    // chase gravity sag instead of arresting it.
+    // Hold target while a goal is active and its reference has not started yet
+    // (no chunk, or a hold before the first one). Latched from the reference the
+    // controller is already commanding rather than read live: in velocity and
+    // effort modes the *_ref fields track the MEASURED state, so holding to them
+    // directly would chase gravity sag instead of arresting it. A hold after the
+    // reference has run is the limiter's come_to_rest() instead; see compute().
     void latch_hold(const State & state);
     void apply_hold(State & state);
     // The limiter's seed when a goal's chunks switch action space into
@@ -157,9 +172,10 @@ private:
     //   effort, task -> joint: H_ee_des and the measurement plus one damped
     //     least-squares step toward it, the joints that pose asks for.
     //   rates: the reference rate of the space being left (v_arm_des or
-    //     twist_des_, both zero while holding), carried into the other through
-    //     the Jacobian or its damped least-squares inverse. The Jacobian is the
-    //     one at q_arm_des for effort joint -> task, J_arm_world otherwise.
+    //     twist_des_; in a hold the stop's, zero once stopped), carried into
+    //     the other through the Jacobian or its damped least-squares inverse.
+    //     The Jacobian is the one at q_arm_des for effort joint -> task,
+    //     J_arm_world otherwise.
     void commanded_now(const State & state, cho_vla_core::Reference & seed) const;
 
     // ---- core objects ------------------------------------------------------
@@ -178,11 +194,13 @@ private:
     // control loop -- the same trap the previous implementation documented.
 
     // ---- executor -> RT ----------------------------------------------------
-    // Bumped once per ACCEPTED chunk. The watchdog lives on the RT side, so it
-    // cannot be poked directly from the subscription callback; RT compares this
+    // Bumped once per ACCEPTED chunk, i.e. one that admitted at least one
+    // waypoint to the timeline. The watchdog lives on the RT side, so it cannot
+    // be poked directly from the subscription callback; RT compares this
     // against its own last-seen count and calls note_chunk() itself. Rejected
-    // chunks deliberately do not bump it: a bridge stuck emitting malformed
-    // chunks must not keep the watchdog happy while nothing drives the arm.
+    // chunks, and chunks already past on arrival, deliberately do not bump it: a
+    // bridge stuck emitting those must not keep the watchdog happy while
+    // nothing drives the arm.
     std::atomic<std::uint64_t> accepted_count_ {0};
     std::uint64_t rt_seen_accepted_ {0};
 
@@ -226,16 +244,22 @@ private:
     // a chunk lands. "observation" uses ActionChunk.header.stamp, which only
     // works if the bridge echoes the controller's own clock (see the message
     // doc). Default is arrival, because an unsynchronised bridge clock would
-    // otherwise place every waypoint in the wrong epoch.
+    // otherwise place every waypoint in the wrong epoch; the observation window
+    // does not change that: a stamp from another clock is refused by it or,
+    // inside it, anchors the chunk at the wrong instant (cho_vla_core DESIGN.md,
+    // Time alignment).
     std::string chunk_time_source_ {"arrival"};
     // "<robot_type>_joint", used to resolve ActionChunk.joint_names into the
     // canonical column order. Franka joints are fr3_joint1..7.
     std::string robot_joint_prefix_ {"fr3_joint"};
-    double inference_dt_ {0.0};
     double ema_factor_ {0.2};
-    double goal_timeout_sec_ {60.0};
+    double goal_timeout_sec_ {0.0};
     double stream_timeout_sec_ {0.0};
     double hold_timeout_sec_ {0.0};
+    // Configure-time; see set_joint_window().
+    Vector7d joint_window_lower_ {Vector7d::Zero()};
+    Vector7d joint_window_upper_ {Vector7d::Zero()};
+    bool joint_window_set_ {false};
 
     // RT-only. Telemetry reads the atomic copy: the executor thread publishing
     // it while the control loop rewrites a std::string was a data race.
@@ -245,7 +269,8 @@ private:
     // Configure-time; called on the RT thread.
     ArmKinematics arm_kinematics_;
 
-    // RT-only hold state.
+    // RT-only hold state. hold_pose_ / hold_joints_ are where the hold stands:
+    // latched by latch_hold(), or each held cycle's come_to_rest() output.
     bool hold_latched_ {false};
     pinocchio::SE3 hold_pose_ {pinocchio::SE3::Identity()};
     Vector7d hold_joints_ {Vector7d::Zero()};

@@ -149,6 +149,7 @@ public:
   struct SpliceResult
   {
     // Waypoints admitted to the timeline (excludes the retained segment origin).
+    // 0 means the timeline was left unchanged; see splice().
     std::size_t admitted {0};
     // Waypoints whose execution time had already passed on arrival.
     std::size_t dropped_past {0};
@@ -189,6 +190,11 @@ public:
   // chunk is not chained (only matters with chunk_ema_factor < 1, on absolute
   // chunks). The timeline therefore stays at about one chunk instead of growing
   // by one every splice.
+  //
+  // A chunk with no waypoint at or after `now` (admitted == 0) changes nothing:
+  // waypoints, action space and blend stay as they were, and only dropped_past
+  // reports it. Spliced, it would replace the buffered horizon with its own
+  // last, already-played waypoint.
   SpliceResult splice(
     const std::vector<Waypoint> & incoming, ActionSpace space, double now, double control_dt);
 

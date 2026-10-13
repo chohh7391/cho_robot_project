@@ -57,13 +57,24 @@ observation from, echoed verbatim. Not the bridge's own wall clock: this repo's
 multi-PC setup has no clock sync, so a bridge clock would be a different time
 domain. Echoing the controller's stamp makes the alignment work without any.
 
+Hosts read the stamp only under `chunk_time_source: observation`; the default
+`arrival` sets `t_obs` to the arrival time. Under `observation` the host also
+sets `Chunk::t_arrival`, and `validate()` refuses a stamp more than
+`max_future_skew` (0.05 s) after arrival as `kObservationInFuture` and one more
+than `max_observation_age` (1 s) before it as `kObservationTooOld`. The default
+is `arrival` because `observation` is right only for a bridge that echoes the
+controller's stamp: any other stamp is either refused by that window or, inside
+it, anchors the chunk at the wrong instant.
+
 `splice()` drops the waypoints whose time has already passed, which is the
 prefix the robot executed while inference ran. The historical pipeline instead
 restarted playback from index 0 at arrival, so every chunk replayed that prefix;
 the EMA filter and reference saturation were masking the resulting lurch. The
 last dropped waypoint is retained as the segment origin, so `now` falls inside a
 segment and interpolation stays continuous instead of jumping to the first
-future waypoint.
+future waypoint. A chunk with no waypoint at or after the splice instant is not
+spliced: the timeline, its action space and any running blend stay as they were,
+and only `dropped_past` reports it.
 
 The same rule prunes what is already buffered: every splice drops the
 timeline's waypoints before `now` except the last, from `waypoints` and from the
@@ -266,6 +277,22 @@ in that cycle, a step of first order in the offset.
 splice, on the executor; the re-seed belongs to the first control cycle that
 samples the new space.
 
+### Coming to rest
+
+`come_to_rest(now)` is one cycle of a stop, for a host in `kHold`, which has
+no sampled reference. In the space the limiter last ran, each rate goes from
+the rate and acceleration `apply()` left to zero through Ruckig's velocity
+interface, at the bounds `apply()` uses (per axis `a/√3` for translation and
+rotation), with no target, gap correction or feed-forward; at zero it stays
+there and the position is held exactly. From rate `v` at zero acceleration the
+stop is `v/a + a/j` long and `v²/(2a) + v·a/(2j)` far (`a/j` = 40 ms by
+default; `2√(v/j)` and `v·√(v/j)` when `v < a²/j`). A rate with no
+acceleration bound (rotation without `max_angular_acceleration`) stops at
+once. The host commands the output, and the hold stands where it ends. Before a
+seed it returns `valid` false. The clock stays current, so the next `apply()`
+continues from the stop's position and rate, its first cycle without
+feed-forward as after a seed: no re-seed is needed to resume.
+
 ## Chunk combination
 
 A new chunk owns the timeline from its first admitted waypoint onward; buffered
@@ -362,18 +389,33 @@ the action space gets the chunk accepted.
 ## Stream liveness
 
 The state machine is `kWaitingFirstChunk → kRunning → kHold → kAborted`, on
-wall-clock quiet time. This is the piece the research stacks leave out and the
-piece a `ros2_control` layer most owes them: LeRobot's client simply stops
-commanding when its queue drains and lets the servo bus hold, while a
-torque-controlled arm has no such fallback and the MIT producer treats a skipped
-write as a protocol fault.
+quiet time on the host's control clock. This is the piece the research stacks
+leave out and the piece a `ros2_control` layer most owes them: LeRobot's client
+simply stops commanding when its queue drains and lets the servo bus hold,
+while a torque-controlled arm has no such fallback and the MIT producer treats
+a skipped write as a protocol fault.
 
 It is distinct from a goal timeout, which is what the historical pipeline had. A
 60 s goal budget cannot tell a long successful task from a policy that died five
 seconds in, and while it runs down the arm sits frozen at a mid-motion waypoint.
-Thresholds are multiples of the inference period (3x is the documented starting
-point), and only *accepted* chunks refresh the timer — a bridge stuck emitting
-malformed chunks must not keep the watchdog happy while nothing drives the arm.
+Only *accepted* chunks that put at least one waypoint in the timeline refresh
+the timer — a bridge stuck emitting malformed chunks, or chunks already past on
+arrival, must not keep the watchdog happy while nothing drives the arm.
+
+Once a chunk has arrived, the buffered horizon counts as liveness.
+`update(now, horizon_end)` takes the time of the timeline's last waypoint, and
+`kHold` needs both `now − last > stream_timeout` and
+`now ≥ min(horizon_end, last + max_horizon_credit)`, `last` being the last
+accepted chunk; the hold comes at
+`max(last + stream_timeout, min(horizon_end, last + max_horizon_credit))`.
+`stream_timeout` (0.2 s in both hosts) is the least quiet time; a horizon that
+outlasts it moves the hold to the horizon's end, where the sampler is already
+holding the last waypoint at zero velocity. `max_horizon_credit` (the hosts'
+`stream_horizon_credit_sec`, 1 s) caps how long a dead policy's last chunk
+plays open-loop. A policy that re-infers every 0.5 s with a 1 s horizon never
+holds. `kAborted` follows `hold_timeout` after the hold. Before the first
+chunk the timeout runs from the goal start alone; `update(now)` is the timeout
+alone.
 
 `kAborted` is terminal. Resume out of `kHold` is a parameter whose library
 default is off so a host must choose, but the choice hosts should make is ON, and

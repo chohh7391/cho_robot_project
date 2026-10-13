@@ -14,6 +14,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <string>
 #include <vector>
@@ -47,6 +48,42 @@ inline constexpr bool dls_fits(Eigen::Index rows, Eigen::Index cols)
   return rows > 0 && rows <= kMaxTaskDim && cols > 0 && cols <= kMaxArmDof;
 }
 
+// A joint-space vector as wide as JacobianT: fixed when its columns are, else
+// of runtime size bounded by kMaxArmDof (on the stack).
+template<typename JacobianT>
+using JointVectorFor = Eigen::Matrix<
+  double, JacobianT::ColsAtCompileTime, 1, 0,
+  (JacobianT::ColsAtCompileTime == Eigen::Dynamic ? kMaxArmDof : JacobianT::ColsAtCompileTime), 1>;
+
+namespace detail
+{
+
+// Whether a dynamic dimension of the Jacobian is inside the stack bounds (a
+// fixed one always is).
+template<typename JacobianT>
+bool jacobian_fits(const Eigen::MatrixBase<JacobianT> & jacobian)
+{
+  constexpr int kRows = JacobianT::RowsAtCompileTime;
+  constexpr int kCols = JacobianT::ColsAtCompileTime;
+  const bool rows_fit = kRows != Eigen::Dynamic || (jacobian.rows() > 0 && jacobian.rows() <= kMaxTaskDim);
+  const bool cols_fit = kCols != Eigen::Dynamic || (jacobian.cols() > 0 && jacobian.cols() <= kMaxArmDof);
+  return rows_fit && cols_fit;
+}
+
+// What a refused call returns: NaN, sized to the columns (capped at kMaxArmDof).
+template<typename JacobianT>
+JointVectorFor<JacobianT> refused_joint_vector(const Eigen::MatrixBase<JacobianT> & jacobian)
+{
+  JointVectorFor<JacobianT> refused;
+  if constexpr (JacobianT::ColsAtCompileTime == Eigen::Dynamic) {
+    refused.resize(std::min<Eigen::Index>(std::max<Eigen::Index>(jacobian.cols(), 0), kMaxArmDof));
+  }
+  refused.setConstant(std::numeric_limits<double>::quiet_NaN());
+  return refused;
+}
+
+}  // namespace detail
+
 // Damped least squares: dq = J^T (J J^T + lambda^2 I)^-1 e. J J^T + lambda^2 I
 // is symmetric positive definite, so it is solved by LDLT rather than inverted.
 //
@@ -57,31 +94,119 @@ inline constexpr bool dls_fits(Eigen::Index rows, Eigen::Index cols)
 // returns NaN (sized to the columns, capped at kMaxArmDof), which every caller's
 // allFinite() guard already turns into a hold, rather than a wrong step.
 template<typename JacobianT, typename ErrorT>
-Eigen::Matrix<
-  double, JacobianT::ColsAtCompileTime, 1, 0,
-  (JacobianT::ColsAtCompileTime == Eigen::Dynamic ? kMaxArmDof : JacobianT::ColsAtCompileTime), 1>
-dls_step(
+JointVectorFor<JacobianT> dls_step(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<ErrorT> & error, double lambda)
 {
   constexpr int kRows = JacobianT::RowsAtCompileTime;
-  constexpr int kCols = JacobianT::ColsAtCompileTime;
   constexpr int kMaxRows = kRows == Eigen::Dynamic ? kMaxTaskDim : kRows;
-  constexpr int kMaxCols = kCols == Eigen::Dynamic ? kMaxArmDof : kCols;
-  using Step = Eigen::Matrix<double, kCols, 1, 0, kMaxCols, 1>;
 
-  const bool rows_fit = kRows != Eigen::Dynamic || (jacobian.rows() > 0 && jacobian.rows() <= kMaxRows);
-  const bool cols_fit = kCols != Eigen::Dynamic || (jacobian.cols() > 0 && jacobian.cols() <= kMaxCols);
-  if (!rows_fit || !cols_fit || error.size() != jacobian.rows()) {
-    Step refused;
-    if constexpr (kCols == Eigen::Dynamic) {
-      refused.resize(std::min<Eigen::Index>(std::max<Eigen::Index>(jacobian.cols(), 0), kMaxCols));
-    }
-    refused.setConstant(std::numeric_limits<double>::quiet_NaN());
-    return refused;
+  if (!detail::jacobian_fits(jacobian) || error.size() != jacobian.rows()) {
+    return detail::refused_joint_vector(jacobian);
   }
   Eigen::Matrix<double, kRows, kRows, 0, kMaxRows, kMaxRows> damped = jacobian * jacobian.transpose();
   damped.diagonal().array() += lambda * lambda;
   return jacobian.transpose() * damped.ldlt().solve(error);
+}
+
+// One differential-IK step toward a task-space target, with the target's own
+// motion this cycle (`advance`) as feed-forward:
+//   move = advance + gain * dt * (error - advance),  dq = dls_step(J, move, lambda).
+// J, error and advance in one frame. gain is a rate [1/s], independent of any
+// torque stiffness: a still target's error decays by (1 - gain * dt) per step,
+// so gain * dt must stay below 1 not to overshoot (2 diverges). A target moving
+// at a steady rate is followed without lag.
+//
+// Then ONE scale on the whole step, the largest that keeps every
+// |dq_i| <= max_joint_step(i): the step keeps its direction, where clamping
+// each joint on its own bends the task-space path. A limit of +inf is no limit;
+// 0, a negative limit or NaN stops the step. Sizes as dls_step(), plus advance
+// as long as error and max_joint_step as wide as J; a mismatch gives NaN.
+template<typename JacobianT, typename ErrorT, typename AdvanceT, typename LimitT>
+JointVectorFor<JacobianT> task_ik_step(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<ErrorT> & error,
+  const Eigen::MatrixBase<AdvanceT> & advance, double gain, double dt, double lambda,
+  const Eigen::MatrixBase<LimitT> & max_joint_step)
+{
+  if (advance.size() != error.size()) {
+    return detail::refused_joint_vector(jacobian);
+  }
+  JointVectorFor<JacobianT> step = dls_step(jacobian, advance + (gain * dt) * (error - advance), lambda);
+  if (max_joint_step.size() != step.size()) {
+    step.setConstant(std::numeric_limits<double>::quiet_NaN());
+    return step;
+  }
+  double scale = 1.0;
+  for (Eigen::Index i = 0; i < step.size(); ++i) {
+    const double magnitude = std::abs(step(i));
+    const double allowed = max_joint_step(i) > 0.0 ? static_cast<double>(max_joint_step(i)) : 0.0;
+    if (magnitude > allowed) {
+      scale = std::min(scale, allowed / magnitude);
+    }
+  }
+  if (scale < 1.0) {
+    step *= scale;
+  }
+  return step;
+}
+
+namespace detail
+{
+
+// Whether J, its generalized inverse jbar (J's transpose's size) and a joint
+// vector of n entries fit together and inside the stack bounds.
+template<typename JacobianT, typename JbarT>
+bool null_space_fits(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar, Eigen::Index n)
+{
+  return jacobian_fits(jacobian) && jbar.rows() == jacobian.cols() && jbar.cols() == jacobian.rows() &&
+         n == jacobian.cols();
+}
+
+// (I - J^T jbar^T) torque, without forming the N x N projector.
+template<typename JacobianT, typename JbarT, typename TorqueT>
+JointVectorFor<JacobianT> project_out_of_task(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar,
+  const Eigen::MatrixBase<TorqueT> & torque)
+{
+  constexpr int kRows = JacobianT::RowsAtCompileTime;
+  constexpr int kMaxRows = kRows == Eigen::Dynamic ? kMaxTaskDim : kRows;
+  JointVectorFor<JacobianT> projected = torque;
+  Eigen::Matrix<double, kRows, 1, 0, kMaxRows, 1> task;
+  task.noalias() = jbar.transpose() * projected;
+  projected.noalias() -= jacobian.transpose() * task;
+  return projected;
+}
+
+}  // namespace detail
+
+// The joint torque that damps a joint velocity v in the task's null space:
+//   tau = -(I - J^T jbar^T) D v,   jbar = M^-1 J^T (J M^-1 J^T)^-1  (N x 6),
+// jbar the dynamically consistent generalized inverse of J (the transpose of
+// the Lambda J M^-1 the torque controllers build), so tau causes no task
+// acceleration: J M^-1 tau = 0. D [N m s/rad] is a scalar here, per joint
+// below; D = 0 is exactly zero torque. J at most kMaxTaskDim x kMaxArmDof,
+// jbar of J's transpose's size, v (and D) as wide as J; a mismatch gives NaN.
+template<typename JacobianT, typename JbarT, typename VelocityT>
+JointVectorFor<JacobianT> null_space_damping_torque(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar, double damping,
+  const Eigen::MatrixBase<VelocityT> & velocity)
+{
+  if (!detail::null_space_fits(jacobian, jbar, velocity.size())) {
+    return detail::refused_joint_vector(jacobian);
+  }
+  return detail::project_out_of_task(jacobian, jbar, -damping * velocity);
+}
+
+// Per-joint damping: tau = -(I - J^T jbar^T) (D .* v).
+template<typename JacobianT, typename JbarT, typename DampingT, typename VelocityT>
+JointVectorFor<JacobianT> null_space_damping_torque(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar,
+  const Eigen::MatrixBase<DampingT> & damping, const Eigen::MatrixBase<VelocityT> & velocity)
+{
+  if (!detail::null_space_fits(jacobian, jbar, velocity.size()) || damping.size() != velocity.size()) {
+    return detail::refused_joint_vector(jacobian);
+  }
+  return detail::project_out_of_task(jacobian, jbar, -damping.cwiseProduct(velocity));
 }
 
 // The pose error of `desired` relative to `reference`, in reference's local

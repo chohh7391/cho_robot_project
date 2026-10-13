@@ -131,6 +131,16 @@ bool project_rate(Eigen::Vector3d & rate, Eigen::Vector3d & acceleration, const 
   return true;
 }
 
+// Whether one DOF of a Ruckig stop has reached rest by now: its own profile,
+// brake included, is over. Its output state is then the target up to Ruckig's
+// rounding, which come_to_rest() replaces with an exact zero so a held position
+// does not creep. `time` counts from the last recalculation, across calls.
+template<std::size_t DOFs>
+bool at_rest_by_now(const ruckig::OutputParameter<DOFs> & output, const std::size_t dof)
+{
+  return output.time >= output.trajectory.get_independent_min_durations()[dof];
+}
+
 // The joint window, when it is on: the last bound on every emitted joint cycle,
 // and on a seed's joints. A joint inside it is left exactly as it is.
 void clamp_into_window(const ReferenceLimiter::Params & params, Vector7 & joints)
@@ -144,6 +154,7 @@ void clamp_into_window(const ReferenceLimiter::Params & params, Vector7 & joints
 
 void ReferenceLimiter::seed(const Reference & reference, const double now)
 {
+  space_ = reference.space;
   previous_time_ = now;
   previous_pose_ = reference.pose;
   // Inside the window, as every joint cycle's output is: the first joint
@@ -285,11 +296,9 @@ void ReferenceLimiter::track_rotation(const double step, Reference & reference)
   previous_angular_velocity_ = velocity;
 }
 
-void ReferenceLimiter::apply(const double now, Reference & reference)
+bool ReferenceLimiter::advance_clock(const double now, double & step)
 {
-  if (!seeded_) {return;}
-
-  const double step = now - previous_time_;
+  step = now - previous_time_;
   // Clock guard. A cycle on which time does not advance -- Isaac reports a zero
   // measured period on cycles that saw no new state, as routine -- moves
   // nothing: it repeats the previous cycle's output and leaves the rate state as
@@ -300,28 +309,45 @@ void ReferenceLimiter::apply(const double now, Reference & reference)
   // rad in one call with a clock alternating between 100 s and 3 s, at 1 rad/s).
   // Written as the one range that IS integrated, so NaN and +inf fall outside
   // it without a test of their own.
-  if (!(step > 0.0 && step <= kClockRebaseSec)) {
-    reference.pose = previous_pose_;
-    reference.joints = previous_joints_;
-    reference.twist = emitted_twist_;
-    reference.joint_velocity = emitted_joint_velocity_;
-    // Whether `now` becomes the time base. Not when `now` is NaN or infinite,
-    // which would poison every step after it. Not for a repeat or a
-    // small step back (jitter): keeping the previous time measures the next
-    // advancing cycle from the last one that did, so no time is counted twice.
-    // But a clock SET BACK stays back, and keeping the previous time would hold
-    // the output until the clock passed it again (the historical code, which
-    // re-based on every cycle, never froze there). A clock set FORWARD is
-    // re-based on as well, which is what keeps the jump out of the next step. A
-    // time base that is itself not finite (a seed at NaN) is replaced by the
-    // first finite `now`, or every step after it would be NaN.
-    const bool clock_set = std::isfinite(step) && std::abs(step) > kClockRebaseSec;
-    if (std::isfinite(now) && (clock_set || !std::isfinite(previous_time_))) {
-      previous_time_ = now;
-    }
+  if (step > 0.0 && step <= kClockRebaseSec) {
+    previous_time_ = now;
+    return true;
+  }
+  // Whether `now` becomes the time base. Not when `now` is NaN or infinite,
+  // which would poison every step after it. Not for a repeat or a
+  // small step back (jitter): keeping the previous time measures the next
+  // advancing cycle from the last one that did, so no time is counted twice.
+  // But a clock SET BACK stays back, and keeping the previous time would hold
+  // the output until the clock passed it again (the historical code, which
+  // re-based on every cycle, never froze there). A clock set FORWARD is
+  // re-based on as well, which is what keeps the jump out of the next step. A
+  // time base that is itself not finite (a seed at NaN) is replaced by the
+  // first finite `now`, or every step after it would be NaN.
+  const bool clock_set = std::isfinite(step) && std::abs(step) > kClockRebaseSec;
+  if (std::isfinite(now) && (clock_set || !std::isfinite(previous_time_))) {
+    previous_time_ = now;
+  }
+  return false;
+}
+
+void ReferenceLimiter::repeat_previous(Reference & reference) const
+{
+  reference.pose = previous_pose_;
+  reference.joints = previous_joints_;
+  reference.twist = emitted_twist_;
+  reference.joint_velocity = emitted_joint_velocity_;
+}
+
+void ReferenceLimiter::apply(const double now, Reference & reference)
+{
+  if (!seeded_) {return;}
+
+  double step = 0.0;
+  if (!advance_clock(now, step)) {
+    repeat_previous(reference);
     return;
   }
-  previous_time_ = now;
+  space_ = reference.space;
 
   if (reference.space == ActionSpace::kTask) {
     const double max_velocity = params_.max_linear_velocity;
@@ -581,6 +607,262 @@ void ReferenceLimiter::apply(const double now, Reference & reference)
   previous_angular_velocity_.setZero();
   previous_angular_acceleration_.setZero();
   angular_rate_valid_ = false;
+}
+
+Reference ReferenceLimiter::come_to_rest(const double now)
+{
+  Reference reference;
+  if (!seeded_) {return reference;}
+  reference.space = space_;
+  reference.valid = true;
+
+  double step = 0.0;
+  if (!advance_clock(now, step)) {
+    repeat_previous(reference);
+    return reference;
+  }
+  // Nothing was sampled this cycle, so the next apply() has no previous sampled
+  // rate to difference against: no feed-forward on its first cycle.
+  joint_rate_valid_ = false;
+  linear_rate_valid_ = false;
+  angular_rate_valid_ = false;
+
+  if (space_ == ActionSpace::kTask) {
+    reference.pose = previous_pose_;
+    stop_translation(step, reference);
+    stop_rotation(step, reference);
+    // The joint field is held, as apply() passes it through in task space.
+    reference.joints = previous_joints_;
+    reference.joint_velocity.setZero();
+    previous_pose_ = reference.pose;
+    emitted_twist_ = reference.twist;
+    emitted_joint_velocity_.setZero();
+    previous_joint_velocity_.setZero();
+    previous_joint_acceleration_.setZero();
+    return reference;
+  }
+
+  reference.pose = previous_pose_;
+  reference.twist.setZero();
+  stop_joints(step, reference);
+  emitted_twist_.setZero();
+  previous_linear_velocity_.setZero();
+  previous_linear_acceleration_.setZero();
+  previous_angular_velocity_.setZero();
+  previous_angular_acceleration_.setZero();
+  return reference;
+}
+
+void ReferenceLimiter::stop_joints(const double step, Reference & reference)
+{
+  bool planned[kJoints] {};
+  bool moving = false;
+  for (std::size_t joint = 0; joint < kJoints; ++joint) {
+    const auto index = static_cast<Eigen::Index>(joint);
+    const double max_velocity = params_.max_joint_velocity(index);
+    const double max_acceleration = params_.max_joint_acceleration(index);
+    const double max_jerk = params_.max_joint_jerk(index);
+    // The joints apply() plans, at the bounds it plans them with.
+    planned[joint] = max_velocity > 0.0 && max_acceleration > 0.0;
+    const double velocity_bound = planned[joint] ? max_velocity : 1.0;
+    const double acceleration_bound = planned[joint] ? max_acceleration : 1.0;
+    joint_input_.max_velocity[joint] = velocity_bound;
+    joint_input_.max_acceleration[joint] = acceleration_bound;
+    joint_input_.max_jerk[joint] =
+      max_jerk > 0.0 ? max_jerk : acceleration_bound / kJerkRampSec;
+    joint_input_.current_position[joint] = previous_joints_(index);
+    joint_input_.current_velocity[joint] = planned[joint] ? previous_joint_velocity_(index) : 0.0;
+    joint_input_.current_acceleration[joint] =
+      planned[joint] ? previous_joint_acceleration_(index) : 0.0;
+    joint_input_.target_velocity[joint] = 0.0;
+    joint_input_.target_acceleration[joint] = 0.0;
+    if (planned[joint] &&
+      (previous_joint_velocity_(index) != 0.0 || previous_joint_acceleration_(index) != 0.0))
+    {
+      moving = true;
+    }
+  }
+
+  bool solved = false;
+  if (moving) {
+    joint_generator_.delta_time = step;
+    solved = joint_generator_.update(joint_input_, joint_output_) >= ruckig::Result::Working;
+  }
+
+  Vector7 velocity;
+  for (std::size_t joint = 0; joint < kJoints; ++joint) {
+    const auto index = static_cast<Eigen::Index>(joint);
+    const double rate_before = previous_joint_velocity_(index);
+    const double acceleration_before = previous_joint_acceleration_(index);
+    if (!planned[joint] || (rate_before == 0.0 && acceleration_before == 0.0)) {
+      // At rest, or no acceleration bound to stop within: held where it is.
+      reference.joints(index) = previous_joints_(index);
+      velocity(index) = 0.0;
+      previous_joint_acceleration_(index) = 0.0;
+      continue;
+    }
+    const double max_velocity = params_.max_joint_velocity(index);
+    double position = 0.0;
+    double rate = 0.0;
+    double acceleration = 0.0;
+    if (solved) {
+      position = joint_output_.new_position[joint];
+      rate = joint_output_.new_velocity[joint];
+      acceleration = joint_output_.new_acceleration[joint];
+      if (at_rest_by_now(joint_output_, joint)) {
+        rate = 0.0;
+        acceleration = 0.0;
+      }
+    } else {
+      // The target is rest and the inputs are finite, so this is not expected.
+      // Slow toward rest within the acceleration bound rather than stop dead.
+      const double slowed =
+        std::max(0.0, std::abs(rate_before) - params_.max_joint_acceleration(index) * step);
+      rate = std::copysign(slowed, rate_before);
+      position = previous_joints_(index) + 0.5 * (rate_before + rate) * step;
+    }
+    // The velocity bound, as apply() keeps it.
+    if (std::abs(rate) > max_velocity) {
+      rate = std::copysign(max_velocity, rate);
+      if (acceleration * rate > 0.0) {acceleration = 0.0;}
+      position = previous_joints_(index) + 0.5 * (rate_before + rate) * step;
+    }
+    const double moved = position - previous_joints_(index);
+    const double reach = max_velocity * step;
+    if (std::abs(moved) > reach) {
+      position = previous_joints_(index) + std::copysign(reach, moved);
+    }
+    reference.joints(index) = position;
+    velocity(index) = rate;
+    previous_joint_acceleration_(index) = acceleration;
+  }
+  previous_joint_velocity_ = velocity;
+
+  clamp_into_window(params_, reference.joints);
+  reference.joint_velocity = (reference.joints - previous_joints_) / step;
+  previous_joints_ = reference.joints;
+  emitted_joint_velocity_ = reference.joint_velocity;
+}
+
+void ReferenceLimiter::stop_translation(const double step, Reference & reference)
+{
+  const double max_velocity = params_.max_linear_velocity;
+  const double max_acceleration = params_.max_linear_acceleration;
+  const Eigen::Vector3d rate_before = previous_linear_velocity_;
+  const Eigen::Vector3d acceleration_before = previous_linear_acceleration_;
+  const bool moving =
+    (rate_before.array() != 0.0).any() || (acceleration_before.array() != 0.0).any();
+
+  Eigen::Vector3d translation = previous_pose_.translation();
+  Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d acceleration = Eigen::Vector3d::Zero();
+  // Only where apply() tracks with Ruckig; otherwise it keeps no acceleration
+  // state and the translation stops at once.
+  if (moving && max_velocity > 0.0 && max_acceleration > 0.0) {
+    const double axis_acceleration = max_acceleration / std::sqrt(3.0);
+    const double axis_jerk = (params_.max_linear_jerk > 0.0
+      ? params_.max_linear_jerk : max_acceleration / kJerkRampSec) / std::sqrt(3.0);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      const auto index = static_cast<Eigen::Index>(axis);
+      linear_input_.max_velocity[axis] = max_velocity;
+      linear_input_.max_acceleration[axis] = axis_acceleration;
+      linear_input_.max_jerk[axis] = axis_jerk;
+      linear_input_.current_position[axis] = translation(index);
+      linear_input_.current_velocity[axis] = rate_before(index);
+      linear_input_.current_acceleration[axis] = acceleration_before(index);
+      linear_input_.target_velocity[axis] = 0.0;
+      linear_input_.target_acceleration[axis] = 0.0;
+    }
+    linear_generator_.delta_time = step;
+    if (linear_generator_.update(linear_input_, linear_output_) >= ruckig::Result::Working) {
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto index = static_cast<Eigen::Index>(axis);
+        if (rate_before(index) == 0.0 && acceleration_before(index) == 0.0) {continue;}
+        if (at_rest_by_now(linear_output_, axis)) {
+          translation(index) = linear_output_.new_position[axis];
+          continue;
+        }
+        translation(index) = linear_output_.new_position[axis];
+        velocity(index) = linear_output_.new_velocity[axis];
+        acceleration(index) = linear_output_.new_acceleration[axis];
+      }
+      if (project_rate(velocity, acceleration, max_velocity)) {
+        translation = previous_pose_.translation() + 0.5 * (rate_before + velocity) * step;
+      }
+      const Eigen::Vector3d moved = translation - previous_pose_.translation();
+      const double reach = max_velocity * step;
+      if (moved.norm() > reach) {
+        translation = previous_pose_.translation() + moved * (reach / moved.norm());
+      }
+    } else {
+      // Not expected, as in stop_joints(): slow along the rate at the bound.
+      const double speed = rate_before.norm();
+      const double slowed = std::max(0.0, speed - max_acceleration * step);
+      velocity = speed > 0.0 ? Eigen::Vector3d(rate_before * (slowed / speed))
+        : Eigen::Vector3d::Zero();
+      translation = previous_pose_.translation() + 0.5 * (rate_before + velocity) * step;
+    }
+  }
+  reference.pose.translation() = translation;
+  reference.twist.head<3>() = velocity;
+  previous_linear_velocity_ = velocity;
+  previous_linear_acceleration_ = acceleration;
+}
+
+void ReferenceLimiter::stop_rotation(const double step, Reference & reference)
+{
+  const double max_velocity = params_.max_angular_velocity;
+  const double max_acceleration = params_.max_angular_acceleration;
+  const Eigen::Vector3d rate_before = previous_angular_velocity_;
+  const Eigen::Vector3d acceleration_before = previous_angular_acceleration_;
+  const bool moving =
+    (rate_before.array() != 0.0).any() || (acceleration_before.array() != 0.0).any();
+
+  Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d acceleration = Eigen::Vector3d::Zero();
+  // Only under max_angular_acceleration, where apply() tracks rotation with
+  // Ruckig; the velocity clamp alone keeps no acceleration state, and the
+  // rotation stops at once.
+  if (moving && max_acceleration > 0.0) {
+    const double axis_acceleration = max_acceleration / std::sqrt(3.0);
+    const double axis_jerk = max_acceleration / kJerkRampSec / std::sqrt(3.0);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      const auto index = static_cast<Eigen::Index>(axis);
+      angular_input_.max_velocity[axis] = max_velocity > 0.0 ? max_velocity : 1.0;
+      angular_input_.max_acceleration[axis] = axis_acceleration;
+      angular_input_.max_jerk[axis] = axis_jerk;
+      angular_input_.current_position[axis] = 0.0;
+      angular_input_.current_velocity[axis] = rate_before(index);
+      angular_input_.current_acceleration[axis] = acceleration_before(index);
+      angular_input_.target_velocity[axis] = 0.0;
+      angular_input_.target_acceleration[axis] = 0.0;
+    }
+    angular_generator_.delta_time = step;
+    if (angular_generator_.update(angular_input_, angular_output_) >= ruckig::Result::Working) {
+      for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto index = static_cast<Eigen::Index>(axis);
+        if (rate_before(index) == 0.0 && acceleration_before(index) == 0.0) {continue;}
+        if (at_rest_by_now(angular_output_, axis)) {continue;}
+        velocity(index) = angular_output_.new_velocity[axis];
+        acceleration(index) = angular_output_.new_acceleration[axis];
+      }
+    } else {
+      const double speed = rate_before.norm();
+      const double slowed = std::max(0.0, speed - max_acceleration * step);
+      velocity = speed > 0.0 ? Eigen::Vector3d(rate_before * (slowed / speed))
+        : Eigen::Vector3d::Zero();
+    }
+    if (max_velocity > 0.0) {
+      project_rate(velocity, acceleration, max_velocity);
+    }
+    reference.pose.rotation() = pinocchio::exp3(
+      Eigen::Vector3d(0.5 * (rate_before + velocity) * step)) * previous_pose_.rotation();
+  } else {
+    reference.pose.rotation() = previous_pose_.rotation();
+  }
+  reference.twist.tail<3>() = velocity;
+  previous_angular_velocity_ = velocity;
+  previous_angular_acceleration_ = acceleration;
 }
 
 }  // namespace cho_vla_core

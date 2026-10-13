@@ -76,6 +76,15 @@ SE3 compose(const SE3 & origin, const SE3 & delta, const RelativeFrame frame)
 Reject validate(const Chunk & chunk, const ValidationLimits & limits)
 {
   if (!std::isfinite(chunk.t_obs)) {return Reject::kNonFiniteStamp;}
+  if (std::isfinite(chunk.t_arrival)) {
+    // Written so a NaN limit compares false and checks nothing.
+    if (chunk.t_obs > chunk.t_arrival + limits.max_future_skew) {
+      return Reject::kObservationInFuture;
+    }
+    if (chunk.t_arrival - chunk.t_obs > limits.max_observation_age) {
+      return Reject::kObservationTooOld;
+    }
+  }
   if (chunk.chunk_size <= 0) {return Reject::kChunkSize;}
   if (!std::isfinite(chunk.control_dt) || chunk.control_dt <= 0.0 ||
     chunk.control_dt > limits.max_control_dt)

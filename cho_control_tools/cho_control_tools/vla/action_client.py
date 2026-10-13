@@ -188,7 +188,7 @@ class VLAActionTester(Node):
             # base. header.frame_id says nothing here: no controller reads it.
             msg.relative_frame = "base"
         msg.chunk_size = self.chunk_size
-        msg.control_dt = self.dt  # explicit waypoint spacing (0.0 would fall back to inference_dt/chunk_size)
+        msg.control_dt = self.dt  # explicit waypoint spacing (a chunk with control_dt <= 0 is rejected)
 
         arm_actions = []
         gripper_actions = []

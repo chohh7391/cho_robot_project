@@ -7,12 +7,20 @@ string model_name  # 'act', 'diffusion_policy', 'gr00t', 'pi0' ...
 # forwards it to the policy server; the controller only carries it.
 string task
 
-# Fallback for ActionChunk.control_dt when a chunk leaves it unset. Must be
-# finite and > 0.
+# The bridge's inference rate [Hz]. Must be finite and > 0 or the goal is
+# rejected; the controller only logs it. It does not time a chunk: a chunk with
+# ActionChunk.control_dt <= 0 is rejected, not timed from this.
 float32 inference_frequency
 
-# Quiet time on the chunk stream before the controller stops following it and
-# holds [s]. <= 0 uses the controller's configured default. This is a STREAM
+# Least quiet time on the chunk stream after the last accepted chunk before the
+# controller stops following it and holds [s]. <= 0 uses the controller's
+# configured default. The buffered horizon counts as liveness: one that outlasts
+# this moves the hold to its end, at most stream_horizon_credit_sec (controller
+# parameter, 1 s) after the last chunk. The hold comes at
+#   max(last chunk + stream_timeout,
+#       min(horizon end, last chunk + stream_horizon_credit_sec)),
+# so a policy that re-infers every 0.5 s with a 1 s horizon never holds, and a
+# dead one is followed open-loop for at most that credit. This is a STREAM
 # timeout, not a goal budget: a goal budget cannot tell a long successful task
 # from a policy that died early, and while it runs down the arm sits frozen at a
 # mid-motion waypoint.

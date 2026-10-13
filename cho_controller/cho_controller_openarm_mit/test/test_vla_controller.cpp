@@ -29,7 +29,10 @@
 // starting from the COMMANDED joints and rates rather than the measurement or
 // rest (AC11), the legacy-law refusal reported in telemetry under its own
 // reason (AC13), and that re-seed kept inside the joint window and stamped
-// with the previous cycle's time (AC18). Expected values come from
+// with the previous cycle's time (AC18); and the 2026-10-13 stream rules: the
+// watchdog waits out the buffered horizon (AC10, S15), the observation-stamp
+// window and chunks with nothing left to play (AC5, S8), control_dt <= 0
+// refused (AC6, C16). Expected values come from
 // hand-worked kinematics of the test URDF (tcp_pose(), tcp_twist()), not from
 // the controller's own model.
 #include <algorithm>
@@ -954,6 +957,192 @@ class NanAngularAccelerationFixture : public AngularAccelerationRefusalFixture
 protected:
   double value() const override {return kNaN;}
 };
+
+// ---------------------------------------------------------------------------
+// Stream-watchdog and chunk-admission tests (2026-10-13: S15, S8, C16).
+//
+// Control time is the wall clock here (the worker passes manager->now()), so
+// these tests measure the wall time between a publish and the telemetry that
+// reports the hold. Telemetry is fast (20 Hz) and only ever LATE, so a lower
+// bound on "hold no sooner than X after the chunk" cannot be violated by
+// delivery delay, and the upper bounds below are generous.
+using Clock = std::chrono::steady_clock;
+
+struct StreamSample
+{
+  Clock::time_point at;
+  std::string state;
+  std::string last_reject;
+  std::uint64_t accepted;
+  std::uint64_t rejected;
+};
+
+struct OpenGoal
+{
+  rclcpp_action::Client<VlaAction>::SharedPtr client;
+  rclcpp_action::ClientGoalHandle<VlaAction>::SharedPtr handle;
+};
+
+class StreamFixture : public Fixture
+{
+protected:
+  void extra_parameters() override {set("telemetry_period_sec", 0.05);}
+
+  void watch_stream()
+  {
+    stream_sub = client_node->create_subscription<cho_interfaces::msg::VlaTelemetry>(
+      telemetry_topic(), rclcpp::SensorDataQoS(),
+      [this](const cho_interfaces::msg::VlaTelemetry::SharedPtr message) {
+        std::lock_guard<std::mutex> lock(stream_mutex);
+        samples.push_back(
+          {Clock::now(), message->stream_state, message->last_reject, message->chunks_accepted,
+            message->chunks_rejected});
+      });
+  }
+
+  OpenGoal open_goal()
+  {
+    OpenGoal goal;
+    goal.client = rclcpp_action::create_client<VlaAction>(
+      client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
+    EXPECT_TRUE(goal.client->wait_for_action_server(std::chrono::seconds(2)));
+    auto future = goal.client->async_send_goal(*vla_goal());
+    for (int i = 0; i < 400 &&
+      future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
+    {
+      cycle();
+    }
+    if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      goal.handle = future.get();
+    }
+    return goal;
+  }
+
+  // Cycle for `seconds` of wall time, calling `each` once per 5 cycles.
+  template<typename Callback>
+  void for_seconds(const double seconds, Callback each)
+  {
+    const auto end = Clock::now() + std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double>(seconds));
+    while (Clock::now() < end) {
+      each();
+      cycle(5);
+    }
+  }
+
+  std::vector<StreamSample> stream_samples()
+  {
+    std::lock_guard<std::mutex> lock(stream_mutex);
+    return samples;
+  }
+
+  // Number of times the reported state went from something else into `state`.
+  int entries_into(const std::string & state)
+  {
+    int count = 0;
+    std::string previous;
+    for (const auto & sample : stream_samples()) {
+      if (sample.state == state && previous != state) {++count;}
+      previous = sample.state;
+    }
+    return count;
+  }
+
+  // Cycles until a sample at or after `since` reports `state`; its time, or
+  // nullopt-like (false) after `timeout_sec`.
+  bool wait_state(const std::string & state, const Clock::time_point since, double timeout_sec,
+    Clock::time_point * when)
+  {
+    const auto end = Clock::now() + std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double>(timeout_sec));
+    while (Clock::now() < end) {
+      for (const auto & sample : stream_samples()) {
+        if (sample.at >= since && sample.state == state) {
+          *when = sample.at;
+          return true;
+        }
+      }
+      cycle(5);
+    }
+    return false;
+  }
+
+  bool wait_reject(const std::string & name, const int max_cycles = 4000)
+  {
+    for (int i = 0; i < max_cycles; i += 5) {
+      const auto all = stream_samples();
+      if (!all.empty() && all.back().last_reject == name) {return true;}
+      cycle(5);
+    }
+    return false;
+  }
+
+  std::string last_reject()
+  {
+    const auto all = stream_samples();
+    return all.empty() ? std::string("(no telemetry)") : all.back().last_reject;
+  }
+
+  static double seconds_between(const Clock::time_point from, const Clock::time_point to)
+  {
+    return std::chrono::duration<double>(to - from).count();
+  }
+
+  rclcpp::Subscription<cho_interfaces::msg::VlaTelemetry>::SharedPtr stream_sub;
+  std::mutex stream_mutex;
+  std::vector<StreamSample> samples;
+};
+
+// A dead policy is cut off at `stream_horizon_credit_sec` of open-loop replay.
+class CreditFixture : public StreamFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    StreamFixture::extra_parameters();
+    set("stream_horizon_credit_sec", 0.5);
+  }
+};
+
+// Chunks placed by their observation stamp, which this fixture sets on the
+// controller's own clock (client_node and the controller manager are both on
+// the system-backed ROS clock).
+class ObservationFixture : public StreamFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    StreamFixture::extra_parameters();
+    set("chunk_time_source", std::string("observation"));
+  }
+
+  // `message` stamped as an observation taken `age_sec` ago (negative: ahead
+  // of the controller clock).
+  cho_interfaces::msg::ActionChunk stamped(
+    cho_interfaces::msg::ActionChunk message, const double age_sec) const
+  {
+    const rclcpp::Time stamp = client_node->now() - rclcpp::Duration::from_seconds(age_sec);
+    message.header.stamp = stamp;
+    return message;
+  }
+
+  // 20 waypoints at 0.05 s: reaches 0.95 s past the observation.
+  cho_interfaces::msg::ActionChunk long_chunk(const double value = 0.2) const
+  {
+    return joint_chunk(value, 20);
+  }
+};
+
+// The age window narrowed to 0.3 s, to show chunk_max_observation_age is wired.
+class NarrowAgeFixture : public ObservationFixture
+{
+protected:
+  void extra_parameters() override
+  {
+    ObservationFixture::extra_parameters();
+    set("chunk_max_observation_age", 0.3);
+  }
+};
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1085,29 +1274,27 @@ TEST_F(Fixture, AnUnknownRotationTypeIsRefusedRatherThanGuessed)
   }
 }
 
-TEST_F(Fixture, AQuietStreamHoldsAndThenAbortsWithoutRequestingSafe)
+TEST_F(StreamFixture, AQuietStreamHoldsAndThenAbortsWithoutRequestingSafe)
 {
+  // AC10 (S15) moved WHEN the hold starts, not whether it does. The watchdog
+  // holds once the stream has been quiet for stream_timeout (0.2 s) AND the
+  // buffered horizon has run out: this chunk's 8 waypoints at 0.05 s reach
+  // about 0.35 s past its arrival, so the hold begins there instead of at 0.2 s.
+  // Quiet -> hold -> abort after hold_timeout, never a SAFE request: unchanged.
   ASSERT_EQ(configured, controller_interface::return_type::OK);
   wait_ready();
   ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
 
-  auto client = rclcpp_action::create_client<VlaAction>(
-    client_node, std::string(kNamespace) + "/" + kControllerName + "/vla");
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
-  auto goal_future = client->async_send_goal(*vla_goal());
-  for (int i = 0; i < 400 &&
-    goal_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
-  {
-    cycle();
-  }
-  auto handle = goal_future.get();
-  ASSERT_NE(handle, nullptr);
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
 
+  const auto published = Clock::now();
   publish(joint_chunk(0.2), 40);
   ASSERT_EQ(Access::accepted(*controller), 1u);
 
-  // Stop publishing. stream_timeout 0.2 s -> hold; hold_timeout 0.6 s -> abort.
-  auto result_future = client->async_get_result(handle);
+  // Stop publishing. Hold when the horizon ends (~0.35 s); hold_timeout 0.6 s -> abort.
+  auto result_future = goal.client->async_get_result(goal.handle);
   for (int i = 0; i < 2000 &&
     result_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
   {
@@ -1127,6 +1314,12 @@ TEST_F(Fixture, AQuietStreamHoldsAndThenAbortsWithoutRequestingSafe)
   for (std::size_t index = 0; index < 38; ++index) {
     EXPECT_TRUE(std::isfinite(Access::command(*controller, index)));
   }
+
+  // The hold was reported, and not before the horizon (0.35 s, bound loosened to
+  // 0.3 s) had passed: under the pre-S15 rule it began at 0.2 s.
+  Clock::time_point held;
+  ASSERT_TRUE(wait_state("hold", published, 1.0, &held)) << "no hold in telemetry";
+  EXPECT_GE(seconds_between(published, held), 0.3);
 }
 
 TEST_F(Fixture, CancelReleasesTheReferenceAndLeavesTheServerAvailable)
@@ -2274,4 +2467,275 @@ TEST_F(MovingSwitchFixture, AC18_ATaskToJointSwitchInMotionAdvancesTheCommandOnT
   EXPECT_LE(progress.fastest, 1.5)
     << "q_des advanced " << progress.fastest << " cycles of its rates in one, "
     << progress.fastest_at << " cycles after the joint chunk was published";
+}
+
+// ---------------------------------------------------------------------------
+// AC10 (S15). The stream watchdog holds when the stream has been quiet for
+// stream_timeout AND the buffered horizon has run out, with open-loop replay
+// capped at stream_horizon_credit_sec (1.0 s default). Here stream_timeout is
+// the fixture's 0.2 s and the goal sets none.
+
+TEST_F(StreamFixture, AC10_ABufferedHorizonKeepsTheWatchdogOffBetweenChunks)
+{
+  // A re-inference every 0.5 s with a 0.95 s horizon: a chunk always arrives
+  // while the previous one still has half a second to play. The quiet gap is
+  // 2.5x stream_timeout, so the pre-S15 watchdog entered hold after every chunk
+  // (about 0.3 s of each 0.5 s).
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  int published = 0;
+  auto next = Clock::now();
+  for_seconds(3.0, [&] {
+      if (Clock::now() >= next) {
+        chunk_pub->publish(joint_chunk(published % 2 == 0 ? 0.2 : 0.25, 20));
+        ++published;
+        next += std::chrono::milliseconds(500);
+      }
+    });
+
+  ASSERT_GE(published, 5);
+  EXPECT_EQ(entries_into("hold"), 0) << "the watchdog held while a horizon was buffered";
+  EXPECT_GE(entries_into("running"), 1);
+  EXPECT_GE(Access::accepted(*controller), static_cast<std::uint64_t>(published - 1));
+  const auto all = stream_samples();
+  ASSERT_FALSE(all.empty());
+  EXPECT_EQ(all.back().state, "running");
+}
+
+TEST_F(StreamFixture, AC10_AQuietStreamHoldsOnlyWhenTheHorizonHasEnded)
+{
+  // One chunk reaching 0.95 s, then silence: hold no sooner than the horizon
+  // (bound loosened to 0.85 s), and still before the goal is left forever.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const auto published = Clock::now();
+  publish(joint_chunk(0.2, 20), 10);
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+
+  Clock::time_point held;
+  ASSERT_TRUE(wait_state("hold", published, 3.0, &held));
+  EXPECT_GE(seconds_between(published, held), 0.85);
+  EXPECT_LE(seconds_between(published, held), 2.5);
+  // Silence stays silence: hold_timeout 0.6 s later the goal is aborted.
+  auto result = goal.client->async_get_result(goal.handle);
+  for (int i = 0; i < 2000 &&
+    result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready; ++i)
+  {
+    cycle(2);
+  }
+  ASSERT_EQ(result.wait_for(std::chrono::milliseconds(0)), std::future_status::ready);
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::ABORTED);
+}
+
+TEST_F(CreditFixture, AC10_OpenLoopReplayIsCappedByTheHorizonCredit)
+{
+  // A 3.95 s horizon from a policy that then dies. With stream_horizon_credit_sec
+  // 0.5 the hold begins about 0.5 s after the chunk, not after 3.95 s.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const auto published = Clock::now();
+  publish(joint_chunk(0.2, 80), 10);
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+
+  Clock::time_point held;
+  ASSERT_TRUE(wait_state("hold", published, 3.0, &held));
+  EXPECT_GE(seconds_between(published, held), 0.45);
+  EXPECT_LE(seconds_between(published, held), 1.5);
+}
+
+// ---------------------------------------------------------------------------
+// AC5 (S8). With chunk_time_source: observation, a chunk whose observation
+// stamp is in the future (more than chunk_max_future_skew, 0.05 s) or older than
+// chunk_max_observation_age (1.0 s) at arrival is rejected under its own
+// reason, and a chunk that leaves no waypoint to play does not count as
+// accepted and does not feed the watchdog.
+
+TEST_F(ObservationFixture, AC5_AnObservationInsideTheWindowIsAccepted)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  // 0.3 s old (limit 1.0) and a 0.95 s horizon: 0.65 s of it still ahead.
+  publish(stamped(long_chunk(), 0.3), 40);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+  EXPECT_EQ(last_reject(), "none");
+
+  // Slightly ahead of the controller clock, inside the 0.05 s skew allowance.
+  publish(stamped(long_chunk(0.25), -0.02), 40);
+  EXPECT_EQ(Access::accepted(*controller), 2u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+}
+
+TEST_F(ObservationFixture, AC5_AnObservationOlderThanTheMaximumAgeIsRejected)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  publish(stamped(long_chunk(), 10.0), 40);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_GE(Access::rejected(*controller), 1u);
+  EXPECT_TRUE(wait_reject("observation_too_old")) << "last_reject was: " << last_reject();
+}
+
+TEST_F(ObservationFixture, AC5_AnObservationInTheFutureIsRejected)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  publish(stamped(long_chunk(), -1.0), 40);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_GE(Access::rejected(*controller), 1u);
+  EXPECT_TRUE(wait_reject("observation_in_future")) << "last_reject was: " << last_reject();
+}
+
+TEST_F(NarrowAgeFixture, AC5_TheMaximumObservationAgeIsAParameter)
+{
+  // chunk_max_observation_age 0.3: a 0.5 s old stamp is refused, a 0.1 s old
+  // one is not (both are well inside the 1.0 s default).
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  publish(stamped(long_chunk(), 0.5), 40);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_TRUE(wait_reject("observation_too_old")) << "last_reject was: " << last_reject();
+
+  publish(stamped(long_chunk(), 0.1), 40);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+}
+
+TEST_F(StreamFixture, AC5_TheArrivalClockDoesNotJudgeTheObservationStamp)
+{
+  // The default chunk_time_source is arrival: the stamp is not the time base, so
+  // a stamp from another clock domain (here 10 s old) must not get a chunk
+  // refused by the observation window.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  auto message = joint_chunk(0.2, 20);
+  const rclcpp::Time stamp = client_node->now() - rclcpp::Duration::from_seconds(10.0);
+  message.header.stamp = stamp;
+  publish(message, 40);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
+}
+
+TEST_F(ObservationFixture, AC5_AChunkWithNoWaypointLeftDoesNotCountOrFeedTheWatchdog)
+{
+  // A valid chunk (0.35 s horizon), then a stream of chunks observed 0.8 s ago
+  // (inside the age window) whose 8 waypoints all lie 0.45 s or more in the
+  // past: nothing in them is playable. They are not "accepted", and they must
+  // not keep the stream looking alive -- the watchdog still holds.
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const auto first = Clock::now();
+  publish(stamped(joint_chunk(0.2, 8), 0.0), 10);
+  ASSERT_EQ(Access::accepted(*controller), 1u);
+
+  bool held = false;
+  Clock::time_point when;
+  for_seconds(2.5, [&] {
+      if (held) {return;}
+      chunk_pub->publish(stamped(joint_chunk(0.3, 8), 0.8));
+      for (const auto & sample : stream_samples()) {
+        if (sample.at >= first && sample.state == "hold") {held = true;}
+      }
+    });
+  EXPECT_TRUE(held) << "stale chunks kept the watchdog alive";
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_TRUE(wait_state("hold", first, 0.5, &when));
+}
+
+// ---------------------------------------------------------------------------
+// AC6 (C16). A chunk with control_dt <= 0 is rejected, not played at an
+// invented spacing derived from the goal's inference_frequency (15 Hz here,
+// which used to make it a perfectly playable chunk).
+
+TEST_F(StreamFixture, AC6_AZeroControlDtChunkIsRejectedAndMovesNothing)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  const auto before = commanded_q();
+  publish(joint_chunk(0.5, 8, 0.0), 60);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_GE(Access::rejected(*controller), 1u);
+  EXPECT_TRUE(wait_reject("control_dt")) << "last_reject was: " << last_reject();
+  EXPECT_LT(max_abs_difference(commanded_q(), before), 1e-3);
+  for (std::size_t index = 0; index < 38; ++index) {
+    EXPECT_TRUE(std::isfinite(Access::command(*controller, index)));
+  }
+}
+
+TEST_F(StreamFixture, AC6_ANegativeControlDtChunkIsRejected)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  publish(joint_chunk(0.5, 8, -0.05), 60);
+  EXPECT_EQ(Access::accepted(*controller), 0u);
+  EXPECT_GE(Access::rejected(*controller), 1u);
+  EXPECT_TRUE(wait_reject("control_dt")) << "last_reject was: " << last_reject();
+}
+
+TEST_F(StreamFixture, AC6_APositiveControlDtChunkIsStillAccepted)
+{
+  ASSERT_EQ(configured, controller_interface::return_type::OK);
+  wait_ready();
+  ASSERT_TRUE(Access::ready(*controller));
+  watch_stream();
+  auto goal = open_goal();
+  ASSERT_NE(goal.handle, nullptr);
+
+  publish(joint_chunk(0.2, 8, 0.05), 40);
+  EXPECT_EQ(Access::accepted(*controller), 1u);
+  EXPECT_EQ(Access::rejected(*controller), 0u);
 }

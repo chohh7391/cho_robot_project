@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <string>
 
 #include <Eigen/Eigen>
@@ -60,6 +61,10 @@ CallbackReturn VLAController::on_init() {
     auto_declare<std::vector<double>>("default_kp_task", {});
     auto_declare<std::vector<double>>("default_kd_task", {});
     auto_declare<double>("velocity_feedforward", 1.0);
+    // Position/velocity task IK rate [1/s]; see task_step().
+    auto_declare<double>("task_ik_gain", 50.0);
+    // Effort task law's null-space joint damping [N m s/rad]; 0 = off.
+    auto_declare<double>("null_space_damping", 0.0);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -83,6 +88,9 @@ CallbackReturn VLAController::on_configure(
     [this](const Vector7d & joints, pinocchio::SE3 & pose, Eigen::Matrix<double, 6, 7> & jacobian) {
       arm_kinematics_world(joints, pose, jacobian);
     });
+  // The reference limiter's joint window: the model limits, 0.05 rad in, the
+  // same window clamp_to_joint_limits() holds q_ref_ to. Before init().
+  action_server_->set_joint_window(q_lower_limits_, q_upper_limits_);
   action_server_->init();
   action_server_->attach_activity(&activity_);
 
@@ -95,6 +103,13 @@ CallbackReturn VLAController::on_activate(
   if (FrankaBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
+  // A chunk observed before this activation must not be anchored to a
+  // reference recorded in the previous one. After the base marked the activity
+  // active, and before the first compute().
+  if (action_server_) {
+    action_server_->reset_history();
+  }
+  task_ik_gain_fault_ = false;
   // Position mode: prefer what the position command interface is still holding
   // (a live hold of this arm) -- same helper/rationale as
   // task_space_ik_controller.cpp, avoids a one-cycle step at the controller
@@ -184,7 +199,20 @@ controller_interface::return_type VLAController::update(
     //    per clock message and three of them report measured_period == 0). With the
     //    raw period that collapsed both step clamps to zero and, worse, turned the
     //    (q_ref_ - q_ref_prev) / period feedforward into 0/0 = NaN.
-    write_open_loop(space, vla_running, twist_des, nominal_period(period));
+    const double dt = nominal_period(period);
+    // The task IK's error decays by (1 - task_ik_gain * dt) per cycle, so
+    // K dt >= 1 overshoots and K dt >= 2 diverges. The rate is only known here
+    // (get_update_rate() is 0, see nominal_period()), so this is checked from
+    // the first update on; once it fails, q_ref_ holds until the next
+    // activation, whatever the goal asks.
+    if (!task_ik_gain_fault_ && !(task_ik_gain_ * dt < 1.0)) {
+      task_ik_gain_fault_ = true;
+      RCLCPP_ERROR(get_node()->get_logger(),
+          "task_ik_gain %g 1/s at a %.3f ms period is K*dt = %.2f >= 1: the task IK would overshoot or "
+          "diverge (it needs task_ik_gain < %.0f at this rate). Holding the reference until reactivated.",
+          task_ik_gain_, dt * 1e3, task_ik_gain_ * dt, 1.0 / dt);
+    }
+    write_open_loop(space, vla_running && !task_ik_gain_fault_, twist_des, dt);
   }
   return controller_interface::return_type::OK;
 }
@@ -221,9 +249,11 @@ void VLAController::write_effort(
                                + current_kd_task_.cwiseProduct(
                                    velocity_feedforward_ * twist_des - J * state_.v_arm);
     Vector7d torque_null = Vector7d::Zero();
-    if (use_nullspace_posture_) {
-      // Optional null-space posture torque (use_nullspace_posture parameter,
-      // default false = the long-standing owner decision to run without it).
+    if (use_nullspace_posture_ || null_space_damping_ > 0.0) {
+      // The dynamically consistent null-space projector, for the optional
+      // posture torque (use_nullspace_posture, default false = the long-standing
+      // owner decision to run without it) and the optional null-space damping
+      // (null_space_damping, default 0). j_eef_inv = Lambda J M^-1 = Jbar^T.
       const Matrix7d & M = state_.M_arm;
       const Matrix7d M_inv = M.llt().solve(Matrix7d::Identity());
       Eigen::Matrix<double, 6, 6> Lambda_inv = J * M_inv * J.transpose();
@@ -231,12 +261,18 @@ void VLAController::write_effort(
       const Eigen::Matrix<double, 6, 7> j_eef_inv =
           Lambda_inv.llt().solve(Eigen::Matrix<double, 6, 6>::Identity()) * J * M_inv;
 
-      Vector7d q_error = default_dof_pos_ - state_.q_arm;
-      for (int i = 0; i < 7; ++i) {
-        q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+      if (use_nullspace_posture_) {
+        Vector7d q_error = default_dof_pos_ - state_.q_arm;
+        for (int i = 0; i < 7; ++i) {
+          q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+        }
+        const Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+        torque_null = (Matrix7d::Identity() - J.transpose() * j_eef_inv) * (M * u_null_accel);
       }
-      const Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
-      torque_null = (Matrix7d::Identity() - J.transpose() * j_eef_inv) * (M * u_null_accel);
+      if (null_space_damping_ > 0.0) {
+        torque_null += cho_controller_base::null_space_damping_torque(
+          J, j_eef_inv.transpose(), null_space_damping_, state_.v_arm);
+      }
     }
     torque_desired = J.transpose() * task_wrench + torque_null + state_.nle;
   }
@@ -262,6 +298,11 @@ VLAController::Vector7d VLAController::clamp_step(const Vector7d & step, const d
   return step.cwiseMax(-max_step).cwiseMin(max_step);
 }
 
+double VLAController::max_joint_step(const double dt) const
+{
+  return (max_joint_vel_ > 0.0) ? max_joint_vel_ * dt : std::numeric_limits<double>::infinity();
+}
+
 VLAController::Vector7d VLAController::task_step(const Vector6d & twist_des, const double dt)
 {
   // FK/Jacobian at q_ref_ (not measured) so the open-loop reference stays free
@@ -280,12 +321,14 @@ VLAController::Vector7d VLAController::task_step(const Vector6d & twist_des, con
   advance.head<3>() = to_local * twist_des.head<3>() * dt;
   advance.tail<3>() = to_local * twist_des.tail<3>() * dt;
 
-  // The advance, plus kp_task * dt of the error to where the reference was
-  // before it (H_ee_des is already this cycle's target). A reference moving at
-  // a steady twist is tracked without lag; the P term alone lags it by
-  // twist / kp_task.
-  const Vector6d move = advance + (current_kp_task_ * dt).cwiseProduct(error - advance);
-  return cho_controller_base::dls_step(J, move, kVlaDlsLambda);
+  // The advance, plus task_ik_gain * dt of the error to where the reference was
+  // before it (H_ee_des is already this cycle's target): a reference moving at
+  // a steady twist is tracked without lag. task_ik_gain is a rate [1/s], not
+  // the effort law's torque stiffness kp_task. The step is bounded at
+  // max_joint_vel by one scale on the whole step, so it keeps its task-space
+  // direction.
+  return cho_controller_base::task_ik_step(
+    J, error, advance, task_ik_gain_, dt, kVlaDlsLambda, Vector7d::Constant(max_joint_step(dt)));
 }
 
 void VLAController::arm_kinematics_world(
@@ -320,15 +363,18 @@ void VLAController::write_open_loop(
   const Vector7d q_ref_prev = q_ref_;
   if (vla_running) {
     // Joint space moves toward the target; task space takes one IK step. Either
-    // way the step is clamped, so a jump in the target (a chunk boundary, or a
+    // way the step is bounded at max_joint_vel (per joint in joint space, one
+    // scale in task space), so a jump in the target (a chunk boundary, or a
     // seed briefly off right after a goal starts) cannot spike the reference.
-    const Vector7d step = (space == cho_vla_core::ActionSpace::kJoint)
-        ? Vector7d(state_.q_arm_des - q_ref_)
+    q_ref_ += (space == cho_vla_core::ActionSpace::kJoint)
+        ? clamp_step(state_.q_arm_des - q_ref_, dt)
         : task_step(twist_des, dt);
-    q_ref_ += clamp_step(step, dt);
+    // The model limits, 0.05 rad in: an absolute joint chunk past them, or a
+    // task target out of reach, stops the reference at the window.
+    FrankaBaseController::clamp_to_joint_limits(q_ref_);
     ref_fk_dirty_ = true;
   }
-  // else: idle -> q_ref_ stays frozen, holding the activation pose exactly.
+  // else: idle (or a task_ik_gain fault) -> q_ref_ stays frozen, holding where it is.
 
   // Keep the shared reference fields synced with q_ref_. VLAActionServer::compute()
   // seeds a new goal from state_.q_arm_ref/H_ee_ref; without this, a second goal
@@ -454,9 +500,22 @@ bool VLAController::assign_parameters() {
                  "velocity_feedforward must be in [0, 1] (got %g)", velocity_feedforward);
     return false;
   }
+  const double task_ik_gain = get_node()->get_parameter("task_ik_gain").as_double();
+  if (!(std::isfinite(task_ik_gain) && task_ik_gain > 0.0)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "task_ik_gain must be finite and > 0 1/s (got %g)", task_ik_gain);
+    return false;
+  }
+  const double null_space_damping = get_node()->get_parameter("null_space_damping").as_double();
+  if (!(std::isfinite(null_space_damping) && null_space_damping >= 0.0)) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "null_space_damping must be finite and >= 0 N*m*s/rad (got %g)", null_space_damping);
+    return false;
+  }
 
   control_interface_ = mode;
   velocity_feedforward_ = velocity_feedforward;
+  task_ik_gain_ = task_ik_gain;
+  null_space_damping_ = null_space_damping;
   kp_task_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(kp_task.data());
   kd_task_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(kd_task.data());
   kp_joint_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(kp_joint.data());

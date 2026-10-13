@@ -19,7 +19,11 @@
 # bridge clock is a different time domain than the controller's. Echoing the
 # controller's own stamp makes time alignment work without any sync.
 # All-zero means "unstamped": the controller falls back to arrival time, which
-# reproduces the pre-v2 behaviour.
+# reproduces the pre-v2 behaviour. A controller reads the stamp only with
+# chunk_time_source: observation (the default is arrival); it then refuses a
+# stamp more than chunk_max_future_skew (0.05 s) after the chunk's arrival or
+# more than chunk_max_observation_age (1 s) before it, so a stamp from another
+# clock is rejected instead of anchoring the chunk at the wrong instant.
 std_msgs/Header header
 
 # Monotonic per-bridge chunk counter, incremented on every publish including a
@@ -127,9 +131,9 @@ string[] joint_names
 int32 chunk_size
 
 # Time between consecutive waypoints in this chunk [s]. Must be positive: it is
-# a divisor in the playback path. <= 0 falls back to
-# (1 / inference_frequency) / chunk_size, i.e. the chunk spans one inference
-# period, and the controller warns -- bridges should set it explicitly.
+# a divisor in the playback path. A chunk with control_dt <= 0 is rejected
+# (telemetry last_reject "control_dt"), not timed from inference_frequency or
+# anything else the controller could invent, so a bridge must set it.
 float64 control_dt
 
 # [chunk_size x dim] row-major. dim is 7 for joint space, or 3 + rotation size

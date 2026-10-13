@@ -177,7 +177,7 @@ System 2  VLM/VLA (7~15 Hz)  ──chunk──▶  실행기 / System 1 (50~200 
 | 큐 비면 무명령 | 위치 서보는 스스로 버팀. 토크 제어 팔은 안 버팀. MIT는 write 누락 = 프로토콜 폴트 | HOLD 블렌드 + 매 사이클 write |
 | 고정 가중 블렌드 | 새 값으로 70% **점프** — 서보가 흡수하는 계단이지 참조 연속성이 아님 | 값 합성 + cubic 시간 블렌드 |
 | 검증 없음 | §1 ① | `ChunkValidator` |
-| 서버가 "비슷한 관측" 드롭 | 청크가 정상적으로 안 올 수 있음 | `stream_timeout`은 추론 주기의 배수(3×)로 잡아 정상 갭을 폴트로 보지 않음 |
+| 서버가 "비슷한 관측" 드롭 | 청크가 정상적으로 안 올 수 있음 | `stream_timeout`은 최소 침묵 시간이고, 버퍼 지평선이 남아 있으면 hold 를 그 끝까지(`max_horizon_credit` 상한) 미뤄 정상 갭을 폴트로 보지 않음 |
 
 ### RTC 실행기 (업스트림 `rollout/inference/rtc.py` + `policies/rtc/action_queue.py`)
 
@@ -225,7 +225,8 @@ cho_controller_common/vla            ◀ 로봇 무관. rclcpp 없이 컴파일(
   ReferenceSampler   sample(now) → q_des, dq_des, x_des, v_des, gripper_des
                      joint 선형 / SE3 측지 보간, 속도는 유한차분(arm_velocities 있으면 그것)
   ReferenceLimiter   현재 saturate_des(속도+가속 사다리꼴) + joint 윈도우 클램프. action_space별로만 실행
-  StreamWatchdog     RUNNING ─(now − t_last_chunk > stream_timeout)→ HOLD ─(hold_timeout)→ ABORT
+  StreamWatchdog     RUNNING ─(now − t_last_chunk > stream_timeout 이고 now ≥ min(버퍼 지평선 끝, t_last_chunk + max_horizon_credit))→ HOLD
+                     ─(hold_timeout)→ ABORT
                      HOLD 진입 = 현재 참조로 cubic release(마지막 웨이포인트 동결 아님). 재도착 시 RESUME(옵션)
   Telemetry          청크 지연(t_arr − t_obs), 나이, 드롭 수·이유, splice 불연속 크기, 큐 깊이,
                      remaining_horizon_sec, last_chunk_stamp (브릿지의 g 트리거용, §2a-b),
@@ -269,7 +270,7 @@ string relative_frame       # "ee" | "base". 상대 task 델타의 합성 프레
 string rotation_type        # euler | axis_angle | rotation6d | quaternion (task 전용)
 string[] joint_names        # 비어 있으면 robot_config 기본 순서. 채워지면 재배열+검증(누락·중복 거부)
 int32 chunk_size
-float64 control_dt          # 웨이포인트 간격. ≤0이면 (1/inference_frequency)/chunk_size 폴백 + WARN
+float64 control_dt          # 웨이포인트 간격. ≤0인 청크는 거부(last_reject "control_dt"), 폴백 없음
 float64[] arm_actions       # [chunk_size × dim] row-major
 float64[] arm_velocities    # 선택. 같은 배열형. 비어 있으면 유한차분
 string gripper_mode         # "binary" | "continuous". 비어 있으면 binary = 현재 동작
@@ -659,7 +660,7 @@ rollout이 끝난다.
 - **`VisionLanguageAction`도 개편 대상**(step 3): `percent_complete`는 한 번도 발행되지 않는 죽은 필드이고
   VLA 롤아웃엔 끝점이 없어 정의 불가 → `remaining_horizon_sec`로 교체. `string message`가 빠져 있어
   (TaskSpace/JointSpace엔 있음) BT가 실패 이유를 구별 못 함 → 추가. **언어 지시문 필드가 없음** → `string task`
-  추가. `inference_frequency`는 `control_dt` 폴백으로만 남긴다.
+  추가. `inference_frequency`는 유한·양수 검증과 로그에만 쓰고, 청크 간격(`control_dt`)을 대신하지 않는다.
 - **외부 이름(`/vla/trigger_success`, `/vla/action/ee_pose`, `.../notify_completion`)은 기본값 유지**, 파라미터화만.
   BT waiter와 success GUI가 의존한다.
 - `hold_on_stale`의 RESUME(청크 재도착 시 HOLD → RUNNING 복귀)은 **옵션, 기본 OFF**. 정책이 왜 멈췄는지
@@ -667,6 +668,5 @@ rollout이 끝난다.
 
 ### 열린 것
 
-- `control_dt ≤ 0` 폴백을 언제 제거할지(WARN → 거부). 브릿지 넷이 모두 명시하게 된 뒤.
 - 워크스페이스 박스의 기준 프레임과 값. 로봇별 `robot_config`에 두는 게 맞아 보이나 미정.
 - 텔레메트리 메시지 타입(`cho_interfaces/msg/VlaTelemetry` 신설 vs `diagnostic_msgs`).

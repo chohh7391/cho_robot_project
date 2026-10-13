@@ -1051,6 +1051,8 @@ TEST(RejectNameAC13, TheOtherReasonsKeepTheNamesTelemetryAlreadyReports) {
     {Reject::kNonFiniteStamp, "non_finite_stamp"},
     {Reject::kUnparseableField, "unparseable_field"},
     {Reject::kActionSpaceNotAccepted, "action_space_not_accepted"},
+    {Reject::kObservationInFuture, "observation_in_future"},
+    {Reject::kObservationTooOld, "observation_too_old"},
   };
   for (std::size_t i = 0; i < std::size(named); ++i) {
     EXPECT_EQ(std::string(reject_name(named[i].reject)), named[i].name);
@@ -1068,5 +1070,130 @@ TEST(RejectNameAC13, AWellFormedJointChunkIsNotRefusedByTheCore) {
   std::vector<Waypoint> waypoints;
   EXPECT_EQ(validate(joint_chunk(), ValidationLimits{}), Reject::kNone);
   EXPECT_EQ(ingest(joint_chunk(), Anchor{}, ValidationLimits{}, waypoints), Reject::kNone);
+}
+// --------------------------------------------------------------------------
+// S8: the observation stamp must sit in a window around the arrival time.
+// Both are on the host's control clock; t_arrival is NaN when the host has no
+// observation time source (arrival), and then nothing is checked.
+// --------------------------------------------------------------------------
+
+Chunk stamped_chunk(const double t_obs, const double t_arrival)
+{
+  Chunk chunk = joint_chunk();
+  chunk.t_obs = t_obs;
+  chunk.t_arrival = t_arrival;
+  return chunk;
+}
+
+TEST(ObservationWindow, S8_AC5_DefaultsAreOffForTheChunkAndOneSecondFiftyMsForTheLimits) {
+  EXPECT_TRUE(std::isnan(Chunk{}.t_arrival));
+  EXPECT_DOUBLE_EQ(ValidationLimits{}.max_observation_age, 1.0);
+  EXPECT_DOUBLE_EQ(ValidationLimits{}.max_future_skew, 0.05);
+}
+
+TEST(ObservationWindow, S8_AC5_NoArrivalTimeMeansNoCheck) {
+  // t_arrival left at NaN: a stamp 1000 s old or ahead is not this check's business.
+  for (const double t_obs : {-1000.0, 0.0, 10.0, 1e9}) {
+    Chunk chunk = joint_chunk();
+    chunk.t_obs = t_obs;
+    ASSERT_TRUE(std::isnan(chunk.t_arrival));
+    EXPECT_EQ(validate(chunk, ValidationLimits{}), Reject::kNone) << "t_obs=" << t_obs;
+  }
+}
+
+TEST(ObservationWindow, S8_AC5_AnInfiniteArrivalTimeIsNotChecked) {
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(validate(stamped_chunk(10.0, inf), ValidationLimits{}), Reject::kNone);
+  EXPECT_EQ(validate(stamped_chunk(10.0, -inf), ValidationLimits{}), Reject::kNone);
+}
+
+TEST(ObservationWindow, S8_AC5_AnObservationAheadOfArrivalIsRejected) {
+  // t_obs = t_arrival + 0.1 against a 0.05 skew.
+  EXPECT_EQ(
+    validate(stamped_chunk(10.1, 10.0), ValidationLimits{}), Reject::kObservationInFuture);
+  EXPECT_EQ(
+    validate(stamped_chunk(11.0, 10.0), ValidationLimits{}), Reject::kObservationInFuture);
+}
+
+TEST(ObservationWindow, S8_AC5_AnObservationOlderThanTheMaximumAgeIsRejected) {
+  // t_arrival - t_obs = 1.5 against a 1.0 s age.
+  EXPECT_EQ(
+    validate(stamped_chunk(10.0, 11.5), ValidationLimits{}), Reject::kObservationTooOld);
+  EXPECT_EQ(
+    validate(stamped_chunk(10.0, 20.0), ValidationLimits{}), Reject::kObservationTooOld);
+}
+
+TEST(ObservationWindow, S8_AC5_InsideTheWindowPasses) {
+  const ValidationLimits limits;
+  EXPECT_EQ(validate(stamped_chunk(10.0, 10.0), limits), Reject::kNone);    // same instant
+  EXPECT_EQ(validate(stamped_chunk(10.0, 10.1), limits), Reject::kNone);    // ordinary latency
+  EXPECT_EQ(validate(stamped_chunk(10.0, 10.9), limits), Reject::kNone);    // old, not too old
+  EXPECT_EQ(validate(stamped_chunk(10.04, 10.0), limits), Reject::kNone);   // within the skew
+}
+
+TEST(ObservationWindow, S8_AC5_TheLimitsAreRead) {
+  ValidationLimits tight;
+  tight.max_observation_age = 0.3;
+  EXPECT_EQ(validate(stamped_chunk(10.0, 10.5), tight), Reject::kObservationTooOld);
+  EXPECT_EQ(validate(stamped_chunk(10.0, 10.2), tight), Reject::kNone);
+
+  ValidationLimits loose;
+  loose.max_future_skew = 0.5;
+  EXPECT_EQ(validate(stamped_chunk(10.3, 10.0), loose), Reject::kNone);
+  EXPECT_EQ(validate(stamped_chunk(10.7, 10.0), loose), Reject::kObservationInFuture);
+
+  ValidationLimits tight_skew;
+  tight_skew.max_future_skew = 0.01;
+  EXPECT_EQ(validate(stamped_chunk(10.04, 10.0), tight_skew), Reject::kObservationInFuture);
+}
+
+TEST(ObservationWindow, S8_AC5_ANonFiniteObservationStampIsStillAStampError) {
+  EXPECT_EQ(validate(stamped_chunk(kNaN, 10.0), ValidationLimits{}), Reject::kNonFiniteStamp);
+  EXPECT_EQ(
+    validate(stamped_chunk(std::numeric_limits<double>::infinity(), 10.0), ValidationLimits{}),
+    Reject::kNonFiniteStamp);
+}
+
+TEST(ObservationWindow, S8_AC5_TaskChunksAreCheckedToo) {
+  Chunk chunk = task_chunk(RotationType::kQuaternion);
+  chunk.t_arrival = 12.0;   // t_obs 10.0: 2 s old
+  EXPECT_EQ(validate(chunk, ValidationLimits{}), Reject::kObservationTooOld);
+  chunk.t_arrival = 9.0;    // 1 s ahead
+  EXPECT_EQ(validate(chunk, ValidationLimits{}), Reject::kObservationInFuture);
+  chunk.t_arrival = 10.2;
+  EXPECT_EQ(validate(chunk, ValidationLimits{}), Reject::kNone);
+}
+
+TEST(ObservationWindow, S8_AC5_IngestRefusesAndLeavesTheOutputUntouched) {
+  std::vector<Waypoint> waypoints(3);
+  EXPECT_EQ(
+    ingest(stamped_chunk(10.0, 20.0), Anchor{}, ValidationLimits{}, waypoints),
+    Reject::kObservationTooOld);
+  EXPECT_EQ(waypoints.size(), 3u);
+  EXPECT_EQ(
+    ingest(stamped_chunk(10.5, 10.0), Anchor{}, ValidationLimits{}, waypoints),
+    Reject::kObservationInFuture);
+  EXPECT_EQ(waypoints.size(), 3u);
+  EXPECT_EQ(
+    ingest(stamped_chunk(10.0, 10.1), Anchor{}, ValidationLimits{}, waypoints), Reject::kNone);
+  EXPECT_EQ(waypoints.size(), 2u);   // the 2-step joint chunk replaced them
+}
+
+TEST(ObservationWindow, S8_AC5_RejectNamesAreTheTelemetryStrings) {
+  EXPECT_STREQ(reject_name(Reject::kObservationInFuture), "observation_in_future");
+  EXPECT_STREQ(reject_name(Reject::kObservationTooOld), "observation_too_old");
+}
+
+TEST(ControlDt, C16_AC6_ANonPositiveSpacingIsRejectedNotInvented) {
+  // validate() is the only gate: a chunk with control_dt <= 0 never reaches decode.
+  for (const double bad_dt : {0.0, -0.0, -1e-9, -0.02}) {
+    Chunk chunk = joint_chunk();
+    chunk.control_dt = bad_dt;
+    EXPECT_EQ(validate(chunk, ValidationLimits{}), Reject::kControlDt) << "control_dt=" << bad_dt;
+    std::vector<Waypoint> waypoints(1);
+    EXPECT_EQ(ingest(chunk, Anchor{}, ValidationLimits{}, waypoints), Reject::kControlDt);
+    EXPECT_EQ(waypoints.size(), 1u);
+  }
+  EXPECT_STREQ(reject_name(Reject::kControlDt), "control_dt");
 }
 }  // namespace

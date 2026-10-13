@@ -37,6 +37,8 @@ const char * reject_name(const Reject reject)
     case Reject::kNonFiniteStamp: return "non_finite_stamp";
     case Reject::kUnparseableField: return "unparseable_field";
     case Reject::kActionSpaceNotAccepted: return "action_space_not_accepted";
+    case Reject::kObservationInFuture: return "observation_in_future";
+    case Reject::kObservationTooOld: return "observation_too_old";
   }
   return "unknown";
 }

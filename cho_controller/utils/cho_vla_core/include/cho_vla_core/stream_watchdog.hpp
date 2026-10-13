@@ -45,17 +45,25 @@ const char * stream_state_name(StreamState state);
 // died five seconds in -- and while it runs down, the arm sits frozen at a
 // mid-motion waypoint.
 //
-// Timeouts are wall-clock, not chunk counts: the host knows the inference period
-// and a multiple of it (3x is the documented starting point) separates a normal
-// gap from a dead stream.
+// Timeouts are on the host's control clock, not chunk counts. Once a chunk has
+// arrived, the buffered horizon counts as liveness too, so a policy that
+// re-infers every 0.5 s with a 1 s horizon never holds. See update().
 class StreamWatchdog
 {
 public:
   struct Params
   {
-    // Quiet time before entering kHold. <= 0 disables the watchdog entirely, so
-    // the state machine stays in kRunning once started.
+    // Least quiet time before kHold [s], since the last accepted chunk (before
+    // the first one: since the goal start). After the first chunk kHold also
+    // waits for the buffered horizon to end, up to max_horizon_credit; see
+    // update(). <= 0 disables the watchdog entirely, so the state machine stays
+    // in kRunning once started.
     double stream_timeout {0.0};
+    // Longest the buffered horizon can keep the stream out of kHold, counted
+    // from the last accepted chunk [s], > 0. It bounds the open-loop replay of a
+    // policy that died with a long chunk buffered. Not finite or <= 0: the
+    // horizon is ignored, as update(now).
+    double max_horizon_credit {1.0};
     // Further quiet time in kHold before kAborted. <= 0 means hold forever.
     double hold_timeout {0.0};
     // Whether a chunk arriving during kHold returns to kRunning.
@@ -86,11 +94,23 @@ public:
   // Begin a goal. Nothing has arrived yet.
   void reset(double now);
 
-  // An accepted chunk arrived. Rejected chunks must NOT be reported here: a
-  // bridge stuck emitting malformed chunks would otherwise keep the watchdog
-  // happy while nothing drives the arm.
+  // An accepted chunk arrived. Rejected chunks must NOT be reported here, nor
+  // one none of whose waypoints reached the timeline (all past on arrival): a
+  // bridge stuck emitting chunks that drive nothing would otherwise keep the
+  // watchdog happy while the arm stands still.
   void note_chunk(double now);
 
+  // `horizon_end` is the time of the timeline's last waypoint on the same clock
+  // (-inf when there is none). Before the first chunk, kHold comes when
+  //   now - goal start > stream_timeout.
+  // After it, from kRunning, when both
+  //   now - last chunk > stream_timeout  and
+  //   now >= min(horizon_end, last chunk + max_horizon_credit),
+  // i.e. the deadline is max(last + stream_timeout, min(horizon_end, last +
+  // max_horizon_credit)). A NaN horizon_end counts as none. kAborted follows
+  // hold_timeout after entering kHold.
+  StreamState update(double now, double horizon_end);
+  // update(now, -inf): the timeout alone decides.
   StreamState update(double now);
   StreamState state() const {return state_;}
 

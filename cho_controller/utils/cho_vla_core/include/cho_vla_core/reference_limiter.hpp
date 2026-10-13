@@ -232,15 +232,59 @@ public:
   // between two times holds the output throughout.
   void apply(double now, Reference & reference);
 
+  // One cycle of a stop, for a host whose stream is in hold: the reference
+  // comes to rest from the limiter's own state, in the space it last ran (the
+  // last apply() that advanced, or the seed). There is no target, so no gap
+  // correction and no feed-forward: each rate goes from where apply() left it
+  // (rate and acceleration) to zero within the bounds apply() uses, and once
+  // at zero it stays there with the position held exactly.
+  //   - Joints with a velocity and an acceleration bound, translation with
+  //     both, and rotation under max_angular_acceleration: Ruckig's velocity
+  //     interface to rest, per joint and per axis (a/sqrt(3), j/sqrt(3) per
+  //     axis, as apply()), jerk as apply() (a / 0.04 s when unset). From rate v
+  //     at zero acceleration the stop takes v/a + a/j and covers
+  //     v^2/(2a) + v*a/(2j); when v < a^2/j, 2*sqrt(v/j) and v*sqrt(v/j).
+  //   - Anything without an acceleration bound stops at once: apply() keeps no
+  //     acceleration state there and passes rate steps through.
+  // The rate stays inside its velocity bound and the joints inside the window,
+  // as in apply(). The other space's representation is held as last emitted.
+  //
+  // Returns the stop: space, pose, joints, twist and joint_velocity as apply()
+  // emits them (joint_velocity the step's displacement over the step, the
+  // twist the stop's own rate; zero in the space not running), valid true, no
+  // gripper. Time as in apply(): a step outside (0, kClockRebaseSec] repeats
+  // the previous output. Before any seed it changes nothing and returns a
+  // default Reference with valid false; seeded() stays false.
+  //
+  // It leaves no sampled-rate memory behind, so the next apply() has no
+  // feed-forward on its first cycle, as after a seed, and continues from the
+  // stop's position, rate and time: a host that calls this on every held
+  // cycle can resume with apply() alone.
+  Reference come_to_rest(double now);
+
   bool seeded() const {return seeded_;}
 
 private:
+  // The clock rule of apply() (see there): true, with `step`, on a cycle that
+  // integrates; otherwise moves the time base as that rule says.
+  bool advance_clock(double now, double & step);
+  // What the previous cycle emitted, for a cycle that integrates nothing.
+  void repeat_previous(Reference & reference) const;
+
   // Task-space rotation under max_angular_acceleration: sets
   // reference.pose.rotation() and reference.twist.tail<3>().
   void track_rotation(double step, Reference & reference);
 
+  // come_to_rest() per space. Each writes its fields of `reference` and its
+  // own rate state.
+  void stop_joints(double step, Reference & reference);
+  void stop_translation(double step, Reference & reference);
+  void stop_rotation(double step, Reference & reference);
+
   Params params_ {};
   bool seeded_ {false};
+  // The space the rate state is in: the seed's, then each integrating apply()'s.
+  ActionSpace space_ {ActionSpace::kTask};
   double previous_time_ {0.0};
   SE3 previous_pose_ {SE3::Identity()};
   Vector7 previous_joints_ {Vector7::Zero()};

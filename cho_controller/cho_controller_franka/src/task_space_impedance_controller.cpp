@@ -21,6 +21,7 @@
 #include <string>
 
 #include <Eigen/Eigen>
+#include "cho_controller_base/kinematics.hpp"
 #include "cho_controller_franka/servers/task_space_action_server.hpp"
 
 namespace cho_controller {
@@ -51,6 +52,8 @@ CallbackReturn TaskSpaceImpedanceController::on_init() {
     auto_declare<double>("kd_null", 1.0);
     auto_declare<std::vector<double>>("default_dof_pos", {});
     auto_declare<bool>("use_nullspace_posture", false);
+    // Joint damping [N m s/rad] projected into the task's null space; 0 = off.
+    auto_declare<double>("null_space_damping", 0.0);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -138,23 +141,31 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // 4. Motion Torque
   Vector7d torque_motion = J_T * task_wrench;
 
-  // 5. Optional null-space posture torque (use_nullspace_posture parameter):
-  // dynamically-consistent projection of a PD pull toward default_dof_pos_.
+  // 5. Optional null-space torques, through the dynamically consistent
+  // projector (j_eef_inv = Lambda J M^-1 = Jbar^T): a PD pull toward
+  // default_dof_pos_ (use_nullspace_posture) and a joint damping
+  // (null_space_damping > 0). Both off by default.
   Vector7d torque_null = Vector7d::Zero();
-  if (use_nullspace_posture_) {
+  if (use_nullspace_posture_ || null_space_damping_ > 0.0) {
     Eigen::Matrix<double, 6, 6> Lambda_inv = J * M_inv * J_T;
     Lambda_inv.diagonal().array() += 1e-4;  // regularize near singularities
     Eigen::Matrix<double, 6, 6> Lambda =
         Lambda_inv.llt().solve(Eigen::Matrix<double, 6, 6>::Identity());
     Eigen::Matrix<double, 6, 7> j_eef_inv = Lambda * J * M_inv;
 
-    Vector7d q_error = default_dof_pos_ - state_.q_arm;
-    for (int i = 0; i < 7; ++i) {
-      q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+    if (use_nullspace_posture_) {
+      Vector7d q_error = default_dof_pos_ - state_.q_arm;
+      for (int i = 0; i < 7; ++i) {
+        q_error(i) = std::atan2(std::sin(q_error(i)), std::cos(q_error(i)));
+      }
+      Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
+      Vector7d u_null_torque = M * u_null_accel;
+      torque_null = (Matrix7d::Identity() - J_T * j_eef_inv) * u_null_torque;
     }
-    Vector7d u_null_accel = kp_null_ * q_error - kd_null_ * state_.v_arm;
-    Vector7d u_null_torque = M * u_null_accel;
-    torque_null = (Matrix7d::Identity() - J_T * j_eef_inv) * u_null_torque;
+    if (null_space_damping_ > 0.0) {
+      torque_null += cho_controller_base::null_space_damping_torque(
+        J, j_eef_inv.transpose(), null_space_damping_, state_.v_arm);
+    }
   }
 
   // 6. Total torque
@@ -175,6 +186,7 @@ bool TaskSpaceImpedanceController::assign_parameters() {
   auto kp_null = get_node()->get_parameter("kp_null").as_double();
   auto kd_null = get_node()->get_parameter("kd_null").as_double();
   auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
+  const double null_space_damping = get_node()->get_parameter("null_space_damping").as_double();
 
   if (kp_task.size() != 6 || kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
@@ -184,13 +196,19 @@ bool TaskSpaceImpedanceController::assign_parameters() {
     RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
     return false;
   }
-  
-  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
+  if (!(std::isfinite(null_space_damping) && null_space_damping >= 0.0)) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "null_space_damping must be finite and >= 0 N*m*s/rad (got %g)", null_space_damping);
+    return false;
+  }
+
+  kp_task_ =Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
   kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
   kp_null_ = kp_null;
   kd_null_ = kd_null;
   default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
   use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
+  null_space_damping_ = null_space_damping;
 
   return true;
 }

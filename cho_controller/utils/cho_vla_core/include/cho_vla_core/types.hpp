@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -162,7 +163,12 @@ enum class Reject : std::uint8_t
   // from kUnparseableField, which says the message is wrong: no fix to the
   // chunk's contents gets this one accepted -- the controller's configuration
   // or the bridge's choice of action space has to change.
-  kActionSpaceNotAccepted
+  kActionSpaceNotAccepted,
+  // t_obs outside the observation window around Chunk::t_arrival (see
+  // ValidationLimits): later than arrival by more than max_future_skew, or
+  // earlier by more than max_observation_age. A stamp from another clock or a
+  // replay, not an observation of this arm.
+  kObservationInFuture, kObservationTooOld
 };
 const char * reject_name(Reject reject);
 
@@ -273,6 +279,11 @@ struct Chunk
   // this repo's multi-PC setup has no clock sync, so a bridge wall clock would be
   // in a different time domain than the controller.
   double t_obs {0.0};
+  // Arrival time on the same clock, set by a host that takes t_obs from the
+  // chunk's stamp; validate() then checks the observation window against it.
+  // NaN (the default) or infinite skips that check: a host that places the
+  // chunk at its arrival has nothing to compare.
+  double t_arrival {std::numeric_limits<double>::quiet_NaN()};
   std::uint64_t seq {0};
   ActionSpace space {ActionSpace::kTask};
   RelativeMode relative {RelativeMode::kAbsolute};

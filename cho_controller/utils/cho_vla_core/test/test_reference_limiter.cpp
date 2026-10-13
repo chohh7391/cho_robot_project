@@ -2666,4 +2666,223 @@ TEST(ReferenceLimiter, AC18_ASeedInsideTheWindowOrWithTheClampOffIsTakenAsGiven)
   }
 }
 
+// --------------------------------------------------------------------------
+// S17: come_to_rest() brings a moving, seeded limiter to a stop inside the
+// space's acceleration bound, continuing from where it is (no one-cycle stop),
+// and then holds the place it stopped at. Expected values come from the bounds
+// and from finite differences of the emitted positions, not from the limiter.
+// --------------------------------------------------------------------------
+
+constexpr double kDt = 0.001;
+
+// Positions emitted per cycle, collected as the limiter is driven.
+struct Trace
+{
+  std::vector<Eigen::VectorXd> positions;
+  double now {0.0};
+};
+
+Eigen::VectorXd joints_of(const Reference & reference) {return reference.joints;}
+Eigen::VectorXd translation_of(const Reference & reference) {return reference.pose.translation();}
+
+// Second difference / dt^2 over the trace: the commanded acceleration.
+std::vector<Eigen::VectorXd> accelerations(const Trace & trace)
+{
+  std::vector<Eigen::VectorXd> out;
+  for (std::size_t i = 2; i < trace.positions.size(); ++i) {
+    out.push_back(
+      (trace.positions[i] - 2.0 * trace.positions[i - 1] + trace.positions[i - 2]) / (kDt * kDt));
+  }
+  return out;
+}
+
+Eigen::VectorXd last_velocity(const Trace & trace)
+{
+  const std::size_t n = trace.positions.size();
+  return (trace.positions[n - 1] - trace.positions[n - 2]) / kDt;
+}
+
+ReferenceLimiter::Params joint_params(const double v, const double a)
+{
+  ReferenceLimiter::Params params;
+  params.max_joint_velocity.setConstant(v);
+  params.max_joint_acceleration.setConstant(a);
+  return params;
+}
+
+// Seed at zero and chase a far target for `seconds`: the joints end up cruising
+// at the velocity bound (acceleration back at zero).
+Trace cruise_joints(ReferenceLimiter & limiter, const double seconds)
+{
+  Trace trace;
+  limiter.seed(joint_reference(0.0), 0.0);
+  trace.positions.push_back(Eigen::VectorXd::Zero(7));
+  const int cycles = static_cast<int>(seconds / kDt + 0.5);
+  for (int i = 1; i <= cycles; ++i) {
+    trace.now = i * kDt;
+    Reference reference = joint_reference(100.0);
+    limiter.apply(trace.now, reference);
+    trace.positions.push_back(joints_of(reference));
+  }
+  return trace;
+}
+
+TEST(ComeToRest, S17_AC2_JointSpaceStopsInsideTheAccelerationBoundAndHoldsThere) {
+  const double a_max = 4.0;
+  ReferenceLimiter limiter(joint_params(1.0, a_max));
+  Trace trace = cruise_joints(limiter, 1.0);
+  const double v0 = last_velocity(trace)(0);
+  ASSERT_GT(v0, 0.9) << "the fixture should be cruising near its 1 rad/s bound";
+  const double start = trace.positions.back()(0);
+
+  for (int i = 1; i <= 2000; ++i) {
+    trace.now += kDt;
+    trace.positions.push_back(joints_of(limiter.come_to_rest(trace.now)));
+  }
+
+  // Acceleration over the whole trace, the switch from tracking to braking included.
+  for (const Eigen::VectorXd & acc : accelerations(trace)) {
+    EXPECT_LE(acc.cwiseAbs().maxCoeff(), a_max * 1.05);
+  }
+
+  // Ends at rest, and every joint stopped (they were all driven alike).
+  EXPECT_LT(last_velocity(trace).cwiseAbs().maxCoeff(), 1e-6);
+  const double stop = trace.positions.back()(0);
+  EXPECT_NEAR(trace.positions.back()(6), stop, 1e-9);
+
+  // Stopping distance: no shorter than v^2 / 2a (that is what the bound allows),
+  // and at most that plus the jerk ramp (a / 0.04 s) and a cycle of slack.
+  const double distance = stop - start;
+  EXPECT_GE(distance, v0 * v0 / (2.0 * a_max) - 2e-3);
+  EXPECT_LE(distance, v0 * v0 / (2.0 * a_max) + v0 * 0.04 + 2e-3);
+  // It brakes; it does not carry on to the 100 rad target.
+  EXPECT_LT(stop, 2.0);
+
+  // Held: further calls return the same place.
+  for (int i = 0; i < 100; ++i) {
+    trace.now += kDt;
+    EXPECT_NEAR(joints_of(limiter.come_to_rest(trace.now))(0), stop, 1e-9);
+  }
+}
+
+TEST(ComeToRest, S17_AC2_ItContinuesTheMotionInsteadOfStoppingForACycle) {
+  ReferenceLimiter limiter(joint_params(1.0, 4.0));
+  Trace trace = cruise_joints(limiter, 1.0);
+  const double step_before = trace.positions.back()(0) - trace.positions[trace.positions.size() - 2](0);
+  ASSERT_GT(step_before, 0.9e-3);
+
+  trace.now += kDt;
+  const Reference first = limiter.come_to_rest(trace.now);
+  const double step_first = first.joints(0) - trace.positions.back()(0);
+  // Deceleration starts from the commanded velocity: this cycle's step is a bit
+  // under the previous one, never zero (that would be a 1 rad/s velocity step in
+  // one cycle against a 4 rad/s^2 bound).
+  EXPECT_GT(step_first, 0.8 * step_before);
+  EXPECT_LE(step_first, step_before + 1e-9);
+}
+
+TEST(ComeToRest, S17_AC2_EveryJointKeepsItsOwnAccelerationBound) {
+  ReferenceLimiter::Params params = joint_params(1.0, 4.0);
+  for (int j = 0; j < 7; ++j) {params.max_joint_acceleration(j) = 2.0 + 0.5 * j;}   // 2 .. 5
+  ReferenceLimiter limiter(params);
+  Trace trace = cruise_joints(limiter, 1.5);
+
+  for (int i = 1; i <= 3000; ++i) {
+    trace.now += kDt;
+    trace.positions.push_back(joints_of(limiter.come_to_rest(trace.now)));
+  }
+  for (const Eigen::VectorXd & acc : accelerations(trace)) {
+    for (int j = 0; j < 7; ++j) {
+      EXPECT_LE(std::abs(acc(j)), params.max_joint_acceleration(j) * 1.05) << "joint " << j;
+    }
+  }
+  EXPECT_LT(last_velocity(trace).cwiseAbs().maxCoeff(), 1e-6);
+}
+
+TEST(ComeToRest, S17_AC2_TaskSpaceStopsInsideTheLinearAccelerationBound) {
+  // Diagonal motion, so the per-axis share of the norm bound is fully used and the
+  // stopping distance is the norm one whichever way the bound is split per axis.
+  const double v_max = 0.5;
+  const double a_max = 2.0;
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = v_max;
+  params.max_linear_acceleration = a_max;
+  ReferenceLimiter limiter(params);
+
+  Trace trace;
+  limiter.seed(task_reference(Eigen::Vector3d::Zero()), 0.0);
+  trace.positions.push_back(Eigen::Vector3d::Zero());
+  for (int i = 1; i <= 1000; ++i) {
+    trace.now = i * kDt;
+    Reference reference = task_reference(Eigen::Vector3d(10.0, 10.0, 10.0));
+    limiter.apply(trace.now, reference);
+    trace.positions.push_back(translation_of(reference));
+  }
+  const double v0 = last_velocity(trace).norm();
+  ASSERT_GT(v0, 0.45) << "the fixture should be cruising near its 0.5 m/s bound";
+  const Eigen::Vector3d start = trace.positions.back();
+
+  for (int i = 1; i <= 2000; ++i) {
+    trace.now += kDt;
+    trace.positions.push_back(translation_of(limiter.come_to_rest(trace.now)));
+  }
+
+  for (const Eigen::VectorXd & acc : accelerations(trace)) {
+    EXPECT_LE(acc.norm(), a_max * 1.05);
+  }
+  EXPECT_LT(last_velocity(trace).norm(), 1e-6);
+
+  const double distance = (trace.positions.back() - start).norm();
+  EXPECT_GE(distance, v0 * v0 / (2.0 * a_max) - 2e-3);
+  EXPECT_LE(distance, v0 * v0 / (2.0 * a_max) + v0 * 0.04 + 2e-3);
+  // Straight on along the direction of travel, no sideways drift.
+  const Eigen::Vector3d direction = Eigen::Vector3d(1.0, 1.0, 1.0).normalized();
+  EXPECT_NEAR((trace.positions.back() - start).dot(direction), distance, 1e-6);
+
+  const Eigen::Vector3d stop = trace.positions.back();
+  for (int i = 0; i < 100; ++i) {
+    trace.now += kDt;
+    EXPECT_NEAR((translation_of(limiter.come_to_rest(trace.now)) - stop).norm(), 0.0, 1e-9);
+  }
+}
+
+TEST(ComeToRest, S17_AC2_AtRestItStaysPut) {
+  ReferenceLimiter limiter(joint_params(1.0, 4.0));
+  limiter.seed(joint_reference(0.3), 0.0);
+  for (int i = 1; i <= 50; ++i) {
+    const Reference reference = limiter.come_to_rest(i * kDt);
+    EXPECT_NEAR(reference.joints(0), 0.3, 1e-12);
+    EXPECT_NEAR(reference.joints(6), 0.3, 1e-12);
+  }
+}
+
+TEST(ComeToRest, S17_AC2_BeforeASeedItDoesNothingAndTheLimiterStaysUnseeded) {
+  ReferenceLimiter limiter(joint_params(1.0, 4.0));
+  limiter.come_to_rest(1.0);
+  EXPECT_FALSE(limiter.seeded());
+}
+
+TEST(ComeToRest, S17_AC2_TrackingResumesFromTheRestPlace) {
+  // A host that leaves hold applies the next sampled reference from where
+  // come_to_rest stopped, on a continuing clock.
+  ReferenceLimiter limiter(joint_params(1.0, 4.0));
+  Trace trace = cruise_joints(limiter, 1.0);
+  for (int i = 1; i <= 1500; ++i) {
+    trace.now += kDt;
+    trace.positions.push_back(joints_of(limiter.come_to_rest(trace.now)));
+  }
+  const double stop = trace.positions.back()(0);
+  ASSERT_LT(last_velocity(trace).cwiseAbs().maxCoeff(), 1e-6);
+
+  trace.now += kDt;
+  Reference reference = joint_reference(stop);   // target = where it already is
+  limiter.apply(trace.now, reference);
+  EXPECT_NEAR(reference.joints(0), stop, 1e-6);
+
+  trace.now += kDt;
+  Reference ahead = joint_reference(stop + 0.5);
+  limiter.apply(trace.now, ahead);
+  EXPECT_GE(ahead.joints(0), stop);
+  EXPECT_LE(ahead.joints(0) - stop, 1.0 * 2 * kDt + 1e-9);   // velocity bound
+}
 }  // namespace

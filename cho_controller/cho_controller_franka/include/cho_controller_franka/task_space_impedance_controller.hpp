@@ -47,6 +47,9 @@ private:
   bool assign_parameters();
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;
+  // Joint damping [N m s/rad] projected into the task's null space
+  // (null_space_damping; 0 = off, the torque is unchanged).
+  double null_space_damping_ {0.0};
 };
 
 } // namespace franka

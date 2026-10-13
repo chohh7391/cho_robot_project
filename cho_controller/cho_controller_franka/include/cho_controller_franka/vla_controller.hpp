@@ -60,7 +60,7 @@ private:
 
     // One differential-IK step of q_ref_ toward state_.H_ee_des, evaluated at the
     // REFERENCE configuration, with the reference twist (world-aligned) as
-    // feed-forward.
+    // feed-forward: cho_controller_base::task_ik_step() at task_ik_gain_.
     Vector7d task_step(const Vector6d & twist_des, double dt);
 
     // VLAActionServer::ArmKinematics: the EE pose and LOCAL_WORLD_ALIGNED
@@ -70,6 +70,8 @@ private:
 
     // Bound a per-cycle reference step at max_joint_vel_ (no-op when <= 0).
     Vector7d clamp_step(const Vector7d & step, double dt) const;
+    // max_joint_vel_ * dt, or +inf when max_joint_vel_ <= 0.
+    double max_joint_step(double dt) const;
 
     std::shared_ptr<VLAActionServer> action_server_;
     // The command interface name ("effort", "position", "velocity"), and the mode
@@ -90,6 +92,17 @@ private:
     // in [0, 1]. 0 is the historical law (damp the arm's absolute rate); see
     // write_effort() for what each end costs.
     double velocity_feedforward_ {1.0};
+
+    // Position/velocity task IK rate [1/s] (task_ik_gain): the step takes this
+    // times dt of the remaining task error. kp_task is the effort law's alone.
+    double task_ik_gain_ {50.0};
+    // Set when task_ik_gain_ * dt >= 1 (ERROR logged once); q_ref_ then holds
+    // until the next activation.
+    bool task_ik_gain_fault_ {false};
+
+    // Effort task law: joint damping [N m s/rad] projected into the task's null
+    // space (null_space_damping; 0 = off, the torque is unchanged).
+    double null_space_damping_ {0.0};
 
     // Open-loop joint reference for the position and velocity modes. Seeded at the
     // activation pose and integrated ONLY while a VLA goal is active; frozen when

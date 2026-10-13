@@ -108,18 +108,142 @@ TEST(ActionBuffer, DropsThePastPrefixButKeepsItsLastWaypointAsSegmentOrigin) {
   EXPECT_NEAR(reference.joints(0), 2.5, 1e-9);
 }
 
-TEST(ActionBuffer, AnEntirelyStaleChunkStillLeavesAHoldTarget) {
+// A chunk with nothing left to play is not spliced. This test used to assert the
+// opposite -- its last waypoint kept as a hold target -- which on a buffered
+// timeline replaced the horizon still ahead with that stale waypoint. The hosts
+// neither count such a chunk as accepted nor let it feed the watchdog, and it no
+// longer moves the reference either: an empty buffer stays empty and the host
+// keeps holding as it does before a first chunk.
+TEST(ActionBuffer, AnEntirelyStaleChunkIsNotSpliced) {
   ActionBuffer buffer;
   const auto result =
     buffer.splice(joint_ramp(1.0, 0.1, 3, 0.0, 1.0), ActionSpace::kJoint, 50.0, 0.1);
   EXPECT_EQ(result.admitted, 0u);
   EXPECT_EQ(result.dropped_past, 3u);
-  ASSERT_EQ(buffer.size(), 1u);
+  EXPECT_FALSE(result.space_reset);
+  EXPECT_TRUE(buffer.empty());
 
   Reference reference;
-  ASSERT_TRUE(buffer.sample(50.0, reference));
-  EXPECT_NEAR(reference.joints(0), 2.0, 1e-12);
-  EXPECT_NEAR(reference.joint_velocity.norm(), 0.0, 1e-12);
+  EXPECT_FALSE(buffer.sample(50.0, reference));
+
+  // It did not set the action space either: a first real chunk in the other
+  // space is not a switch.
+  const auto first =
+    buffer.splice(task_ramp(50.0, 0.1, 3, 0.3, 0.0), ActionSpace::kTask, 50.0, 0.1);
+  EXPECT_EQ(first.admitted, 3u);
+  EXPECT_FALSE(first.space_reset);
+  EXPECT_EQ(buffer.space(), ActionSpace::kTask);
+}
+
+void expect_same_waypoints(
+  const std::vector<Waypoint> & actual, const std::vector<Waypoint> & expected)
+{
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    SCOPED_TRACE("waypoint " + std::to_string(i));
+    EXPECT_EQ(actual[i].t, expected[i].t);
+    EXPECT_EQ(actual[i].joints, expected[i].joints);
+    EXPECT_TRUE(actual[i].pose.toHomogeneousMatrix() == expected[i].pose.toHomogeneousMatrix());
+    EXPECT_EQ(actual[i].joint_tangent, expected[i].joint_tangent);
+    EXPECT_EQ(actual[i].linear_tangent, expected[i].linear_tangent);
+    EXPECT_EQ(actual[i].angular_tangent, expected[i].angular_tangent);
+  }
+}
+
+void expect_same_timeline(const Timeline & actual, const Timeline & expected)
+{
+  {
+    SCOPED_TRACE("waypoints");
+    expect_same_waypoints(actual.waypoints, expected.waypoints);
+  }
+  {
+    SCOPED_TRACE("previous");
+    expect_same_waypoints(actual.previous, expected.previous);
+  }
+  EXPECT_EQ(actual.blend_start, expected.blend_start);
+  EXPECT_EQ(actual.blend_end, expected.blend_end);
+  EXPECT_EQ(actual.space, expected.space);
+  EXPECT_EQ(actual.interpolation, expected.interpolation);
+}
+
+// The horizon a host is playing survives a chunk that arrives too late to add
+// anything, inside a running blend window too, for every interpolation.
+TEST(ActionBuffer, AnEntirelyStaleChunkLeavesABufferedHorizonUntouched) {
+  for (const Interpolation mode :
+    {Interpolation::kLinear, Interpolation::kPchip, Interpolation::kSpline})
+  {
+    SCOPED_TRACE("interpolation " + std::to_string(static_cast<int>(mode)));
+    ActionBuffer::Params params;
+    params.blend_duration = 0.2;
+    params.interpolation = mode;
+    ActionBuffer buffer(params);
+    // 1.0 .. 1.9, then 1.3 .. 2.2 spliced at 1.3: a blend runs to 1.5.
+    buffer.splice(joint_ramp(1.0, 0.1, 10, 0.0, 1.0), ActionSpace::kJoint, 1.0, 0.1);
+    buffer.splice(joint_ramp(1.3, 0.1, 10, 3.0, 1.0), ActionSpace::kJoint, 1.3, 0.1);
+    const Timeline before = buffer.timeline();
+    ASSERT_GT(before.blend_end, 1.4);
+    ASSERT_NEAR(buffer.horizon_end(), 2.2, 1e-12);
+
+    // At 1.4, a chunk planned for 0.8 .. 1.3 with a wildly different value.
+    const auto result =
+      buffer.splice(joint_ramp(0.8, 0.1, 6, 100.0, 0.0), ActionSpace::kJoint, 1.4, 0.1);
+    EXPECT_EQ(result.admitted, 0u);
+    EXPECT_EQ(result.dropped_past, 6u);
+    EXPECT_FALSE(result.space_reset);
+
+    expect_same_timeline(buffer.timeline(), before);
+    EXPECT_NEAR(buffer.horizon_end(), 2.2, 1e-12);
+    for (int tick = 0; tick <= 900; ++tick) {
+      const double t = 1.4 + 1e-3 * tick;
+      Reference expected;
+      Reference actual;
+      ASSERT_TRUE(sample_timeline(before, t, expected));
+      ASSERT_TRUE(buffer.sample(t, actual));
+      EXPECT_EQ(actual.joints, expected.joints) << "t=" << t;
+      EXPECT_EQ(actual.joint_velocity, expected.joint_velocity) << "t=" << t;
+    }
+  }
+}
+
+// A late chunk in the other action space does not clear the timeline or switch
+// it; only a chunk with something to play does that.
+TEST(ActionBuffer, AnEntirelyStaleChunkInAnotherSpaceNeitherClearsNorSwitches) {
+  ActionBuffer buffer;
+  buffer.splice(joint_ramp(1.0, 0.1, 10, 0.0, 1.0), ActionSpace::kJoint, 1.0, 0.1);
+  const Timeline before = buffer.timeline();
+
+  const auto result =
+    buffer.splice(task_ramp(0.8, 0.1, 5, 0.3, 0.0), ActionSpace::kTask, 1.4, 0.1);
+  EXPECT_EQ(result.admitted, 0u);
+  EXPECT_EQ(result.dropped_past, 5u);
+  EXPECT_FALSE(result.space_reset);
+  EXPECT_EQ(buffer.space(), ActionSpace::kJoint);
+  expect_same_timeline(buffer.timeline(), before);
+
+  Reference reference;
+  ASSERT_TRUE(buffer.sample(1.45, reference));
+  EXPECT_EQ(reference.space, ActionSpace::kJoint);
+}
+
+// The boundary: a last waypoint due exactly now is due, not past, so that chunk
+// is spliced and owns the timeline from its retained origin onward.
+TEST(ActionBuffer, AChunkWhoseLastWaypointIsDueNowIsSpliced) {
+  ActionBuffer::Params params;
+  params.interpolation = Interpolation::kLinear;
+  ActionBuffer buffer(params);
+  // 1.0 .. 2.0 on a 0.125 grid (exact in binary).
+  buffer.splice(joint_ramp(1.0, 0.125, 9, 0.0, 1.0), ActionSpace::kJoint, 1.0, 0.125);
+
+  // 1.25 and 1.5 at 1.5: one dropped, one admitted.
+  const auto result =
+    buffer.splice(joint_ramp(1.25, 0.25, 2, 100.0, 0.0), ActionSpace::kJoint, 1.5, 0.25);
+  EXPECT_EQ(result.admitted, 1u);
+  EXPECT_EQ(result.dropped_past, 1u);
+  EXPECT_EQ(buffer.horizon_end(), 1.5);
+
+  Reference reference;
+  ASSERT_TRUE(buffer.sample(1.5, reference));
+  EXPECT_NEAR(reference.joints(0), 100.0, 1e-12);
 }
 
 TEST(ActionBuffer, AWaypointDueExactlyNowIsAdmittedNotDropped) {

@@ -310,6 +310,26 @@ built against the current `cho_interfaces`.
 
 - `max_task_ang_acc` [rad/s²] bounds the angular acceleration of the task reference; 0 turns it
   off. Default: 10 on Franka `vla_controller`, 0 on OpenArm `vla_mit_controller`.
+- `ActionChunk.control_dt` must be positive: a chunk with `control_dt <= 0` is rejected
+  (`last_reject: control_dt`), never timed from the goal's `inference_frequency`.
+- `stream_timeout_sec` (0.2 s) is the least quiet time after the last accepted chunk before the
+  stream holds. A buffered horizon that outlasts it moves the hold to the horizon's end, at most
+  `stream_horizon_credit_sec` (1 s, > 0) after that chunk, so a policy that re-infers every 0.5 s
+  with a 1 s horizon never holds; the goal's `stream_timeout` overrides the first of the two. A
+  chunk with no waypoint at or after its arrival does not count as accepted and does not feed the
+  watchdog.
+- `chunk_time_source` is `arrival` (default) or `observation`, for a bridge that echoes the
+  controller's joint-state stamp. Under `observation`, `chunk_max_observation_age` (1 s) and
+  `chunk_max_future_skew` (0.05 s) refuse a stamp that far before or after arrival
+  (`last_reject: observation_too_old` / `observation_in_future`).
+- Franka `vla_controller`: `goal_timeout_sec` is 0 (off); above 0 it aborts a goal that runs
+  longer. The reference stays inside the model's joint limits (0.05 rad margin), and a stream that
+  stops brings it to rest within `max_joint_ref_acc` / `max_task_lin_acc` / `max_task_ang_acc`.
+  `task_ik_gain` [1/s] (50, > 0) is the task-space IK gain of the position and velocity laws; the
+  first update with `task_ik_gain × period ≥ 1` logs an ERROR and holds. `null_space_damping`
+  [N·m·s/rad] (0 = off) damps null-space joint velocity in the effort law's task branch and in
+  `task_space_impedance_controller`, through the dynamically consistent projector. No bringup
+  config sets either; the null-space damping stays off until it is tried on the real arm.
 - `ros2 run cho_control_tools vla_action_client` sends relative chunks with `relative_frame: base`.
 
 ## Inspecting a running system

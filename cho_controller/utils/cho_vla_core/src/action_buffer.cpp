@@ -365,6 +365,29 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
   SpliceResult result;
   if (incoming.empty()) {return result;}
 
+  // Drop the prefix the robot already executed while inference ran. The LAST
+  // dropped waypoint is retained as the segment origin so `now` falls inside a
+  // segment and interpolation stays continuous -- without it the first sample
+  // after a splice would jump straight to the first future waypoint.
+  //
+  // Strictly `<`, not `<=`: a waypoint due exactly now is not in the past, it is
+  // due. With `<=` the arrival-time path dropped waypoint 0 of EVERY chunk,
+  // because there t_obs is the arrival instant, so dropped_past counted one per
+  // chunk by construction and was useless as the inference-latency alarm it
+  // exists to be. Measured in MuJoCo: 15 accepted chunks reported exactly 15
+  // dropped waypoints.
+  std::size_t first_future = 0;
+  while (first_future < incoming.size() && incoming[first_future].t < now) {++first_future;}
+  result.dropped_past = first_future;
+  result.admitted = incoming.size() - first_future;
+
+  // Nothing in the chunk is still ahead: it leaves the timeline exactly as it
+  // was, action space and blend included. Spliced, its last waypoint would
+  // become the segment origin and replace every buffered waypoint from there on:
+  // one late chunk would erase a good horizon and leave the arm on a stale
+  // waypoint.
+  if (result.admitted == 0) {return result;}
+
   // A chunk that switches action space invalidates the whole timeline: joint and
   // task waypoints are not interpolatable against each other, and a blend across
   // the switch would mean interpolating a pose toward a joint vector's stand-in
@@ -382,22 +405,6 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
   }
   timeline_.space = space;
   space_set_ = true;
-
-  // Drop the prefix the robot already executed while inference ran. The LAST
-  // dropped waypoint is retained as the segment origin so `now` falls inside a
-  // segment and interpolation stays continuous -- without it the first sample
-  // after a splice would jump straight to the first future waypoint.
-  //
-  // Strictly `<`, not `<=`: a waypoint due exactly now is not in the past, it is
-  // due. With `<=` the arrival-time path dropped waypoint 0 of EVERY chunk,
-  // because there t_obs is the arrival instant, so dropped_past counted one per
-  // chunk by construction and was useless as the inference-latency alarm it
-  // exists to be. Measured in MuJoCo: 15 accepted chunks reported exactly 15
-  // dropped waypoints.
-  std::size_t first_future = 0;
-  while (first_future < incoming.size() && incoming[first_future].t < now) {++first_future;}
-  result.dropped_past = first_future;
-  result.admitted = incoming.size() - first_future;
 
   const std::size_t origin = (first_future > 0) ? first_future - 1 : 0;
   std::vector<Waypoint> admitted(incoming.begin() + static_cast<std::ptrdiff_t>(origin),

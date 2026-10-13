@@ -21,7 +21,10 @@
 // controller_manager lifecycle on mock hardware.
 //
 // The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
-// change of action space within one goal (AC8, AC11, AC18 C3).
+// change of action space within one goal (AC8, AC11, AC18 C3). The 4th-stage
+// VLA fixes (REVIEW_FIX_PLAN S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
+// tests named AC1..AC10 further down; their expected values come from the spec
+// and from hand arithmetic, not from the controller.
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -93,16 +96,22 @@ std::string interface_of(const Mode mode)
 double moved_threshold(const Mode mode) {return mode == Mode::kEffort ? 0.5 : 1e-3;}
 double hold_tolerance(const Mode mode) {return mode == Mode::kEffort ? 1e-2 : 1e-6;}
 
-std::string fr3_description()
+// `dynamics`: GenericSystem integrates a velocity command into the position, so
+// a velocity controller moves the mock joints.
+std::string fr3_description(const bool dynamics = false)
 {
   std::ifstream file(
     ament_index_cpp::get_package_share_directory("cho_description_franka") +
     "/urdf/fr3/fr3_franka_hand.urdf");
   std::stringstream text;
   text << file.rdbuf();
+  std::vector<std::pair<std::string, std::string>> hardware;
+  if (dynamics) {
+    hardware.emplace_back("calculate_dynamics", "true");
+  }
   return cho_controller_base::testing::with_ros2_control(
     text.str(), cho_controller_base::testing::mock_ros2_control(
-      kJoints, kHome, {"fr3_finger_joint1"}));
+      kJoints, kHome, {"fr3_finger_joint1"}, hardware));
 }
 
 // fr3_hand_tcp in fr3_link0, from the joint origins of
@@ -671,11 +680,11 @@ class VlaGoal : public ::testing::Test
 protected:
   void SetUp() override
   {
-    harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_vla");
+    harness_ = std::make_unique<ControllerManagerHarness>(description(), "/franka_vla");
     // config/mujoco/controllers.yaml's VLA block, position mode, with every
     // global name moved under this test's namespace.
     std::vector<rclcpp::Parameter> parameters = {
-      rclcpp::Parameter("robot_description", fr3_description()),
+      rclcpp::Parameter("robot_description", description()),
       rclcpp::Parameter("robot_type", "fr3"),
       rclcpp::Parameter("bringup_type", "mujoco"),
       rclcpp::Parameter("control_mode", "position"),
@@ -688,8 +697,10 @@ protected:
       rclcpp::Parameter("chunk_topic", "/franka_vla/chunks"),
       rclcpp::Parameter("success_service", "/franka_vla/success"),
       rclcpp::Parameter("gripper_action", "/franka_vla/gripper"),
-      rclcpp::Parameter("chunk_time_source", "observation"),
       rclcpp::Parameter("telemetry_period_sec", 0.02)};
+    if (chunk_time_source_is_set()) {
+      parameters.emplace_back("chunk_time_source", "observation");
+    }
     const auto extra = extra_parameters();
     parameters.insert(parameters.end(), extra.begin(), extra.end());
     ASSERT_NE(harness_->load(kName, "cho_controller_franka/VLAController", parameters), nullptr);
@@ -701,6 +712,11 @@ protected:
 
   // Parameters a derived fixture adds to the VLA block.
   virtual std::vector<rclcpp::Parameter> extra_parameters() const {return {};}
+
+  virtual std::string description() const {return fr3_description();}
+
+  // False leaves chunk_time_source at the controller's own default.
+  virtual bool chunk_time_source_is_set() const {return true;}
 
   // `stream_timeout` <= 0 leaves the controller's default.
   rclcpp_action::ClientGoalHandle<Vla>::SharedPtr send(const double stream_timeout = 0.0)
@@ -748,7 +764,21 @@ TEST_F(VlaGoal, AGoalEndedWhileInactiveSaysSo) {reactivate(true);}
 // observed before its goal started -- the bridge's first inference runs while
 // the goal is being sent -- otherwise finds nothing at its time and is anchored
 // to the oldest entry instead, inexactly (re-audit 3, vla_action_server.cpp).
-TEST_F(VlaGoal, AChunkObservedBeforeTheGoalHasAnExactAnchor)
+//
+// The harness clock starts about 1 s behind the node clock the controller times
+// arrivals on, so a chunk stamped on it arrives about 0.9 s old. The window
+// admits that age and the chunk's horizon outlasts it: a chunk whose waypoints
+// have all passed on arrival admits nothing and is not counted as accepted.
+class VlaGoalAnchor : public VlaGoal
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("chunk_max_observation_age", 5.0)};
+  }
+};
+
+TEST_F(VlaGoalAnchor, AChunkObservedBeforeTheGoalHasAnExactAnchor)
 {
   harness_->cycle(200);
   const rclcpp::Time observed = harness_->now();
@@ -770,15 +800,15 @@ TEST_F(VlaGoal, AChunkObservedBeforeTheGoalHasAnExactAnchor)
   }
   ASSERT_GT(publisher->get_subscription_count(), 0u);
 
-  // Two joint waypoints, zero offsets from the anchor: the arm stays put.
+  // 60 joint waypoints (a 3 s horizon), zero offsets from the anchor: the arm stays put.
   cho_interfaces::msg::ActionChunk chunk;
   chunk.header.stamp = observed;
   chunk.seq = 1;
   chunk.action_space = "joint";
   chunk.relative_mode = "from_anchor";
-  chunk.chunk_size = 2;
+  chunk.chunk_size = 60;
   chunk.control_dt = 0.05;
-  chunk.arm_actions.assign(14, 0.0);
+  chunk.arm_actions.assign(60 * 7, 0.0);
   publisher->publish(chunk);
 
   bool accepted = false;
@@ -818,11 +848,11 @@ protected:
   using Telemetry = cho_interfaces::msg::VlaTelemetry;
   static constexpr double kPeriod = ControllerManagerHarness::kPeriod;
 
-  void start()
+  void start(const double stream_timeout = 5.0)
   {
     LogCapture::install();
     harness_->cycle(50);
-    goal_ = send(5.0);
+    goal_ = send(stream_timeout);
     ASSERT_NE(goal_, nullptr) << "goal rejected";
     telemetry_subscription_ = harness_->client_node()->create_subscription<Telemetry>(
       std::string("/franka_vla/") + kName + "/vla_telemetry", 10,
@@ -1286,6 +1316,556 @@ TEST_F(VlaStream, AC8_ATaskToJointSwitchStartsFromTheCommandedJoints)
   }
   EXPECT_EQ(telemetry_.action_space, "joint");
   EXPECT_LT(largest, 1e-6) << "the joint command left the commanded joints by " << largest << " rad across the switch";
+}
+
+// ---------------------------------------------------------------------------
+// REVIEW_FIX 4th stage (6th run). Position mode unless a fixture says otherwise,
+// observation time source, the mock's 1 ms period.
+// ---------------------------------------------------------------------------
+
+// FR3 joint limits, from cho_description_franka/urdf/fr3/fr3_franka_hand.urdf
+// (the <limit lower/upper> of fr3_joint1..7). The controller keeps its reference
+// 0.05 rad inside them (AC1).
+const Doubles kLower = {-2.9007, -1.8361, -2.9007, -3.077, -2.8763, 0.4398, -3.0508};
+const Doubles kUpper = {2.9007, 1.8361, 2.9007, -0.1169, 2.8763, 4.6216, 3.0508};
+constexpr double kJointMargin = 0.05;
+
+// How far `q` is outside the margin-narrowed limits; 0 when every joint is inside.
+double outside_window(const Doubles & q)
+{
+  double worst = 0.0;
+  for (std::size_t i = 0; i < q.size(); ++i) {
+    worst = std::max({worst, kLower[i] + kJointMargin - q[i], q[i] - (kUpper[i] - kJointMargin)});
+  }
+  return worst;
+}
+
+bool all_finite(const Doubles & q)
+{
+  return std::all_of(q.begin(), q.end(), [](double v) {return std::isfinite(v);});
+}
+
+// A parameter of the VLA controller node, read over its parameter services.
+rclcpp::Parameter read_parameter(ControllerManagerHarness & harness, const std::string & name)
+{
+  auto client = std::make_shared<rclcpp::AsyncParametersClient>(
+    harness.client_node(), "/franka_vla/vla_controller");
+  for (int i = 0; i < 3000 && !client->service_is_ready(); ++i) {
+    harness.cycle(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (!client->service_is_ready()) {return rclcpp::Parameter();}
+  auto future = client->get_parameters({name});
+  if (!harness.spin_until(future)) {return rclcpp::Parameter();}
+  const auto values = future.get();
+  return values.empty() ? rclcpp::Parameter() : values[0];
+}
+
+// AC1 (S11): the reference stays inside the model's joint limits, 0.05 rad in.
+// Limits and margin are the URDF's and the spec's; a chunk that asks for more
+// gets the window edge, not the limit and not past it.
+TEST_F(VlaStream, AC1_S11_AnAbsoluteJointChunkBeyondTheLimitsStopsAtTheWindow)
+{
+  ASSERT_NO_FATAL_FAILURE(start(60.0));
+  harness_->cycle(20);
+  Doubles target = commanded();
+  target[3] = kUpper[3] + 0.2;  // joint 4 past its upper limit
+  target[1] = kLower[1] - 0.2;  // joint 2 past its lower limit
+  publish("joint", "absolute", "", "", std::vector<Doubles>(30, target), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u)
+    << "an absolute joint chunk past the limits is clamped, not refused by default: " << telemetry_.last_reject;
+
+  double worst = 0.0;
+  int quiet = 0;
+  Doubles previous = commanded();
+  for (int i = 0; i < 20000 && (quiet < 50 || i < 200); ++i) {
+    harness_->cycle(1);
+    const Doubles now = commanded();
+    worst = std::max(worst, outside_window(now));
+    quiet = max_abs_difference(now, previous) < 1e-9 ? quiet + 1 : 0;
+    previous = now;
+  }
+  RecordProperty("largest_window_violation_rad", std::to_string(worst));
+  EXPECT_LT(worst, 1e-9) << "a commanded joint left the 0.05 rad window by " << worst << " rad";
+  // It went where the chunk pointed, as far as the window allows.
+  EXPECT_NEAR(previous[3], kUpper[3] - kJointMargin, 5e-3) << "joint 4 did not come to the window edge";
+  EXPECT_NEAR(previous[1], kLower[1] + kJointMargin, 5e-3) << "joint 2 did not come to the window edge";
+}
+
+// AC1 (S11): a task target the arm cannot reach drives the IK against the
+// limits; no commanded joint may leave the window and none may go non-finite.
+// Three targets, all with the TCP z axis kept down: 1.1 m out at the home height
+// (the arm stretches to about 0.92 m and stops), and two above the shoulder's
+// reach, 1.2 m and 1.5 m up, which drive fr3_joint6 below its limit on a
+// controller that does not clamp.
+class VlaUnreachable : public VlaStream
+{
+protected:
+  void drive_to(const Vec3 & target)
+  {
+    ASSERT_NO_FATAL_FAILURE(start(60.0));
+    harness_->cycle(20);
+    const Doubles hold = commanded();
+    publish("task", "absolute", "", "quaternion",
+      std::vector<Doubles>(30, pose_row(target, fr3_tcp(hold).R)), 0.1);
+    ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+    ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+
+    double worst = 0.0;
+    bool finite = true;
+    int quiet = 0;
+    Doubles previous = commanded();
+    for (int i = 0; i < 12000 && (quiet < 100 || i < 500); ++i) {
+      harness_->cycle(1);
+      const Doubles now = commanded();
+      finite = finite && all_finite(now);
+      worst = std::max(worst, outside_window(now));
+      quiet = max_abs_difference(now, previous) < 1e-9 ? quiet + 1 : 0;
+      previous = now;
+    }
+    RecordProperty("largest_window_violation_rad", std::to_string(worst));
+    EXPECT_TRUE(finite) << "a commanded joint went non-finite";
+    EXPECT_LT(worst, 1e-9) << "a commanded joint left the 0.05 rad window by " << worst << " rad";
+    EXPECT_GT(max_abs_difference(previous, hold), 0.3)
+      << "the arm never reached out, so the window was not what held it";
+  }
+};
+
+TEST_F(VlaUnreachable, AC1_S11_ATargetFarBeyondTheReachNeverTakesAJointOutOfTheWindow)
+{
+  drive_to(Vec3{1.1, 0.0, 0.487});
+}
+
+TEST_F(VlaUnreachable, AC1_S11_ATargetAboveTheReachNeverTakesAJointOutOfTheWindow)
+{
+  drive_to(Vec3{0.6, 0.0, 1.2});
+}
+
+TEST_F(VlaUnreachable, AC1_S11_ATargetStraightOverheadNeverTakesAJointOutOfTheWindow)
+{
+  drive_to(Vec3{0.3, 0.0, 1.5});
+}
+
+// AC1 (S11), velocity mode: the integrated reference q_ref_ is the one the
+// velocity command chases, and with dynamics on the mock the joint follows it.
+// An unclamped reference would carry joint 4 to its chunk target, 0.2 rad past
+// the limit.
+class VlaVelocityDynamics : public VlaVelocity
+{
+protected:
+  std::string description() const override {return fr3_description(true);}
+};
+
+TEST_F(VlaVelocityDynamics, AC1_S11_AVelocityModeReferenceStaysInsideTheWindow)
+{
+  ASSERT_NO_FATAL_FAILURE(start(60.0));
+  harness_->cycle(20);
+  Doubles target = harness_->states(kJoints, "position");
+  target[3] = kUpper[3] + 0.2;
+  target[1] = kLower[1] - 0.2;
+  publish("joint", "absolute", "", "", std::vector<Doubles>(30, target), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+
+  double worst = 0.0;
+  Doubles now;
+  for (int i = 0; i < 15000; ++i) {
+    harness_->cycle(1);
+    now = harness_->states(kJoints, "position");
+    worst = std::max(worst, outside_window(now));
+  }
+  RecordProperty("largest_window_violation_rad", std::to_string(worst));
+  EXPECT_LT(worst, 2e-3) << "a joint went " << worst << " rad past the window: the reference was not clamped";
+  EXPECT_NEAR(now[3], kUpper[3] - kJointMargin, 2e-2) << "joint 4 never came to the window edge";
+  EXPECT_NEAR(now[1], kLower[1] + kJointMargin, 2e-2) << "joint 2 never came to the window edge";
+}
+
+// AC2 (S17): the stream goes quiet while joint 7 turns at 0.1 rad/s. Whatever
+// rule decides when to hold, the reference must come to rest inside the
+// limiter's acceleration bound (max_joint_ref_acc, default 4 rad/s^2), not stop
+// in one period (v / dt = 100 rad/s^2 at 0.1 rad/s and 1 ms). The hold target is
+// where it stopped: the position never goes back, and it stays put afterwards.
+TEST_F(VlaStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLimit)
+{
+  constexpr double kRate = 0.1;               // joint 7 [rad/s]
+  constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
+  constexpr double kDt = ControllerManagerHarness::kPeriod;
+  ASSERT_NO_FATAL_FAILURE(start(0.3));
+  harness_->cycle(20);
+
+  std::vector<Doubles> rows;  // 10 s of constant rate, far longer than the test runs
+  for (int k = 0; k < 100; ++k) {
+    Doubles row(7, 0.0);
+    row[6] = kRate * 0.1 * k;
+    rows.push_back(row);
+  }
+  publish("joint", "from_anchor", "", "", rows, 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+
+  std::vector<Doubles> q;
+  q.push_back(commanded());
+  const auto step = [&] {
+      tick();
+      q.push_back(commanded());
+    };
+  // Up to speed first, so the start-up transient is not what is measured.
+  std::size_t steady_from = 0;
+  for (int i = 0; i < 1000 && steady_from == 0; ++i) {
+    step();
+    if ((q.back()[6] - q[q.size() - 2][6]) / kDt > 0.95 * kRate) {
+      steady_from = q.size() - 1;
+    }
+  }
+  ASSERT_GT(steady_from, 0u) << "joint 7 never reached the chunk's rate";
+
+  // Until the host reports the hold, then 300 periods more.
+  for (int i = 0; i < 3000 && telemetry_.stream_state != "hold"; ++i) {
+    step();
+  }
+  ASSERT_EQ(telemetry_.stream_state, "hold") << "the stream went quiet and the host never held";
+  for (int i = 0; i < 300; ++i) {
+    step();
+  }
+
+  double worst_acceleration = 0.0;
+  for (std::size_t k = std::max<std::size_t>(steady_from + 100, 2); k < q.size(); ++k) {
+    for (std::size_t j = 0; j < 7; ++j) {
+      const double a = std::abs(q[k][j] - 2.0 * q[k - 1][j] + q[k - 2][j]) / (kDt * kDt);
+      worst_acceleration = std::max(worst_acceleration, a);
+    }
+  }
+  RecordProperty("largest_command_acceleration_rad_s2", std::to_string(worst_acceleration));
+  EXPECT_LE(worst_acceleration, kAccelerationLimit * 1.05)
+    << "the command accelerated at " << worst_acceleration << " rad/s^2 on the way into the hold";
+
+  // It does stop, there, and never goes back.
+  const auto & last = q.back();
+  EXPECT_LT(std::abs(last[6] - q[q.size() - 2][6]) / kDt, 1e-6) << "joint 7 is still moving after the hold";
+  for (std::size_t k = steady_from; k < q.size(); ++k) {
+    EXPECT_GE(q[k][6] - q[k - 1][6], -1e-12) << "joint 7 went backwards at period " << k;
+  }
+  EXPECT_GT(last[6], q[steady_from][6]) << "the hold target is behind where the motion was";
+}
+
+// AC10 (S15), Franka host: chunks 0.5 s apart with a 1 s horizon and a goal
+// stream_timeout of 0.2 s never put the host into hold while the horizon lasts;
+// once they stop it holds after the horizon has run out, not after 0.2 s.
+TEST_F(VlaStream, AC10_S15_ChunksSpacedWithinTheirHorizonNeverHoldTheStream)
+{
+  constexpr double kDt = 0.1;
+  ASSERT_NO_FATAL_FAILURE(start(0.2));
+  harness_->cycle(20);
+  const std::vector<Doubles> rows(10, Doubles(7, 0.0));  // from_anchor, 0.9..1.0 s of horizon
+  int holds = 0;
+  for (int c = 0; c < 6; ++c) {
+    publish("joint", "from_anchor", "", "", rows, kDt);
+    if (c == 0) {
+      ASSERT_TRUE(answered(1, 0)) << "the first chunk was never answered";
+    }
+    for (int i = 0; i < 500; ++i) {
+      tick();
+      if (telemetry_.stream_state == "hold" || telemetry_.stream_state == "aborted") {++holds;}
+    }
+  }
+  EXPECT_EQ(holds, 0) << "the stream was held " << holds << " periods while the horizon was still buffered";
+  EXPECT_EQ(telemetry_.chunks_rejected, 0u) << telemetry_.last_reject;
+
+  // The publisher stops: the host holds once the horizon is out, not before.
+  int periods = 0;
+  while (periods < 3000 && telemetry_.stream_state != "hold") {
+    tick();
+    ++periods;
+  }
+  EXPECT_EQ(telemetry_.stream_state, "hold") << "a stream gone quiet was never held";
+  // The last chunk was published 500 periods before this count starts and had
+  // 0.9-1.0 s of horizon: the hold comes about 400-500 periods in, and not
+  // before ~300 (a 0.2 s rule would have held at the start).
+  EXPECT_GE(periods, 300) << "held after " << periods << " periods: before the horizon was out";
+}
+
+// AC6 (C16): control_dt <= 0 is refused, not invented from the goal's
+// inference_frequency; nothing moves; a valid control_dt is then taken.
+TEST_F(VlaStream, AC6_C16_AChunkWithoutAControlDtIsRefusedAndMovesNothing)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  const Doubles hold = commanded();
+  Doubles offset(7, 0.0);
+  offset[0] = 0.05;
+  const std::vector<Doubles> rows(20, offset);
+
+  publish("joint", "from_anchor", "", "", rows, 0.0);
+  ASSERT_TRUE(answered(1, 0)) << "the control_dt = 0 chunk was never answered";
+  EXPECT_EQ(telemetry_.chunks_accepted, 0u) << "a chunk with control_dt = 0 was taken";
+  EXPECT_EQ(telemetry_.chunks_rejected, 1u);
+  EXPECT_EQ(telemetry_.last_reject, "control_dt");
+
+  publish("joint", "from_anchor", "", "", rows, -0.05);
+  ASSERT_TRUE(answered(1, 1)) << "the control_dt < 0 chunk was never answered";
+  EXPECT_EQ(telemetry_.chunks_accepted, 0u);
+  EXPECT_EQ(telemetry_.chunks_rejected, 2u);
+  EXPECT_EQ(telemetry_.last_reject, "control_dt");
+
+  harness_->cycle(300);
+  EXPECT_LT(max_abs_difference(commanded(), hold), 1e-12) << "a refused chunk moved the command";
+
+  publish("joint", "from_anchor", "", "", rows, 0.1);
+  ASSERT_TRUE(answered(1, 2)) << "the same chunk with control_dt = 0.1 was never answered";
+  EXPECT_EQ(telemetry_.chunks_rejected, 2u) << "refused with a valid control_dt: " << telemetry_.last_reject;
+  EXPECT_EQ(telemetry_.chunks_accepted, 1u);
+}
+
+// AC5 (S8): the observation time window, with the controller's default limits
+// (max age 1.0 s, max future skew 0.05 s). Nothing refused moves the arm; a
+// chunk inside the window is taken.
+TEST_F(VlaStream, AC5_S8_AnObservationTooOldOrInTheFutureIsRefused)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  const Doubles hold = commanded();
+  Doubles offset(7, 0.0);
+  offset[0] = 0.05;
+  const std::vector<Doubles> rows(30, offset);
+  const auto publish_observed = [&](const double seconds_from_now) {
+      align_clocks();
+      Chunk message = chunk("joint", "from_anchor", "", "", rows, 0.1);
+      message.header.stamp = harness_->now() + rclcpp::Duration::from_seconds(seconds_from_now);
+      chunks_->publish(message);
+    };
+
+  publish_observed(-10.0);
+  ASSERT_TRUE(answered(1, 0)) << "the 10 s old chunk was never answered";
+  EXPECT_EQ(telemetry_.chunks_accepted, 0u) << "a chunk observed 10 s ago was taken";
+  EXPECT_EQ(telemetry_.chunks_rejected, 1u);
+  EXPECT_EQ(telemetry_.last_reject, "observation_too_old");
+
+  publish_observed(1.0);
+  ASSERT_TRUE(answered(1, 1)) << "the chunk from 1 s ahead was never answered";
+  EXPECT_EQ(telemetry_.chunks_accepted, 0u) << "a chunk observed 1 s in the future was taken";
+  EXPECT_EQ(telemetry_.chunks_rejected, 2u);
+  EXPECT_EQ(telemetry_.last_reject, "observation_in_future");
+
+  harness_->cycle(200);
+  EXPECT_LT(max_abs_difference(commanded(), hold), 1e-12) << "a refused chunk moved the command";
+
+  // 0.5 s old is inside the 1.0 s age bound and 30 x 0.1 s of horizon outlasts it.
+  publish_observed(-0.5);
+  ASSERT_TRUE(answered(1, 2)) << "the 0.5 s old chunk was never answered";
+  EXPECT_EQ(telemetry_.chunks_rejected, 2u) << "a chunk inside the window was refused: " << telemetry_.last_reject;
+  EXPECT_EQ(telemetry_.chunks_accepted, 1u);
+}
+
+// AC5 (S8): a chunk none of whose waypoints is still ahead (observed 0.5 s ago,
+// 0.25 s of horizon) is inside the window but has nothing to play. It is not
+// counted as accepted and it does not keep the watchdog alive: with only such
+// chunks arriving after one real one, the stream is held.
+TEST_F(VlaStream, AC5_S8_AChunkWithNoAdmittedWaypointDoesNotKeepTheStreamAlive)
+{
+  ASSERT_NO_FATAL_FAILURE(start(0.2));
+  harness_->cycle(20);
+  const std::vector<Doubles> real_rows(20, Doubles(7, 0.0));  // 2 s of horizon
+  publish("joint", "from_anchor", "", "", real_rows, 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the first chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << telemetry_.last_reject;
+
+  const std::vector<Doubles> stale_rows(6, Doubles(7, 0.0));
+  const auto publish_stale = [&] {
+      align_clocks();
+      Chunk message = chunk("joint", "from_anchor", "", "", stale_rows, 0.05);
+      message.header.stamp = harness_->now() - rclcpp::Duration::from_seconds(0.5);
+      chunks_->publish(message);
+    };
+  // A stale chunk every 50 ms until the host holds (it has 1.6 s to), then
+  // 400 ms more of them: they must not bring it out of the hold either.
+  int periods = 0;
+  while (periods < 1600 && telemetry_.stream_state != "hold") {
+    if (periods % 50 == 0) {publish_stale();}
+    tick();
+    ++periods;
+  }
+  ASSERT_EQ(telemetry_.stream_state, "hold")
+    << "chunks with no admitted waypoint kept the watchdog fed for " << periods << " periods";
+  for (int i = 0; i < 400; ++i) {
+    if (i % 50 == 0) {publish_stale();}
+    tick();
+  }
+  EXPECT_EQ(telemetry_.stream_state, "hold") << "a chunk with no admitted waypoint resumed the stream";
+  EXPECT_EQ(telemetry_.chunks_accepted, 1u) << "a chunk with no admitted waypoint was counted as accepted";
+}
+
+// AC4 (S3): the reference history is emptied when the controller is activated.
+// A chunk observed before a deactivation has no entry of its own after the
+// reactivation: the ring starts again, and the chunk is older than its oldest
+// entry, so the anchor is the inexact fallback. Without the reset the ring
+// still holds that moment and the anchor is exact.
+class VlaHistory : public VlaStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    // The deactivation and the new goal take real time; keep the chunk inside the window.
+    return {rclcpp::Parameter("chunk_max_observation_age", 5.0)};
+  }
+};
+
+TEST_F(VlaHistory, AC4_S3_AChunkObservedBeforeAReactivationIsAnchoredInexactly)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(100);
+  const rclcpp::Time observed = harness_->now();
+  harness_->cycle(100);
+
+  auto result = client_->async_get_result(goal_);
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  ASSERT_TRUE(harness_->spin_until(result)) << "the deactivation did not end the goal";
+  ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+  harness_->cycle(100);
+  goal_ = send(30.0);
+  ASSERT_NE(goal_, nullptr) << "the goal after the reactivation was rejected";
+  has_telemetry_ = false;
+  telemetry_ = Telemetry();
+  ASSERT_TRUE(cycle_until([this] {
+      return has_telemetry_ && chunks_->get_subscription_count() > 0;
+    })) << "no telemetry after the reactivation";
+  harness_->cycle(100);
+
+  align_clocks();
+  Chunk message = chunk("joint", "from_anchor", "", "", std::vector<Doubles>(100, Doubles(7, 0.0)), 0.1);
+  message.header.stamp = observed;
+  chunks_->publish(message);
+  ASSERT_TRUE(answered(1, 0)) << "the chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "chunk refused: " << telemetry_.last_reject;
+  EXPECT_TRUE(telemetry_.anchor_inexact)
+    << "the chunk was anchored exactly at a time recorded before the reactivation: the ring was not reset";
+}
+
+// AC3 (S12): position/velocity task IK takes its own gain, task_ik_gain [1/s],
+// not the torque stiffness kp_task. K * dt >= 1 at the first update is an ERROR
+// and the controller holds that goal. The mock runs at 1 ms, so 2000 1/s is
+// K * dt = 2. The log capture is installed before the controller is activated,
+// because the check runs on the first update.
+class VlaIkGain : public VlaStream
+{
+protected:
+  VlaIkGain()
+  {
+    LogCapture::install();
+    LogCapture::clear();
+  }
+
+  virtual double gain() const = 0;
+
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("task_ik_gain", gain())};
+  }
+};
+
+class VlaIkGainTooHigh : public VlaIkGain
+{
+protected:
+  double gain() const override {return 2000.0;}
+};
+
+class VlaIkGainSafe : public VlaIkGain
+{
+protected:
+  double gain() const override {return 500.0;}  // K * dt = 0.5
+};
+
+TEST_F(VlaIkGainTooHigh, AC3_S12_AGainThatCannotConvergeIsAnErrorAndHoldsTheGoal)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  EXPECT_GE(LogCapture::count(RCUTILS_LOG_SEVERITY_ERROR, "task_ik_gain"), 1u)
+    << "K * dt = 2 at the first update was not reported as an ERROR naming task_ik_gain";
+  const Doubles hold = commanded();
+  const Pose at_hold = fr3_tcp(hold);
+  publish("task", "absolute", "", "quaternion",
+    std::vector<Doubles>(30, pose_row(add(at_hold.p, Vec3{0.0, 0.01, 0.02}), at_hold.R)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+  harness_->cycle(1500);
+  EXPECT_LT(max_abs_difference(commanded(), hold), 1e-9)
+    << "the controller followed a task chunk with a gain that cannot converge";
+}
+
+TEST_F(VlaIkGainSafe, AC3_S12_AnIkGainOtherThanKpTaskConvergesAtTheMockPeriod)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_ERROR, "task_ik_gain"), 0u)
+    << "K * dt = 0.5 was reported as an error";
+  const Pose at_hold = fr3_tcp(commanded());
+  const Vec3 target = add(at_hold.p, Vec3{0.0, 0.01, 0.02});
+  publish("task", "absolute", "", "quaternion", std::vector<Doubles>(30, pose_row(target, at_hold.R)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+  harness_->cycle(2500);
+  EXPECT_LT(norm(sub(fr3_tcp(commanded()).p, target)), 2e-3) << "the task chunk did not take the TCP to its target";
+}
+
+// AC7 (C17), AC9 (C23), AC10 and the defaults of the other new parameters, read
+// off the controller: goal_timeout_sec is 0 (off, as in the OpenArm host),
+// chunk_time_source stays "arrival" (decided after S8, see cho_vla_core's
+// DESIGN.md), stream_horizon_credit_sec 1.0, the observation window 1.0 s and
+// 0.05 s, task_ik_gain 50 1/s and null_space_damping 0 (today's behaviour).
+class VlaDefaults : public VlaStream
+{
+protected:
+  bool chunk_time_source_is_set() const override {return false;}
+};
+
+TEST_F(VlaDefaults, AC7_AC9_AC10_TheNewParametersHaveTheirDocumentedDefaults)
+{
+  const std::vector<std::pair<std::string, double>> expected = {
+    {"goal_timeout_sec", 0.0}, {"stream_horizon_credit_sec", 1.0}, {"chunk_max_observation_age", 1.0},
+    {"chunk_max_future_skew", 0.05}, {"task_ik_gain", 50.0}, {"null_space_damping", 0.0}};
+  for (const auto & entry : expected) {
+    const auto parameter = read_parameter(*harness_, entry.first);
+    const auto type = parameter.get_type();
+    if (type != rclcpp::ParameterType::PARAMETER_DOUBLE && type != rclcpp::ParameterType::PARAMETER_INTEGER) {
+      ADD_FAILURE() << entry.first << " is not a numeric parameter of the VLA controller";
+      continue;
+    }
+    EXPECT_DOUBLE_EQ(parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE ?
+      parameter.as_double() : static_cast<double>(parameter.as_int()), entry.second) << entry.first;
+  }
+  const auto source = read_parameter(*harness_, "chunk_time_source");
+  ASSERT_EQ(source.get_type(), rclcpp::ParameterType::PARAMETER_STRING);
+  EXPECT_EQ(source.as_string(), "arrival");
+}
+
+// AC7 (C17): with goal_timeout_sec = 0.3 a goal is aborted once it has run that
+// long, with the parameter in the reason.
+class VlaGoalTimeout : public VlaStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("goal_timeout_sec", 0.3)};
+  }
+};
+
+TEST_F(VlaGoalTimeout, AC7_C17_AGoalPastGoalTimeoutSecIsAborted)
+{
+  harness_->cycle(50);
+  auto handle = send(30.0);
+  ASSERT_NE(handle, nullptr) << "goal rejected";
+  auto result = client_->async_get_result(handle);
+  for (int i = 0; i < 100; ++i) {tick();}
+  EXPECT_NE(result.wait_for(std::chrono::milliseconds(0)), std::future_status::ready)
+    << "the goal ended 0.1 s in, before goal_timeout_sec = 0.3";
+  bool ended = false;
+  for (int i = 0; i < 2500 && !ended; ++i) {
+    tick();
+    ended = result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+  }
+  ASSERT_TRUE(ended) << "the goal ran far past goal_timeout_sec and was not aborted";
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_NE(wrapped.result->message.find("goal_timeout_sec"), std::string::npos) << wrapped.result->message;
 }
 
 // The Franka gripper relay with no franka_gripper servers up, which fails every
