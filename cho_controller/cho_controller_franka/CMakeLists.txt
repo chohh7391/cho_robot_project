@@ -52,6 +52,16 @@ find_package(cho_controller_base REQUIRED)
 find_package(joint_limits REQUIRED)
 find_package(cho_vla_core REQUIRED)
 find_package(cho_interfaces REQUIRED)
+find_package(generate_parameter_library REQUIRED)
+
+# The controllers whose parameters are declared from YAML (CLAUDE.md,
+# "Controllers"); the others still declare theirs by hand.
+generate_parameter_library(franka_task_space_qp_controller_parameters
+    src/task_space_qp_controller_parameters.yaml)
+generate_parameter_library(franka_joint_space_qp_controller_parameters
+    src/joint_space_qp_controller_parameters.yaml)
+generate_parameter_library(franka_operational_space_controller_parameters
+    src/operational_space_controller_parameters.yaml)
 
 add_library(${PROJECT_NAME} SHARED
     # controllers
@@ -94,6 +104,11 @@ ament_target_dependencies(${PROJECT_NAME}
     cho_vla_core
     cho_interfaces
 )
+target_link_libraries(${PROJECT_NAME}
+    franka_task_space_qp_controller_parameters
+    franka_joint_space_qp_controller_parameters
+    franka_operational_space_controller_parameters
+)
 
 pluginlib_export_plugin_description_file(
         controller_interface cho_controller_franka.xml)
@@ -106,10 +121,18 @@ if(BUILD_TESTING)
     ament_add_gtest(test_reactivation test/test_reactivation.cpp TIMEOUT 300)
     ament_target_dependencies(test_reactivation
         ament_index_cpp cho_controller_base cho_interfaces controller_manager
-        hardware_interface rclcpp rclcpp_action)
+        franka_msgs hardware_interface rclcpp rclcpp_action)
     # The gripper's result handoff alone: header-only, no ROS.
     ament_add_gtest(test_gripper_outcome test/test_gripper_outcome.cpp)
     target_include_directories(test_gripper_outcome PRIVATE include)
+    # The task-space QP (TaskSpaceQP) on the FR3 model, no ROS graph: links the
+    # library; the URDF comes from cho_description_franka at run time.
+    ament_add_gtest(test_task_space_qp_bounds test/test_task_space_qp_bounds.cpp TIMEOUT 120)
+    target_link_libraries(test_task_space_qp_bounds ${PROJECT_NAME} pinocchio::pinocchio)
+    ament_target_dependencies(test_task_space_qp_bounds
+        ament_index_cpp cho_controller_base cho_controller_common cho_interfaces cho_vla_core
+        controller_interface hardware_interface rclcpp rclcpp_action rclcpp_lifecycle
+        realtime_tools control_msgs)
 endif()
 
 install(TARGETS ${PROJECT_NAME}
@@ -131,6 +154,7 @@ ament_export_libraries(
 )
 ament_export_dependencies(
     controller_interface
+    generate_parameter_library
     pluginlib
     rclcpp
     rclcpp_lifecycle

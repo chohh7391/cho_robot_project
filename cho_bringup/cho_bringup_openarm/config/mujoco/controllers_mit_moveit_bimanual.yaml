@@ -1,5 +1,6 @@
 # Canonical 14-axis paired MIT controller map. This file intentionally contains
-# no per-arm trajectory or direct producer: the pair token is exclusive.
+# no per-arm trajectory or direct producer: the pair token is exclusive. The two
+# gripper controllers are not arm producers: they claim only the fingers.
 /**:
   controller_manager:
     ros__parameters:
@@ -12,6 +13,15 @@
         type: cho_controller_openarm_mit/EEStateBroadcaster
       bimanual_follow_joint_trajectory_mit_controller:
         type: cho_controller_openarm_mit/BimanualFollowJointTrajectoryController
+
+      # One robot-independent gripper controller per hand, the same two as
+      # controllers_mit_direct_bimanual.yaml. Each claims only its finger's
+      # position command interface, which no arm controller touches, so it
+      # stays active beside the arm controller and takes no pair token.
+      left_gripper_controller:
+        type: cho_controller_gripper/GripperController
+      right_gripper_controller:
+        type: cho_controller_gripper/GripperController
 
   joint_state_broadcaster:
     ros__parameters:
@@ -58,3 +68,49 @@
         path_tolerance: 0.2
         goal_tolerance: 0.02
         goal_time: 0.5
+
+  left_gripper_controller:
+    ros__parameters:
+      gripper_joint: openarm_left_finger_joint1
+      # The MJCF drives the finger through a position servo on the split tendon
+      # and reports no finger velocity, so the width rate is differenced from
+      # position instead. The MIT MuJoCo model is the same MJCF and the same
+      # finger interfaces as the legacy bimanual one.
+      use_velocity_state: false
+      use_effort_state: true
+      # Both jaws move, so the object sees twice the 44 mm of finger travel.
+      joint_at_closed: 0.0
+      joint_at_open: 0.044
+      width_at_closed: 0.0
+      width_at_open: 0.088
+      default_speed: 0.05
+      max_speed: 0.2
+      default_force: 20.0
+      max_force: 60.0
+      # Simulated contact here is not worth failing a task over: a behaviour
+      # tree gets success on a completed motion and reads ~/state for whether
+      # anything was actually held.
+      report_grasp_failure: false
+
+  right_gripper_controller:
+    ros__parameters:
+      gripper_joint: openarm_right_finger_joint1
+      # The MJCF drives the finger through a position servo on the split tendon
+      # and reports no finger velocity, so the width rate is differenced from
+      # position instead. The MIT MuJoCo model is the same MJCF and the same
+      # finger interfaces as the legacy bimanual one.
+      use_velocity_state: false
+      use_effort_state: true
+      # Both jaws move, so the object sees twice the 44 mm of finger travel.
+      joint_at_closed: 0.0
+      joint_at_open: 0.044
+      width_at_closed: 0.0
+      width_at_open: 0.088
+      default_speed: 0.05
+      max_speed: 0.2
+      default_force: 20.0
+      max_force: 60.0
+      # Simulated contact here is not worth failing a task over: a behaviour
+      # tree gets success on a completed motion and reads ~/state for whether
+      # anything was actually held.
+      report_grasp_failure: false

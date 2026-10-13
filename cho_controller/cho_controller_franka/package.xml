@@ -20,6 +20,7 @@
   <depend>controller_interface</depend>
   <depend>eigen</depend>
   <depend>franka_msgs</depend>
+  <depend>generate_parameter_library</depend>
   <depend>geometry_msgs</depend>
   <depend>hardware_interface</depend>
   <depend>pinocchio</depend>

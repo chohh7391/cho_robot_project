@@ -950,6 +950,102 @@ TEST(SessionReset, AC3_ActivateClosesAnOpenGoal) {
   EXPECT_EQ(rig.tick().mode, Mode::kIdle);
 }
 
+// Every field of two snapshots equal. Doubles compared exactly: both sides are
+// copies of one stored value.
+bool same_snapshot(const TelemetrySnapshot & a, const TelemetrySnapshot & b)
+{
+  return a.chunks_accepted == b.chunks_accepted && a.chunks_rejected == b.chunks_rejected &&
+         a.waypoints_dropped_past == b.waypoints_dropped_past && a.last_reject == b.last_reject &&
+         a.last_chunk_latency == b.last_chunk_latency &&
+         a.last_chunk_stamp == b.last_chunk_stamp && a.playback_stamp == b.playback_stamp &&
+         a.remaining_horizon == b.remaining_horizon && a.queue_depth == b.queue_depth &&
+         a.stream_state == b.stream_state && a.action_space == b.action_space &&
+         a.anchor_inexact == b.anchor_inexact;
+}
+
+void expect_cleared(const TelemetrySnapshot & telemetry, const char * when)
+{
+  EXPECT_EQ(telemetry.chunks_accepted, 0u) << when;
+  EXPECT_EQ(telemetry.chunks_rejected, 0u) << when;
+  EXPECT_EQ(telemetry.waypoints_dropped_past, 0u) << when;
+  EXPECT_EQ(telemetry.last_reject, Reject::kNone) << when;
+  EXPECT_DOUBLE_EQ(telemetry.last_chunk_latency, 0.0) << when;
+  EXPECT_DOUBLE_EQ(telemetry.last_chunk_stamp, 0.0) << when;
+  EXPECT_DOUBLE_EQ(telemetry.playback_stamp, 0.0) << when;
+  EXPECT_DOUBLE_EQ(telemetry.remaining_horizon, 0.0) << when;
+  EXPECT_EQ(telemetry.queue_depth, 0u) << when;
+  EXPECT_EQ(telemetry.stream_state, StreamState::kWaitingFirstChunk) << when;
+  EXPECT_EQ(telemetry.action_space, ActionSpace::kTask) << when;
+  EXPECT_FALSE(telemetry.anchor_inexact) << when;
+}
+
+// AC11 (run 20261014-002735). activate() runs on the control thread and leaves
+// what the executor writes to the executor; from the outside the effect is the
+// same: once it returns, telemetry() reads cleared and the gripper edge the
+// control loop left untaken is never sent. Queued ends are kept.
+TEST(SessionReset, AC11_ActivateClearsTheTelemetryAndTheGripperEdgeBeforeAnyExecutorCall) {
+  SessionParams params;
+  params.time_source = TimeSource::kObservation;
+  // A goal that leaves every telemetry field off its default, a grasp edge not
+  // taken yet and an end queued; the goal's id.
+  const auto run_goal = [](Rig & rig) {
+      const double before = rig.now();
+      for (int i = 0; i < 20; ++i) {rig.tick();}
+      const GoalId goal = rig.session.begin_goal(0.0);
+      rig.tick();
+      // Observed before the oldest record: accepted on the inexact anchor, its
+      // first two waypoints already past. Every waypoint closes the gripper, so
+      // the first followed sample raises a grasp.
+      Chunk chunk = joint_chunk(before - 0.005, 50, 0.02, 0.2);
+      chunk.gripper_mode = GripperMode::kBinary;
+      chunk.gripper_actions.assign(50, -1.0);
+      EXPECT_EQ(rig.feed(chunk).outcome, IngestOutcome::kAccepted);
+      EXPECT_TRUE(rig.session.refuse(Reject::kUnparseableField));
+      for (int i = 0; i < 10; ++i) {EXPECT_EQ(rig.tick().mode, Mode::kFollow) << i;}
+      EXPECT_EQ(rig.session.end_goal(Terminal::kAborted, 5), goal);
+      return goal;
+    };
+
+  // Without an activation the edge is there to take.
+  Rig unactivated(params);
+  run_goal(unactivated);
+  ASSERT_EQ(unactivated.session.take_gripper(), GripperCommand::kGrasp);
+
+  Rig rig(params);
+  const GoalId goal = run_goal(rig);
+  const TelemetrySnapshot live = rig.session.telemetry();
+  ASSERT_EQ(live.chunks_accepted, 1u);
+  ASSERT_EQ(live.chunks_rejected, 1u);
+  ASSERT_GT(live.waypoints_dropped_past, 0u);
+  ASSERT_EQ(live.last_reject, Reject::kUnparseableField);
+  ASSERT_NE(live.last_chunk_stamp, 0.0);
+  ASSERT_NE(live.last_chunk_latency, 0.0);
+  ASSERT_GT(live.playback_stamp, 0.0);
+  ASSERT_GT(live.remaining_horizon, 0.0);
+  ASSERT_GT(live.queue_depth, 0u);
+  ASSERT_EQ(live.stream_state, StreamState::kRunning);
+  ASSERT_EQ(live.action_space, ActionSpace::kJoint);
+  ASSERT_TRUE(live.anchor_inexact);
+
+  rig.session.activate();
+  // telemetry() is const and the first executor call: nothing has caught up yet.
+  expect_cleared(rig.session.telemetry(), "first call after activate()");
+  EXPECT_EQ(rig.session.take_gripper(), GripperCommand::kNone)
+    << "the grasp raised before activate() must not be sent after it";
+  expect_cleared(rig.session.telemetry(), "after the executor caught up");
+  TerminalEvent event;
+  ASSERT_TRUE(rig.session.poll_terminal(event)) << "an end queued before activate() is kept";
+  EXPECT_EQ(event.goal, goal);
+  EXPECT_EQ(event.host_code, 5u);
+  EXPECT_FALSE(rig.session.poll_terminal(event));
+
+  rig.session.begin_goal(0.0);
+  const Step start = rig.tick();
+  EXPECT_TRUE(start.goal_started);
+  EXPECT_EQ(start.mode, Mode::kWaiting);
+  expect_cleared(rig.session.telemetry(), "the next goal before its first chunk");
+}
+
 // ===========================================================================
 // Seeding, hold and resume
 // ===========================================================================
@@ -1606,6 +1702,137 @@ TEST(SessionRealtime, AC2_ConcurrentIngestNeverHandsStepATornTimeline) {
   EXPECT_EQ(non_finite, 0);
   EXPECT_EQ(torn, 0);
   EXPECT_EQ(rig.session.telemetry().chunks_accepted, static_cast<std::uint64_t>(accepted.load()));
+}
+
+// ===========================================================================
+// AC11: executor polls overlapping activate() and configure()
+// ===========================================================================
+
+// Both hosts poll telemetry(), take_gripper() and poll_terminal() from a 5 ms
+// timer that runs whether the controller is active or not, so those calls
+// overlap the control thread's activate(); OpenArm's timer, kept across a
+// re-configure, overlaps configure() too. Round by round: the executor opens a
+// goal and feeds it, the control loop follows it until a grasp edge is pending,
+// and the lifecycle call runs while the executor polls. Every poll sees one side
+// of the call, the round's snapshot whole or the cleared one; once the call has
+// returned, the cleared one and no edge. Built with -fsanitize=thread it is the
+// data-race check as well.
+TEST(SessionRealtime, AC11_PollsOverlappingActivateOrConfigureSeeOneSideOfIt) {
+  for (const bool reconfigure : {false, true}) {
+    SCOPED_TRACE(reconfigure ? "configure()" : "activate()");
+    SessionParams params;
+    params.buffer.interpolation = Interpolation::kLinear;
+    Rig rig(params);
+    ASSERT_TRUE(rig.configured);
+
+    constexpr int kRounds = 300;
+    enum Phase : int {kStart, kGoalOpen, kFollowed, kPolling};
+    std::atomic<int> phase {kStart};
+    // The last round whose lifecycle call has returned.
+    std::atomic<int> done {0};
+    // The control loop's next cycle time, for the executor's arrivals.
+    std::atomic<double> clock {rig.now()};
+    std::atomic<bool> stuck {false};
+    const auto await = [&stuck](const std::atomic<int> & flag, const int value) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (flag.load(std::memory_order_acquire) != value) {
+          if (stuck.load(std::memory_order_relaxed) ||
+            std::chrono::steady_clock::now() > deadline)
+          {
+            stuck.store(true, std::memory_order_relaxed);
+            return false;
+          }
+          std::this_thread::yield();
+        }
+        return true;
+      };
+
+    // The executor's counts, read after join().
+    long bad_rounds = 0;      // a round that did not set up what is checked
+    long polls = 0;
+    long cleared_during = 0;  // cleared reads while the call had not returned
+    long mixed = 0;           // neither the round's snapshot nor the cleared one
+    long late = 0;            // not cleared although the call had returned
+    long stale_edges = 0;     // an edge taken after the call had returned
+    long events = 0;          // the call closes the goal without one
+    std::thread executor([&] {
+        for (int round = 1; round <= kRounds; ++round) {
+          const double arrival = clock.load(std::memory_order_acquire);
+          const std::uint64_t refusals = 1 + static_cast<std::uint64_t>(round % 5);
+          if (rig.session.begin_goal(0.0) == 0) {++bad_rounds;}
+          Chunk chunk = joint_chunk(arrival, 50, 0.02, 0.05 * (round % 7));
+          chunk.gripper_mode = GripperMode::kBinary;
+          chunk.gripper_actions.assign(50, -1.0);
+          if (rig.session.ingest(std::move(chunk), arrival).outcome != IngestOutcome::kAccepted) {
+            ++bad_rounds;
+          }
+          for (std::uint64_t i = 0; i < refusals; ++i) {
+            rig.session.refuse(Reject::kUnparseableField);
+          }
+          phase.store(kGoalOpen, std::memory_order_release);
+          if (!await(phase, kFollowed)) {return;}
+
+          const TelemetrySnapshot before = rig.session.telemetry();
+          if (before.chunks_accepted != 1u || before.chunks_rejected != refusals ||
+            before.stream_state != StreamState::kRunning || !(before.playback_stamp > 0.0) ||
+            before.action_space != ActionSpace::kJoint)
+          {
+            ++bad_rounds;
+          }
+          phase.store(kPolling, std::memory_order_release);
+          for (bool returned = false; !returned; ) {
+            // Loaded first: when it says returned, the poll below starts after the call.
+            returned = done.load(std::memory_order_acquire) == round;
+            const TelemetrySnapshot seen = rig.session.telemetry();
+            ++polls;
+            if (same_snapshot(seen, TelemetrySnapshot{})) {
+              if (!returned) {++cleared_during;}
+            } else if (returned) {
+              ++late;
+            } else if (!same_snapshot(seen, before)) {
+              ++mixed;
+            }
+            if (rig.session.take_gripper() != GripperCommand::kNone && returned) {++stale_edges;}
+            TerminalEvent event;
+            if (rig.session.poll_terminal(event)) {++events;}
+            if ((polls % 16) == 0) {rig.session.gripper_refused();}
+            if (stuck.load(std::memory_order_relaxed)) {return;}
+          }
+        }
+      });
+
+    long unfollowed = 0;
+    long refused_configures = 0;
+    for (int round = 1; round <= kRounds; ++round) {
+      if (!await(phase, kGoalOpen)) {break;}
+      bool followed = false;
+      for (int i = 0; i < 5; ++i) {followed = rig.tick().mode == Mode::kFollow || followed;}
+      if (!followed) {++unfollowed;}
+      phase.store(kFollowed, std::memory_order_release);
+      if (!await(phase, kPolling)) {break;}
+      if (reconfigure) {
+        if (!rig.session.configure(params)) {++refused_configures;}
+      } else {
+        rig.session.activate();
+      }
+      clock.store(rig.now(), std::memory_order_release);
+      done.store(round, std::memory_order_release);
+    }
+    executor.join();
+
+    EXPECT_FALSE(stuck.load()) << "a thread waited 20 s for the other";
+    EXPECT_EQ(bad_rounds, 0);
+    EXPECT_EQ(unfollowed, 0);
+    EXPECT_EQ(refused_configures, 0);
+    EXPECT_GE(polls, 2L * kRounds);
+    EXPECT_EQ(mixed, 0) << "a poll saw part of the round and part of the call";
+    EXPECT_EQ(late, 0) << "a poll after the call returned saw the round's values";
+    EXPECT_EQ(stale_edges, 0) << "a grasp from before the call was taken after it";
+    EXPECT_EQ(events, 0);
+    RecordProperty(
+      reconfigure ? "configure_cleared_during" : "activate_cleared_during",
+      static_cast<int>(cleared_during));
+  }
 }
 
 }  // namespace

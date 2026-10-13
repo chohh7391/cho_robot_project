@@ -71,6 +71,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_kinematics ${PROJECT_NAME})
   ament_add_gtest(test_dls_no_malloc test/test_dls_no_malloc.cpp)
   target_link_libraries(test_dls_no_malloc ${PROJECT_NAME})
+  # testing/controller_manager_harness.hpp on joint_state_broadcaster, which it
+  # loads through pluginlib: needed installed, not linked.
+  find_package(controller_manager REQUIRED)
+  find_package(hardware_interface REQUIRED)
+  ament_add_gtest(test_controller_manager_harness test/test_controller_manager_harness.cpp TIMEOUT 120)
+  target_link_libraries(test_controller_manager_harness ${PROJECT_NAME})
+  ament_target_dependencies(test_controller_manager_harness controller_manager hardware_interface sensor_msgs)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

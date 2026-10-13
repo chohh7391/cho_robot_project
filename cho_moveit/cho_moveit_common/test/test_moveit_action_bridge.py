@@ -212,9 +212,12 @@ def _constraints(bridge):
 
 def bare_bridge():
     bridge = object.__new__(MODULE.MoveItActionBridge)
+    bridge.warnings = []
     bridge.get_logger = lambda: SimpleNamespace(
-        error=lambda _text: None, warn=lambda _text: None, fatal=lambda _text: None,
-        info=lambda _text: None)
+        error=lambda _text, **_kwargs: None,
+        warn=lambda text, **_kwargs: bridge.warnings.append(text),
+        fatal=lambda _text, **_kwargs: None,
+        info=lambda _text, **_kwargs: None)
     bridge._goal_lock = MODULE.threading.Lock()
     bridge._goal_reserved = True
     bridge._faulted = False
@@ -861,3 +864,230 @@ def test_planning_pipeline_defaults_to_ompl():
     """OMPL is the only pipeline this project registers, and both goal types use it."""
     bridge = bare_bridge()
     assert bridge._pipeline == 'ompl'
+
+
+# ------------------------------------------------- readiness query
+#
+# Trigger -> list_controllers -> get_planning_scene. rclpy's call_async has no
+# timeout, so a lost response used to leave the query pending for good and the
+# bridge never advertised its actions (or never again, after a restart of the
+# server it was waiting on).
+
+class ReadyFuture:
+    """A rclpy Future the test completes by hand."""
+
+    def __init__(self):
+        self._done = False
+        self._result = None
+        self._callbacks = []
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        return self._result
+
+    def add_done_callback(self, callback):
+        if self._done:
+            callback(self)
+        else:
+            self._callbacks.append(callback)
+
+    def set_result(self, result):
+        self._done = True
+        self._result = result
+        for callback in self._callbacks:
+            callback(self)
+
+
+class ReadyClient:
+    """A service client that records its requests and the futures dropped from it."""
+
+    def __init__(self, name):
+        self.srv_name = name
+        self.up = True
+        self.futures = []
+        self.removed = []
+        self.call_error = None
+
+    def service_is_ready(self):
+        return self.up
+
+    def call_async(self, _request):
+        if self.call_error is not None:
+            raise self.call_error
+        future = ReadyFuture()
+        self.futures.append(future)
+        return future
+
+    def remove_pending_request(self, future):
+        self.removed.append(future)
+
+
+TRIGGER_OK = SimpleNamespace(success=True, message='')
+CONTROLLERS_ACTIVE = SimpleNamespace(controller=[SimpleNamespace(name='jtc', state='active')])
+SCENE_WITH_FLOOR = SimpleNamespace(scene=SimpleNamespace(
+    world=SimpleNamespace(collision_objects=[SimpleNamespace(id='floor')])))
+
+
+def _query_bridge(monkeypatch, timeout=3.0):
+    """A bridge with fake readiness clients and a clock the test advances; returns (bridge, clock)."""
+    clock = FakeClock()
+    clock.now = 100.0
+    monkeypatch.setattr(MODULE.time, 'monotonic', clock.monotonic)
+    bridge = bare_bridge()
+    bridge._ready = False
+    bridge._ready_verified_at = 0.0
+    bridge._ready_lock = MODULE.threading.Lock()
+    bridge._ready_query_pending = False
+    bridge._ready_inflight = None
+    bridge._ready_stage_started_at = 0.0
+    bridge._ready_query_timeout = timeout
+    bridge._trajectory_controllers = ['jtc']
+    bridge._ready_client = ReadyClient('/static_scene_ready')
+    bridge._controllers_client = ReadyClient('/controller_manager/list_controllers')
+    bridge._scene_client = ReadyClient('/get_planning_scene')
+    bridge.advertised = 0
+    bridge._advertise_action_servers = lambda: setattr(bridge, 'advertised', bridge.advertised + 1)
+    return bridge, clock
+
+
+def test_a_query_is_not_dropped_before_its_timeout(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    assert bridge._ready_query_pending
+    clock.now += 2.9
+    bridge._poll_ready()
+    assert bridge._ready_query_pending
+    assert bridge._ready_client.removed == []
+    assert len(bridge._ready_client.futures) == 1
+    assert bridge.warnings == []
+
+
+def test_a_lost_trigger_response_is_dropped_after_the_timeout_and_asked_again(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    lost = bridge._ready_client.futures[0]
+    clock.now += 3.1
+    bridge._poll_ready()
+    # The pending request is taken out of the client that holds it, so it
+    # neither leaks nor can complete the query late.
+    assert bridge._ready_client.removed == [lost]
+    assert len(bridge.warnings) == 1
+    assert '/static_scene_ready' in bridge.warnings[0] and 'ready_query_timeout_sec' in bridge.warnings[0]
+    # ... and the same poll asked again.
+    assert len(bridge._ready_client.futures) == 2
+    assert bridge._ready_query_pending
+    assert bridge._ready_inflight == (bridge._ready_client, bridge._ready_client.futures[1])
+
+
+def test_the_timeout_applies_to_each_request_of_the_chain(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    clock.now += 2.5
+    bridge._ready_client.futures[0].set_result(TRIGGER_OK)
+    assert len(bridge._controllers_client.futures) == 1
+    # 5 s since the query began, 2.5 s since its current request was sent.
+    clock.now += 2.5
+    bridge._poll_ready()
+    assert bridge._controllers_client.removed == []
+    clock.now += 0.6
+    lost = bridge._controllers_client.futures[0]
+    bridge._poll_ready()
+    assert bridge._controllers_client.removed == [lost]
+    assert bridge._ready_client.removed == []
+    assert '/controller_manager/list_controllers' in bridge.warnings[0]
+    assert len(bridge._ready_client.futures) == 2  # asked again from the Trigger
+
+
+def test_a_lost_scene_response_is_dropped_from_the_scene_client(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    bridge._ready_client.futures[0].set_result(TRIGGER_OK)
+    bridge._controllers_client.futures[0].set_result(CONTROLLERS_ACTIVE)
+    lost = bridge._scene_client.futures[0]
+    clock.now += 3.1
+    bridge._poll_ready()
+    assert bridge._scene_client.removed == [lost]
+    assert bridge._ready_client.removed == [] and bridge._controllers_client.removed == []
+    assert '/get_planning_scene' in bridge.warnings[0]
+
+
+def test_a_response_to_a_dropped_request_is_ignored(monkeypatch):
+    # rclpy does not deliver one once remove_pending_request() ran; a callback
+    # that was already on its way must not advance the query either.
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    old = bridge._ready_client.futures[0]
+    clock.now += 3.1
+    bridge._poll_ready()
+    new = bridge._ready_client.futures[1]
+    old.set_result(TRIGGER_OK)
+    assert bridge._controllers_client.futures == []
+    assert bridge._ready_inflight == (bridge._ready_client, new)
+    assert bridge._ready_query_pending
+
+
+def test_the_bridge_is_ready_when_a_server_answers_after_the_lost_response(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    clock.now += 3.1
+    bridge._poll_ready()
+    assert not bridge._ready
+    bridge._ready_client.futures[1].set_result(TRIGGER_OK)
+    bridge._controllers_client.futures[0].set_result(CONTROLLERS_ACTIVE)
+    bridge._scene_client.futures[0].set_result(SCENE_WITH_FLOOR)
+    assert bridge._ready and not bridge._ready_query_pending
+    assert bridge._ready_inflight is None
+    assert bridge.advertised == 1
+    with bridge._ready_lock:
+        assert bridge._ready and MODULE.time.monotonic() - bridge._ready_verified_at <= 1.5
+
+
+def test_a_query_whose_server_left_is_released_by_the_timeout(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._poll_ready()
+    lost = bridge._ready_client.futures[0]
+    bridge._ready_client.up = False
+    clock.now += 3.1
+    bridge._poll_ready()
+    assert bridge._ready_client.removed == [lost]
+    assert not bridge._ready_query_pending and bridge._ready_inflight is None
+    # Nothing is asked of a service that is not there; it is asked once it is back.
+    assert len(bridge._ready_client.futures) == 1
+    bridge._ready_client.up = True
+    bridge._poll_ready()
+    assert len(bridge._ready_client.futures) == 2
+
+
+def test_a_timeout_closes_a_gate_that_was_open(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    bridge._ready = True
+    bridge._ready_verified_at = clock.now
+    bridge._poll_ready()
+    clock.now += 3.1
+    bridge._poll_ready()
+    assert not bridge._ready
+
+
+def test_a_request_that_cannot_be_sent_closes_the_query(monkeypatch):
+    bridge, _clock = _query_bridge(monkeypatch)
+    bridge._ready_client.call_error = RuntimeError('context is shut down')
+    bridge._poll_ready()
+    assert not bridge._ready_query_pending and bridge._ready_inflight is None
+    assert 'context is shut down' in bridge.warnings[0]
+
+
+def test_a_healthy_chain_is_untouched_by_the_timeout(monkeypatch):
+    bridge, clock = _query_bridge(monkeypatch)
+    for _ in range(3):
+        bridge._poll_ready()
+        clock.now += 1.0
+        bridge._ready_client.futures[-1].set_result(TRIGGER_OK)
+        bridge._controllers_client.futures[-1].set_result(CONTROLLERS_ACTIVE)
+        bridge._scene_client.futures[-1].set_result(SCENE_WITH_FLOOR)
+        assert bridge._ready
+        clock.now += 1.0
+    assert bridge.warnings == []
+    assert bridge.advertised == 1
+    assert bridge._ready_client.removed == []

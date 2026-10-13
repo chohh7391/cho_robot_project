@@ -49,12 +49,10 @@ CallbackReturn OperationalSpaceController::on_init() {
   }
 
   try {
-    auto_declare<std::vector<double>>("kp_task", {});
-    auto_declare<std::vector<double>>("kd_task", {});
-    auto_declare<double>("kp_null", 10.0);
-    auto_declare<double>("kd_null", 1.0);
-    auto_declare<std::vector<double>>("default_dof_pos", {});
-    auto_declare<bool>("use_nullspace_posture", false);
+    // Declares and range-checks every parameter in
+    // operational_space_controller_parameters.yaml; a value outside
+    // its range throws here.
+    param_listener_ = std::make_shared<franka_operational_space_controller::ParamListener>(get_node());
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Init exception: %s", e.what());
     return CallbackReturn::ERROR;
@@ -123,18 +121,12 @@ controller_interface::return_type OperationalSpaceController::update(
   // calculate desired torque
   Vector7d torque_desired;
 
-  const double kAlpha = 0.99;
-  dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
+  dq_filtered_ = (1 - velocity_filter_alpha_) * dq_filtered_ + velocity_filter_alpha_ * state_.v_arm;
 
-  Matrix7d & M = state_.M_arm;
-  // practical terms for better simulation behavior (reduce oscillation)
-  M(4, 4) *= 6.0;
-  M(5, 5) *= 6.0;
-  M(6, 6) *= 10.0;
-  kd_joint_ = 2.0 * sqrt(5.0) * Vector7d::Ones();
-  kd_joint_(4) = 0.2;
-  kd_joint_(5) = 0.2;
-  kd_joint_(6) = 0.2;
+  // Practical terms for better simulation behavior (reduce oscillation), from
+  // the parameters. A local copy: state_.M_arm stays the model's mass matrix.
+  Matrix7d M = state_.M_arm;
+  M.diagonal().array() *= inertia_scale_.array();
   const Eigen::Matrix<double, 6, 7> & J = state_.J_arm; // 6x7 Jacobian
   const pinocchio::SE3 & H_ee = state_.H_ee;      // Current EE Pose
   const Vector7d & q = state_.q_arm;              // 7x1 Joint Position
@@ -178,7 +170,7 @@ controller_interface::return_type OperationalSpaceController::update(
   }
 
   torque_desired = J.transpose() * F_task + tau_null + state_.nle;
-  torque_desired -= kd_joint_.cwiseProduct(dq_filtered_);  // Damping term for stability
+  torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
@@ -192,27 +184,34 @@ controller_interface::return_type OperationalSpaceController::update(
 }
 
 bool OperationalSpaceController::assign_parameters() {
-  auto kp_task = get_node()->get_parameter("kp_task").as_double_array();
-  auto kd_task = get_node()->get_parameter("kd_task").as_double_array();
-  auto kp_null = get_node()->get_parameter("kp_null").as_double();
-  auto kd_null = get_node()->get_parameter("kd_null").as_double();
-  auto default_dof_pos = get_node()->get_parameter("default_dof_pos").as_double_array();
-
-  if (kp_task.size() != 6 || kd_task.size() != 6) {
+  // Each value is range-checked by the generated listener (see the YAML); what
+  // is left here is what its inclusive element bounds cannot say.
+  const auto params = param_listener_->get_params();
+  if (params.kp_task.size() != 6 || params.kd_task.size() != 6) {
     RCLCPP_ERROR(get_node()->get_logger(), "kp_task and kd_task must be size 6");
     return false;
   }
-  if (default_dof_pos.size() != static_cast<size_t>(num_dof_)) {
-    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu", num_dof_, default_dof_pos.size());
+  if (params.default_dof_pos.size() != static_cast<size_t>(num_dof_)) {
+    RCLCPP_ERROR(get_node()->get_logger(), "default_dof_pos size must be %d, but got %zu",
+      num_dof_, params.default_dof_pos.size());
     return false;
   }
+  for (const double value : params.inertia_scale) {
+    if (!(value > 0.0) || !std::isfinite(value)) {
+      RCLCPP_ERROR(get_node()->get_logger(), "every entry of inertia_scale must be positive and finite");
+      return false;
+    }
+  }
 
-  kp_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kp_task.data());
-  kd_task_ = Eigen::Map<Eigen::Matrix<double, 6, 1>>(kd_task.data());
-  kp_null_ = kp_null;
-  kd_null_ = kd_null;
-  default_dof_pos_ = Eigen::Map<Eigen::Matrix<double, 7, 1>>(default_dof_pos.data());
-  use_nullspace_posture_ = get_node()->get_parameter("use_nullspace_posture").as_bool();
+  kp_task_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(params.kp_task.data());
+  kd_task_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(params.kd_task.data());
+  kp_null_ = params.kp_null;
+  kd_null_ = params.kd_null;
+  default_dof_pos_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(params.default_dof_pos.data());
+  use_nullspace_posture_ = params.use_nullspace_posture;
+  velocity_filter_alpha_ = params.velocity_filter_alpha;
+  inertia_scale_ = Eigen::Map<const Vector7d>(params.inertia_scale.data());
+  joint_damping_ = Eigen::Map<const Vector7d>(params.joint_damping.data());
 
   return true;
 }

@@ -106,3 +106,24 @@ The generic debug shell is available as
 operator-facing clients. It accepts explicit robot, controller, and manual
 endpoint-selection options for diagnosis, but should not be used in the normal
 operator workflow.
+
+## Plotting a recorded run
+
+`plot_pose_log` and `plot_joint_pos_log` plot a rosbag2 sqlite3 (`.db3`) bag of the
+controller's own state topics ([CONTRACT.md, State topics](../cho_interfaces/CONTRACT.md#state-topics)).
+`--topic` has no default:
+
+| Tool | `--topic` | Message | Plots |
+|---|---|---|---|
+| `plot_pose_log` | `/<controller>/ee_state` | `cho_interfaces/PoseLog` | `pose_des` against `pose_curr` per axis, the orientation error |
+| `plot_joint_pos_log` | `/<controller>/controller_state` | `control_msgs/JointTrajectoryControllerState` | `reference` against `feedback` per joint, the feedback velocity against the FR3's velocity limits |
+
+```bash
+ros2 run cho_control_tools plot_pose_log --path <DB3_PATH> --topic /task_space_qp_controller/ee_state --start 2 --end 12
+```
+
+`--start` and `--end` are seconds from the topic's first message. A topic that is
+not in the bag (the error lists the bag's topics of the tool's type), carries the other
+tool's message type, or has nothing in the window ends the tool with a one-line error.
+The OpenArm MIT controllers publish neither topic, so there is nothing to plot for
+them.

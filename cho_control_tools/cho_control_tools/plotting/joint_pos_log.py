@@ -12,161 +12,141 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sqlite3
-from rosidl_runtime_py.utilities import get_message
-from rclpy.serialization import deserialize_message
+"""Plot a controller's joint reference-vs-feedback position and velocity from a rosbag2 sqlite3 bag.
+
+Reads `/<controller>/controller_state` (control_msgs/JointTrajectoryControllerState):
+`reference` against `feedback`, one subplot per joint.
+"""
+
 import argparse
 
-# 제공해주신 Joint 1~7의 velocity limit 정보 (절댓값 기준)
+import numpy as np
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
+
+from cho_control_tools.plotting.bag_io import BagError, read_topic
+
+CONTROLLER_STATE_TYPE = 'control_msgs/msg/JointTrajectoryControllerState'
+
+# Franka FR3 joint 1-7 velocity limits [rad/s], the dotted lines of the velocity plot.
+# Joints past the list get no limit line.
 VELOCITY_LIMITS = [2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26]
 
-def get_joint_data(db_path, topic, start_t=None, end_t=None):
-    import numpy as np
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+def joint_columns(samples):
+    """(t, des_pos, curr_pos, curr_vel) from [(seconds, JointTrajectoryControllerState)].
 
-    # Look up the message type stored for this topic, so the same script reads
-    # both the legacy cho_interfaces/JointLog and the new per-controller
-    # control_msgs/JointTrajectoryControllerState (~/controller_state).
-    cursor.execute("SELECT type FROM topics WHERE name = ?", (topic,))
-    trow = cursor.fetchone()
-    if trow is None:
-        print(f"토픽 '{topic}' 이 bag에 없습니다. (ros2 bag info 로 토픽 확인)")
-        conn.close()
-        return None
-    type_str = trow[0]
-    msg_type = get_message(type_str)
-    is_jtcs = type_str.endswith('JointTrajectoryControllerState')
-
-    query = ("SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id "
-             "WHERE topics.name = ? ORDER BY timestamp ASC")
-    cursor.execute(query, (topic,))
-
+    des_pos is the state's reference.positions, curr_pos and curr_vel its feedback; each
+    is N x joints. A controller that publishes no velocity gives zeros. BagError when
+    the joint count changes along the bag, or a message has no positions.
+    """
     timestamps = []
     des_pos = []
     curr_pos = []
     curr_vel = []
-
-    rows = cursor.fetchall()
-    if not rows:
-        print("데이터가 없습니다. 토픽 이름이나 패스를 확인하세요.")
-        return None
-
-    first_ts = rows[0][0] / 1e9
-
-    for ts, data in rows:
-        current_sec = (ts / 1e9) - first_ts
-
-        if start_t is not None and current_sec < start_t:
-            continue
-        if end_t is not None and current_sec > end_t:
-            continue
-
-        msg = deserialize_message(data, msg_type)
-        if is_jtcs:
-            dp = list(msg.reference.positions)
-            cp = list(msg.feedback.positions)
-            cv = list(msg.feedback.velocities)
-        else:
-            dp = list(msg.desired_state.position)
-            cp = list(msg.current_state.position)
-            cv = list(msg.current_state.velocity)
-        # velocity fields can be empty (e.g. a controller that logs no velocity);
-        # pad to the position length so the arrays stay rectangular.
+    for index, (seconds, msg) in enumerate(samples):
+        dp = list(msg.reference.positions)
+        cp = list(msg.feedback.positions)
+        cv = list(msg.feedback.velocities)
+        if not dp or len(dp) != len(cp):
+            raise BagError(f"message {index} has {len(dp)} reference and {len(cp)} feedback positions; "
+                           "the plot needs both, one per joint")
+        if des_pos and len(dp) != len(des_pos[0]):
+            raise BagError(f"message {index} has {len(dp)} joints, the first had {len(des_pos[0])}")
+        # An empty velocity is a controller that publishes none; pad so the array stays rectangular.
         if len(cv) != len(cp):
             cv = [0.0] * len(cp)
-        timestamps.append(current_sec)
+        timestamps.append(seconds)
         des_pos.append(dp)
         curr_pos.append(cp)
         curr_vel.append(cv)
-
-    conn.close()
     return np.array(timestamps), np.array(des_pos), np.array(curr_pos), np.array(curr_vel)
 
-def plot_results(bag_db_path, topic, start_t, end_t):
+
+def get_joint_data(db_path, topic, start_t=None, end_t=None):
+    """joint_columns() of the JointTrajectoryControllerState messages on *topic*; BagError when there are none."""
+    msg_type = get_message(CONTROLLER_STATE_TYPE)
+    rows = read_topic(db_path, topic, CONTROLLER_STATE_TYPE, start_t, end_t)
+    return joint_columns((seconds, deserialize_message(data, msg_type)) for seconds, data in rows)
+
+
+def build_figures(data, title):
+    """(position figure, velocity figure) for get_joint_data()'s columns."""
     import matplotlib.pyplot as plt
-    import numpy as np
-
-    data = get_joint_data(bag_db_path, topic, start_t, end_t)
-
-    if data is None or len(data[0]) == 0:
-        print("조건에 맞는 시간대의 데이터가 없습니다.")
-        return
 
     t, d_pos, c_pos, c_vel = data
     num_joints = d_pos.shape[1]
 
-    # 데이터 예외 처리 (NaN)
-    norm_d = np.linalg.norm(d_pos, axis=1)
-    norm_c = np.linalg.norm(c_pos, axis=1)
-    invalid_mask = (norm_d < 1e-6) & (norm_c < 1e-6)
-
+    # A row where both are all zero is a controller that had not written yet.
+    invalid_mask = (np.linalg.norm(d_pos, axis=1) < 1e-6) & (np.linalg.norm(c_pos, axis=1) < 1e-6)
+    d_pos = np.array(d_pos, dtype=float)
+    c_pos = np.array(c_pos, dtype=float)
+    c_vel = np.array(c_vel, dtype=float)
     d_pos[invalid_mask] = np.nan
     c_pos[invalid_mask] = np.nan
     c_vel[invalid_mask] = np.nan
 
-    # ---------------------------------------------------------
-    # 1. 위치(Position) 플롯 (Figure 1)
-    # ---------------------------------------------------------
-    fig1, axes1 = plt.subplots(num_joints, 1, figsize=(12, 2.0 * num_joints), sharex=True)
-    if num_joints == 1: axes1 = [axes1]
-
+    fig1, axes1 = plt.subplots(num_joints, 1, figsize=(12, 2.0 * num_joints), sharex=True, squeeze=False)
+    axes1 = axes1[:, 0]
     for i in range(num_joints):
         axes1[i].plot(t, d_pos[:, i], 'r--', label='Des Pos', alpha=0.8)
         axes1[i].plot(t, c_pos[:, i], 'b-', label='Curr Pos', alpha=0.6)
         axes1[i].set_ylabel(f'J{i+1} Pos\n(rad)', fontsize=10)
         axes1[i].legend(loc='upper right', fontsize=8)
         axes1[i].grid(True)
-
     axes1[-1].set_xlabel('Time (s)', fontsize=12)
-    if len(t) > 0: axes1[-1].set_xlim(t[0], t[-1])
-    fig1.suptitle(f'Joint Position Tracking: {bag_db_path}', fontsize=14)
+    axes1[-1].set_xlim(t[0], t[-1])
+    fig1.suptitle(f'Joint Position Tracking: {title}', fontsize=14)
     fig1.tight_layout()
 
-    # ---------------------------------------------------------
-    # 2. 속도(Velocity) 플롯 (Figure 2)
-    # ---------------------------------------------------------
-    fig2, axes2 = plt.subplots(num_joints, 1, figsize=(12, 2.0 * num_joints), sharex=True)
-    if num_joints == 1: axes2 = [axes2]
-
+    fig2, axes2 = plt.subplots(num_joints, 1, figsize=(12, 2.0 * num_joints), sharex=True, squeeze=False)
+    axes2 = axes2[:, 0]
     for i in range(num_joints):
         v_limit = VELOCITY_LIMITS[i] if i < len(VELOCITY_LIMITS) else None
 
         axes2[i].plot(t, c_vel[:, i], 'g-', label='Curr Vel', alpha=0.8)
 
-        # Velocity Limit 점선 표시 (상단/하단)
         if v_limit:
             axes2[i].axhline(v_limit, color='red', linestyle=':', alpha=0.7, label='Limit')
             axes2[i].axhline(-v_limit, color='red', linestyle=':', alpha=0.7)
-
-            # y축 범위를 limit보다 조금 더 여유있게 설정하여 점선이 잘 보이도록 함
+            # A little room past the limit so the dotted lines stay visible.
             axes2[i].set_ylim(-v_limit * 1.2, v_limit * 1.2)
 
         axes2[i].set_ylabel(f'J{i+1} Vel\n(rad/s)', fontsize=10)
         axes2[i].legend(loc='upper right', fontsize=8)
         axes2[i].grid(True)
-
     axes2[-1].set_xlabel('Time (s)', fontsize=12)
-    if len(t) > 0: axes2[-1].set_xlim(t[0], t[-1])
-    fig2.suptitle(f'Joint Velocity with Limits: {bag_db_path}', fontsize=14)
+    axes2[-1].set_xlim(t[0], t[-1])
+    fig2.suptitle(f'Joint Velocity with Limits: {title}', fontsize=14)
     fig2.tight_layout()
+    return fig1, fig2
 
-    # 두 개의 창을 동시에 띄움
+
+def plot_results(bag_db_path, topic, start_t, end_t):
+    data = get_joint_data(bag_db_path, topic, start_t, end_t)
+    # Imported once the bag has been read: a bag error needs no plotting stack.
+    import matplotlib.pyplot as plt
+
+    build_figures(data, f'{bag_db_path} {topic}')
     plt.show()
 
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Plot joint desired-vs-current from a ROS 2 sqlite3 bag")
+    parser = argparse.ArgumentParser(description="Plot joint reference-vs-feedback from a ROS 2 sqlite3 bag")
     parser.add_argument("--path", type=str, required=True, help="Path to the sqlite3 database (.db3)")
-    parser.add_argument("--topic", type=str, default="/log/joint_pos",
-                        help="Topic to read. Legacy: /log/joint_pos (cho_interfaces/JointLog). "
-                             "New: /<controller>/controller_state (control_msgs/JointTrajectoryControllerState). "
-                             "The message type is auto-detected from the bag.")
+    parser.add_argument("--topic", type=str, required=True,
+                        help="The controller's controller_state topic "
+                             "(control_msgs/JointTrajectoryControllerState), "
+                             "e.g. /joint_space_qp_controller/controller_state; "
+                             "ros2 bag info lists the bag's topics")
     parser.add_argument("--start", type=float, default=None, help="Start time in seconds")
     parser.add_argument("--end", type=float, default=None, help="End time in seconds")
 
     args = parser.parse_args(argv)
-    plot_results(args.path, args.topic, args.start, args.end)
+    try:
+        plot_results(args.path, args.topic, args.start, args.end)
+    except BagError as error:
+        raise SystemExit(f"error: {error}") from error
 
 
 if __name__ == "__main__":

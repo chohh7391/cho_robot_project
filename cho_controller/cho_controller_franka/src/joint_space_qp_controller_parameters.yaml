@@ -1,0 +1,54 @@
+# Franka JointSpaceQPController parameters (generate_parameter_library).
+#
+# Range checks live here. Left to the controller, at configure: the sizes of
+# kp_joint and kd_joint (7), and the strictly positive entries of inertia_scale
+# (the library's element bounds are inclusive). The gains default to empty so
+# that a controller loaded first and given its gains after (ros2 control
+# load_controller, then set; the test harness) still loads; one never given
+# them fails to configure, as before.
+#
+# The base class declares its own parameters (robot_type, bringup_type, ee_name,
+# mass, center_of_mass, load_inertia, rotor_inertia), not listed here.
+franka_joint_space_qp_controller:
+  kp_joint:
+    type: double_array
+    default_value: []
+    description: "Posture task stiffness per arm joint, acceleration level [1/s^2]."
+    validation:
+      lower_element_bounds<>: [0.0]
+  kd_joint:
+    type: double_array
+    default_value: []
+    description: "Posture task damping per arm joint, acceleration level [1/s]."
+    validation:
+      lower_element_bounds<>: [0.0]
+  velocity_filter_alpha:
+    type: double
+    default_value: 0.99
+    description: >-
+      Weight of the new sample in the joint-velocity filter used by the damping
+      term, dq_f = (1 - alpha) dq_f + alpha v. 1 is the raw velocity.
+    validation:
+      gt<>: [0.0]
+      lt_eq<>: [1.0]
+  inertia_scale:
+    type: double_array
+    default_value: [1.0, 1.0, 1.0, 1.0, 6.0, 6.0, 10.0]
+    description: >-
+      Factor on each diagonal entry of the arm mass matrix in tau = M ddq + ...
+      The FR3 wrist links are light against their reflected rotor inertia, which
+      the URDF cannot express; the factors stand in for it. The base's
+      rotor_inertia parameter adds that inertia to M itself, so with
+      rotor_inertia set the two compound: set one or the other.
+    validation:
+      fixed_size<>: [7]
+      lower_element_bounds<>: [0.0]
+  joint_damping:
+    type: double_array
+    default_value: [4.47213595499958, 4.47213595499958, 4.47213595499958, 4.47213595499958, 0.2, 0.2, 0.2]
+    description: >-
+      Joint damping in the torque law, tau -= joint_damping * dq_f [N m s/rad].
+      Default 2 sqrt(5) on joints 1-4 and 0.2 on the wrist.
+    validation:
+      fixed_size<>: [7]
+      lower_element_bounds<>: [0.0]

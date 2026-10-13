@@ -83,9 +83,16 @@ std::array<double, kJointsPerArm> Limiter::update(
     // previous cycle as tau_ff -- the gravity torque of an arm at rest, which
     // the MIT motor has no model of. Not the last accepted tau_ff, which left
     // whatever the producer's spring had carried to sag away at the safe gains.
+    // That tau_ff applies in this cycle, not through the tau_ff slew: q_des at
+    // the measured pose removes the spring's share kp * (q_des - q) in this
+    // cycle, and a tau_ff still slewing from the commit's would let the output
+    // fall toward it. Applied at once, the output continues from the previous
+    // cycle's torque, as the real adapter's hold does. The gains still slew to
+    // the safe gains.
     for (std::size_t i = 0; i < kJointsPerArm; ++i) {
       command_[i].q = q[i];
       command_[i].tau = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
+      applied_[i].tau = command_[i].tau;
     }
     capture_safe_position_ = false;
   }

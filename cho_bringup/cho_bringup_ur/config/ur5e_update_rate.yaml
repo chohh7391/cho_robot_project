@@ -1,0 +1,7 @@
+# ur_robot_driver's ur_control.launch.py loads <runtime_config_package>/config/<ur_type>_update_rate.yaml
+# into the driver's controller_manager node, and the real bringup passes this package as the
+# runtime_config_package. Keep update_rate equal to real/controllers.yaml
+# (cho_bringup_common/test/test_runtime_config_files.py checks it).
+controller_manager:
+  ros__parameters:
+    update_rate: 500  # Hz

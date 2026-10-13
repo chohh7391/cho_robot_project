@@ -12,13 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sqlite3
+"""Plot a controller's desired-vs-current end-effector pose from a rosbag2 sqlite3 bag.
+
+Reads `/<controller>/ee_state` (cho_interfaces/PoseLog): pose_des against pose_curr per
+axis, and the orientation error between them.
+"""
+
+import argparse
 import struct
 from types import SimpleNamespace
 
-from rosidl_runtime_py.utilities import get_message
+import numpy as np
 from rclpy.serialization import deserialize_message
-import argparse
+from rosidl_runtime_py.utilities import get_message
+
+from cho_control_tools.plotting.bag_io import BagError, read_topic
+
+POSE_LOG_TYPE = 'cho_interfaces/msg/PoseLog'
 
 # PoseLog gained a std_msgs/Header when ~/ee_state became stamped. A bag recorded
 # before that holds three bare Poses, which the current type cannot deserialize.
@@ -47,103 +57,66 @@ def decode_pose_log(data, msg_type):
         pose_curr=_legacy_pose(values[14:21]))
 
 
-def get_pose_data(db_path, topic, start_t=None, end_t=None):
-    import numpy as np
+def pose_columns(samples):
+    """(t, des_pos, curr_pos, des_quat, curr_quat) from [(seconds, PoseLog)].
 
-    # Both the legacy /log/ee_pose and the new per-controller ~/ee_state
-    # (/<controller>/ee_state) are cho_interfaces/msg/PoseLog, so only the
-    # topic name changes.
-    msg_type = get_message('cho_interfaces/msg/PoseLog')
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    query = ("SELECT timestamp, data FROM messages JOIN topics ON messages.topic_id = topics.id "
-             "WHERE topics.name = ? ORDER BY timestamp ASC")
-    cursor.execute(query, (topic,))
-
+    Positions are N x 3 (x, y, z), quaternions N x 4 (x, y, z, w), in the PoseLog's frame.
+    """
     timestamps = []
     des_pos = []
     curr_pos = []
     des_quat = []
     curr_quat = []
-
-    rows = cursor.fetchall()
-    if not rows:
-        print("데이터가 없습니다.")
-        return None
-
-    # 기준 시간 설정 (전체 데이터의 시작점)
-    first_ts = rows[0][0] / 1e9
-
-    for ts, data in rows:
-        current_sec = (ts / 1e9) - first_ts
-
-        # 시간 필터링
-        if start_t is not None and current_sec < start_t:
-            continue
-        if end_t is not None and current_sec > end_t:
-            continue
-
-        msg = decode_pose_log(data, msg_type)
-        timestamps.append(current_sec)
-
+    for seconds, msg in samples:
+        timestamps.append(seconds)
         des_pos.append([msg.pose_des.position.x, msg.pose_des.position.y, msg.pose_des.position.z])
         curr_pos.append([msg.pose_curr.position.x, msg.pose_curr.position.y, msg.pose_curr.position.z])
         des_quat.append([msg.pose_des.orientation.x, msg.pose_des.orientation.y,
                          msg.pose_des.orientation.z, msg.pose_des.orientation.w])
         curr_quat.append([msg.pose_curr.orientation.x, msg.pose_curr.orientation.y,
                           msg.pose_curr.orientation.z, msg.pose_curr.orientation.w])
+    return (np.array(timestamps), np.array(des_pos).reshape(-1, 3), np.array(curr_pos).reshape(-1, 3),
+            np.array(des_quat).reshape(-1, 4), np.array(curr_quat).reshape(-1, 4))
 
-    conn.close()
-    return np.array(timestamps), np.array(des_pos), np.array(curr_pos), np.array(des_quat), np.array(curr_quat)
 
-def plot_results(bag_db_path, topic, start_t, end_t):
+def get_pose_data(db_path, topic, start_t=None, end_t=None):
+    """pose_columns() of the PoseLog messages on *topic*; BagError when the bag has none to give."""
+    msg_type = get_message(POSE_LOG_TYPE)
+    rows = read_topic(db_path, topic, POSE_LOG_TYPE, start_t, end_t)
+    return pose_columns((seconds, decode_pose_log(data, msg_type)) for seconds, data in rows)
+
+
+def tracking_errors(d_pos, c_pos, d_q, c_q):
+    """(d_pos, c_pos, orientation error [deg]) with the rows of an unwritten pose set to NaN.
+
+    A zero-norm quaternion is a pose the controller had not written yet; scipy cannot
+    rotate by it, so those rows are masked out of the plot instead.
+    """
+    from scipy.spatial.transform import Rotation
+
+    d_pos = np.array(d_pos, dtype=float)
+    c_pos = np.array(c_pos, dtype=float)
+    invalid = (np.linalg.norm(d_q, axis=1) < 1e-6) | (np.linalg.norm(c_q, axis=1) < 1e-6)
+    d_pos[invalid] = np.nan
+    c_pos[invalid] = np.nan
+    d_q_safe = np.array(d_q, dtype=float)
+    c_q_safe = np.array(c_q, dtype=float)
+    d_q_safe[invalid] = [0.0, 0.0, 0.0, 1.0]
+    c_q_safe[invalid] = [0.0, 0.0, 0.0, 1.0]
+    error_deg = np.degrees((Rotation.from_quat(c_q_safe).inv() * Rotation.from_quat(d_q_safe)).magnitude())
+    error_deg[invalid] = np.nan
+    return d_pos, c_pos, error_deg
+
+
+def build_figure(data, title):
+    """The tracking figure for get_pose_data()'s columns: X, Y, Z and the orientation error."""
     import matplotlib.pyplot as plt
-    import numpy as np
-    from scipy.spatial.transform import Rotation as R
-
-    data = get_pose_data(bag_db_path, topic, start_t, end_t)
-    # 필터링 후 데이터가 완전히 비었을 경우를 방지
-    if data is None or len(data[0]) == 0:
-        print("조건에 맞는 시간대의 데이터가 없습니다.")
-        return
 
     t, d_pos, c_pos, d_q, c_q = data
-
-    # ---------------------------------------------------------
-    # [수정된 부분] 쿼터니언 (Zero-norm) 에러 예외 처리
-    # ---------------------------------------------------------
-    # 1. 벡터의 크기(norm) 계산
-    norm_d = np.linalg.norm(d_q, axis=1)
-    norm_c = np.linalg.norm(c_q, axis=1)
-
-    # 2. 크기가 0에 가까운(초기화 안 된) 쓰레기값 인덱스 마스크 생성
-    invalid_mask = (norm_d < 1e-6) | (norm_c < 1e-6)
-
-    # ---------------------------------------------------------
-    # [새로 추가할 부분] 위치 데이터(Position)도 쓰레기값 구간을 NaN으로 처리
-    d_pos[invalid_mask] = np.nan
-    c_pos[invalid_mask] = np.nan
-    # ---------------------------------------------------------
-
-    # 3. scipy 에러를 피하기 위해 임시로 유효한 쿼터니언([0,0,0,1])으로 복사 및 덮어쓰기
-    d_q_safe = np.copy(d_q)
-    c_q_safe = np.copy(c_q)
-    d_q_safe[invalid_mask] = [0.0, 0.0, 0.0, 1.0]
-    c_q_safe[invalid_mask] = [0.0, 0.0, 0.0, 1.0]
-
-    # 4. 회전 에러 계산
-    rot_d = R.from_quat(d_q_safe)
-    rot_c = R.from_quat(c_q_safe)
-    error_rot = (rot_c.inv() * rot_d).magnitude() * (180.0 / np.pi)
-
-    # 5. 초기화 안 된 유효하지 않은 데이터 구간은 그래프에서 무시되도록 NaN 처리
-    error_rot[invalid_mask] = np.nan
-    # ---------------------------------------------------------
+    d_pos, c_pos, error_rot = tracking_errors(d_pos, c_pos, d_q, c_q)
 
     fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
     coords = ['X', 'Y', 'Z']
-
     for i in range(3):
         axes[i].plot(t, d_pos[:, i], 'r--', label='Desired', alpha=0.8)
         axes[i].plot(t, c_pos[:, i], 'b-', label='Current', alpha=0.6)
@@ -156,27 +129,39 @@ def plot_results(bag_db_path, topic, start_t, end_t):
     axes[3].set_xlabel('Time (s)', fontsize=12)
     axes[3].legend(loc='upper right')
     axes[3].grid(True)
+    axes[3].set_xlim(t[0], t[-1])
 
-    # X축 범위 명시적 설정 (데이터가 없는 구간 방지)
-    if len(t) > 0:
-        plt.xlim(t[0], t[-1])
+    fig.suptitle(title, fontsize=15)
+    fig.tight_layout()
+    return fig
 
-    plt.suptitle(f'Tracking Performance: {bag_db_path}\n'
-                 f'Range: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]:.2f}s', fontsize=15)
-    plt.tight_layout()
+
+def plot_results(bag_db_path, topic, start_t, end_t):
+    data = get_pose_data(bag_db_path, topic, start_t, end_t)
+    # Imported once the bag has been read: a bag error needs no plotting stack.
+    import matplotlib.pyplot as plt
+
+    t = data[0]
+    build_figure(data, f'Tracking Performance: {bag_db_path} {topic}\n'
+                       f'Range: {start_t if start_t else 0}s ~ {end_t if end_t else t[-1]:.2f}s')
     plt.show()
 
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="db3 path with time range")
-    parser.add_argument("--path", type=str, required=True, help="Path to the sqlite3 database")
-    parser.add_argument("--topic", type=str, default="/log/ee_pose",
-                        help="Topic to read (cho_interfaces/PoseLog). Legacy: /log/ee_pose. "
-                             "New: /<controller>/ee_state.")
+    parser = argparse.ArgumentParser(description="Plot a controller's desired-vs-current end-effector pose "
+                                                 "from a ROS 2 sqlite3 bag")
+    parser.add_argument("--path", type=str, required=True, help="Path to the sqlite3 database (.db3)")
+    parser.add_argument("--topic", type=str, required=True,
+                        help="The controller's ee_state topic (cho_interfaces/PoseLog), "
+                             "e.g. /task_space_qp_controller/ee_state; ros2 bag info lists the bag's topics")
     parser.add_argument("--start", type=float, default=None, help="Start time in seconds")
     parser.add_argument("--end", type=float, default=None, help="End time in seconds")
 
     args = parser.parse_args(argv)
-    plot_results(args.path, args.topic, args.start, args.end)
+    try:
+        plot_results(args.path, args.topic, args.start, args.end)
+    except BagError as error:
+        raise SystemExit(f"error: {error}") from error
 
 
 if __name__ == "__main__":

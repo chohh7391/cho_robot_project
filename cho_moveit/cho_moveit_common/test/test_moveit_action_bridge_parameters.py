@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Real-node construction guards: optional array parameters and the node name."""
+"""Real-node guards: construction (optional array parameters, node name) and the readiness query."""
 
 import importlib.util
 import os
@@ -21,10 +21,18 @@ import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 
+from controller_manager_msgs.msg import ControllerState
+from controller_manager_msgs.srv import ListControllers
+from moveit_msgs.msg import CollisionObject
+from moveit_msgs.srv import GetPlanningScene
 import pytest
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from std_srvs.srv import Trigger
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'moveit_action_bridge.py'
@@ -49,6 +57,8 @@ def test_single_controller_launches_initialize_the_optional_array():
         # The planning budget is a parameter of its own; duration_sec is the
         # motion's minimum length, not a planning budget.
         assert node._planning_time == 5.0
+        # A lost readiness response is given up on after this long [s].
+        assert node._ready_query_timeout == 3.0
         assert node._execute_action == '/execute_trajectory'
         # An absolute goal may also name the registry's arm_base_link, where TF
         # puts it at the planning frame.
@@ -81,6 +91,91 @@ def test_a_planning_budget_that_cannot_plan_is_refused(value):
         with pytest.raises(ValueError, match='planning_time_sec'):
             MODULE.MoveItActionBridge()
     finally:
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize('value', ['0.0', '-1.0', '.nan', '.inf'])
+def test_a_ready_query_timeout_that_cannot_expire_is_refused(value):
+    rclpy.init(args=['--ros-args', '-r', '__node:=fr5_moveit_action_bridge',
+                     '-p', 'robot_type:=fr5', '-p', f'ready_query_timeout_sec:={value}'])
+    try:
+        with pytest.raises(ValueError, match='ready_query_timeout_sec'):
+            MODULE.MoveItActionBridge()
+    finally:
+        rclpy.shutdown()
+
+
+def _wait_until(condition, timeout_sec):
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.05)
+    return condition()
+
+
+def test_a_lost_readiness_response_does_not_keep_the_bridge_from_becoming_ready():
+    # A response that never arrives used to leave the query pending for good:
+    # no second request, so no READY and no actions even once the server
+    # answers. The Trigger server here takes each request and holds its
+    # response until released.
+    rclpy.init(args=['--ros-args', '-r', '__node:=fr5_moveit_action_bridge',
+                     '-p', 'robot_type:=fr5', '-p', 'ready_query_timeout_sec:=0.6'])
+    release = threading.Event()
+    asked = []
+    bridge = servers = None
+    executors = []
+    threads = []
+    try:
+        servers = rclpy.create_node('fake_readiness_servers')
+        group = ReentrantCallbackGroup()
+
+        def trigger(_request, response):
+            asked.append(time.monotonic())
+            release.wait(timeout=30.0)
+            response.success = True
+            return response
+
+        def controllers(_request, response):
+            response.controller = [
+                ControllerState(name='joint_trajectory_controller', state='active')]
+            return response
+
+        def scene(_request, response):
+            response.scene.world.collision_objects = [CollisionObject(id='floor')]
+            return response
+
+        servers.create_service(Trigger, '/static_scene_ready', trigger, callback_group=group)
+        servers.create_service(
+            ListControllers, '/controller_manager/list_controllers', controllers,
+            callback_group=group)
+        servers.create_service(GetPlanningScene, '/get_planning_scene', scene, callback_group=group)
+        bridge = MODULE.MoveItActionBridge()
+        for node in (servers, bridge):
+            executor = MultiThreadedExecutor(num_threads=6)
+            executor.add_node(node)
+            executors.append(executor)
+            threads.append(threading.Thread(target=executor.spin, daemon=True))
+            threads[-1].start()
+
+        # Asked again and again while nothing is answered, and what it gave up
+        # on does not pile up in the client.
+        assert _wait_until(lambda: len(asked) >= 3, 10.0)
+        assert not bridge._ready
+        assert len(bridge._ready_client._pending_requests) <= 1
+
+        release.set()
+        assert _wait_until(lambda: bridge._ready, 10.0)
+        assert bridge._joint_server is not None
+    finally:
+        release.set()
+        for executor in executors:
+            executor.shutdown(timeout_sec=2.0)
+        for thread in threads:
+            thread.join(timeout=5.0)
+        for node in (bridge, servers):
+            if node is not None:
+                node.destroy_node()
         rclpy.shutdown()
 
 

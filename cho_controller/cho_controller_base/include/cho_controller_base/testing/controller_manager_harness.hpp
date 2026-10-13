@@ -16,8 +16,8 @@
 // mock_components/GenericSystem that a test drives one control period at a
 // time, with an action client node on the same executor. For an adapter test
 // that needs the real lifecycle -- switches, interface claims, a goal sent
-// over ROS -- rather than a hand-called compute(). Nothing in this package
-// includes it; a test that does links controller_manager itself.
+// over ROS -- rather than a hand-called compute(). In this package only its
+// own test includes it; a test that does links controller_manager itself.
 #pragma once
 
 #include <algorithm>
@@ -29,6 +29,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -106,6 +107,9 @@ class ControllerManagerHarness
 public:
   using Strictness = controller_manager_msgs::srv::SwitchController::Request;
   static constexpr double kPeriod = 0.001;
+  // How long a load, configure or switch may take, periods included, before it
+  // is given up as failed (see run_with_periods()).
+  static constexpr std::chrono::seconds kRequestBudget{20};
 
   ControllerManagerHarness(const std::string & urdf, const std::string & ns)
   {
@@ -131,11 +135,15 @@ public:
   ControllerManagerHarness & operator=(const ControllerManagerHarness &) = delete;
 
   // Loads `type` (a pluginlib name) as `name` and sets `parameters` on it.
+  // Before and after cycle(), as configure().
   controller_interface::ControllerInterfaceBaseSharedPtr load(
     const std::string & name, const std::string & type,
     const std::vector<rclcpp::Parameter> & parameters)
   {
-    auto controller = manager_->load_controller(name, type);
+    const auto manager = manager_;
+    auto controller = list_request(
+      [manager, name, type]() {return manager->load_controller(name, type);},
+      controller_interface::ControllerInterfaceBaseSharedPtr());
     if (!controller) {
       return nullptr;
     }
@@ -150,29 +158,29 @@ public:
     return controller;
   }
 
+  // Configures `name`; one that is inactive is cleaned up first, by the
+  // controller_manager. Before the first period it runs on this thread and runs
+  // no period, as it always did. After one it runs periods while it waits, as a
+  // switch does (run_with_periods()): an active controller sees them.
   bool configure(const std::string & name)
   {
-    return manager_->configure_controller(name) == controller_interface::return_type::OK;
+    const auto manager = manager_;
+    return list_request(
+      [manager, name]() {return manager->configure_controller(name);},
+      controller_interface::return_type::ERROR) == controller_interface::return_type::OK;
   }
 
   // Humble performs a switch at the end of update(), so periods have to run
-  // while the request waits. They run here, one at a time, and stop as soon as
-  // the request returns: the next period is the first of the new state, and it
-  // is the test's to run with cycle(). The executor is NOT spun meanwhile, so
-  // no action-server timer runs during a switch.
+  // while the request waits: run_with_periods().
   bool switch_controllers(
     const std::vector<std::string> & activate, const std::vector<std::string> & deactivate)
   {
-    auto request = std::async(std::launch::async, [&]() {
-        return manager_->switch_controller(activate, deactivate, Strictness::STRICT);
-      });
-    for (int i = 0; i < 1000; ++i) {
-      if (request.wait_for(std::chrono::milliseconds(20)) == std::future_status::ready) {
-        break;
-      }
-      step();
-    }
-    return request.get() == controller_interface::return_type::OK;
+    const auto manager = manager_;
+    return run_with_periods(
+      [manager, activate, deactivate]() {
+        return manager->switch_controller(activate, deactivate, Strictness::STRICT);
+      },
+      controller_interface::return_type::ERROR) == controller_interface::return_type::OK;
   }
 
   // `count` control periods; the executor is spun after each, so timers and
@@ -225,12 +233,70 @@ public:
   rclcpp::Time now() const {return rclcpp::Time(clock_ns_, RCL_ROS_TIME);}
 
 private:
+  // A load or configure. Humble's controller_manager ends either by handing
+  // update() a new controller list and waiting until update() has taken it
+  // (switch_updated_list()); until update() has first run there is nothing to
+  // wait for. Here update() runs only in step(), on this thread, so after the
+  // first period a direct call never returns: it goes through
+  // run_with_periods(). Before, it runs here, with no period, as it always did.
+  template<typename Request>
+  std::invoke_result_t<Request &> list_request(
+    Request request, std::invoke_result_t<Request &> failed)
+  {
+    if (!stepped_) {
+      return request();
+    }
+    return run_with_periods(std::move(request), std::move(failed));
+  }
+
+  // `request`, a controller_manager call, on a thread of its own while periods
+  // run here, one at a time, 20 ms apart, and stop as soon as it returns: the
+  // next period is the first of the new state, and it is the test's to run with
+  // cycle(). The executor is NOT spun meanwhile, so no action-server timer runs
+  // during a request. Its exception is rethrown here. One still running after
+  // kRequestBudget returns `failed` and is left running on its own thread (a
+  // std::async future would wait for it on destruction), holding the manager.
+  template<typename Request>
+  std::invoke_result_t<Request &> run_with_periods(
+    Request request, std::invoke_result_t<Request &> failed)
+  {
+    using Result = std::invoke_result_t<Request &>;
+    auto promise = std::make_shared<std::promise<Result>>();
+    auto result = promise->get_future();
+    std::thread(
+      [promise, request = std::make_unique<Request>(std::move(request))]() mutable {
+        // The request, and the manager it holds, goes before the result is
+        // handed over: once the caller has the result this thread owns no
+        // manager, and the harness destroys its manager on its own thread.
+        try {
+          Result value = (*request)();
+          request.reset();
+          promise->set_value(std::move(value));
+        } catch (...) {
+          request.reset();
+          promise->set_exception(std::current_exception());
+        }
+      }).detach();
+    const auto deadline = std::chrono::steady_clock::now() + kRequestBudget;
+    while (result.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        RCLCPP_ERROR(
+          client_node_->get_logger(), "a controller_manager request did not return within %lld s",
+          static_cast<long long>(kRequestBudget.count()));
+        return failed;
+      }
+      step();
+    }
+    return result.get();
+  }
+
   // One period on the harness's own clock, which advances exactly kPeriod per
   // period: the periods run far faster than real time, and a controller that
   // times its trajectory from update()'s `time` would otherwise see almost
   // none of it pass.
   void step()
   {
+    stepped_ = true;
     const auto period = rclcpp::Duration::from_seconds(kPeriod);
     clock_ns_ += period.nanoseconds();
     const rclcpp::Time now(clock_ns_, RCL_ROS_TIME);
@@ -244,6 +310,8 @@ private:
   std::shared_ptr<controller_manager::ControllerManager> manager_;
   rclcpp::Node::SharedPtr client_node_;
   std::int64_t clock_ns_{0};
+  // update() has run: a load or configure now waits for it (list_request()).
+  bool stepped_{false};
 };
 
 inline double max_abs_difference(const std::vector<double> & a, const std::vector<double> & b)

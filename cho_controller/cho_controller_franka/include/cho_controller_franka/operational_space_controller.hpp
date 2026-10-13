@@ -21,6 +21,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include "cho_controller_franka/base_controller.hpp"
+#include "cho_controller_franka/franka_operational_space_controller_parameters.hpp"
 #include "cho_interfaces/action/task_space.hpp"
 #include "cho_controller_franka/servers/task_space_action_server.hpp"
 
@@ -47,6 +48,16 @@ private:
   bool assign_parameters();
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;
+
+  // Declares and range-checks the parameters in
+  // operational_space_controller_parameters.yaml.
+  std::shared_ptr<franka_operational_space_controller::ParamListener> param_listener_;
+
+  // The practical terms of the torque law, from the parameters of the same name
+  // (see the YAML for what each stands in for).
+  double velocity_filter_alpha_{0.99};
+  Vector7d inertia_scale_{Vector7d::Ones()};
+  Vector7d joint_damping_{Vector7d::Zero()};
 };
 
 } // namespace franka

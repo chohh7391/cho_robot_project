@@ -88,8 +88,10 @@ where `q_measured` and `tau_measured` come from the same read, clamped per joint
 `tau_ff_magnitude`. The measured torque is what keeps a gravity-loaded arm up, because the MIT
 equation inside the motor has no gravity model; why it is the measurement and not the producer's
 last `tau_ff` is in [the core's SAFE hold](../cho_hardware/cho_openarm_mit_core/DESIGN.md#safe-hold).
-MuJoCo applies the same rule with the torque its limiter applied in the previous cycle; the test fake
-with its mirrored state.
+MuJoCo applies the same rule, `tau_measured` being the torque its limiter applied in the previous
+cycle, in effect from the latching cycle on so the torque continues across the latch; the test
+fake with its mirrored state. `mit_command_v1.yaml`'s `safe_seed` is this tuple
+(`tau_ff: measured_torque`).
 
 On activation the consumer itself enters SAFE from the state measured by the seed read: the
 measured pose, and the measured torque as `tau_ff` -- about zero on motors enabled just now, the
@@ -233,7 +235,10 @@ limiter does, and the loader rejects a profile that names the other backend's.
 Lease expiry or invalid input transitions to measured-position SAFE, or disables on hardware
 fault. Lease and stale counters advance only on a successful consumer write cycle; slew in the
 MuJoCo limiter is relative to the last command successfully submitted, and a normal SAFE transition
-there uses the same bounded slew. A transport or hardware FAULT disables at once, without a ramp.
+there slews the gains to the safe gains and keeps the final-torque slew, while its `tau_ff`, the
+latched torque, applies in the latching cycle: `q_des` moves to the measured pose at once, taking the
+spring's share with it, so only an immediate `tau_ff` continues the torque across the latch. A
+transport or hardware FAULT disables at once, without a ramp.
 
 ## FollowJointTrajectory compatibility
 

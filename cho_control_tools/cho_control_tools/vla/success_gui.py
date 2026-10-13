@@ -20,6 +20,7 @@ from std_srvs.srv import Trigger
 import tkinter as tk
 import threading
 
+
 class VLASuccessGUI(Node):
     def __init__(self):
         super().__init__('vla_success_gui_node')
@@ -45,12 +46,13 @@ class VLASuccessGUI(Node):
         except Exception as e:
             self.get_logger().error(f"❌ Service call failed: {e}")
 
+
 def run_gui(ros_node):
     """Tkinter GUI 창 생성 및 실행"""
     root = tk.Tk()
     root.title("VLA Controller")
     root.geometry("350x150")  # 창 크기
-    root.attributes('-topmost', True) # 창을 항상 맨 위에 띄우기 (옵션)
+    root.attributes('-topmost', True)  # 창을 항상 맨 위에 띄우기 (옵션)
 
     # 버튼 클릭 이벤트와 ROS 2 함수 연결
     def on_click():
@@ -61,7 +63,7 @@ def run_gui(ros_node):
         root,
         text="🚀 Task Success (Trigger)",
         font=("Arial", 16, "bold"),
-        bg="#4CAF50", # 초록색 계열
+        bg="#4CAF50",  # 초록색 계열
         fg="white",
         activebackground="#45a049",
         command=on_click
@@ -75,6 +77,7 @@ def run_gui(ros_node):
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
+
 
 def main(args=None):
     parser = argparse.ArgumentParser(
@@ -92,6 +95,7 @@ def main(args=None):
 
     # 창이 닫히면 스레드 종료 대기
     spin_thread.join(timeout=1.0)
+
 
 if __name__ == '__main__':
     main()

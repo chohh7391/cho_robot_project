@@ -75,3 +75,15 @@ read as the pose (`observe(position, effort)`), clamped per joint to the hold's
 effort limit (the profile's `tau_ff_magnitude` on the real adapter). A new
 session (`configure()`) is seeded with the torque measured at the seed read.
 The `ArmConsumer` class comment in `mit_protocol.hpp` gives the reasons.
+
+The MuJoCo `Limiter` holds the same tuple, its measured torque being the
+torque it applied in the previous cycle (the simulator's measured joint
+torque), clamped to `tau_ff_magnitude`; `reset()` seeds a new session from
+it the same way. A latch (`request_safe()` or a lease expiry) sets `q_des` to
+the measured pose, which removes the spring's share `kp * (q_des - q)` in that
+cycle, so the latched `tau_ff` applies in that cycle too, past the `tau_ff`
+slew: at rest the output continues from the torque before the latch. The
+gains still slew to the safe gains, and the final torque keeps its saturation
+and slew. `test_mit_limiter` checks the torque across the latch at 1 kHz.
+`mit_command_v1.yaml`'s `safe_seed` (`tau_ff: measured_torque`) names this
+hold for both adapters.

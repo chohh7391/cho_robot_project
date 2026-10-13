@@ -132,6 +132,8 @@ public:
     // update_joint_states() reads by index. Logs what is wrong.
     bool state_interfaces_in_order() const;
     void compute_all_terms();
+    // The payload's gravity torque, fed forward in the "gazebo" branch of
+    // compute_all_terms(); see the definition for the gravity it uses.
     Vector7d compute_hand_gravity();
 
     // EE-frame pose + arm Jacobian (LOCAL) at an arbitrary full configuration q_full,
@@ -219,6 +221,8 @@ protected:
     double mass_;
     std::array<double, 3> center_of_mass_;
     std::array<double, 9> load_inertia_;
+    // "gazebo_payload_gravity" [m/s^2], read in on_configure; compute_hand_gravity().
+    double gazebo_payload_gravity_{1.0};
 
     const Eigen::Matrix<double, 7, 1> torque_limits_ {87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0};
 

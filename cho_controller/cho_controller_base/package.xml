@@ -26,6 +26,11 @@
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_lint_cmake</test_depend>
   <test_depend>ament_cmake_xmllint</test_depend>
+  <!-- test_controller_manager_harness: the harness's controller_manager over
+       mock hardware, driving the stock JointStateBroadcaster. -->
+  <test_depend>controller_manager</test_depend>
+  <test_depend>hardware_interface</test_depend>
+  <test_depend>joint_state_broadcaster</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

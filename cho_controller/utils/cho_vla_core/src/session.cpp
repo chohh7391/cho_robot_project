@@ -79,7 +79,8 @@ const char * end_reason_name(const EndReason reason)
 Session::Session()
 {
   history_ = std::make_unique<ReferenceHistory>(params_.history_capacity);
-  reset();
+  reset_ingest();
+  reset_control();
 }
 
 bool Session::configure(const SessionParams & params)
@@ -89,33 +90,43 @@ bool Session::configure(const SessionParams & params)
     history_ = std::make_unique<ReferenceHistory>(params.history_capacity);
   }
   params_ = params;
-  reset();
+  reset_ingest();
+  reset_control();
   return true;
 }
 
 void Session::activate()
 {
-  reset();
+  reset_control();
 }
 
-void Session::reset()
+void Session::reset_ingest()
 {
+  // Read by begin_goal(), ingest() and refuse() only, none of which the executor
+  // runs during configure(): its timer's calls do not reach these.
   buffer_.set_params(params_.buffer);
   buffer_.reset();
   timeline_.reset(buffer_.timeline());
-  history_->reset();
-  telemetry_ = Telemetry{};
-  anchor_inexact_ = false;
   last_seq_ = 0;
   goal_watchdog_ = params_.watchdog;
+}
 
+void Session::reset_control()
+{
+  // Odd from here to the end. An executor call that overlaps this sees it odd
+  // or, having read a value stored below, sees it moved on its second load
+  // (telemetry()): either way it takes nothing it read as current.
+  activations_.fetch_add(1, std::memory_order_relaxed);
+  std::atomic_thread_fence(std::memory_order_release);
+
+  // The control loop is this ring's only writer; ingest(), its reader, does not
+  // run now (Threads).
+  history_->reset();
+  // Closed without a TerminalEvent; a goal opened before this never starts
+  // (started_through_ below). The events already queued stay for poll_terminal().
   open_goal_.store(0, std::memory_order_release);
-  cancel_goal_.store(0, std::memory_order_relaxed);
-  success_requested_.store(false, std::memory_order_relaxed);
-  accepted_.store(0, std::memory_order_relaxed);
-  pending_gripper_.store(
-    static_cast<std::uint8_t>(GripperCommand::kNone), std::memory_order_relaxed);
-  gripper_refused_.store(false, std::memory_order_relaxed);
+  // The telemetry values only this loop writes while a goal runs (begin_goal()
+  // also clears the first two, with no goal running).
   playback_stamp_.store(0.0, std::memory_order_relaxed);
   remaining_horizon_.store(0.0, std::memory_order_relaxed);
   stream_state_.store(
@@ -127,7 +138,6 @@ void Session::reset()
   watchdog_.reset(0.0);
   gripper_dispatch_.reset();
   running_goal_ = 0;
-  // A goal opened before this never starts.
   started_through_ = newest_goal_.load(std::memory_order_acquire);
   goal_start_ = 0.0;
   previous_time_ = std::numeric_limits<double>::quiet_NaN();
@@ -135,14 +145,36 @@ void Session::reset()
   limiter_seeded_ = false;
   rest_seed_pending_ = false;
   limiter_space_ = ActionSpace::kTask;
+
+  // Even again: an executor call that loads this sees everything above.
+  activations_.fetch_add(1, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
 // Executor
 // ---------------------------------------------------------------------------
 
+void Session::catch_up()
+{
+  const std::uint64_t activations = activations_.load(std::memory_order_acquire);
+  if (activations == caught_up_) {return;}
+  // An odd value (an activation still running) clears now and again once it is
+  // even. Nothing of the new activation's is lost by that: what is cleared here
+  // is written for an open goal, and a goal opens only through begin_goal(),
+  // which does not overlap an activation and catches up first.
+  caught_up_ = activations;
+  telemetry_ = Telemetry{};
+  anchor_inexact_ = false;
+  // A gripper edge still here is from before the activation: dropped, not sent.
+  // A refusal likewise.
+  pending_gripper_.store(
+    static_cast<std::uint8_t>(GripperCommand::kNone), std::memory_order_relaxed);
+  gripper_refused_.store(false, std::memory_order_relaxed);
+}
+
 GoalId Session::begin_goal(const double stream_timeout)
 {
+  catch_up();
   if (goal_open()) {return 0;}
   const GoalId goal = newest_goal_.load(std::memory_order_relaxed) + 1;
 
@@ -192,11 +224,13 @@ GoalId Session::newest_goal() const
 
 void Session::request_cancel(const GoalId goal)
 {
+  catch_up();
   if (goal != 0) {cancel_goal_.store(goal, std::memory_order_release);}
 }
 
 bool Session::request_success()
 {
+  catch_up();
   if (!goal_open()) {
     success_requested_.store(false, std::memory_order_release);
     return false;
@@ -207,6 +241,7 @@ bool Session::request_success()
 
 IngestReport Session::ingest(Chunk chunk, const double arrival)
 {
+  catch_up();
   IngestReport report;
   if (!goal_open()) {return report;}
   report.outcome = IngestOutcome::kRejected;
@@ -298,6 +333,7 @@ IngestReport Session::ingest(Chunk chunk, const double arrival)
 
 bool Session::refuse(const Reject reason)
 {
+  catch_up();
   if (!goal_open()) {return false;}
   ++telemetry_.chunks_rejected;
   telemetry_.last_reject = reason;
@@ -306,6 +342,12 @@ bool Session::refuse(const Reject reason)
 
 TelemetrySnapshot Session::telemetry() const
 {
+  // A seqlock read against reset_control(): the activation count before and
+  // after, and the snapshot only if both are the even value catch_up() cleared
+  // at. Otherwise an activation is unseen or running, and what it leaves is the
+  // default snapshot: no goal, nothing counted (catch_up() leaves the
+  // executor's fields so, reset_control() the control loop's).
+  const std::uint64_t before = activations_.load(std::memory_order_acquire);
   TelemetrySnapshot snapshot;
   static_cast<Telemetry &>(snapshot) = telemetry_;
   snapshot.playback_stamp = playback_stamp_.load(std::memory_order_relaxed);
@@ -315,22 +357,30 @@ TelemetrySnapshot Session::telemetry() const
   snapshot.action_space =
     static_cast<ActionSpace>(action_space_.load(std::memory_order_relaxed));
   snapshot.anchor_inexact = anchor_inexact_;
+  std::atomic_thread_fence(std::memory_order_acquire);
+  const std::uint64_t after = activations_.load(std::memory_order_relaxed);
+  if (before != caught_up_ || after != before || (before & 1u) != 0u) {
+    return TelemetrySnapshot{};
+  }
   return snapshot;
 }
 
 bool Session::poll_terminal(TerminalEvent & event)
 {
+  catch_up();
   return terminals_.pop(event);
 }
 
 GripperCommand Session::take_gripper()
 {
+  catch_up();
   return static_cast<GripperCommand>(pending_gripper_.exchange(
            static_cast<std::uint8_t>(GripperCommand::kNone), std::memory_order_acq_rel));
 }
 
 void Session::gripper_refused()
 {
+  catch_up();
   gripper_refused_.store(true, std::memory_order_release);
 }
 

@@ -22,9 +22,11 @@ namespace cho_openarm_mit_core
 // The MuJoCo backend's per-arm consumer (cho_hardware_openarm_mit_mujoco). It
 // shapes a commit: targets, gains and tau_ff are clamped to the profile and
 // slewed, then the MIT equation is evaluated and the final torque saturated
-// and slewed. The real adapter validates and rejects instead (ArmConsumer);
-// test_limiter_vs_consumer measures the difference. Only a MUJOCO profile, at
-// its own update rate, is accepted.
+// and slewed. A SAFE hold's latched tau_ff is the exception: it applies in the
+// latching cycle, so the output continues from the torque before the latch
+// (see request_safe()). The real adapter validates and rejects instead
+// (ArmConsumer); test_limiter_vs_consumer measures the difference. Only a
+// MUJOCO profile, at its own update rate, is accepted.
 class Limiter
 {
 public:
@@ -54,7 +56,11 @@ public:
     last_tau_.fill(0);  // a faulted limiter commands nothing
   }
   // The next update() latches the hold: the measured position, and the torque
-  // applied in the previous cycle as tau_ff (see reset()).
+  // applied in the previous cycle as tau_ff (see reset()), applied in that
+  // cycle rather than slewed to from the last accepted tau_ff. q_des moves to
+  // the measured pose at once, taking the spring's share kp * (q_des - q) with
+  // it, so only an immediate tau_ff keeps the output at the torque it had. A
+  // lease expiry latches the same way.
   void request_safe()
   {
     safe_ = true;

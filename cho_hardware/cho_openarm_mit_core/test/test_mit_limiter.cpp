@@ -125,7 +125,9 @@ TEST(MitLimiter, SafeHoldKeepsTheTorqueAppliedNotTheLastAcceptedFeedforward)
   // The producer held the arm with a spring as well as tau_ff: 2 N m/rad over
   // 0.5 rad plus 1 N m. The MIT motor has no gravity model, and the safe gains
   // are not that spring, so the hold must keep the 2 N m actually applied --
-  // keeping the 1 N m tau_ff alone dropped the spring's share.
+  // keeping the 1 N m tau_ff alone dropped the spring's share. (dt = 1 s lets
+  // every slew finish in one cycle; the torque across the latch at the control
+  // rate is the next two tests.)
   Limiter l(profile(), 1000);
   std::array<double, N> q{}, dq{};
   l.reset(q);
@@ -141,6 +143,67 @@ TEST(MitLimiter, SafeHoldKeepsTheTorqueAppliedNotTheLastAcceptedFeedforward)
     EXPECT_NEAR(tau[i], 2.0, 1e-12) << i;
     EXPECT_NEAR(l.held_effort(i), 2.0, 1e-12) << i;
   }
+}
+namespace
+{
+// At the profile's 1 kHz, a producer holds the arm mostly with its spring,
+// 0.05 rad at kp_max plus 0.5 N m of tau_ff, then the hold latches: through
+// request_safe() if `explicit_safe`, else when the lease runs out. With q_des
+// at the measured pose the spring's share is gone in the latching cycle; the
+// latched tau_ff must take it over in that same cycle. It used to slew up
+// from the commit's 0.5 N m at tau_ff_slew_per_s while the output fell toward
+// 0.5 N m at final_slew_per_s, for 24-83 ms in MuJoCo.
+void expect_the_latch_continues_the_torque(bool explicit_safe)
+{
+  const auto p = profile();
+  constexpr double kDt = 0.001;
+  constexpr double kError = 0.05;  // rad, q_des - q
+  constexpr double kFeedForward = 0.5;
+  constexpr std::uint64_t kLease = 20;
+  Limiter l(p, 1000);
+  std::array<double, N> q{}, dq{};
+  l.reset(q);
+  std::array<Tuple, N> c{};
+  for (std::size_t i = 0; i < N; ++i) c[i] = {kError, 0, p.kp_max[i], 0, kFeedForward};
+  // One second, past every slew, refreshed well inside the lease.
+  std::array<double, N> before{};
+  std::uint64_t generation = 0;
+  for (int cycle = 0; cycle < 1000; ++cycle) {
+    if (cycle % 10 == 0) {
+      ASSERT_TRUE(l.submit(c, ++generation, kLease));
+    }
+    before = l.update(q, dq, kDt);
+  }
+  ASSERT_FALSE(l.safe());
+  for (std::size_t i = 0; i < N; ++i) {
+    const double spring = p.kp_max[i] * kError;
+    ASSERT_NEAR(before[i], spring + kFeedForward, 1e-9) << i;
+    // The share a slewed tau_ff had to recover: many cycles of its slew.
+    ASSERT_GT(spring, 10 * p.tau_ff_slew[i] * kDt) << i;
+  }
+  // No more commits. The cycles the lease has left (the last submit was 10
+  // cycles ago), the latching cycle, and the SAFE cycles after it for longer
+  // than the drop lasted.
+  if (explicit_safe) l.request_safe();
+  std::size_t safe_cycles = 0;
+  for (int cycle = 0; cycle < 200; ++cycle) {
+    const auto tau = l.update(q, dq, kDt);
+    if (l.safe()) ++safe_cycles;
+    for (std::size_t i = 0; i < N; ++i)
+      EXPECT_NEAR(tau[i], before[i], 1e-9)
+        << "joint " << i << ", cycle " << cycle << (l.safe() ? " (SAFE)" : " (ACTIVE)");
+  }
+  EXPECT_EQ(safe_cycles, explicit_safe ? 200u : 200u - (kLease - 10) + 1);
+  for (std::size_t i = 0; i < N; ++i) EXPECT_NEAR(l.held_effort(i), before[i], 1e-9) << i;
+}
+}  // namespace
+TEST(MitLimiter, ALeaseExpiryAtTheControlRateContinuesTheTorqueApplied)
+{
+  expect_the_latch_continues_the_torque(false);
+}
+TEST(MitLimiter, AnExplicitSafeAtTheControlRateContinuesTheTorqueApplied)
+{
+  expect_the_latch_continues_the_torque(true);
 }
 TEST(MitLimiter, AResetOfAHoldingLimiterKeepsItsTorqueAndAFaultedOneHasNone)
 {

@@ -174,7 +174,8 @@ class VLAActionTester(Node):
         self.timer = self.create_timer(self.inference_dt, self.publish_action_chunk)
 
     def publish_action_chunk(self):
-        if not self.goal_accepted: return
+        if not self.goal_accepted:
+            return
 
         msg = ActionChunk()
         msg.header = Header(stamp=self.get_clock().now().to_msg(), frame_id="base_link")
@@ -233,11 +234,11 @@ class VLAActionTester(Node):
             elif self.test_rotation_type == "rotation6d":
                 # Scipy를 이용해 회전 행렬을 만든 뒤 v1, v2 추출
                 rot_mat = R.from_euler('x', 180, degrees=True).as_matrix() if not self.is_relative else np.eye(3)
-                v1 = rot_mat[:, 0] # 첫 번째 컬럼
-                v2 = rot_mat[:, 1] # 두 번째 컬럼
+                v1 = rot_mat[:, 0]  # 첫 번째 컬럼
+                v2 = rot_mat[:, 1]  # 두 번째 컬럼
                 arm_actions.extend(v1.tolist() + v2.tolist())
 
-            gripper_actions.append(-1.0) # Open
+            gripper_actions.append(-1.0)  # Open
 
         msg.arm_actions = arm_actions
         msg.gripper_actions = gripper_actions
@@ -245,6 +246,7 @@ class VLAActionTester(Node):
         self.publisher_.publish(msg)
         self.get_logger().info(f'Published {self.test_rotation_type} chunk {self.count}')
         self.count += 1
+
 
 def build_parser():
     parser = argparse.ArgumentParser(

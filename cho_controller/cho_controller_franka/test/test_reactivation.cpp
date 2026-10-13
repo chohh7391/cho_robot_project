@@ -27,6 +27,7 @@
 // and from hand arithmetic, not from the controller.
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -60,6 +61,16 @@
 #include "cho_interfaces/action/vision_language_action.hpp"
 #include "cho_interfaces/msg/action_chunk.hpp"
 #include "cho_interfaces/msg/vla_telemetry.hpp"
+
+// The relay generation test needs stand-in franka_gripper servers, so
+// franka_msgs among this test's dependencies; without it the test is skipped.
+#if __has_include("franka_msgs/action/grasp.hpp")
+#include "franka_msgs/action/grasp.hpp"
+#include "franka_msgs/action/move.hpp"
+#define CHO_TEST_FRANKA_GRIPPER 1
+#else
+#define CHO_TEST_FRANKA_GRIPPER 0
+#endif
 
 namespace
 {
@@ -259,10 +270,13 @@ TEST(Fr3Kinematics, KHomeIsTheReadyPose)
 }
 
 // Every log record at WARN or above, whatever logger wrote it, so a test can
-// ask whether the VLA host warned about a field.
+// ask whether the VLA host warned about a field. INFO too while record_info()
+// is set (the gripper relay tests ask what its callbacks logged).
 class LogCapture
 {
 public:
+  static void record_info(const bool on) {info().store(on);}
+
   static void install()
   {
     std::lock_guard<std::mutex> lock(mutex());
@@ -303,7 +317,8 @@ private:
     const rcutils_log_location_t * location, int severity, const char * name,
     rcutils_time_point_value_t timestamp, const char * format, va_list * args)
   {
-    if (severity >= RCUTILS_LOG_SEVERITY_WARN && format != nullptr) {
+    const int floor = info().load() ? RCUTILS_LOG_SEVERITY_INFO : RCUTILS_LOG_SEVERITY_WARN;
+    if (severity >= floor && format != nullptr) {
       va_list copy;
       va_copy(copy, *args);
       char buffer[4096];
@@ -317,6 +332,7 @@ private:
 
   static std::mutex & mutex() {static std::mutex m; return m;}
   static bool & installed() {static bool value = false; return value;}
+  static std::atomic<bool> & info() {static std::atomic<bool> value{false}; return value;}
   static rcutils_logging_output_handler_t & previous()
   {
     static rcutils_logging_output_handler_t handler = nullptr;
@@ -1949,6 +1965,220 @@ TEST_F(Gripper, AReactivationEndsTheGoalInFlight)
   ASSERT_TRUE(run_until(next_result)) << "the next goal never ended";
   EXPECT_EQ(next_result.get().result->message, "franka_gripper reported that the command failed");
 }
+
+// A configure after control periods (the harness runs it on a thread of its own
+// once update() has run) gives the controller a new franka_gripper relay: the
+// command the last configure's relay staged and never dispatched answers
+// nothing, and the next goal ends with its own command's outcome.
+TEST_F(Gripper, AReconfigureAfterACycleStartsAFreshGeneration)
+{
+  auto handle = send();
+  ASSERT_NE(handle, nullptr) << "goal rejected";
+  // One period stages the command; the executor does not run, so it is never
+  // dispatched.
+  harness_->cycle(1, /*spin=*/false);
+  auto result = client_->async_get_result(handle);
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  ASSERT_TRUE(harness_->spin_until(result)) << "the finisher did not end the goal while inactive";
+  EXPECT_EQ(result.get().result->message, cho_controller_base::kReasonDeactivated);
+
+  ASSERT_TRUE(harness_->configure(kName)) << "the re-configure after a period failed";
+  ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+  // The re-configure replaced the ~/gripper server too.
+  ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  for (int i = 0; i < 50; ++i) {
+    harness_->cycle(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  auto next = send();
+  ASSERT_NE(next, nullptr) << "the first goal after the re-configure was rejected";
+  auto next_result = client_->async_get_result(next);
+  ASSERT_TRUE(run_until(next_result)) << "the first goal after the re-configure never ended";
+  const auto wrapped = next_result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  EXPECT_EQ(wrapped.result->message, "franka_gripper reported that the command failed");
+}
+
+#if CHO_TEST_FRANKA_GRIPPER
+// The relay against stand-in franka_gripper move and grasp servers, served on
+// the harness's client node. A re-configure replaces the relay, and with it the
+// franka_gripper clients, while the executor still holds the old ones: in
+// Humble a spin runs what one wait found ready, so a client the re-configure
+// dropped still runs its callbacks later in the same spin. Here the old grasp
+// client's feedback (width 0.0123) and result are both waiting when a timer
+// earlier in that spin re-configures. They must do nothing: the old relay is
+// gone, and nothing of theirs reaches the new one. Before the relay those
+// callbacks held the controller (`this`): they stored the width into it and
+// logged the result, and after an unload they ran on a freed controller.
+class GripperGenerations : public ::testing::Test
+{
+protected:
+  using Move = franka_msgs::action::Move;
+  using Grasp = franka_msgs::action::Grasp;
+
+  void SetUp() override
+  {
+    LogCapture::install();
+    LogCapture::record_info(true);
+    LogCapture::clear();
+    harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_gripper_generations");
+    const auto node = harness_->client_node();
+    move_server_ = rclcpp_action::create_server<Move>(
+      node, "/franka_gripper/move",
+      [](const rclcpp_action::GoalUUID &, std::shared_ptr<const Move::Goal>) {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [](std::shared_ptr<rclcpp_action::ServerGoalHandle<Move>>) {return rclcpp_action::CancelResponse::ACCEPT;},
+      [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<Move>> goal) {moves_.push_back(goal);});
+    grasp_server_ = rclcpp_action::create_server<Grasp>(
+      node, "/franka_gripper/grasp",
+      [](const rclcpp_action::GoalUUID &, std::shared_ptr<const Grasp::Goal>) {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [](std::shared_ptr<rclcpp_action::ServerGoalHandle<Grasp>>) {return rclcpp_action::CancelResponse::ACCEPT;},
+      [this](std::shared_ptr<rclcpp_action::ServerGoalHandle<Grasp>> goal) {grasps_.push_back(goal);});
+    ASSERT_NE(harness_->load(kName, "cho_controller_franka/GripperController", {
+        rclcpp::Parameter("robot_type", "fr3"),
+        rclcpp::Parameter("auto_home", false),
+        rclcpp::Parameter("report_failure", true),
+        rclcpp::Parameter("result_timeout", 5.0)}), nullptr);
+    ASSERT_TRUE(harness_->configure(kName));
+    ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+    client_ = rclcpp_action::create_client<GripperAction>(
+      node, std::string("/franka_gripper_generations/") + kName + "/gripper");
+    ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  }
+
+  void TearDown() override {LogCapture::record_info(false);}
+
+  // Periods, with the executor spun and a little wall time for the dispatch
+  // timer and the transport, until `done` or the budget runs out.
+  bool cycle_until(const std::function<bool()> & done, const int periods = 3000)
+  {
+    for (int i = 0; i < periods; ++i) {
+      if (done()) {
+        return true;
+      }
+      harness_->cycle(1);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return done();
+  }
+
+  // `count` periods as cycle_until() runs them: requests and answers already
+  // on their way arrive and are handled.
+  void settle(const int count)
+  {
+    for (int i = 0; i < count; ++i) {
+      harness_->cycle(1);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
+  rclcpp_action::ClientGoalHandle<GripperAction>::SharedPtr send_grasp()
+  {
+    GripperAction::Goal goal;
+    goal.grasp = true;
+    auto future = client_->async_send_goal(goal);
+    return harness_->spin_until(future) ? future.get() : nullptr;
+  }
+
+  // Completes the initial open an activation sends, the `count`-th Move goal.
+  void answer_initial_open(const std::size_t count)
+  {
+    ASSERT_TRUE(cycle_until([&]() {return moves_.size() >= count;})) << "the activation sent no initial open";
+    auto result = std::make_shared<Move::Result>();
+    result->success = true;
+    moves_.back()->succeed(result);
+  }
+
+  static constexpr const char * kName = "gripper_controller";
+  std::unique_ptr<ControllerManagerHarness> harness_;
+  rclcpp_action::Server<Move>::SharedPtr move_server_;
+  rclcpp_action::Server<Grasp>::SharedPtr grasp_server_;
+  std::vector<std::shared_ptr<rclcpp_action::ServerGoalHandle<Move>>> moves_;
+  std::vector<std::shared_ptr<rclcpp_action::ServerGoalHandle<Grasp>>> grasps_;
+  rclcpp_action::Client<GripperAction>::SharedPtr client_;
+};
+
+TEST_F(GripperGenerations, AC10_TheOldRelaysCallbacksDoNothingAfterAReconfigure)
+{
+  answer_initial_open(1);
+  // A grasp the first relay sends; its goal response and result request go
+  // through before the controller is let go.
+  auto handle = send_grasp();
+  ASSERT_NE(handle, nullptr) << "goal rejected";
+  ASSERT_TRUE(cycle_until([&]() {return grasps_.size() == 1;})) << "the grasp was not dispatched";
+  settle(200);
+  auto ended = client_->async_get_result(handle);
+  ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
+  ASSERT_TRUE(harness_->spin_until(ended)) << "the finisher did not end the goal while inactive";
+
+  // The old grasp's feedback and result, queued for the first relay's client
+  // and not yet taken.
+  auto feedback = std::make_shared<Grasp::Feedback>();
+  feedback->current_width = 0.0123;
+  grasps_[0]->publish_feedback(feedback);
+  auto success = std::make_shared<Grasp::Result>();
+  success->success = true;
+  grasps_[0]->succeed(success);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  // The re-configure runs from a timer that the same spin then runs the old
+  // client after.
+  LogCapture::clear();
+  std::promise<bool> configured;
+  auto reconfigured = configured.get_future();
+  bool fired = false;
+  rclcpp::TimerBase::SharedPtr timer;
+  timer = harness_->client_node()->create_wall_timer(std::chrono::milliseconds(1), [&]() {
+      timer->cancel();
+      if (!fired) {
+        fired = true;
+        configured.set_value(harness_->configure(kName));
+      }
+    });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ASSERT_TRUE(harness_->spin_until(reconfigured));
+  ASSERT_TRUE(reconfigured.get()) << "the re-configure failed";
+  settle(50);
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_INFO, "Grasp Goal current_width"), 0u)
+    << "the old grasp client's feedback reached a relay after the re-configure";
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_INFO, "Grasp Goal result"), 0u)
+    << "the old grasp client's result reached a relay after the re-configure";
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_INFO, "franka_gripper outcome"), 0u)
+    << "the old grasp's outcome was handed on after the re-configure";
+
+  // The new relay: its own initial open, then a grasp whose feedback and
+  // result it does take, and the goal ends with that result.
+  ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
+  ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
+  answer_initial_open(2);
+  settle(50);
+  auto next = send_grasp();
+  ASSERT_NE(next, nullptr) << "the first goal after the re-configure was rejected";
+  ASSERT_TRUE(cycle_until([&]() {return grasps_.size() == 2;})) << "the new relay did not dispatch the grasp";
+  settle(200);
+  feedback->current_width = 0.0456;
+  grasps_[1]->publish_feedback(feedback);
+  grasps_[1]->succeed(success);
+  auto next_result = client_->async_get_result(next);
+  ASSERT_TRUE(cycle_until(
+      [&]() {return next_result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;}, 4000))
+    << "the first goal after the re-configure never ended";
+  const auto wrapped = next_result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::SUCCEEDED) << wrapped.result->message;
+  // The capture does see the relay's callbacks: the new client's feedback.
+  EXPECT_GE(LogCapture::count(RCUTILS_LOG_SEVERITY_INFO, "Grasp Goal current_width: 0.045600"), 1u);
+  EXPECT_EQ(LogCapture::count(RCUTILS_LOG_SEVERITY_INFO, "Grasp Goal current_width: 0.012300"), 0u);
+}
+#else
+TEST(GripperGenerations, AC10_TheOldRelaysCallbacksDoNothingAfterAReconfigure)
+{
+  GTEST_SKIP() << "needs franka_msgs among test_reactivation's dependencies (stand-in franka_gripper servers)";
+}
+#endif
 
 }  // namespace
 

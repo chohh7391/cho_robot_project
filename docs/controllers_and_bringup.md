@@ -35,7 +35,7 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 | Argument | Applies to | Meaning |
 | --- | --- | --- |
 | `controller_name` | all robots | Which arm controller to activate. Must name an instance the backend's `controllers.yaml` declares. |
-| `control_mode` | Franka, OpenArm | `position` / `velocity` / `torque`. The description exports **one** command interface per joint, so a controller from the wrong mode fails on a missing interface. Every controller is also told the mode (Franka's `vla_controller` runs the law of that mode). |
+| `control_mode` | Franka, OpenArm | `position` / `velocity` / `torque`; the Franka Gazebo bringup takes only `position` and `torque` (the vendor plugin applies no velocity command). The description exports **one** command interface per joint, so a controller from the wrong mode fails on a missing interface. Every controller is also told the mode (Franka's `vla_controller` runs the law of that mode). |
 | `bimanual` | OpenArm | `true` selects the two-arm torso description and the `_bimanual` config. Controller instance names then carry a `left_` / `right_` prefix. |
 | `hand` | OpenArm MuJoCo, real | Spawns the gripper controller separately, so a hand fault cannot take an arm down. On the real bringup the adapter then also drives an eighth Damiao motor on the arm's CAN socket. |
 | `vla` | Franka | Activates the VLA controller path. |
@@ -54,11 +54,11 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 ### Franka FR3 — `cho_controller_franka`
 
 Thirteen plugins (`cho_controller_franka.xml`), not all on every backend.
-Gazebo omits the two velocity-interface ones.
+Gazebo omits the two velocity-interface ones and refuses `control_mode:=velocity`.
 
 | Instance | Plugin | What it does | MuJoCo | Gazebo | Isaac | Real |
 | --- | --- | --- | --- | --- | --- | --- |
-| `task_space_qp_controller` | `TaskSpaceQPController` | Task-space QP (SE3 task over a posture task) | ✓ | ✓ | ✓ | ✓ |
+| `task_space_qp_controller` | `TaskSpaceQPController` | Task-space QP: joint-acceleration bounds, the SE3 task as a damped cost, null-space posture | ✓ | ✓ | ✓ | ✓ |
 | `joint_space_qp_controller` | `JointSpaceQPController` | Joint-level QP | ✓ | ✓ | ✓ | ✓ |
 | `operational_space_controller` | `OperationalSpaceController` | Operational-space control | ✓ | ✓ | ✓ | ✓ |
 | `task_space_impedance_controller` | `TaskSpaceImpedanceController` | Cartesian impedance | ✓ | ✓ | ✓ | ✓ |
@@ -87,7 +87,9 @@ The simulation configs also load the stock `simulation_gripper_controller`
 
 The real config additionally loads the full `ur_controllers` stack (scaled JTC,
 force mode, freedrive, passthrough trajectory, tool contact, TCP pose
-broadcaster). Those are vendor controllers, not project ones.
+broadcaster). Those are vendor controllers, not project ones. The driver launch
+takes the real controller_manager's rate from `config/ur5e_update_rate.yaml`
+(500 Hz, equal to `real/controllers.yaml`'s `update_rate`).
 
 ### FAIRINO FR5 — `cho_controller_fr5`
 

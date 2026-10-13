@@ -166,7 +166,11 @@ it against, a non-positive duration or one over an hour, any goal while
 another is active or before its scene/controller readiness gate is open, and
 any goal while nothing subscribes to move_group's
 `trajectory_execution_event` topic (below), because then a cancel could not
-stop it. `world_frame` is in TF on every bringup that starts the bridge
+stop it. The readiness gate is a query (the static-scene Trigger, the controller
+manager's `list_controllers`, the planning scene) repeated every 0.5 s; a request
+unanswered for `ready_query_timeout_sec` (3 s) is dropped and the query starts
+over, so goals are accepted again once the servers answer after a lost response
+or a restart. `world_frame` is in TF on every bringup that starts the bridge
 (`cho_moveit/README.md`).
 
 **Cancel.** Humble's move_group (MoveIt 2.5.x) accepts a cancel of

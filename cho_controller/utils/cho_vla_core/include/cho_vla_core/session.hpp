@@ -219,9 +219,17 @@ struct TelemetrySnapshot : Telemetry
 // control cycle, the goal's lifetime, and its telemetry. No ROS, no clock: every
 // time is a double on the host's control clock, passed in.
 //
-// Threads. Each group below is called from one thread only:
-//   lifecycle  configure(), activate(): while step() is not running and no goal
-//              is open, with no executor call concurrent.
+// Threads. Each group below is called from one thread at a time:
+//   lifecycle  configure(), activate(): while step() is not running, and while
+//              begin_goal(), ingest() and refuse() cannot run (the host's own
+//              activity gate). The executor's other calls may overlap them:
+//              both hosts poll telemetry(), take_gripper() and poll_terminal()
+//              from a timer that runs whether the controller is active or not.
+//              These two write only the control loop's state, the values it
+//              publishes, the open goal and the anchor history. The executor's
+//              part (its telemetry counters, anchor_inexact, the gripper edge
+//              and refusal) it clears itself, on its first call after it sees
+//              the activation; telemetry() reports it cleared until then.
 //   executor   begin_goal() ... gripper_refused(): one thread, e.g. a node's
 //              default callback group. May allocate.
 //   control    record(), step(), invalidate_rate_state(), end_goal(): the
@@ -242,11 +250,16 @@ public:
 
   // ---- lifecycle ---------------------------------------------------------
   // False, and nothing changed, when validate() refuses `params`. Otherwise
-  // takes them and resets as activate() does.
+  // takes them, empties the timeline and the seq order, and resets as
+  // activate() does.
   bool configure(const SessionParams & params);
   const SessionParams & params() const {return params_;}
-  // Clears the anchor history, the timeline, the telemetry, the seq order, the
-  // gripper state and any open goal, which then never starts. Pending
+  // Closes any open goal, which then never starts, and clears the anchor
+  // history and the gripper state. From the executor's next call on (the
+  // executor clears its part itself, see Threads), the telemetry reads as
+  // cleared, including a telemetry() that overlaps this call, and take_gripper()
+  // returns no edge from before it. The timeline and the seq order of a closed
+  // goal are not read again: the next begin_goal() clears them. Pending
   // TerminalEvents are kept for poll_terminal().
   void activate();
 
@@ -285,6 +298,8 @@ public:
   // its own law cannot drive): with a goal open, chunks_rejected + 1 and
   // last_reject = `reason`, true. Without, nothing, false.
   bool refuse(Reject reason);
+  // A default TelemetrySnapshot, what an activation leaves, while the executor
+  // has not caught up with the latest one or one runs during the read.
   TelemetrySnapshot telemetry() const;
   // Oldest goal end not yet taken. A host that ends its goals from step()'s
   // output need not call it.
@@ -326,8 +341,16 @@ public:
   GoalId end_goal(Terminal terminal, std::uint8_t host_code);
 
 private:
-  // configure() and activate().
-  void reset();
+  // configure(): the executor's state that only begin_goal(), ingest() and
+  // refuse() touch, which configure() runs without (Threads).
+  void reset_ingest();
+  // configure() and activate(), on their own thread: the control loop's state,
+  // the values it publishes, the open goal and the anchor history, between the
+  // two increments of activations_.
+  void reset_control();
+  // Executor, first in each of its non-const calls: after an activation it has
+  // not seen yet, clears what the executor writes and telemetry() reports.
+  void catch_up();
   // Control loop: reports `goal`'s end and closes it.
   void close(GoalId goal, Terminal terminal, EndReason reason, std::uint8_t host_code);
   // Control loop: closes the running goal and fills `out` as kEnded.
@@ -374,6 +397,18 @@ private:
   bool limiter_seeded_ {false};
   bool rest_seed_pending_ {false};
   ActionSpace limiter_space_ {ActionSpace::kTask};
+
+  // ---- activation --------------------------------------------------------
+  // Last, so every member above keeps its offset from before these two: a host
+  // built against this header but run on an older libcho_vla_core destroys
+  // (the implicit, inline ~Session()) the members that library constructed,
+  // where it constructed them.
+  // Shared. Two per configure() or activate(), one before and one after
+  // reset_control(): odd while it runs. An executor call that loads a value it
+  // has not cleared at knows the executor's state is from before it.
+  std::atomic<std::uint64_t> activations_ {0};
+  // Executor: the activations_ value catch_up() last cleared at.
+  std::uint64_t caught_up_ {0};
 };
 
 }  // namespace cho_vla_core

@@ -124,6 +124,11 @@ struct VlaControllerTestAccess
   {
     return controller.session_.telemetry().chunks_rejected;
   }
+  // Node clock minus action clock [s], as the control thread last refreshed it.
+  static double action_time_offset(const VlaController & controller)
+  {
+    return controller.action_time_offset_.load(std::memory_order_acquire);
+  }
   static double reference_offset_limit(const VlaController & controller, std::size_t joint)
   {
     return controller.reference_offset_limit_[joint];
@@ -2984,10 +2989,20 @@ TEST_F(ObservationFixture, AC6_TheObservationStampComesBackAsSent)
 
   const auto message = stamped(long_chunk(), 0.3);
   const double stamp = rclcpp::Time(message.header.stamp).seconds();
+  const double offset_before = Access::action_time_offset(*controller);
   publish(message, 40);
   ASSERT_TRUE(wait_telemetry([](const auto & t) {return t.chunks_accepted >= 1;}));
   const auto t = telemetry();
-  EXPECT_NEAR(t.last_chunk_stamp, stamp, 2e-3);
+  const double offset_after = Access::action_time_offset(*controller);
+  // The stamp goes to the action clock at ingest and back at publish, each through
+  // the offset of the last cycle. This worker advances the action clock 1 ms per
+  // cycle but sleeps at least 1 ms of node time, so the offset only grows, by a
+  // load-dependent amount: the stamp returns late by at most that growth over
+  // the test (offset_after - offset_before), never early. An arrival stamp
+  // would be 0.3 s off. 1e-5 s is double rounding at ~1.7e9 s.
+  const double returned_late = t.last_chunk_stamp - stamp;
+  EXPECT_GE(returned_late, -1e-5);
+  EXPECT_LE(returned_late, offset_after - offset_before + 1e-5);
   EXPECT_NEAR(t.last_chunk_latency, 0.3, 0.1);
 }
 

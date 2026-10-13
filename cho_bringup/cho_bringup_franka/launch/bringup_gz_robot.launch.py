@@ -70,19 +70,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'control_mode',
             default_value='torque',
-            # NOTE: 'velocity' is accepted (vla_controller supports it and the URDF already
-            # declares the command_interface -- verified working via MuJoCo and, at the code
-            # level, on real hardware) but does NOT currently work in Gazebo: velocity
-            # commands are computed correctly (confirmed via debug logging) but are not
-            # applied by the physics engine -- the arm free-drifts under gravity for ~2s
-            # after activation and then stops responding to any further velocity command.
-            # Root cause traced to extern/franka_ros2/franka_gazebo/franka_ign_ros2_control
-            # (vendored, not to be edited here) rather than to this project's own code.
-            # Do not use control_mode:=velocity with Gazebo until that plugin is fixed/
-            # replaced; use MuJoCo or real hardware instead.
-            description=('Choose control mode: position, torque '
-                         '(velocity is NOT functional in Gazebo -- see NOTE above)'),
-            choices=['position', 'velocity', 'torque']
+            # No 'velocity': the vendor franka_ign_ros2_control plugin (extern/, not edited here)
+            # does not apply velocity commands, so the arm free-drifts under gravity. Use MuJoCo
+            # or the real robot for the velocity controllers.
+            description='Choose control mode: position, torque (the Gazebo plugin applies no velocity command)',
+            choices=['position', 'torque']
         ),
         DeclareLaunchArgument(
             'controller_name',

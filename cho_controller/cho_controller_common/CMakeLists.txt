@@ -61,6 +61,7 @@ add_library(${PROJECT_NAME} SHARED
   src/solver/solver_HQP_factory.cpp
   src/tasks/task_base.cpp
   src/tasks/task_contact_force.cpp
+  src/tasks/task_joint_bounds.cpp
   src/tasks/task_joint_posture.cpp
   src/tasks/task_motion.cpp
   src/tasks/task_se3_equality.cpp
@@ -145,6 +146,9 @@ if(BUILD_TESTING)
   # The control-thread half of a goal does not allocate (malloc interposed).
   ament_add_gtest(test_trajectory_no_alloc test/test_trajectory_no_alloc.cpp)
   target_link_libraries(test_trajectory_no_alloc ${PROJECT_NAME} pinocchio::pinocchio)
+  # TaskJointBounds alone and as level 0 of the HQP, on a URDF written in the test.
+  ament_add_gtest(test_task_joint_bounds test/test_task_joint_bounds.cpp)
+  target_link_libraries(test_task_joint_bounds ${PROJECT_NAME} pinocchio::pinocchio)
 endif()
 
 ament_package()

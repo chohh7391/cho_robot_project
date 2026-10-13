@@ -40,8 +40,11 @@ cancel through move_group's `trajectory_execution_event` are specified in
 [The MoveIt bridge](../cho_interfaces/CONTRACT.md#the-moveit-bridge).
 
 Other bridge parameters: `planning_time_sec` (5 s, the planning budget; never taken from
-the goal) and `execute_trajectory_action` (`/execute_trajectory`). Verified in FR5
-MuJoCo: a cancel stops the arm within 0.25 s.
+the goal), `execute_trajectory_action` (`/execute_trajectory`) and
+`ready_query_timeout_sec` (3 s): the bridge opens its goal gate by asking the static-scene
+Trigger, the controller manager and the planning scene in turn, and a request left
+unanswered that long is dropped and the query starts over, so the gate opens once the
+servers answer again. Verified in FR5 MuJoCo: a cancel stops the arm within 0.25 s.
 
 A relative goal is composed against TF's `world_frame -> ee_link`, so `world_frame`
 must be in TF. It is on every bringup in the table above: the FR5, UR5e and OpenArm

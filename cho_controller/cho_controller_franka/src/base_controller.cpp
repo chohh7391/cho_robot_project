@@ -101,6 +101,12 @@ CallbackReturn FrankaBaseController::on_init()
         // therefore the default and means "none", which is what every current
         // config asks for - so this stays inert until some config opts in.
         auto_declare<std::vector<double>>("rotor_inertia", {});
+        // Gravity [m/s^2] at which the "gazebo" bringup feeds forward the payload
+        // above (mass, center_of_mass) on top of what the Gazebo plugin already
+        // compensates. Finite and >= 0; 0 drops the term. Read nowhere else. What
+        // the plugin covers and why the default is 1.0, not 9.81:
+        // compute_hand_gravity().
+        auto_declare<double>("gazebo_payload_gravity", 1.0);
     } catch (const std::exception& e) {
         fprintf(stderr, "Exception thrown during init stage with message: %s \n", e.what());
         return CallbackReturn::ERROR;
@@ -266,6 +272,14 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
     std::copy_n(com_vec.begin(), std::min(com_vec.size(), size_t(3)), center_of_mass_.begin());
     std::copy_n(inertia_vec.begin(), std::min(inertia_vec.size(), size_t(9)), load_inertia_.begin());
 
+    const double payload_gravity = get_node()->get_parameter("gazebo_payload_gravity").as_double();
+    if (!std::isfinite(payload_gravity) || payload_gravity < 0.0) {
+        RCLCPP_FATAL(get_node()->get_logger(),
+            "gazebo_payload_gravity = %f is not a finite, non-negative acceleration [m/s^2]", payload_gravity);
+        return CallbackReturn::FAILURE;
+    }
+    gazebo_payload_gravity_ = payload_gravity;
+
     RCLCPP_INFO(get_node()->get_logger(), "FrankaBaseController Configured successfully.");
     return CallbackReturn::SUCCESS;
 }
@@ -407,7 +421,8 @@ void FrankaBaseController::compute_all_terms()
         // libfranka compensates arm + hand gravity (set at Desk); add Coriolis only.
         state_.nle = (robot_->nonLinearEffects(data_) - robot_->GeneralizedGravity(data_)).head(num_dof_);
     } else if (bringup_type_ == "gazebo") {
-        // franka_ros2 compensates arm gravity; add Coriolis + hand-payload gravity.
+        // franka_ros2's Gazebo plugin compensates the gravity of the arm and the hand
+        // body; add Coriolis + the payload term (compute_hand_gravity()).
         state_.nle = (robot_->nonLinearEffects(data_) - robot_->GeneralizedGravity(data_)).head(num_dof_)
                      + compute_hand_gravity();
     }
@@ -441,12 +456,27 @@ void FrankaBaseController::compute_arm_kinematics(
 
 Vector7d FrankaBaseController::compute_hand_gravity()
 {
-    Eigen::Vector3d gravity_world(0, 0, -9.81);
+    // The joint torque that holds the payload ("mass" at "center_of_mass" in the
+    // EE frame; config/payload.yaml, 0.97 kg for FT sensor + hand) against
+    // gravity. compute_all_terms() adds it in the "gazebo" branch only, at
+    // gazebo_payload_gravity m/s^2 (default 1.0), not at 9.81:
+    //
+    // - franka_ros2's Gazebo plugin (extern/franka_ros2/franka_gazebo/
+    //   franka_ign_ros2_control, IgnitionSystem::write()) adds to every effort
+    //   command the KDL gravity torque, at 9.8 m/s^2, of the chain from the URDF
+    //   root to the leaf link findTipLink() picks. For the FR3 descriptions here
+    //   that leaf is fr3_hand_tcp, so the chain carries link0-link7, fr3_hand
+    //   (0.654 kg) and, with load_ft_sensor, the Bota sensor links: the hand body
+    //   is compensated already. Only the two fingers (0.029 kg each), off that
+    //   chain, are not.
+    // - 1.0 m/s^2 is an empirical value with no recorded derivation or
+    //   measurement; it is not the fingers' weight either (0.97 N here against
+    //   0.57 N for the fingers). It stays the default so behaviour is unchanged;
+    //   the parameter lets a measurement replace it, or 0 drop the term.
+    const double gravity =
+        (bringup_type_ == "gazebo") ? gazebo_payload_gravity_ : 9.81;
+    const Eigen::Vector3d gravity_world(0, 0, -gravity);
 
-    if (bringup_type_ == "gazebo") {
-        gravity_world = Eigen::Vector3d(0, 0, -1.0);
-    }
-    
     Eigen::Matrix<double, 6, 1> wrench_local;
     wrench_local.setZero();
 

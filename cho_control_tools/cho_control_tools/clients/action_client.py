@@ -63,6 +63,8 @@ ACTION_TYPE_NAMES = {
     "task": "cho_interfaces/action/TaskSpace",
     "gripper": "cho_interfaces/action/Gripper",
 }
+
+
 class bcolors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -151,11 +153,11 @@ class ControlSuiteShell(cmd.Cmd):
         self.node = rclpy.create_node(
             f"actions_client_{robot_type}_{arm}",
             parameter_overrides=[
-            rclpy.Parameter(
-                "use_sim_time",
-                rclpy.Parameter.Type.BOOL,
-                True
-            )]
+                rclpy.Parameter(
+                    "use_sim_time",
+                    rclpy.Parameter.Type.BOOL,
+                    True
+                )]
         )
 
         self.joint_action_name = None
@@ -502,7 +504,6 @@ class ControlSuiteShell(cmd.Cmd):
             self.gripper_action_client = client
         return True
 
-
     def _joint_target(self, positions):
         """A JointState for *positions*, named with this profile's joints.
 
@@ -659,7 +660,6 @@ class ControlSuiteShell(cmd.Cmd):
             self._report_outcome(True)
         else:
             self._report_outcome(False)
-
 
     def do_quit(self, arg):
         """Quit shell"""

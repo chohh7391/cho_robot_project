@@ -31,6 +31,8 @@ _REACH = {
     '2': [-0.15, -0.45, -0.1, 1.1, -0.1, 0.35, 0.0],
     '3': [0.0, -0.35, 0.0, 0.95, 0.0, 0.30, 0.0],
 }
+
+
 def _model(prefix, ee_link, relative_goal_frame):
     """See clients/fr5/metadata.py; *prefix* is the bimanual arm's, '' for one arm."""
     model = {

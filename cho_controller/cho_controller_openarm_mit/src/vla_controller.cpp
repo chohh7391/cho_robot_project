@@ -274,6 +274,9 @@ controller_interface::CallbackReturn VlaController::on_configure(
   params.accept_joint = drive_side_impedance_;
   params.accept_task = true;
   params.gripper = enable_gripper_;
+  // On a re-configure the previous configure's vla_timer_ still polls the
+  // session while it is reset here; Session::configure() allows that (its
+  // Threads note), and task_ready_ is down, so nothing is ingested.
   const char * refused = cho_vla_core::validate(params);
   if (refused != nullptr || !session_.configure(params)) {
     RCLCPP_ERROR(get_node()->get_logger(),
@@ -350,9 +353,12 @@ controller_interface::CallbackReturn VlaController::on_activate(
   }
   telemetry_pub_->on_activate();
   last_telemetry_ = get_node()->now();
-  // The anchor history, timeline, telemetry, seq order and gripper state; a
-  // goal left open never starts (abort_goals_from_before() ends its handle).
-  // No goal can open meanwhile: task_ready_ is down until the startup settles.
+  // The anchor history, telemetry and gripper state; a goal left open never
+  // starts (abort_goals_from_before() ends its handle). No goal can open nor a
+  // chunk be ingested meanwhile: task_ready_ is down until the startup settles.
+  // vla_timer_'s poll_terminal(), take_gripper() and telemetry() may run
+  // meanwhile; the session allows that, and clears its executor-side state on
+  // that thread.
   session_.activate();
   releasing_on_hold_ = false;
   // task_q_ref_'s rate counterpart; the base class has just set task_q_ref_ to

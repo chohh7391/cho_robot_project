@@ -243,13 +243,20 @@ numeric_policy:
         bimanual_send_skew_gate: measure_before_enforcement
 gripper_contract: separate_position_control
 # Hardware-owned SAFE hold tuple. kp/kd are the per-joint profile values.
-# tau_ff keeps the last accepted feed-forward because the MIT equation runs
-# inside the motor without a gravity model: zeroing it would drop the arm's
-# gravity compensation exactly when the controller stops commanding it. A new
-# session (no accepted command yet) therefore holds with tau_ff = 0.
+# tau_ff is the joint torque measured in the same read as the position,
+# clamped per joint to tau_ff_magnitude. The MIT equation runs inside the
+# motor without a gravity model, so the hold needs the gravity torque in
+# tau_ff; at rest the measured torque is that torque, while the last accepted
+# tau_ff is only the part the producer did not put in its kp spring (keeping
+# it alone let the spring's share sag away at the safe gains). The real
+# adapter (ArmConsumer) measures it on the drives; the MuJoCo limiter takes
+# the torque it applied in the previous cycle, the simulator's measured joint
+# torque, and applies it in the latching cycle. A new session's first hold
+# is seeded with the torque measured at the seed read: about zero on motors
+# enabled just now, the gravity torque on an arm that was being held.
 safe_seed:
   q_des: measured_position
   dq_des: 0.0
   kp: safe_hold_stiffness
   kd: safe_hold_damping
-  tau_ff: last_accepted_tau_ff
+  tau_ff: measured_torque

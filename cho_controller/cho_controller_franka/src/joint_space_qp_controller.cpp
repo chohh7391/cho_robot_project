@@ -48,8 +48,10 @@ CallbackReturn JointSpaceQPController::on_init()
   }
 
   try {
-    auto_declare<std::vector<double>>("kp_joint", {});
-    auto_declare<std::vector<double>>("kd_joint", {});
+    // Declares and range-checks every parameter in
+    // joint_space_qp_controller_parameters.yaml; a value outside
+    // its range throws here.
+    param_listener_ = std::make_shared<franka_joint_space_qp_controller::ParamListener>(get_node());
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception thrown during init stage with message: %s", e.what());
     return CallbackReturn::ERROR;
@@ -128,20 +130,12 @@ controller_interface::return_type JointSpaceQPController::update(
   }
 
   // ----------------------------------------------------
-  // Velocity filtering and practical correction terms
+  // Velocity filtering and practical correction terms, from the parameters
   // ----------------------------------------------------
-  const double kAlpha = 0.99;
-  dq_filtered_ = (1 - kAlpha) * dq_filtered_ + kAlpha * state_.v_arm;
+  dq_filtered_ = (1 - velocity_filter_alpha_) * dq_filtered_ + velocity_filter_alpha_ * state_.v_arm;
 
   Eigen::Matrix<double, 7, 7> M_modified = state_.M_arm;
-  M_modified(4, 4) *= 6.0;
-  M_modified(5, 5) *= 6.0;
-  M_modified(6, 6) *= 10.0;
-
-  Vector7d kd_joint_modified = 2.0 * sqrt(5.0) * Vector7d::Ones();
-  kd_joint_modified(4) = 0.2;
-  kd_joint_modified(5) = 0.2;
-  kd_joint_modified(6) = 0.2;
+  M_modified.diagonal().array() *= inertia_scale_.array();
 
   // ----------------------------------------------------
   // Track the action-server trajectory
@@ -188,24 +182,33 @@ controller_interface::return_type JointSpaceQPController::update(
   // ----------------------------------------------------
   // TSID solve
   // ----------------------------------------------------
+  // An answer that is not optimal or not finite is not commanded: acc_arm
+  // stays zero, so the torque below is nle - damping, the gravity-compensated
+  // damped hold.
   Vector7d acc_arm = Vector7d::Zero();
   try {
     const HQPData & hqp_data = tsid_->computeProblemData(time.seconds(), state_.q, state_.v);
     
     if (hqp_data.size() > 0) {
       const auto& qp_sol = solver_->solve(hqp_data);
-      if (qp_sol.status == HQP_STATUS_OPTIMAL) {
-          VectorXd ddq = tsid_->getAccelerations(qp_sol);
-          acc_arm = ddq.head(num_dof_);
-      } else {
+      if (qp_sol.status != HQP_STATUS_OPTIMAL) {
           // A non-converged (MAX_ITER) solution may violate constraints / be
           // unbounded near singularities; hold instead of commanding it.
-          RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "QP Solver Failed! Holding position.");
-          acc_arm.setZero();
+          RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+            "the QP solver found no optimal solution; holding (gravity compensation and damping).");
+      } else {
+          const VectorXd & ddq = tsid_->getAccelerations(qp_sol);
+          if (ddq.head(num_dof_).allFinite()) {
+            acc_arm = ddq.head(num_dof_);
+          } else {
+            RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+              "the QP solution is not finite; holding (gravity compensation and damping).");
+          }
       }
     }
   } catch (const std::exception& e) {
-      RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000, "TSID Error: %s", e.what());
+      RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+        "TSID error: %s; holding (gravity compensation and damping).", e.what());
       acc_arm.setZero();
   }
 
@@ -215,7 +218,7 @@ controller_interface::return_type JointSpaceQPController::update(
   Vector7d torque_desired;
   torque_desired = M_modified * acc_arm;
   torque_desired += state_.nle; 
-  torque_desired -= kd_joint_modified.cwiseProduct(dq_filtered_);
+  torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);
 
   FrankaBaseController::clip_torque(torque_desired);
   
@@ -227,23 +230,27 @@ controller_interface::return_type JointSpaceQPController::update(
 }
 
 bool JointSpaceQPController::assign_parameters() {
-  auto kp_joint = get_node()->get_parameter("kp_joint").as_double_array();
-  auto kd_joint = get_node()->get_parameter("kd_joint").as_double_array();
-
-  if (kp_joint.empty() || kp_joint.size() != static_cast<uint>(num_dof_)) {
-    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kp_joint parameter");
+  // Each value is range-checked by the generated listener (see the YAML); what
+  // is left here is what its inclusive element bounds cannot say.
+  const auto params = param_listener_->get_params();
+  if (params.kp_joint.size() != static_cast<std::size_t>(num_dof_) ||
+      params.kd_joint.size() != static_cast<std::size_t>(num_dof_))
+  {
+    RCLCPP_FATAL(get_node()->get_logger(), "kp_joint and kd_joint must have %d entries", num_dof_);
     return false;
   }
-  if (kd_joint.empty() || kd_joint.size() != static_cast<uint>(num_dof_)) {
-    RCLCPP_FATAL(get_node()->get_logger(), "Invalid kd_joint parameter");
-    return false;
+  for (const double value : params.inertia_scale) {
+    if (!(value > 0.0) || !std::isfinite(value)) {
+      RCLCPP_ERROR(get_node()->get_logger(), "every entry of inertia_scale must be positive and finite");
+      return false;
+    }
   }
 
-  for (int i = 0; i < num_dof_; ++i) {
-    kp_joint_(i) = kp_joint.at(i);
-    kd_joint_(i) = kd_joint.at(i);
-  }
-  
+  kp_joint_ = Eigen::Map<const Vector7d>(params.kp_joint.data());
+  kd_joint_ = Eigen::Map<const Vector7d>(params.kd_joint.data());
+  velocity_filter_alpha_ = params.velocity_filter_alpha;
+  inertia_scale_ = Eigen::Map<const Vector7d>(params.inertia_scale.data());
+  joint_damping_ = Eigen::Map<const Vector7d>(params.joint_damping.data());
   return true;
 }
 

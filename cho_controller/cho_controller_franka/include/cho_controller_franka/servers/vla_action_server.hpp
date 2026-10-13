@@ -124,10 +124,13 @@ public:
 
     // Session::activate(): empties the anchor history, so a chunk observed
     // before this activation gets the inexact fallback anchor rather than a
-    // reference from the previous activation, and clears the timeline, the
-    // telemetry and the seq order. From the controller's on_activate(), BEFORE
-    // its activity is marked active: compute() is not running then, and no goal
-    // can be accepted while the session resets.
+    // reference from the previous activation, closes the session goal, and the
+    // telemetry reads cleared from then on. From the controller's on_activate(),
+    // BEFORE its activity is marked active: compute() is not running then, and
+    // no goal can be accepted nor a chunk ingested while the session resets
+    // (controller_ready(), rt_active()). The 5 ms timer's take_gripper() and
+    // telemetry() may run meanwhile; the session allows that, and clears its
+    // executor-side state on that thread.
     void reset_for_activation() { session_.activate(); }
 
     // Ends the session goal, so chunks stop counting with the activation; the

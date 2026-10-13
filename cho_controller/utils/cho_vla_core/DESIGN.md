@@ -58,10 +58,13 @@ keeps its ROS adapter — parameters into `SessionParams`, the subscription and
 `ActionChunk` into `Chunk`, the action server, telemetry publication — and its
 control law.
 
-Each call group runs on one thread:
+Each call group runs on one thread at a time:
 
-- lifecycle: `configure()`, `activate()`, while `step()` is not running and no
-  goal is open.
+- lifecycle: `configure()`, `activate()`, while `step()` is not running and
+  `begin_goal()`, `ingest()` and `refuse()` cannot run (each host's activity
+  gate). The executor's other calls may overlap them: both hosts poll
+  `telemetry()`, `take_gripper()` and `poll_terminal()` from a 5 ms timer that
+  runs whether the controller is active or not.
 - executor: `begin_goal()`, `request_cancel()`, `request_success()`,
   `ingest()`, `refuse()`, `telemetry()`, `poll_terminal()`, `take_gripper()`,
   `gripper_refused()`. Both hosts call them from the node's default callback
@@ -78,6 +81,23 @@ parameters and the control loop copies them when it starts the goal, so only
 that thread touches the watchdog. `ingest()` publishes the timeline before it
 counts the chunk, so the cycle that feeds the watchdog the chunk also samples
 it.
+
+An activation writes nothing of the executor's: `activate()` runs on the
+control thread (Humble switches controllers inside the controller_manager's
+`update()`) and resets the control loop's state, the four telemetry values the
+loop publishes (`playback_stamp`, `remaining_horizon`, `stream_state`,
+`action_space`), the open goal and the anchor history (the loop is its
+writer). Two increments of an activation count bracket those writes. The
+executor clears its own part, its telemetry counters, `anchor_inexact` and the
+gripper edge and refusal handed between the two, at the start of its next
+non-const call once the count has moved.
+`telemetry()` is a seqlock read against the count: its snapshot only when the
+count is even, unchanged across the read and caught up with, otherwise the
+default snapshot, which is what an activation leaves. A poll overlapping an
+activation gets one side of it whole; a poll after it, nothing from before.
+`configure()` does the same and also empties the timeline and the seq order,
+which only the gated calls touch. `test_session`'s `AC11_*` tests run the polls
+against both calls; built with `-fsanitize=thread` they report no race.
 
 The host gives `record(now, pose, joints)` every cycle before `step()` (the
 reference it commanded, for anchoring), its clock (`now`, `arrival`; the

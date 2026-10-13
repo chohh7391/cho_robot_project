@@ -60,7 +60,6 @@ Which cameras exist is ``config/cameras.yaml``, read by this node and by the
 launch that starts the detectors, so the prefixes cannot drift apart.
 """
 
-from collections import deque
 import math
 import threading
 
@@ -73,6 +72,7 @@ from cho_interfaces.msg import (
 from cho_object_pose import fusion, geometry, visibility
 from cho_object_pose.cameras import parse_cameras, single_camera
 from cho_object_pose.objects import parse_objects
+from cho_object_pose.sample_window import SampleWindow
 from geometry_msgs.msg import PoseStamped
 import numpy as np
 import rclpy
@@ -108,6 +108,9 @@ _MAX_CLOCK_SKEW_SEC = 1.0
 
 #: Seconds between repeats of that complaint.
 _SKEW_COMPLAINT_PERIOD_SEC = 5.0
+
+#: Seconds between repeats of the image-clock-rewind notice.
+_REWIND_LOG_PERIOD_SEC = 2.0
 
 #: visualization_msgs marker type per object shape.
 _MARKER_TYPES = {
@@ -209,14 +212,17 @@ class ObjectPoseNode(Node):
 
         self._priorities = {camera.name: camera.priority for camera in self._cameras}
 
-        self._samples = {spec.name: deque() for spec in self._specs}
+        # One window per object, on the image clock. It also notices the image
+        # clock jumping BACK (a looped bag, a restarted simulator) and empties
+        # itself: see sample_window.py for why trimming by age alone cannot.
+        self._windows = {spec.name: SampleWindow(self._window) for spec in self._specs}
         # ONE LOCK OVER THE AGGREGATION WINDOW, and it is not optional. The
         # detection subscriptions share a ReentrantCallbackGroup on a
         # MultiThreadedExecutor, so two cameras' callbacks genuinely run at the
         # same time -- that is what makes the fusion prompt rather than
-        # round-robin. They then meet in this one dict: one thread appends
-        # while the other iterates the same deque, and Python raises
-        # "deque mutated during iteration" and takes the node down.
+        # round-robin. They then meet in these windows: one thread appends
+        # while the other iterates the same list, and Python raises
+        # "mutated during iteration" and takes the node down.
         #
         # Measured: it killed a two-camera run after ~20 minutes. With a single
         # camera there was only ever one callback thread, which is why nothing
@@ -405,13 +411,51 @@ class ObjectPoseNode(Node):
         # block for tf_timeout, and serialising two cameras on each other's TF
         # waits would undo the point of running them concurrently.
         with self._lock:
+            # Every object's window sees every stamp, seen in this message or
+            # not, BEFORE any sample goes in: a camera whose clock jumped back
+            # empties all of them, and the first sample after the jump lands in
+            # a clean window. An object not in this message would otherwise keep
+            # its old samples and be evaluated, and published, from them. The
+            # jump is judged against THIS camera's own previous stamps, never
+            # another camera's: two cameras on clocks that differ are not each
+            # other's rewind (see sample_window.py).
+            rewound = [spec.name for spec in self._specs
+                       if self._windows[spec.name].advance(seconds, camera.name)]
+            if rewound:
+                self._forget_before_rewind(rewound, seconds, camera)
             if self._newest_detection is None or seconds > self._newest_detection:
                 self._newest_detection = seconds
             for name, sample in accepted:
-                self._samples[name].append(sample)
+                self._windows[name].add(seconds, sample, camera.name)
             for spec in self._specs:
                 self._camera_status[spec.name][camera.name] = (blocked[spec.name], seconds)
                 self._evaluate(spec, seconds, msg.header.stamp)
+
+    def _forget_before_rewind(self, names, seconds, camera):
+        """Drop what *camera*'s clock jumping back makes meaningless for the objects in *names*.
+
+        CALL WITH THE LOCK HELD, after those objects' windows were emptied (all
+        cameras' samples go, not only *camera*'s: sample_window.py says why).
+        Everything kept as an image stamp is on the old clock: the time of the
+        last publish would make ``publishing`` read true for as long as the new
+        run takes to reach the old one's time, a camera's last word would stay
+        un-stale for the same stretch, and the newest-detection stamp would make
+        ``_check_clock`` report the jump as a clock mismatch.
+        """
+        for name in names:
+            self._published_at[name] = None
+            self._camera_status[name] = {
+                other.name: (visibility.UNKNOWN, None) for other in self._cameras}
+            self._status[name] = 'no detection yet'
+        self._newest_detection = seconds
+        # Throttled: a simulator restart rewinds every camera in turn, and a
+        # camera that keeps jumping back must not be a log flood either.
+        self.get_logger().info(
+            f'camera {camera.name}: detection stamps went back '
+            f'{self._windows[names[0]].last_rewind_sec:.1f} s (to {seconds:.3f} s), so its '
+            f"clock was reset; the aggregation window was cleared for {', '.join(names)} "
+            'and nothing from before the jump is published',
+            throttle_duration_sec=_REWIND_LOG_PERIOD_SEC)
 
     def _lookup(self, spec, camera, stamp, seconds):
         """(sample, None) for the tag pose in the base frame, else (None, reason).
@@ -465,10 +509,9 @@ class ObjectPoseNode(Node):
 
     def _evaluate(self, spec, stamp_seconds, stamp_msg):
         # stamp_seconds is the detection's image stamp, not the node clock: the
-        # window is measured in the cameras' time.
-        samples = self._samples[spec.name]
-        while samples and stamp_seconds - samples[0][0] > self._window:
-            samples.popleft()
+        # window is measured in the cameras' time. _on_detections has already
+        # advanced every object's window to it, which trimmed what aged out.
+        samples = [sample for _, sample in self._windows[spec.name].samples()]
 
         # The priority contest, and it is decided by what is IN THE WINDOW, not
         # by what is configured: a camera that saw nothing suppresses nothing.

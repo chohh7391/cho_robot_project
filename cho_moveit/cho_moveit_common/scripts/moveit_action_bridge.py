@@ -94,6 +94,11 @@ STOP_REPEAT_SEC = 0.25
 # bridge calls its motion state unknown and latches a fault.
 STOP_CONFIRM_TIMEOUT_SEC = 10.0
 
+# How often a dropped readiness request is reported [s]: the query is asked
+# again every ready_query_timeout_sec, so a server that never answers would
+# otherwise log on every one of them.
+READY_QUERY_WARN_THROTTLE_SEC = 10.0
+
 
 def execution_event_topic(execute_action):
     """The TrajectoryExecutionManager event topic of the move_group serving *execute_action*.
@@ -217,6 +222,11 @@ class MoveItActionBridge(Node):
         self.declare_parameter('ready_service', '/static_scene_ready')
         self.declare_parameter('controller_manager', '/controller_manager')
         self.declare_parameter('planning_scene_service', '/get_planning_scene')
+        # How long one request of the readiness query (Trigger -> controllers ->
+        # scene) may go unanswered [s] before it is dropped and the query is
+        # asked again from the start. rclpy's call_async has no timeout: a lost
+        # response would otherwise leave the query pending forever.
+        self.declare_parameter('ready_query_timeout_sec', 3.0)
         self._robot_type = self.get_parameter('robot_type').value.strip('/')
         self._profile = self.get_parameter('profile').value.strip('/') or 'single'
         self._pipeline = self.get_parameter('planning_pipeline').value
@@ -248,6 +258,9 @@ class MoveItActionBridge(Node):
         self._ready_service = self.get_parameter('ready_service').value
         controller_manager = self.get_parameter('controller_manager').value.rstrip('/')
         self._planning_scene_service = self.get_parameter('planning_scene_service').value
+        self._ready_query_timeout = float(self.get_parameter('ready_query_timeout_sec').value)
+        if not math.isfinite(self._ready_query_timeout) or self._ready_query_timeout <= 0.0:
+            raise ValueError('ready_query_timeout_sec must be finite and positive')
         if not self._robot_type:
             raise ValueError('robot_type must be non-empty')
         robot_config = load_robot_config(self._robot_type, self._profile)
@@ -303,7 +316,13 @@ class MoveItActionBridge(Node):
             self._tf_buffer, self, spin_thread=False)
         self._ready_timer = self.create_timer(
             0.5, self._poll_ready, callback_group=self._callbacks)
+        # The readiness query is a chain of three requests. _ready_query_pending
+        # is set from its first request to its end; _ready_inflight is the
+        # (client, future) it waits on, sent at _ready_stage_started_at. All
+        # three are guarded by _ready_lock.
         self._ready_query_pending = False
+        self._ready_inflight = None
+        self._ready_stage_started_at = 0.0
         self.get_logger().info(
             f'Cho MoveIt bridge ({self._robot_type}, {self._group}, {self._ee_link}) '
             'waiting for its floor/JTC identity gate before advertising actions')
@@ -328,17 +347,74 @@ class MoveItActionBridge(Node):
         self.get_logger().info(f'Planning pipeline: {self._pipeline}')
 
     def _poll_ready(self):
+        self._expire_ready_query()
         services = (self._ready_client, self._controllers_client, self._scene_client)
-        if self._ready_query_pending or not all(client.service_is_ready() for client in services):
-            with self._ready_lock:
+        services_up = all(client.service_is_ready() for client in services)
+        with self._ready_lock:
+            if self._ready_query_pending or not services_up:
                 if time.monotonic() - self._ready_verified_at > 1.5:
                     self._ready = False
+                return
+            self._ready_query_pending = True
+        self._send_ready_request(self._ready_client, Trigger.Request(), self._ready_response)
+
+    def _send_ready_request(self, client, request, on_done):
+        """Send one request of the readiness query and remember it, so a lost response can be dropped."""
+        try:
+            future = client.call_async(request)
+        except Exception as error:  # noqa: BLE001 - readiness remains closed
+            self.get_logger().warn(f'Readiness request to {client.srv_name} failed: {error}')
+            self._finish_ready_query(False)
             return
-        self._ready_query_pending = True
-        future = self._ready_client.call_async(Trigger.Request())
-        future.add_done_callback(self._ready_response)
+        with self._ready_lock:
+            self._ready_inflight = (client, future)
+            self._ready_stage_started_at = time.monotonic()
+        future.add_done_callback(on_done)
+
+    def _claim_ready_request(self, future):
+        """True when *future* is the request the query waits on; False for one it gave up on.
+
+        A response can reach its callback while the timeout drops the request:
+        whichever takes ``_ready_inflight`` under the lock first handles it.
+        """
+        with self._ready_lock:
+            if self._ready_inflight is None or self._ready_inflight[1] is not future:
+                return False
+            self._ready_inflight = None
+            return True
+
+    def _expire_ready_query(self):
+        """Drop the request the readiness query has waited on for ready_query_timeout_sec.
+
+        Its future is removed from its client's pending requests (a late
+        response is then ignored and nothing accumulates there), the query is
+        released, and the poll asks again from the start.
+        """
+        with self._ready_lock:
+            inflight = self._ready_inflight
+            waited = time.monotonic() - self._ready_stage_started_at
+            if (not self._ready_query_pending or inflight is None
+                    or waited <= self._ready_query_timeout):
+                return
+            self._ready_inflight = None
+            self._ready_query_pending = False
+            if time.monotonic() - self._ready_verified_at > 1.5:
+                self._ready = False
+        client, future = inflight
+        try:
+            client.remove_pending_request(future)
+        except Exception as error:  # noqa: BLE001 - the query is released regardless
+            self.get_logger().warn(
+                f'Could not drop the readiness request to {client.srv_name}: {error}')
+        self.get_logger().warn(
+            f'No response from {client.srv_name} in {waited:.1f} s '
+            f'(ready_query_timeout_sec {self._ready_query_timeout:g}); dropped the request '
+            'and asking again',
+            throttle_duration_sec=READY_QUERY_WARN_THROTTLE_SEC)
 
     def _ready_response(self, future):
+        if not self._claim_ready_request(future):
+            return
         try:
             gate_ready = bool(future.result().success)
         except Exception as error:  # noqa: BLE001 - readiness remains closed
@@ -347,10 +423,12 @@ class MoveItActionBridge(Node):
         if not gate_ready:
             self._finish_ready_query(False)
             return
-        future = self._controllers_client.call_async(ListControllers.Request())
-        future.add_done_callback(self._controllers_response)
+        self._send_ready_request(
+            self._controllers_client, ListControllers.Request(), self._controllers_response)
 
     def _controllers_response(self, future):
+        if not self._claim_ready_request(future):
+            return
         try:
             states = {item.name: item.state for item in future.result().controller}
             jtc_active = all(
@@ -363,10 +441,11 @@ class MoveItActionBridge(Node):
             return
         request = GetPlanningScene.Request()
         request.components.components = PlanningSceneComponents.WORLD_OBJECT_NAMES
-        future = self._scene_client.call_async(request)
-        future.add_done_callback(self._scene_response)
+        self._send_ready_request(self._scene_client, request, self._scene_response)
 
     def _scene_response(self, future):
+        if not self._claim_ready_request(future):
+            return
         try:
             floor_present = any(
                 item.id == 'floor'
@@ -382,7 +461,8 @@ class MoveItActionBridge(Node):
             self._ready = ready
             if ready:
                 self._ready_verified_at = time.monotonic()
-        self._ready_query_pending = False
+            self._ready_inflight = None
+            self._ready_query_pending = False
         if ready and not was_ready:
             self._advertise_action_servers()
             self.get_logger().info(

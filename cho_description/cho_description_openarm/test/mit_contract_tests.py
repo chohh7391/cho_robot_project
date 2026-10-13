@@ -58,7 +58,9 @@ def test_runtime_gains_and_safe_seed_are_fail_closed():
         "dq_des": 0.0,
         "kp": "safe_hold_stiffness",
         "kd": "safe_hold_damping",
-        "tau_ff": "last_accepted_tau_ff",
+        # What both adapters hold with: ArmConsumer the drives' measured
+        # torque, the MuJoCo limiter the torque it applied last cycle.
+        "tau_ff": "measured_torque",
     }
 
 

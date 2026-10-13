@@ -376,25 +376,22 @@ TEST(LimiterVsConsumer, SafeHoldAfterSeeding)
   for (std::size_t j = 0; j < kJointsPerArm; ++j)
     latched[j] = mit_torque({kSeed[j], 0.0, kKp[j], kKd[j], kHeld[j]}, q_hold[j], 0.0);
 
-  // At rest. The real hold carries the latched torque at once. The limiter's
-  // spring is gone at once too (q_des is the measured pose) while its tau_ff
-  // slews from the commit's to the latched torque at tau_ff_slew_per_s, so
-  // its torque dips by up to the spring's share in between.
-  Results at_rest{};
-  for (std::size_t j = 0; j < kJointsPerArm; ++j)
-    at_rest[j].expected_s = (latched[j] - kHeld[j]) / p.tau_ff_slew[j];
+  // At rest. The real hold carries the latched torque at once, and so does
+  // the limiter's: its spring is gone at once (q_des is the measured pose) and
+  // its tau_ff is the latched torque in the latching cycle, not a slew to it
+  // from the commit's, so the two agree from the first SAFE cycle. (The slew
+  // dipped the limiter by up to the spring's share, kp * 0.05 here.)
+  Results at_rest{};  // expected_s 0: no slew to wait for
   constexpr std::uint64_t kRestCycles = kRate / 2;
-  for (const auto & r : at_rest) ASSERT_LT(r.expected_s, 0.4);
   bench.request_safe();
   measure(
     bench, q_hold, nullptr, kRestCycles, at_rest,
     [&](std::size_t j, double t, double real, double sim) {
       EXPECT_NEAR(real, latched[j], 1e-9) << j;
-      EXPECT_LE(sim, real + kAgree) << "joint " << j << " t " << t;
-      EXPECT_GE(sim, kHeld[j] - kAgree) << "joint " << j << " t " << t;
+      EXPECT_NEAR(sim, real, kAgree) << "joint " << j << " t " << t;
     });
   if (HasFatalFailure()) return;
-  report("safe_at_rest", "SAFE latched at rest, tau_ff slews to the latched torque", at_rest);
+  report("safe_at_rest", "SAFE latched at rest, tau_ff the latched torque at once", at_rest);
 
   // Then pushed a further 0.02 rad: the real hold resists at the safe kp, the
   // limiter at a kp still slewing down from the commit's since the latch, so

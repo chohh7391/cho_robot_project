@@ -14,8 +14,9 @@
 # --- Per-environment torque feedforward regime (why the mujoco gains differ) ---
 # bringup_type "mujoco": NOTHING external compensates gravity, so the torque
 # controllers feed forward the FULL non-linear effects -- Coriolis + full gravity
-# (cho_controller_franka/src/base_controller.cpp:262-272, the else branch; isaac
-# shares this branch). The loop runs at a true 1 kHz with no actuator servo
+# (cho_controller_franka/src/base_controller.cpp,
+# FrankaBaseController::compute_all_terms(), the else branch; isaac shares this
+# branch). The loop runs at a true 1 kHz with no actuator servo
 # between controller and joints. That is why mujoco stiffnesses are HIGHER than
 # the real/gazebo values (which lean on external arm-gravity compensation and a
 # 1 kHz servo) -- the gap is by design, not drift.

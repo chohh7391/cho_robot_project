@@ -60,7 +60,13 @@ reconsider a bad one, so nothing is published until it has earned it:
    `fx = 239.96` and the same tag only reaches about 0.38 m. Set `min_edge_px` from the pose
    accuracy you need and read the range off that formula, rather than discovering it.
 2. **Repeatability** over a time window — at least `min_samples` detections inside
-   `window_sec`, with the position spread under `max_position_spread_m`.
+   `window_sec`, with the position spread under `max_position_spread_m`. The window is on the
+   image clock; a stamp more than 1 s earlier than the same camera's previous one (a looped bag,
+   a restarted simulator or driver) is a clock rewind, and the node empties every object's
+   window, logs an `INFO` line naming the camera, and publishes again only from samples taken
+   after the jump. Cameras are compared with themselves, never with each other, so cameras
+   whose clocks differ are not rewinds; a camera more than `window_sec` behind the others'
+   clocks contributes nothing, because one window holds one time base.
 3. **Orientation is not trusted by default.** AprilTag's planar pose has a two-solution
    ambiguity that flips the tag normal between frames. With `top_down_yaw: true` (the default)
    only the tag's yaw survives and the approach is straight down, which the flip does not
@@ -428,6 +434,7 @@ camera stale while it is publishing poses. The node says so out loud when it hap
 | `objects.py` | Parsing and validation of `config/objects.yaml`, including the display shape |
 | `cameras.py` | Parsing and validation of `config/cameras.yaml` — the cameras to fuse, the prefixes that keep their tag frames apart, each one's `priority`, and the `optical_frame` that lets it contribute a ray |
 | `visibility.py` | The states a camera can be in, and which cameras' samples survive a priority contest. No ROS — the suppression rule is a pure function of names and integers |
+| `sample_window.py` | One object's aggregation window on the image clock: time-ordered samples, age-out by `window_sec`, and the per-camera rewind rule that empties it. No ROS |
 | `node.py` | The ROS adapter: subscribe, look TF up at the image stamp, gate, publish |
 | `mock_publisher.py` | A fixed pose on the output topic, for wiring tasks without hardware |
 | `fake_scene.py` | The simulated bench: scene parsing, the field-of-view cone, the line-of-sight occlusion test, apparent tag size. No ROS |

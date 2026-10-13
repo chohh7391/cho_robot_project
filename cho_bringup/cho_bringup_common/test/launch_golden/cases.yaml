@@ -43,7 +43,6 @@ cases:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
       vla: [vla:=true]
-      vla_velocity: [vla:=true, control_mode:=velocity]
       bare_no_rviz: [load_gripper:=false, load_ft_sensor:=false, launch_rviz:=false]
       no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
@@ -188,6 +187,8 @@ cases:
       default_usd: []
       bimanual_default_usd: [bimanual:=true]
       default: [robot_usd:=$FAKE/usd/robot/robot.usda]
+      position: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=position,
+                 controller_name:=joint_space_position_controller]
       newton_bimanual_position: [robot_usd:=$FAKE/usd/robot/robot.usda, bimanual:=true, physics_engine:=newton,
                                  control_mode:=position, controller_name:=joint_space_position_controller]
       velocity_headless: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity,
