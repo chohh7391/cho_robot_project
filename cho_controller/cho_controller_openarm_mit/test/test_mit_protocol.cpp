@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
+#include "cho_openarm_mit_core/testing/unbounded_consumer.hpp"
 #include "cho_controller_openarm_mit/bimanual_fjt_controller.hpp"
 #include <gtest/gtest.h>
 #include <limits>
@@ -53,27 +54,10 @@ struct BimanualFjtTestAccess {
 }  // namespace cho_controller_openarm_mit
 namespace {
 ValidationLimits limits() { return {7, 20, 500, 50, 100, 20}; }
-// The consumers here never bound a hold in motion: band and motion velocity
-// +inf, stated. The hold's effort limit is max_abs_effort.
-constexpr double kUnbounded = std::numeric_limits<double>::infinity();
-const std::array<double, 7> kUnboundedBand = detail::every_joint(kUnbounded);
-ArmConsumer unbounded_consumer(const ValidationLimits &l,
-                               const std::array<double, 7> &damping,
-                               const std::array<double, 7> &stiffness) {
-  return ArmConsumer(l, damping, stiffness,
-                     detail::every_joint(l.max_abs_effort), kUnboundedBand,
-                     kUnbounded);
-}
-ArmConsumer unbounded_consumer(const ValidationLimits &l, double damping = 1.0) {
-  return unbounded_consumer(l, detail::every_joint(damping),
-                            detail::every_joint(0.0));
-}
-PairedConsumer unbounded_pair(std::uint64_t session) {
-  return PairedConsumer(limits(), session, 1.0, kUnboundedBand, kUnbounded);
-}
-BimanualCommandRouter unbounded_router() {
-  return BimanualCommandRouter(limits(), 1.0, kUnboundedBand, kUnbounded);
-}
+// The consumers here never bound a hold in motion: the helpers state it.
+using cho_openarm_mit_core::testing::unbounded_arm_consumer;
+using cho_openarm_mit_core::testing::unbounded_command_router;
+using cho_openarm_mit_core::testing::unbounded_paired_consumer;
 ArmCommand command(double session, double generation) {
   ArmCommand c;
   c.session_echo = session;
@@ -126,8 +110,8 @@ TEST(Validation, RejectsNonFiniteNegativeGainAndBadProtocol) {
 TEST(Validation, RejectsInvalidConfiguration) {
   auto l = limits();
   l.max_damping = -1;
-  EXPECT_THROW(unbounded_consumer(l), std::invalid_argument);
-  ArmConsumer c = unbounded_consumer(limits());
+  EXPECT_THROW(unbounded_arm_consumer(l), std::invalid_argument);
+  ArmConsumer c = unbounded_arm_consumer(limits());
   std::array<double, 7> q{};
   EXPECT_FALSE(c.configure(0, q));
   q[2] = std::numeric_limits<double>::infinity();
@@ -135,7 +119,7 @@ TEST(Validation, RejectsInvalidConfiguration) {
   EXPECT_EQ(c.status(), MitStatus::DISABLED);
 }
 TEST(Consumer, GenerationLastAckAfterWholeWriteAndSessionLeaseLatch) {
-  ArmConsumer c = unbounded_consumer(limits());
+  ArmConsumer c = unbounded_arm_consumer(limits());
   std::array<double, 7> q{};
   c.configure(9, q);
   auto x = command(9, 1);
@@ -152,7 +136,7 @@ TEST(Consumer, GenerationLastAckAfterWholeWriteAndSessionLeaseLatch) {
   EXPECT_FALSE(c.accept_and_write(command(9, 1)));
 }
 TEST(Consumer, SafeTransitionAndCleanup) {
-  ArmConsumer c = unbounded_consumer(limits());
+  ArmConsumer c = unbounded_arm_consumer(limits());
   std::array<double, 7> q{};
   c.configure(1, q);
   c.request_safe_transition();
@@ -164,7 +148,7 @@ TEST(Consumer, SafeTransitionAndCleanup) {
   EXPECT_EQ(c.status(), MitStatus::DISABLED);
 }
 TEST(Consumer, SafeAckOnlyAfterTransportAndLeaseExpiresOnWriteCycles) {
-  ArmConsumer c = unbounded_consumer(limits(), 2.0);
+  ArmConsumer c = unbounded_arm_consumer(limits(), 2.0);
   std::array<double, 7> q{};
   q[0] = 0.4;
   c.configure(1, q);
@@ -192,7 +176,7 @@ TEST(Consumer, SafeHoldKeepsPerJointGainsAndTheMeasuredTorque) {
     damping[i] = 0.1 * static_cast<double>(i + 1);
     stiffness[i] = 1.0 * static_cast<double>(i + 1);
   }
-  ArmConsumer c = unbounded_consumer(limits(), damping, stiffness);
+  ArmConsumer c = unbounded_arm_consumer(limits(), damping, stiffness);
   std::array<double, 7> q{};
   q[2] = -0.3;
   ASSERT_TRUE(c.configure(1, q));
@@ -237,10 +221,10 @@ TEST(Consumer, SafeHoldKeepsPerJointGainsAndTheMeasuredTorque) {
   EXPECT_DOUBLE_EQ(c.submitted().joints[0].effort, 0.0);
   EXPECT_DOUBLE_EQ(c.submitted().joints[2].effort, 4.9);
   damping[6] = 0.0;
-  EXPECT_THROW(unbounded_consumer(limits(), damping, stiffness), std::invalid_argument);
+  EXPECT_THROW(unbounded_arm_consumer(limits(), damping, stiffness), std::invalid_argument);
 }
 TEST(Consumer, TransportFailureNeverAcknowledgesAndFaultStaysLatched) {
-  ArmConsumer c = unbounded_consumer(limits());
+  ArmConsumer c = unbounded_arm_consumer(limits());
   std::array<double, 7> q{};
   ASSERT_TRUE(c.configure(1, q));
   EXPECT_FALSE(c.accept_and_write(command(1, 1), false));
@@ -252,7 +236,7 @@ TEST(Consumer, TransportFailureNeverAcknowledgesAndFaultStaysLatched) {
   EXPECT_TRUE(c.accept_and_write(command(2, 1), true));
 }
 TEST(Pair, AllOrNoneAndFaultLatch) {
-  PairedConsumer p = unbounded_pair(4);
+  PairedConsumer p = unbounded_paired_consumer(limits(), 4);
   auto l = command(4, 1), r = command(4, 1);
   r.joints[0].damping = -1;
   EXPECT_FALSE(p.write_pair(l, r));
@@ -260,7 +244,7 @@ TEST(Pair, AllOrNoneAndFaultLatch) {
   EXPECT_EQ(p.right().ack_generation(), 0u);
   EXPECT_EQ(p.left().status(), MitStatus::SAFE_TRANSITION);
   EXPECT_TRUE(p.submit_safe_transition(true, true));
-  PairedConsumer active = unbounded_pair(5);
+  PairedConsumer active = unbounded_paired_consumer(limits(), 5);
   l = command(5, 1);
   r = command(5, 1);
   EXPECT_TRUE(active.write_pair(l, r));
@@ -272,14 +256,14 @@ TEST(Pair, AllOrNoneAndFaultLatch) {
   EXPECT_EQ(active.right().status(), MitStatus::SAFE);
 }
 TEST(Pair, RequiresEqualGenerationAndLatchesPairWithoutPartialAck) {
-  PairedConsumer p = unbounded_pair(4);
+  PairedConsumer p = unbounded_paired_consumer(limits(), 4);
   auto l = command(4, 1), r = command(4, 2);
   EXPECT_FALSE(p.write_pair(l, r));
   EXPECT_EQ(p.left().ack_generation(), 0u);
   EXPECT_EQ(p.right().ack_generation(), 0u);
   EXPECT_EQ(p.left().status(), MitStatus::SAFE_TRANSITION);
   EXPECT_EQ(p.right().status(), MitStatus::SAFE_TRANSITION);
-  PairedConsumer transport = unbounded_pair(5);
+  PairedConsumer transport = unbounded_paired_consumer(limits(), 5);
   l = command(5, 1);
   r = command(5, 1);
   EXPECT_FALSE(transport.write_pair(l, r, false));
@@ -371,7 +355,7 @@ TEST(TrajectoryGate, SuccessfulCompletionReturnsIdleWithoutSafeTransition) {
   EXPECT_TRUE(g.accept_goal(names));
 }
 TEST(CommandRouter, DirectGenerationLeaseAndFaultAreIndependent) {
-  BimanualCommandRouter r = unbounded_router();
+  BimanualCommandRouter r = unbounded_command_router(limits());
   std::array<double, 7> q{};
   ASSERT_TRUE(r.configure(8, q, q));
   ASSERT_TRUE(r.acquire_direct(ArmSide::LEFT));
@@ -385,7 +369,7 @@ TEST(CommandRouter, DirectGenerationLeaseAndFaultAreIndependent) {
   EXPECT_EQ(r.left().ack_generation(), 1u);
 }
 TEST(CommandRouter, PairedModeRequiresAtomicCommonGeneration) {
-  BimanualCommandRouter router = unbounded_router();
+  BimanualCommandRouter router = unbounded_command_router(limits());
   std::array<double, 7> q{};
   ASSERT_TRUE(router.configure(9, q, q));
   EXPECT_FALSE(router.write_pair(command(9, 1), command(9, 1)));
@@ -409,7 +393,7 @@ TEST(CommandRouter, PairedModeRequiresAtomicCommonGeneration) {
 }
 TEST(CommandRouter, DirectLeaseAgesIndependentlyButPairedExpiresTogether) {
   std::array<double, 7> q{};
-  BimanualCommandRouter direct = unbounded_router();
+  BimanualCommandRouter direct = unbounded_command_router(limits());
   ASSERT_TRUE(direct.configure(3, q, q));
   ASSERT_TRUE(direct.acquire_direct(ArmSide::LEFT));
   ASSERT_TRUE(direct.acquire_direct(ArmSide::RIGHT));
@@ -422,7 +406,7 @@ TEST(CommandRouter, DirectLeaseAgesIndependentlyButPairedExpiresTogether) {
   EXPECT_FALSE(direct.successful_write_cycle());
   EXPECT_EQ(direct.left().status(), MitStatus::SAFE_TRANSITION);
   EXPECT_EQ(direct.right().status(), MitStatus::ACTIVE);
-  BimanualCommandRouter paired = unbounded_router();
+  BimanualCommandRouter paired = unbounded_command_router(limits());
   ASSERT_TRUE(paired.configure(4, q, q));
   ASSERT_TRUE(paired.acquire_paired());
   l = command(4, 1);

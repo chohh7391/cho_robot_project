@@ -2851,9 +2851,9 @@ TEST(OpenArmMitRealHoldTorque, TheFixtureContaminationExceedsTheShippedBand)
 
 TEST(OpenArmMitRealHoldTorque, AnEstimateOutsideTheTauFfBoundIsRejectedLikeAnOutOfRangeTauFf)
 {
-  // The reference: joint 5's tau_ff past its 7 N m, rejected by the adapter's
-  // own tuple check. A hold torque past the same bound is rejected by the
-  // consumer's validity rule instead; the outcome must be the same.
+  // The reference: joint 5's tau_ff past its 7 N m, rejected by the consumer's
+  // tuple-effort check. A hold torque past the same bound is rejected by its
+  // validity rule instead; the outcome must be the same.
   CommitOutcome reference;
   second_commit(set_command("openarm_joint5/effort", 7.5), reference);
   ASSERT_EQ(reference.status, kSafe);

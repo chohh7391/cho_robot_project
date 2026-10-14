@@ -34,6 +34,7 @@
 
 #include "cho_openarm_mit_core/mit_limiter.hpp"
 #include "cho_openarm_mit_core/mit_protocol.hpp"
+#include "cho_openarm_mit_core/testing/unbounded_consumer.hpp"
 
 namespace
 {
@@ -45,6 +46,7 @@ using cho_openarm_mit_core::kJointsPerArm;
 using cho_openarm_mit_core::Limiter;
 using cho_openarm_mit_core::MitStatus;
 using cho_openarm_mit_core::PairedConsumer;
+using cho_openarm_mit_core::testing::unbounded_arm_consumer;
 using cho_openarm_mit_core::ValidationLimits;
 using A = std::array<double, kJointsPerArm>;
 
@@ -54,8 +56,9 @@ constexpr double kMotion = 0.1;     // rad/s, the profile's safe_hold_motion_vel
 constexpr double kBand = 0.5;       // N m
 constexpr double kHold = 2.0;       // N m, a producer's gravity estimate
 constexpr double kContaminated = 3.5;
-// max_abs_effort (the tau_ff validation bound) is 50; banded()'s hold effort
-// limit, which also bounds a valid hold torque, is 40.
+// max_abs_effort (validate_tuple's scalar tau_ff bound) is 50; banded()'s hold
+// effort limit, the joint's tau_ff bound for commits and holds (a tuple's effort
+// and a valid hold torque), is 40.
 constexpr ValidationLimits kLimits{3.5, 10.0, 200.0, 10.0, 50.0, 100};
 
 A filled(double value)
@@ -82,13 +85,6 @@ ArmCommand command(std::uint64_t session, double generation, double position, co
 ArmConsumer banded(const A & band = filled(kBand), double motion = kMotion)
 {
   return ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), band, motion);
-}
-
-// A consumer that never bounds a hold: band and motion velocity +inf, stated.
-ArmConsumer unbounded(
-  const A & damping, const A & stiffness, const A & effort_limit = filled(kLimits.max_abs_effort))
-{
-  return ArmConsumer(kLimits, damping, stiffness, effort_limit, filled(kInf), kInf);
 }
 
 // A moving read: joint `moving` at `speed`, the others at rest.
@@ -366,7 +362,7 @@ TEST(ArmConsumerHold, AC1_AnEstimateOverTheTauFfBoundRejectsTheCommit)
   auto reference = banded();  // the status an out-of-range tau_ff produces
   ASSERT_TRUE(reference.configure(1, filled(0.0)));
   auto bad_tau = command(1, 1, 0.4, filled(kNaN));
-  bad_tau.joints[3].effort = 50.5;
+  bad_tau.joints[3].effort = 40.5;  // over the joint's tau_ff bound, under max_abs_effort
   EXPECT_FALSE(reference.accept_and_write(bad_tau));
   const MitStatus rejected = reference.status();
   EXPECT_EQ(rejected, MitStatus::SAFE_TRANSITION);
@@ -579,7 +575,7 @@ TEST(ArmConsumerHold, AC3_AnUnboundedConsumerKeepsTheMeasuredTorqueInMotion)
 {
   const A measured = filled(kHold + kContaminated);
   {
-    auto consumer = unbounded(filled(2.0), filled(30.0));
+    auto consumer = unbounded_arm_consumer(kLimits, filled(2.0), filled(30.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -589,7 +585,7 @@ TEST(ArmConsumerHold, AC3_AnUnboundedConsumerKeepsTheMeasuredTorqueInMotion)
     }
   }
   {
-    auto consumer = unbounded(filled(2.0), filled(3.0));
+    auto consumer = unbounded_arm_consumer(kLimits, filled(2.0), filled(3.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -597,7 +593,7 @@ TEST(ArmConsumerHold, AC3_AnUnboundedConsumerKeepsTheMeasuredTorqueInMotion)
     EXPECT_DOUBLE_EQ(consumer.submitted().joints[0].effort, kHold + kContaminated);
   }
   {
-    auto consumer = unbounded(filled(2.0), filled(3.0), filled(40.0));
+    auto consumer = unbounded_arm_consumer(kLimits, filled(2.0), filled(3.0), filled(40.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -608,7 +604,7 @@ TEST(ArmConsumerHold, AC3_AnUnboundedConsumerKeepsTheMeasuredTorqueInMotion)
 
 TEST(ArmConsumerHold, AC1_AnUnboundedConsumerStillValidatesTheEstimate)
 {
-  auto consumer = unbounded(filled(2.0), filled(30.0));
+  auto consumer = unbounded_arm_consumer(kLimits, filled(2.0), filled(30.0));
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   EXPECT_FALSE(consumer.accept_and_write(command(1, 1, 0.4, filled(51.0))));
   EXPECT_EQ(consumer.status(), MitStatus::SAFE_TRANSITION);

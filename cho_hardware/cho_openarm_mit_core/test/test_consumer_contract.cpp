@@ -308,6 +308,46 @@ TEST(HoldTorqueValidity, AC5_ArmConsumerLimitIsPerJointNotTheScalarMaximum)
   }
 }
 
+// The tuple's effort is bounded by the same per-joint array as the hold torque: the
+// joint's tau_ff bound, below limits.max_abs_effort (which validate_tuple() checks).
+
+TEST(TupleEffortLimit, ArmConsumerRejectsATupleEffortOverTheJointsLimit)
+{
+  for (std::size_t j = 0; j < kJointsPerArm; ++j) {
+    // Over the limit, and under max_abs_effort: validate_tuple() alone accepts these.
+    ASSERT_LT(kEffortLimit[j] + 0.5, kLimits.max_abs_effort);
+    for (const double sign : {1.0, -1.0}) {
+      auto consumer = limited_consumer();
+      ASSERT_TRUE(consumer.configure(1, filled(0.0)));
+      ASSERT_TRUE(consumer.accept_and_write(commit(1, filled(kNaN))));
+
+      auto bad = commit(2, filled(kNaN));
+      bad.joints[j].effort = sign * (kEffortLimit[j] + 0.5);
+      EXPECT_FALSE(consumer.accept_and_write(bad)) << "joint " << j << " sign " << sign;
+      EXPECT_NE(consumer.status(), MitStatus::ACTIVE) << "joint " << j;
+      // The accepted state is unchanged: no new acknowledgement, the old tuple kept.
+      EXPECT_EQ(consumer.ack_generation(), 1u) << "joint " << j;
+      EXPECT_DOUBLE_EQ(consumer.submitted().joints[j].effort, 0.5) << "joint " << j;
+    }
+  }
+}
+
+TEST(TupleEffortLimit, ArmConsumerAcceptsATupleEffortAtTheJointsLimit)
+{
+  auto consumer = limited_consumer();
+  ASSERT_TRUE(consumer.configure(1, filled(0.0)));
+  auto at_limit = commit(1, filled(kNaN));
+  for (std::size_t j = 0; j < kJointsPerArm; ++j) {
+    at_limit.joints[j].effort = (j % 2 == 0) ? kEffortLimit[j] : -kEffortLimit[j];
+  }
+  EXPECT_TRUE(consumer.accept_and_write(at_limit));
+  EXPECT_EQ(consumer.status(), MitStatus::ACTIVE);
+  EXPECT_EQ(consumer.ack_generation(), 1u);
+  for (std::size_t j = 0; j < kJointsPerArm; ++j) {
+    EXPECT_DOUBLE_EQ(consumer.submitted().joints[j].effort, at_limit.joints[j].effort) << j;
+  }
+}
+
 TEST(HoldTorqueValidity, AC5_ARejectedEstimateSendsTheArmToSafeLikeAnyInvalidCommit)
 {
   // The outcome of an invalid h is the outcome of any invalid commit (here an

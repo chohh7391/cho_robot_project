@@ -15,11 +15,11 @@
 // The SAFE hold's target: where the arm is when SAFE happens, not where it
 // was at configure().
 #include "cho_openarm_mit_core/mit_protocol.hpp"
+#include "cho_openarm_mit_core/testing/unbounded_consumer.hpp"
 
 #include <array>
 #include <cmath>
 #include <gtest/gtest.h>
-#include <limits>
 #include <stdexcept>
 
 namespace
@@ -28,6 +28,7 @@ using cho_openarm_mit_core::ArmCommand;
 using cho_openarm_mit_core::ArmConsumer;
 using cho_openarm_mit_core::kJointsPerArm;
 using cho_openarm_mit_core::MitStatus;
+using cho_openarm_mit_core::testing::unbounded_arm_consumer;
 using cho_openarm_mit_core::ValidationLimits;
 
 constexpr ValidationLimits kLimits{3.5, 10.0, 200.0, 10.0, 50.0, 100};
@@ -37,18 +38,6 @@ std::array<double, kJointsPerArm> filled(double value)
   std::array<double, kJointsPerArm> q{};
   q.fill(value);
   return q;
-}
-
-constexpr double kUnbounded = std::numeric_limits<double>::infinity();
-
-// A consumer whose hold is never bounded in motion (band and motion velocity
-// +inf), with `damping` and `stiffness` on every joint.
-ArmConsumer unbounded(
-  double damping, double stiffness,
-  const std::array<double, kJointsPerArm> & effort_limit = filled(kLimits.max_abs_effort))
-{
-  return ArmConsumer(
-    kLimits, filled(damping), filled(stiffness), effort_limit, filled(kUnbounded), kUnbounded);
 }
 
 // A read at rest.
@@ -67,7 +56,7 @@ ArmCommand command(double session, double generation, double position)
 }
 
 TEST(ArmConsumer, ASafeTransitionHoldsThePoseMeasuredWhenItHappens) {
-  auto consumer = unbounded(2.0, 30.0);
+  auto consumer = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4)));
   // The arm has since moved toward the command, and holds there with 1.2 N m
@@ -91,7 +80,7 @@ TEST(ArmConsumer, AFreshSessionSeedsItsFirstHoldFromTheTorqueMeasuredAtTheSeedRe
   // The motors were holding the arm when the session was configured (a
   // reactivation): the first hold must keep that torque. It used to start at
   // zero, and at the safe gains a zero tau_ff dropped a held arm.
-  auto consumer = unbounded(2.0, 3.0);
+  auto consumer = unbounded_arm_consumer(kLimits, 2.0, 3.0);
   EXPECT_FALSE(consumer.accept_and_write(command(0, 1, 0.0)));  // not configured yet
   ASSERT_TRUE(consumer.configure(4, filled(0.2), filled(-7.5)));
   consumer.request_safe_transition(true);
@@ -117,7 +106,7 @@ TEST(ArmConsumer, TheHoldTorqueIsClampedPerJointAndANonFiniteSampleIsIgnored) {
   std::array<double, kJointsPerArm> limit{};
   limit.fill(7.0);
   limit[0] = 40.0;
-  auto consumer = unbounded(2.0, 3.0, limit);
+  auto consumer = unbounded_arm_consumer(kLimits, 2.0, 3.0, limit);
   ASSERT_TRUE(consumer.configure(1, filled(0.0), filled(0.0)));
   consumer.observe(filled(0.1), kAtRest, filled(20.0));
   auto sample = filled(-30.0);
@@ -133,11 +122,11 @@ TEST(ArmConsumer, TheHoldTorqueIsClampedPerJointAndANonFiniteSampleIsIgnored) {
   EXPECT_DOUBLE_EQ(consumer.hold_effort()[1], -7.0);
   // A limit outside the validation envelope is a configuration error.
   limit[4] = 51.0;
-  EXPECT_THROW(unbounded(2.0, 3.0, limit), std::invalid_argument);
+  EXPECT_THROW(unbounded_arm_consumer(kLimits, 2.0, 3.0, limit), std::invalid_argument);
 }
 
 TEST(ArmConsumer, ALeaseExpiryHoldsTheLatestPoseToo) {
-  auto consumer = unbounded(2.0, 30.0);
+  auto consumer = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4)));
   for (int cycle = 0; cycle < 9; ++cycle) {
@@ -151,8 +140,8 @@ TEST(ArmConsumer, ALeaseExpiryHoldsTheLatestPoseToo) {
 }
 
 TEST(ArmConsumer, TheHoldBoundMustBeANonNegativeBandAndAPositiveMotionVelocity) {
-  const auto inf = std::numeric_limits<double>::infinity();
   // +inf on both: a hold never bounded, which the caller states.
+  constexpr double inf = cho_openarm_mit_core::testing::kUnbounded;
   EXPECT_NO_THROW(ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(inf), inf));
   EXPECT_NO_THROW(ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(0.0), 0.1));
   for (const double band : {-0.1, std::nan("")}) {
@@ -190,7 +179,7 @@ TEST(ArmConsumer, APositionOnlyReadingKeepsTheVelocityAndTorqueSamplesTogether) 
 }
 
 TEST(ArmConsumer, ANonFiniteReadingKeepsThePreviousPose) {
-  auto consumer = unbounded(2.0, 30.0);
+  auto consumer = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   ASSERT_TRUE(consumer.configure(1, filled(0.1)));
   auto bad = filled(0.2);
   bad[3] = std::nan("");

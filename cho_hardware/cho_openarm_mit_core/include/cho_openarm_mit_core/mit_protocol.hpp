@@ -195,9 +195,8 @@ bool is_exact_nonnegative_integer(double value);
 bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
 // The hold-torque validity rule of every consumer, per joint of a commit:
 // kNoHoldTorque (NaN), or finite with |hold_torque| <= limit, `limit` being
-// that joint's hold effort limit -- the bound its hold tau_ff is clamped to
-// (bounded_hold_torque()'s effort_limit). Anything else, an infinity included,
-// makes the whole commit invalid.
+// that joint's hold effort limit (ArmConsumer's constructor; bounded_hold_torque()'s
+// effort_limit). Anything else, an infinity included, makes the whole commit invalid.
 bool valid_hold_torque(double hold_torque, double limit);
 
 // in_motion of bounded_hold_torque()'s rule; a non-finite dq counts as motion.
@@ -263,9 +262,11 @@ class ArmConsumer
 public:
   // Per joint: the hold's safe gains (an MIT motor has no internal gravity
   // model, so a SAFE hold that collapsed seven joints onto the smallest wrist
-  // gain could not hold the shoulder or elbow against gravity), the hold's
-  // effort limit (each in [0, limits.max_abs_effort]), and the hold's bound in
-  // motion, the profile's safe_hold_torque_band (each >= 0) and
+  // gain could not hold the shoulder or elbow against gravity); the hold
+  // effort limit (each in [0, limits.max_abs_effort]), the joint's tau_ff bound
+  // for commits and holds: a commit whose tuple effort or hold torque exceeds
+  // it is invalid, and a hold's tau_ff is clamped to it; and the hold's bound
+  // in motion, the profile's safe_hold_torque_band (each >= 0) and
   // safe_hold_motion_velocity (> 0). +inf on both band and velocity never
   // bounds a hold: a caller that means that passes it.
   ArmConsumer(
@@ -308,8 +309,9 @@ public:
   // h: the hold_torque of the last commit accepted in this session, NaN where
   // there is none.
   const std::array<double, kJointsPerArm> & held_hold_torque() const {return hold_torque_;}
-  // A commit whose hold_torque fails valid_hold_torque() on any joint is
-  // invalid like any other (INVALID, then SAFE).
+  // A commit is invalid (INVALID, then SAFE) if any joint's tuple fails
+  // validate_tuple() or has |effort| > hold_effort_limit, or its hold_torque
+  // fails valid_hold_torque() against the same limit.
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
   bool successful_write_cycle();
   void request_safe_transition(bool recoverable = false);
@@ -352,6 +354,7 @@ private:
   std::array<double, kJointsPerArm> hold_torque_band_{};
   double hold_motion_velocity_{0.0};
   void sample_effort(const std::array<double, kJointsPerArm> & effort);
+  bool valid_tuples(const ArmCommand & command) const;
   bool valid_hold_torques(const std::array<double, kJointsPerArm> & hold_torque) const;
   void forget_samples_and_hold_torque();
 };

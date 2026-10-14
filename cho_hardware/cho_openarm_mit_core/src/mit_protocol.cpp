@@ -510,6 +510,19 @@ void ArmConsumer::sample_effort(const std::array<double, kJointsPerArm> & effort
   }
 }
 
+bool ArmConsumer::valid_tuples(const ArmCommand & command) const
+{
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    // validate_tuple() bounds the effort by the scalar limits_.max_abs_effort;
+    // hold_effort_limit_[i] is this joint's own tau_ff bound, no larger.
+    if (!validate_tuple(command.joints[i], limits_) ||
+        std::abs(command.joints[i].effort) > hold_effort_limit_[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ArmConsumer::valid_hold_torques(const std::array<double, kJointsPerArm> & hold_torque) const
 {
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
@@ -531,8 +544,7 @@ bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_su
       static_cast<std::uint64_t>(c.generation) <= ack_generation_ ||
       !is_exact_nonnegative_integer(c.lease_cycles) || c.lease_cycles == 0.0 ||
       c.lease_cycles > static_cast<double>(limits_.max_lease_cycles) ||
-      !std::all_of(c.joints.begin(), c.joints.end(), [this](const auto & j) {return validate_tuple(j, limits_);}) ||
-      !valid_hold_torques(c.hold_torque)) {
+      !valid_tuples(c) || !valid_hold_torques(c.hold_torque)) {
     // An invalid snapshot is diagnostic failure, but must also schedule a hardware-owned
     // measured-position hold so the last ACTIVE tuple is not left on the transport.
     status_ = MitStatus::INVALID; permanent_latched_ = true;

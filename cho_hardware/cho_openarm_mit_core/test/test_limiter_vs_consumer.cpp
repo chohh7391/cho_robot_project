@@ -101,7 +101,9 @@ ValidationLimits real_adapter_limits(const SafetyProfile & p)
     p.lease_cap};
 }
 
-// The real adapter's per-joint gate: a commit outside it is rejected, not sent.
+// The real adapter's own per-joint gate (window, velocity, gains): a commit outside
+// it is rejected, not sent. The tuple's tau_ff against tau_ff_max is the consumer's
+// check (accept_and_write), made right after this one.
 bool real_adapter_accepts(const SafetyProfile & p, const ArmCommand & c)
 {
   for (std::size_t j = 0; j < kJointsPerArm; ++j) {
@@ -109,7 +111,7 @@ bool real_adapter_accepts(const SafetyProfile & p, const ArmCommand & c)
     if (
       t.position < p.position_lower[j] || t.position > p.position_upper[j] ||
       std::abs(t.velocity) > p.command_velocity[j] || t.stiffness > p.kp_max[j] ||
-      t.damping > p.kd_max[j] || std::abs(t.effort) > p.tau_ff_max[j])
+      t.damping > p.kd_max[j])
       return false;
   }
   return true;

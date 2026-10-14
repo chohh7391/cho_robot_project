@@ -88,9 +88,9 @@ contract, with what bounds `h` and when it is kept, is
 
 The MuJoCo `Limiter` holds the same tuple, its measured torque being the
 torque it applied in the previous cycle (the simulator's measured joint
-torque); its hold effort limit is `tau_ff_magnitude`. `reset()` seeds a new
-session from that torque and forgets `h`. A latch (`request_safe()` or a lease
-expiry) sets `q_des` to the measured pose, which removes the spring's share
+torque); its hold effort limit (the joint's tau_ff bound, as `ArmConsumer`'s)
+is `tau_ff_magnitude`. `reset()` seeds a new session from that torque and
+forgets `h`. A latch (`request_safe()` or a lease expiry) sets `q_des` to the measured pose, which removes the spring's share
 `kp * (q_des - q)` in that cycle, so the latched `tau_ff` applies in that cycle
 too, past the `tau_ff` slew: at rest the output continues from the torque
 before the latch. The gains still slew to the safe gains, and the final torque
@@ -98,3 +98,6 @@ keeps its saturation and slew. `test_mit_limiter` checks the torque across the
 latch at 1 kHz; `test_limiter_vs_consumer` that both consumers bound a hold in
 motion alike. `mit_command_v1.yaml`'s `safe_seed` (`tau_ff: measured_torque`,
 with its `tau_ff_bound`) names this hold for both adapters.
+
+A test that needs a consumer that never bounds a hold takes it from
+`testing/unbounded_consumer.hpp` (band and motion velocity +inf, stated).

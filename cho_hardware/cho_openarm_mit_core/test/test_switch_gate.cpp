@@ -15,10 +15,10 @@
 // The controller-switch rule shared by every OpenArm MIT backend (SwitchGate),
 // and the commit fence it relies on (ArmConsumer::discard_commit).
 #include "cho_openarm_mit_core/mit_protocol.hpp"
+#include "cho_openarm_mit_core/testing/unbounded_consumer.hpp"
 
 #include <array>
 #include <gtest/gtest.h>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -32,20 +32,10 @@ using cho_openarm_mit_core::complete_claims;
 using cho_openarm_mit_core::kJointsPerArm;
 using cho_openarm_mit_core::MitStatus;
 using cho_openarm_mit_core::SwitchGate;
+using cho_openarm_mit_core::testing::unbounded_arm_consumer;
 using cho_openarm_mit_core::ValidationLimits;
 
 constexpr ValidationLimits kLimits{3.5, 10.0, 200.0, 10.0, 50.0, 100};
-
-// A consumer whose hold is never bounded in motion (band and motion velocity
-// +inf): damping 2, stiffness 30, the hold's effort limit max_abs_effort.
-ArmConsumer unbounded_consumer()
-{
-  using cho_openarm_mit_core::detail::every_joint;
-  constexpr double kUnbounded = std::numeric_limits<double>::infinity();
-  return ArmConsumer(
-    kLimits, every_joint(2.0), every_joint(30.0), every_joint(kLimits.max_abs_effort),
-    every_joint(kUnbounded), kUnbounded);
-}
 
 ArmCommand command(double session, double generation, double position)
 {
@@ -168,7 +158,7 @@ TEST(SwitchGate, AnUnrelatedPerformAfterAnAbandonedPrepareStillDiscards) {
 }
 
 TEST(ArmConsumer, ADiscardedCommitAdvancesTheAckWithoutRunning) {
-  ArmConsumer consumer = unbounded_consumer();
+  ArmConsumer consumer = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   std::array<double, kJointsPerArm> q{};
   ASSERT_TRUE(consumer.configure(1, q));
   ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.1)));
@@ -191,7 +181,7 @@ TEST(ArmConsumer, ADiscardedCommitAdvancesTheAckWithoutRunning) {
   ArmConsumer shadow = consumer;
   EXPECT_FALSE(shadow.accept_and_write(command(1, 2, 0.2)));
   // ...and the incoming producer, continuing from the ack, commits above it.
-  ArmConsumer fresh = unbounded_consumer();
+  ArmConsumer fresh = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   ASSERT_TRUE(fresh.configure(1, q));
   ASSERT_TRUE(fresh.discard_commit(5.0));
   EXPECT_TRUE(fresh.accept_and_write(command(1, 6, 0.2)));
@@ -199,7 +189,7 @@ TEST(ArmConsumer, ADiscardedCommitAdvancesTheAckWithoutRunning) {
 }
 
 TEST(ArmConsumer, NothingIsDiscardedOutsideASession) {
-  ArmConsumer consumer = unbounded_consumer();
+  ArmConsumer consumer = unbounded_arm_consumer(kLimits, 2.0, 30.0);
   EXPECT_FALSE(consumer.discard_commit(3.0));
   EXPECT_EQ(consumer.ack_generation(), 0u);
 }

@@ -189,10 +189,11 @@ endpoints (`gripper_motor_closed`/`_open`, `gripper_joint_closed`/`_open`) and
 - **A commit is validated, not clamped.** Each tuple must lie inside the
   profile's per-joint position window, command velocity, `kp_max`, `kd_max` and
   `tau_ff_magnitude`, and each hold torque must be valid by the
-  [Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque) rule, which
-  `ArmConsumer` checks against `tau_ff_magnitude`; a commit with any joint
-  outside is rejected. The motor evaluates the MIT equation itself; this
-  adapter applies no slew. The hold torque is never sent.
+  [Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque) rule;
+  `ArmConsumer` checks the tuple's effort and the hold torque against
+  `tau_ff_magnitude`. A commit with any joint outside is rejected. The motor
+  evaluates the MIT equation itself; this adapter applies no slew. The hold
+  torque is never sent.
 - **What goes out is bounded to the final torque.** Every tuple sent (commit,
   ACTIVE re-send, SAFE hold, the write watchdog's last hold) has `q_des`, then
   `dq_des`, moved toward the latest measured state until

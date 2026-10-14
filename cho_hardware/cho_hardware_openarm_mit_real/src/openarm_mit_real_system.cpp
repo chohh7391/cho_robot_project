@@ -795,8 +795,8 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
     // The hold's tau_ff is the measured joint torque (ArmConsumer), and a hold
     // latched in motion is bounded to the last accepted commit's hold torque
     // (docs/openarm_mit_contract_v1.md, "Hold torque"). tau_ff_max is its
-    // per-joint hold effort limit: the bound the hold's tau_ff is clamped to
-    // and the one the consumer validates a commit's hold torque against.
+    // per-joint tau_ff bound: the one the consumer validates a commit's tuple
+    // effort and hold torque against, and clamps a hold's tau_ff to.
     consumer_ = std::make_unique<cho_openarm_mit_core::ArmConsumer>(
       limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness,
       safety_profile_.tau_ff_max, safety_profile_.safe_hold_torque_band,
@@ -1724,8 +1724,8 @@ bool OpenArmMitRealSystem::apply_producer_input()
   bool per_joint_limits_valid = true;
   for (std::size_t index = 0; index < kArmDof; ++index) {
     const auto & tuple = command.joints[index];
-    // The commit's hold torque is not checked here: the consumer validates it
-    // against its hold effort limit, tau_ff_max (valid_hold_torque()), in
+    // The tuple's effort and the commit's hold torque are not checked here: the
+    // consumer validates both against its hold effort limit, tau_ff_max, in
     // accept_and_write() below, and a commit it rejects takes the same path as
     // one that fails these checks.
     per_joint_limits_valid =
@@ -1735,8 +1735,7 @@ bool OpenArmMitRealSystem::apply_producer_input()
       std::abs(tuple.velocity) <=
       safety_profile_.command_velocity[index] &&
       tuple.stiffness <= safety_profile_.kp_max[index] &&
-      tuple.damping <= safety_profile_.kd_max[index] &&
-      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
+      tuple.damping <= safety_profile_.kd_max[index];
   }
   // A commit is evaluated once, accepted or not. A rejected one used to be
   // re-evaluated every cycle, and each rejection re-latched the SAFE hold to
