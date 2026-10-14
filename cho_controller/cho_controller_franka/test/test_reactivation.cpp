@@ -719,7 +719,8 @@ protected:
     }
     const auto extra = extra_parameters();
     parameters.insert(parameters.end(), extra.begin(), extra.end());
-    ASSERT_NE(harness_->load(kName, "cho_controller_franka/VLAController", parameters), nullptr);
+    controller_ = harness_->load(kName, "cho_controller_franka/VLAController", parameters);
+    ASSERT_NE(controller_, nullptr);
     ASSERT_TRUE(harness_->configure(kName));
     ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
     client_ = rclcpp_action::create_client<Vla>(harness_->client_node(), std::string("/franka_vla/") + kName + "/vla");
@@ -769,6 +770,7 @@ protected:
 
   static constexpr const char * kName = "vla_controller";
   std::unique_ptr<ControllerManagerHarness> harness_;
+  controller_interface::ControllerInterfaceBaseSharedPtr controller_;
   rclcpp_action::Client<Vla>::SharedPtr client_;
 };
 
@@ -1563,6 +1565,254 @@ TEST_F(VlaStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLi
     EXPECT_GE(q[k][6] - q[k - 1][6], -1e-12) << "joint 7 went backwards at period " << k;
   }
   EXPECT_GT(last[6], q[steady_from][6]) << "the hold target is behind where the motion was";
+}
+
+// S2: the goal ends while joint 7 turns at 0.1 rad/s -- canceled, succeeded,
+// or past goal_timeout_sec -- in position mode (the commanded joints) and in
+// velocity mode (the commanded rates, on a mock arm that integrates them into
+// its joints). Velocity mode runs with kp_joint_vel 0, so the commanded rate is
+// the reference's own: the tracking term is continuous whatever the reference
+// does, and against the mock's two-period lag it moves the arm back by that
+// lag after any stop. As for the hold (AC2, S17), the reference comes to rest
+// inside the limiter's acceleration bound, not in one period: frozen, or pulled
+// to the measurement on success, it would stop at v / dt = 100 rad/s^2. It
+// stands where it stops: never back, put from then on, and a goal sent after it
+// holds there. The result goes out when the end takes effect, before the
+// reference is at rest (VLAActionServer::compute()).
+class VlaEnd : public VlaStream
+{
+protected:
+  enum class End {kCancel, kSuccess, kGoalTimeout};
+
+  virtual bool velocity_mode() const {return false;}
+  // [s]; 0 leaves goal_timeout_sec off.
+  virtual double goal_timeout() const {return 0.0;}
+
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    std::vector<rclcpp::Parameter> parameters;
+    if (velocity_mode()) {
+      parameters = {rclcpp::Parameter("control_mode", "velocity"),
+        rclcpp::Parameter("kp_joint_vel", Doubles(7, 0.0)),
+        rclcpp::Parameter("max_joint_vel", 1.0)};
+    }
+    if (goal_timeout() > 0.0) {
+      parameters.emplace_back("goal_timeout_sec", goal_timeout());
+    }
+    return parameters;
+  }
+
+  // Velocity mode: GenericSystem integrates the commanded rate into the joints.
+  std::string description() const override {return fr3_description(velocity_mode());}
+
+  // The success service's callback, run as the executor runs it. This test does
+  // not depend on std_srvs, so it has no typed client to call it with. The reply
+  // has no client to go to; whether sending it fails does not matter, the
+  // request was handled before it.
+  bool request_success()
+  {
+    rclcpp::ServiceBase::SharedPtr service;
+    controller_->get_node()->get_node_base_interface()->for_each_callback_group(
+      [&service](const rclcpp::CallbackGroup::SharedPtr & group) {
+        if (!service) {
+          service = group->find_service_ptrs_if([](const rclcpp::ServiceBase::SharedPtr & candidate) {
+                return std::string(candidate->get_service_name()) == "/franka_vla/success";
+              });
+        }
+      });
+    if (!service) {
+      return false;
+    }
+    try {
+      service->handle_request(service->create_request_header(), service->create_request());
+    } catch (const std::exception &) {
+    }
+    return true;
+  }
+
+  void end_in_motion(const End how)
+  {
+    constexpr double kRate = 0.1;               // joint 7 [rad/s]
+    constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
+    constexpr double kJerk = kAccelerationLimit / 0.04;  // the limiter's, max_joint_ref_jerk unset
+    constexpr double kDt = ControllerManagerHarness::kPeriod;
+    // From kRate at zero acceleration, kRate < a^2 / j: a stop 2 sqrt(v / j)
+    // long (63 ms) and v sqrt(v / j) far (3.2 mrad); see ReferenceLimiter::come_to_rest().
+    const double stop_distance = kRate * std::sqrt(kRate / kJerk);
+    ASSERT_NO_FATAL_FAILURE(start());  // stream_timeout_sec 5: no hold while this runs
+    harness_->cycle(20);
+    auto result = client_->async_get_result(goal_);
+    const auto ended = [&result] {return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;};
+
+    std::vector<Doubles> rows;  // 10 s of constant rate, far longer than the test runs
+    for (int k = 0; k < 100; ++k) {
+      Doubles row(7, 0.0);
+      row[6] = kRate * 0.1 * k;
+      rows.push_back(row);
+    }
+    publish("joint", "from_anchor", "", "", rows, 0.1);
+    ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+    ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+
+    // q: the joints (position mode: as commanded). v: velocity mode's commanded rates.
+    std::vector<Doubles> q;
+    std::vector<Doubles> v;
+    const auto sample = [&] {
+        q.push_back(harness_->states(kJoints, "position"));
+        if (velocity_mode()) {
+          v.push_back(harness_->states(kJoints, "velocity"));
+        }
+      };
+    const auto step = [&] {
+        tick();
+        sample();
+      };
+    const auto rate = [&](const std::size_t k) {
+        return velocity_mode() ? v[k][6] : (q[k][6] - q[k - 1][6]) / kDt;
+      };
+    sample();
+
+    // Up to speed, then 100 periods at it: the start-up transient is not what is measured.
+    std::size_t steady_from = 0;
+    for (int i = 0; i < 1000 && steady_from == 0; ++i) {
+      step();
+      if (rate(q.size() - 1) > 0.95 * kRate) {
+        steady_from = q.size() - 1;
+      }
+    }
+    ASSERT_GT(steady_from, 0u) << "joint 7 never reached the chunk's rate";
+    for (int i = 0; i < 100; ++i) {
+      step();
+    }
+    ASSERT_FALSE(ended()) << "the goal ended before this test ended it, so nothing below would be tested";
+    const std::size_t ended_at = q.size() - 1;
+
+    std::shared_future<rclcpp_action::Client<Vla>::CancelResponse::SharedPtr> cancel;
+    switch (how) {
+      case End::kCancel:
+        cancel = client_->async_cancel_goal(goal_);
+        break;
+      case End::kSuccess:
+        ASSERT_TRUE(request_success()) << "the controller has no /franka_vla/success service";
+        break;
+      case End::kGoalTimeout:
+        break;
+    }
+    // Until the result arrives, then 300 periods more.
+    for (int i = 0; i < 5000 && !ended(); ++i) {
+      step();
+    }
+    ASSERT_TRUE(ended()) << "the goal was never ended";
+    const std::size_t result_at = q.size() - 1;
+    for (int i = 0; i < 300; ++i) {
+      step();
+    }
+
+    const auto wrapped = result.get();
+    switch (how) {
+      case End::kCancel:
+        EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::CANCELED);
+        break;
+      case End::kSuccess:
+        EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::SUCCEEDED);
+        EXPECT_TRUE(wrapped.result->is_completed);
+        break;
+      case End::kGoalTimeout:
+        EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+        EXPECT_NE(wrapped.result->message.find("goal_timeout_sec"), std::string::npos) << wrapped.result->message;
+        break;
+    }
+
+    // The commanded acceleration, from the steady motion on: the second
+    // difference of the commanded joints, or the difference of the commanded rates.
+    double worst_acceleration = 0.0;
+    for (std::size_t k = std::max<std::size_t>(steady_from + 100, 2); k < q.size(); ++k) {
+      for (std::size_t j = 0; j < 7; ++j) {
+        const double a = velocity_mode()
+          ? std::abs(v[k][j] - v[k - 1][j]) / kDt
+          : std::abs(q[k][j] - 2.0 * q[k - 1][j] + q[k - 2][j]) / (kDt * kDt);
+        worst_acceleration = std::max(worst_acceleration, a);
+      }
+    }
+    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(worst_acceleration));
+    EXPECT_LE(worst_acceleration, kAccelerationLimit * 1.05)
+      << "the command accelerated at " << worst_acceleration << " rad/s^2 on the way to rest";
+
+    // When the result came, and when joint 7 slowed below 1 % of its rate.
+    std::size_t slow_at = q.size() - 1;
+    for (std::size_t k = ended_at + 1; k < q.size(); ++k) {
+      if (std::abs(rate(k)) < 0.01 * kRate) {
+        slow_at = k;
+        break;
+      }
+    }
+    RecordProperty("periods_from_end_request_to_result", std::to_string(result_at - ended_at));
+    RecordProperty("periods_from_end_request_to_rest", std::to_string(slow_at - ended_at));
+    EXPECT_LT(result_at, slow_at) << "the result waited for the reference to come to rest";
+
+    // At rest, ahead of where the motion was when the end was asked for and
+    // within the stop's distance of where it was when the result came; never back.
+    const Doubles last = q.back();
+    EXPECT_LT(std::abs(rate(q.size() - 1)), 1e-3 * kRate) << "joint 7 is still moving";
+    std::size_t back_at = 0;
+    for (std::size_t k = steady_from + 1; k < q.size() && back_at == 0; ++k) {
+      if (q[k][6] - q[k - 1][6] < -1e-12) {
+        back_at = k;
+      }
+    }
+    EXPECT_EQ(back_at, 0u) << "joint 7 went backwards at period " << back_at << ", "
+                           << back_at - ended_at << " after the end was asked for";
+    EXPECT_GT(last[6], q[ended_at][6]) << "the reference stopped behind where the motion was";
+    EXPECT_LT(last[6], q[result_at][6] + 1.5 * stop_distance) << "the reference ran on past its stop";
+
+    if (how != End::kCancel) {
+      return;
+    }
+    // A goal sent now holds where the reference stopped.
+    ASSERT_NE(send(5.0), nullptr) << "the next goal was rejected";
+    for (int i = 0; i < 200; ++i) {
+      step();
+    }
+    EXPECT_LT(max_abs_difference(q.back(), last), 1e-9) << "the next goal moved the reference from where it stopped";
+    if (velocity_mode()) {
+      EXPECT_LT(max_abs_difference(v.back(), Doubles(7, 0.0)), 1e-9) << "the next goal commands a rate while it holds";
+    }
+  }
+};
+
+class VlaEndTimeout : public VlaEnd
+{
+protected:
+  // Long enough for start() and the chunk's ramp to speed, which run inside it.
+  double goal_timeout() const override {return 3.0;}
+};
+
+class VlaEndVelocity : public VlaEnd
+{
+protected:
+  bool velocity_mode() const override {return true;}
+};
+
+class VlaEndVelocityTimeout : public VlaEndVelocity
+{
+protected:
+  double goal_timeout() const override {return 3.0;}
+};
+
+TEST_F(VlaEnd, S2_APositionGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
+TEST_F(VlaEnd, S2_APositionGoalSucceededInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kSuccess);}
+TEST_F(VlaEndTimeout, S2_APositionGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
+{
+  end_in_motion(End::kGoalTimeout);
+}
+TEST_F(VlaEndVelocity, S2_AVelocityGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
+TEST_F(VlaEndVelocity, S2_AVelocityGoalSucceededInMotionStopsWithinTheAccelerationLimit)
+{
+  end_in_motion(End::kSuccess);
+}
+TEST_F(VlaEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
+{
+  end_in_motion(End::kGoalTimeout);
 }
 
 // AC10 (S15), Franka host: chunks 0.5 s apart with a 1 s horizon and a goal

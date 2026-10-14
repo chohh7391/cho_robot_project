@@ -36,6 +36,7 @@ default QoS, so re-publishing is the dependable way to cover any start order.
 """
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
@@ -69,8 +70,15 @@ def main(args=None):
     node = IsaacCommandGate()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # Stopping the launch: rclpy's signal handler shuts the context down, and spin() reports that
+        # as ExternalShutdownException, or as KeyboardInterrupt when a SIGINT reaches Python first.
         pass
+    except RuntimeError:
+        # rclpy's RCLError, from a wait set or publish on a context that was shut down between two
+        # cycles. Only that case is a normal exit; with the context alive it is a real error.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

@@ -162,7 +162,8 @@ bool null_space_fits(
          n == jacobian.cols();
 }
 
-// (I - J^T jbar^T) torque, without forming the N x N projector.
+// (I - J^T jbar^T) torque, the transpose of the null-space projector
+// N = I - jbar J applied to a torque, without forming the n x n matrix.
 template<typename JacobianT, typename JbarT, typename TorqueT>
 JointVectorFor<JacobianT> project_out_of_task(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar,
@@ -177,15 +178,38 @@ JointVectorFor<JacobianT> project_out_of_task(
   return projected;
 }
 
+// The null-space part of a joint velocity, N v = v - jbar (J v), without
+// forming the n x n projector N = I - jbar J.
+template<typename JacobianT, typename JbarT, typename VelocityT>
+JointVectorFor<JacobianT> null_space_velocity(
+  const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar,
+  const Eigen::MatrixBase<VelocityT> & velocity)
+{
+  constexpr int kRows = JacobianT::RowsAtCompileTime;
+  constexpr int kMaxRows = kRows == Eigen::Dynamic ? kMaxTaskDim : kRows;
+  JointVectorFor<JacobianT> projected = velocity;
+  Eigen::Matrix<double, kRows, 1, 0, kMaxRows, 1> task;
+  task.noalias() = jacobian * projected;
+  projected.noalias() -= jbar * task;
+  return projected;
+}
+
 }  // namespace detail
 
-// The joint torque that damps a joint velocity v in the task's null space:
-//   tau = -(I - J^T jbar^T) D v,   jbar = M^-1 J^T (J M^-1 J^T)^-1  (N x 6),
-// jbar the dynamically consistent generalized inverse of J (the transpose of
-// the Lambda J M^-1 the torque controllers build), so tau causes no task
-// acceleration: J M^-1 tau = 0. D [N m s/rad] is a scalar here, per joint
-// below; D = 0 is exactly zero torque. J at most kMaxTaskDim x kMaxArmDof,
-// jbar of J's transpose's size, v (and D) as wide as J; a mismatch gives NaN.
+// The joint torque that damps the null-space part of a joint velocity v:
+//   tau = -N^T D N v,   N = I - jbar J,   jbar = M^-1 J^T (J M^-1 J^T)^-1,
+// J m x n (m task rows, n joints) and jbar n x m, the dynamically consistent
+// generalized inverse of J (the transpose of the Lambda J M^-1 the torque
+// controllers build). N v is computed as v - jbar (J v) and N^T as
+// I - J^T jbar^T, so no n x n matrix is formed. The torque
+// - is passive: v^T tau = -(N v)^T D (N v) <= 0 for D >= 0, whatever jbar is
+//   (a regularized Lambda included). N^T D N is positive semidefinite for a
+//   scalar D >= 0 and for a diagonal per-joint D >= 0 alike;
+// - is zero for pure task motion: v = jbar xdot gives N v = 0 (J jbar = I);
+// - causes no task acceleration: J M^-1 tau = 0 (J M^-1 N^T = 0).
+// D [N m s/rad] is a scalar here, per joint below; D = 0 is exactly zero
+// torque. J at most kMaxTaskDim x kMaxArmDof, jbar of J's transpose's size,
+// v (and D) as wide as J; a mismatch gives NaN.
 template<typename JacobianT, typename JbarT, typename VelocityT>
 JointVectorFor<JacobianT> null_space_damping_torque(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar, double damping,
@@ -194,10 +218,11 @@ JointVectorFor<JacobianT> null_space_damping_torque(
   if (!detail::null_space_fits(jacobian, jbar, velocity.size())) {
     return detail::refused_joint_vector(jacobian);
   }
-  return detail::project_out_of_task(jacobian, jbar, -damping * velocity);
+  const JointVectorFor<JacobianT> null_velocity = detail::null_space_velocity(jacobian, jbar, velocity);
+  return detail::project_out_of_task(jacobian, jbar, -damping * null_velocity);
 }
 
-// Per-joint damping: tau = -(I - J^T jbar^T) (D .* v).
+// Per-joint damping, D = diag(d): tau = -N^T (d .* (N v)).
 template<typename JacobianT, typename JbarT, typename DampingT, typename VelocityT>
 JointVectorFor<JacobianT> null_space_damping_torque(
   const Eigen::MatrixBase<JacobianT> & jacobian, const Eigen::MatrixBase<JbarT> & jbar,
@@ -206,7 +231,8 @@ JointVectorFor<JacobianT> null_space_damping_torque(
   if (!detail::null_space_fits(jacobian, jbar, velocity.size()) || damping.size() != velocity.size()) {
     return detail::refused_joint_vector(jacobian);
   }
-  return detail::project_out_of_task(jacobian, jbar, -damping.cwiseProduct(velocity));
+  const JointVectorFor<JacobianT> null_velocity = detail::null_space_velocity(jacobian, jbar, velocity);
+  return detail::project_out_of_task(jacobian, jbar, -damping.cwiseProduct(null_velocity));
 }
 
 // The pose error of `desired` relative to `reference`, in reference's local

@@ -156,6 +156,8 @@ void VLAController::latch_activation_state()
   // Position mode starts from the held command taken in on_activate; the other
   // modes from the measurement.
   q_ref_ = (control_mode_ == ControlMode::kPosition) ? activation_seed_ : state_.q_arm;
+  q_ref_rate_.setZero();
+  end_stopping_ = false;
   ref_fk_dirty_ = true;
   activation_state_latched_ = true;
 }
@@ -173,14 +175,19 @@ controller_interface::return_type VLAController::update(
 
   // The action space and the desired twist come from the running VLA goal.
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
-  // one that outlived a deactivation -- and when there is no goal at all: then
-  // its trajectory is not sampled and the idle branch holds.
+  // one that outlived a deactivation, and in the position and velocity modes
+  // also succeeded -- when there is no goal at all, and while q_ref_ is still
+  // coming to rest from a goal (set_reference_settling()): then its trajectory
+  // is not sampled and the idle branch holds.
   //
   // Called every cycle, goal or not, because compute() also feeds the server's
   // anchor history (the reference at each instant, for relative chunks). Gated
   // on is_running(), as it was, the history stopped between goals, and a chunk
   // observed before its goal started was anchored to the end of the PREVIOUS
   // goal -- reported as exact, since an entry at or before its time existed.
+  if (action_server_) {
+    action_server_->set_reference_settling(end_stopping_);
+  }
   const bool vla_running = action_server_ && action_server_->compute(time, state_);
   cho_vla_core::ActionSpace space = cho_vla_core::ActionSpace::kTask;
   Vector6d twist_des = Vector6d::Zero();
@@ -229,6 +236,15 @@ controller_interface::return_type VLAController::update(
           task_ik_gain_, dt * 1e3, task_ik_gain_ * dt, 1.0 / dt);
     }
     write_open_loop(space, vla_running && !task_ik_gain_fault_, twist_des, dt);
+    if (!vla_running) {
+      // Idle: what these modes hold is q_ref_, coming to rest and then frozen,
+      // not the measurement latched when the goal finished (H_ee_init). The next
+      // goal's hold and limiter seed are taken from *_des
+      // (VLAActionServer::compute()), so it starts where the reference stands.
+      state_.q_arm_des = q_ref_;
+      state_.H_ee_des = state_.H_ee_ref;
+      state_.v_arm_des = q_ref_rate_;
+    }
   }
   return controller_interface::return_type::OK;
 }
@@ -359,15 +375,52 @@ void VLAController::arm_kinematics_world(
   jacobian.bottomRows<3>() = pose.rotation() * local.bottomRows<3>();
 }
 
+void VLAController::come_to_rest(const double dt)
+{
+  if (!end_stopping_) {
+    // From where q_ref_ is and the rate it moved at last cycle, at zero
+    // acceleration. The joint velocity bound is raised to that rate where it is
+    // faster -- a task-space goal's joint rates are bounded by max_joint_vel, not
+    // max_joint_ref_vel -- since the seed's rate is clamped into it.
+    cho_vla_core::ReferenceLimiter::Params params = action_server_->limiter_params();
+    for (int i = 0; i < num_dof_; ++i) {
+      params.max_joint_velocity(i) = std::max(params.max_joint_velocity(i), std::abs(q_ref_rate_(i)));
+    }
+    end_stop_.set_params(params);
+    cho_vla_core::Reference from;
+    from.space = cho_vla_core::ActionSpace::kJoint;
+    from.joints = q_ref_;
+    from.joint_velocity = q_ref_rate_;
+    from.pose = state_.H_ee_ref;
+    end_stop_clock_ = 0.0;
+    end_stop_.seed_with_rates(from, end_stop_clock_);
+    end_stopping_ = true;
+  }
+  // One nominal period per cycle, as q_ref_ advances; capped at the step the
+  // limiter takes for a clock jump, on which it would not advance at all.
+  end_stop_clock_ += std::min(dt, cho_vla_core::ReferenceLimiter::kClockRebaseSec);
+  const cho_vla_core::Reference stop = end_stop_.come_to_rest(end_stop_clock_);
+  q_ref_ = stop.joints;
+  FrankaBaseController::clamp_to_joint_limits(q_ref_);
+  ref_fk_dirty_ = true;
+  // At rest come_to_rest() holds the position exactly, at a rate of exactly
+  // zero. A non-finite rate ends the stop as well: it would never come to rest,
+  // and the next goal waits for it (VLAActionServer::set_reference_settling()).
+  if (!stop.joint_velocity.allFinite() || (stop.joint_velocity.array() == 0.0).all()) {
+    end_stopping_ = false;
+  }
+}
+
 void VLAController::write_open_loop(
   const cho_vla_core::ActionSpace space, const bool vla_running,
   const Vector6d & twist_des, const double dt)
 {
   // ----- Position & velocity control: shared OPEN-LOOP reference generation -----
-  // Both modes integrate the same joint reference q_ref_ (active only while a VLA
-  // goal runs; FROZEN at idle) and differ only in the output stage below. The
-  // reference generator is deliberately free of measured-state feedback: its
-  // differential-IK error is evaluated at FK(q_ref_), not at the measured pose.
+  // Both modes integrate the same joint reference q_ref_ (driven only while a VLA
+  // goal runs; at idle it comes to rest, then is FROZEN) and differ only in the
+  // output stage below. The reference generator is deliberately free of
+  // measured-state feedback: its differential-IK error is evaluated at
+  // FK(q_ref_), not at the measured pose.
   // That matters twice over:
   //  - rebuilding from measured every cycle integrates servo tracking lag (creep,
   //    cf. task_space_ik_controller), and on velocity actuators (pure dampers in
@@ -378,6 +431,9 @@ void VLAController::write_open_loop(
   //    reproduced in sim with 15 Hz chunk_size=1 streaming).
   const Vector7d q_ref_prev = q_ref_;
   if (vla_running) {
+    // No stop is in progress: the server starts no goal while one is
+    // (VLAActionServer::set_reference_settling()).
+    end_stopping_ = false;
     // Joint space moves toward the target; task space takes one IK step. Either
     // way the step is bounded at max_joint_vel (per joint in joint space, one
     // scale in task space), so a jump in the target (a chunk boundary, or a
@@ -389,8 +445,15 @@ void VLAController::write_open_loop(
     // task target out of reach, stops the reference at the window.
     FrankaBaseController::clamp_to_joint_limits(q_ref_);
     ref_fk_dirty_ = true;
+  } else if (end_stopping_ ||
+    (action_server_ && q_ref_rate_.allFinite() && (q_ref_rate_.array() != 0.0).any()))
+  {
+    // Moving, and no goal drives it any more (idle, or a task_ik_gain fault):
+    // it comes to rest within the limiter's joint bounds (end_stop_).
+    come_to_rest(dt);
   }
-  // else: idle (or a task_ik_gain fault) -> q_ref_ stays frozen, holding where it is.
+  // else: at rest -> q_ref_ stays frozen, holding where it is.
+  q_ref_rate_ = (q_ref_ - q_ref_prev) / dt;
 
   // Keep the shared reference fields synced with q_ref_. VLAActionServer::compute()
   // seeds a new goal from state_.q_arm_ref/H_ee_ref; without this, a second goal

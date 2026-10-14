@@ -24,6 +24,7 @@
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_interfaces/action/vision_language_action.hpp"
 #include "cho_controller_franka/servers/vla_action_server.hpp"
+#include "cho_vla_core/reference_limiter.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -58,6 +59,10 @@ private:
     // and differ only in the output stage.
     void write_open_loop(
         cho_vla_core::ActionSpace space, bool vla_running, const Vector6d & twist_des, double dt);
+
+    // Position and velocity, q_ref_ moving with no goal driving it: one cycle of
+    // its stop through end_stop_, which the first such cycle seeds.
+    void come_to_rest(double dt);
 
     // One differential-IK step of q_ref_ toward state_.H_ee_des, evaluated at the
     // REFERENCE configuration, with the reference twist (world-aligned) as
@@ -106,10 +111,28 @@ private:
     double null_space_damping_ {0.0};
 
     // Open-loop joint reference for the position and velocity modes. Seeded at the
-    // activation pose and integrated ONLY while a VLA goal is active; frozen when
-    // idle so the arm holds exactly instead of creeping on measured-position
-    // feedback. (mirrors task_space_ik_controller's q_ref_ pattern)
+    // activation pose and integrated ONLY while a VLA goal is active; when idle
+    // it comes to rest (end_stop_) and is then frozen, so the arm holds exactly
+    // instead of creeping on measured-position feedback. (mirrors
+    // task_space_ik_controller's q_ref_ pattern)
     Vector7d q_ref_;
+    // q_ref_'s rate over the last cycle [rad/s]: its step over the nominal
+    // period, the velocity output stage's feed-forward.
+    Vector7d q_ref_rate_ {Vector7d::Zero()};
+
+    // Position and velocity: q_ref_ moving with no goal driving it -- the goal
+    // ended (canceled, succeeded, timed out, aborted) or a task_ik_gain fault
+    // stopped it -- comes to rest through this, the VLA reference limiter's
+    // come_to_rest() in joint space, instead of freezing: a v/dt step in the
+    // command (100 rad/s^2 at 0.1 rad/s and 1 ms) against libfranka's 10 rad/s^2,
+    // with franka_hardware's position and velocity rate limiters off. Seeded from
+    // q_ref_ and q_ref_rate_ at zero acceleration, bounded by the server's
+    // limiter_params() (max_joint_ref_acc, max_joint_ref_jerk, the joint
+    // window), on a clock of its own advanced by the nominal period.
+    cho_vla_core::ReferenceLimiter end_stop_;
+    double end_stop_clock_ {0.0};
+    // q_ref_ follows end_stop_ while set; cleared on the cycle it is at rest.
+    bool end_stopping_ {false};
 
     // True while state_.H_ee_ref is stale relative to q_ref_. Lets the ref-sync
     // block skip the (FK + Jacobian) recompute on idle cycles, where q_ref_ is

@@ -792,6 +792,11 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
     if (!rt_active()) {
         return false;
     }
+    // The controller's reference is still coming to rest from the goal before:
+    // the session waits until it is at rest (set_reference_settling()).
+    if (reference_settling_) {
+        return false;
+    }
 
     // In order (Session::step()): a cancel, a success request, goal_timeout_sec,
     // the watchdog; then, in kRunning only, the sampled reference, limited, the
@@ -854,8 +859,23 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
             twist_des_.setZero();
             return true;
         case Mode::kEnded:
-            if (step.reason == cho_vla_core::EndReason::kSucceeded) {
-                // The controller runs this cycle on it: the arm where it is, at rest.
+            // Finished on this cycle in every mode: the result reports the end
+            // when it takes effect (cho_interfaces/CONTRACT.md, Outcomes), not
+            // when the arm is at rest. In position and velocity modes the
+            // reference is still moving then; VLAController brings it to rest
+            // within max_joint_ref_acc and holds where it stops
+            // (write_open_loop()), and a goal accepted before it is at rest waits
+            // for it (set_reference_settling()). Frozen here, or set to the
+            // measurement, it would stop in one cycle: v/dt, 100 rad/s^2 at
+            // 0.1 rad/s and 1 ms.
+            if (step.reason == cho_vla_core::EndReason::kSucceeded &&
+                !(is_position_mode() || is_velocity_mode()))
+            {
+                // Effort: the law runs this cycle on the arm where it is, at
+                // rest, as the idle hold does from the next cycle on. What that
+                // changes is the torque, by the spring's stretch and the
+                // damping's feed-forward, a step franka_hardware's torque rate
+                // limiter bounds; the arm's own motion stays continuous.
                 state.H_ee_des = state.H_ee;
                 state.q_arm_des = state.q_arm;
                 state.v_arm_des.setZero();
@@ -882,8 +902,8 @@ void VLAActionServer::handle_success_trigger(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-    // Applied on the control loop's next step(): the arm held where it is and
-    // the goal succeeded.
+    // Applied on the control loop's next step(): the goal succeeds there, and
+    // the arm holds where its reference comes to rest (compute()).
     if (!rt_active() || !session_.request_success()) {
         response->success = true;
         response->message = "No active VLA goal. Controller is ready for a new goal.";

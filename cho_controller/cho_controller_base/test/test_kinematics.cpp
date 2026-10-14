@@ -19,8 +19,8 @@
 //     dq   = J^T (J J^T + lambda^2 I)^-1 move, then one scale on the whole step so
 //            that |dq_i| <= max_joint_step_i (the direction is kept)
 //
-//   null_space_damping_torque(J, j_eef_inv, D, v)
-//     tau = -(I - J^T Jbar^T) D v, Jbar = M^-1 J^T (J M^-1 J^T)^-1 (N x 6)
+//   null_space_damping_torque(J, jbar, D, v)
+//     tau = -N^T D N v, N = I - jbar J, jbar = M^-1 J^T (J M^-1 J^T)^-1 (n x 6)
 //
 // Expected values are hand arithmetic or computed here with dense Eigen
 // formulas, never by calling dls_step() or the function under test.
@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
-#include <type_traits>
 #include <utility>
 
 #include <Eigen/Core>
@@ -251,50 +250,37 @@ TEST(TaskIkStep, AC3_AStepInsideTheLimitsIsLeftAloneAndAZeroMoveIsZero)
 
 struct Dynamics
 {
-  Eigen::MatrixXd J;      // 6 x 7
-  Eigen::MatrixXd M;      // 7 x 7, symmetric positive definite
-  Eigen::MatrixXd jbar;   // 7 x 6, M^-1 J^T (J M^-1 J^T)^-1
-  Eigen::MatrixXd P;      // 7 x 7, I - J^T jbar^T
+  Eigen::MatrixXd J;      // m x n
+  Eigen::MatrixXd M;      // n x n, symmetric positive definite
+  Eigen::MatrixXd jbar;   // n x m, M^-1 J^T (J M^-1 J^T)^-1
+  Eigen::MatrixXd N;      // n x n, I - jbar J
 };
 
-Dynamics make_dynamics()
+// A random m x n Jacobian and a random SPD inertia, M = A A^T + n I.
+Dynamics make_dynamics(std::mt19937 & generator, const int rows, const int cols)
 {
-  std::mt19937 generator(11);
   Dynamics d;
-  d.J = random_matrix(generator, 6, 7);
-  const Eigen::MatrixXd a = random_matrix(generator, 7, 7);
-  d.M = a * a.transpose() + 7.0 * Eigen::MatrixXd::Identity(7, 7);
+  d.J = random_matrix(generator, rows, cols);
+  const Eigen::MatrixXd a = random_matrix(generator, cols, cols);
+  d.M = a * a.transpose() + cols * Eigen::MatrixXd::Identity(cols, cols);
   const Eigen::MatrixXd minv = d.M.inverse();
   const Eigen::MatrixXd lambda = (d.J * minv * d.J.transpose()).inverse();
   d.jbar = minv * d.J.transpose() * lambda;
-  d.P = Eigen::MatrixXd::Identity(7, 7) - d.J.transpose() * d.jbar.transpose();
+  d.N = Eigen::MatrixXd::Identity(cols, cols) - d.jbar * d.J;
   return d;
 }
 
-// null_space_damping_torque takes the damping as a scalar or as a per-joint
-// vector. A signature the header does not offer is not a compile error here: the
-// wrapper returns an empty vector and the test skips.
-struct Probe
+// The fixed-seed 6 x 7 case (an FR3-sized arm).
+Dynamics make_dynamics()
 {
-  template<typename D>
-  static auto call(const Dynamics & d, const D & damping, const Eigen::VectorXd & v, int)
-  -> decltype(null_space_damping_torque(d.J, d.jbar, damping, v), std::true_type())
-  {
-    return {};
-  }
-
-  template<typename D>
-  static std::false_type call(const Dynamics &, const D &, const Eigen::VectorXd &, long) {return {};}
-};
+  std::mt19937 generator(11);
+  return make_dynamics(generator, 6, 7);
+}
 
 template<typename D>
 Eigen::VectorXd damp(const Dynamics & d, const D & damping, const Eigen::VectorXd & v)
 {
-  if constexpr (decltype(Probe::call(d, damping, v, 0))::value) {
-    return null_space_damping_torque(d.J, d.jbar, damping, v);
-  } else {
-    return Eigen::VectorXd();
-  }
+  return null_space_damping_torque(d.J, d.jbar, damping, v);
 }
 
 // AC8: the projector is dynamically consistent. Whatever the joint velocity and
@@ -309,43 +295,45 @@ TEST(NullSpaceDamping, AC8_TheTorqueCausesNoTaskAcceleration)
   for (int trial = 0; trial < 20; ++trial) {
     const Eigen::VectorXd v = random_matrix(generator, 7, 1);
     const Eigen::VectorXd tau = damp(d, 5.0, v);
-    if (tau.size() == 0) {GTEST_SKIP() << "no scalar-damping overload";}
     ASSERT_EQ(tau.size(), 7);
     ASSERT_GT(tau.norm(), 1e-3) << "a random velocity gave no torque";
     EXPECT_LT((d.J * minv * tau).norm(), 1e-9 * tau.norm()) << "trial " << trial;
   }
 }
 
-// AC8: it is -(I - J^T jbar^T) D v, computed here with dense algebra, and linear in D.
-TEST(NullSpaceDamping, AC8_TheTorqueIsMinusTheProjectedDampingTimesVelocity)
+// AC8: it is -N^T D N v, computed here with dense algebra, and linear in D.
+TEST(NullSpaceDamping, AC8_TheTorqueIsMinusNTransposeDNTimesVelocity)
 {
   const Dynamics d = make_dynamics();
   std::mt19937 generator(5);
   const Eigen::VectorXd v = random_matrix(generator, 7, 1);
   const Eigen::VectorXd tau = damp(d, 3.5, v);
-  if (tau.size() == 0) {GTEST_SKIP() << "no scalar-damping overload";}
-  const Eigen::VectorXd expected = -3.5 * d.P * v;
+  const Eigen::VectorXd expected = -3.5 * d.N.transpose() * d.N * v;
   EXPECT_LT((tau - expected).norm(), 1e-9 * expected.norm());
   const Eigen::VectorXd doubled = damp(d, 7.0, v);
   EXPECT_LT((doubled - 2.0 * tau).norm(), 1e-9 * doubled.norm());
 }
 
-// AC8: D = 0 is no torque at all (the default null_space_damping leaves today's behaviour).
+// AC8: D = 0 is no torque at all (the default null_space_damping leaves the
+// torque unchanged), as a scalar and as a per-joint vector.
 TEST(NullSpaceDamping, AC8_ZeroDampingIsZeroTorque)
 {
   const Dynamics d = make_dynamics();
   std::mt19937 generator(9);
   const Eigen::VectorXd v = random_matrix(generator, 7, 1);
   const Eigen::VectorXd tau = damp(d, 0.0, v);
-  if (tau.size() == 0) {GTEST_SKIP() << "no scalar-damping overload";}
   ASSERT_EQ(tau.size(), 7);
   EXPECT_TRUE(tau.allFinite());
   EXPECT_EQ(tau.norm(), 0.0);
+  const Eigen::VectorXd per_joint = damp(d, Eigen::VectorXd(Eigen::VectorXd::Zero(7)), v);
+  ASSERT_EQ(per_joint.size(), 7);
+  EXPECT_TRUE(per_joint.allFinite());
+  EXPECT_EQ(per_joint.norm(), 0.0);
 }
 
-// AC8: it slows the null-space motion. For a velocity with J v = 0, v^T tau =
-// -D |v|^2 < 0 exactly (v^T J^T = 0 removes the projector's task part), and
-// v = 0 gives 0.
+// AC8: it slows the null-space motion. For a velocity with J v = 0, N v = v and
+// v^T tau = -D |v|^2 < 0 exactly (v^T J^T = 0 removes the projector's task
+// part), and v = 0 gives 0.
 TEST(NullSpaceDamping, AC8_ANullSpaceVelocityIsOpposedByTheTorque)
 {
   const Dynamics d = make_dynamics();
@@ -357,7 +345,6 @@ TEST(NullSpaceDamping, AC8_ANullSpaceVelocityIsOpposedByTheTorque)
     ASSERT_LT((d.J * v).norm(), 1e-9 * v.norm());
     ASSERT_GT(v.norm(), 1e-3);
     const Eigen::VectorXd tau = damp(d, 2.0, v);
-    if (tau.size() == 0) {GTEST_SKIP() << "no scalar-damping overload";}
     EXPECT_NEAR(v.dot(tau), -2.0 * v.squaredNorm(), 1e-9 * v.squaredNorm()) << "trial " << trial;
     EXPECT_LT(v.dot(tau), 0.0);
   }
@@ -365,8 +352,9 @@ TEST(NullSpaceDamping, AC8_ANullSpaceVelocityIsOpposedByTheTorque)
   EXPECT_EQ(none.norm(), 0.0);
 }
 
-// AC8: a per-joint damping D (a vector) is -(I - J^T jbar^T) (D .* v), still without task acceleration.
-TEST(NullSpaceDamping, AC8_APerJointDampingIsAppliedBeforeTheProjector)
+// AC8: a per-joint damping d (a vector, D = diag(d)) is -N^T (d .* (N v)),
+// still without task acceleration.
+TEST(NullSpaceDamping, AC8_APerJointDampingIsAppliedBetweenTheProjectors)
 {
   const Dynamics d = make_dynamics();
   const Eigen::MatrixXd minv = d.M.inverse();
@@ -375,10 +363,176 @@ TEST(NullSpaceDamping, AC8_APerJointDampingIsAppliedBeforeTheProjector)
   Eigen::VectorXd damping(7);
   damping << 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0;
   const Eigen::VectorXd tau = damp(d, damping, v);
-  if (tau.size() == 0) {GTEST_SKIP() << "no per-joint damping overload";}
-  const Eigen::VectorXd expected = -d.P * damping.cwiseProduct(v);
+  const Eigen::VectorXd expected = -d.N.transpose() * damping.asDiagonal() * d.N * v;
   EXPECT_LT((tau - expected).norm(), 1e-9 * expected.norm());
   EXPECT_LT((d.J * minv * tau).norm(), 1e-9 * tau.norm());
+}
+
+// Pure task motion, v = jbar xdot, has no null-space part (N jbar = jbar -
+// jbar J jbar = 0), so it is not damped: tau = 0 for both overloads, while the
+// same v damped in full, -(I - J^T jbar^T) D v, is a torque that would
+// accelerate the null space.
+TEST(NullSpaceDamping, PureTaskMotionGivesNoTorque)
+{
+  std::mt19937 generator(19);
+  Eigen::VectorXd per_joint(7);
+  per_joint << 0.5, 1.0, 2.0, 4.0, 3.0, 1.5, 0.25;
+  for (int trial = 0; trial < 50; ++trial) {
+    const Dynamics d = make_dynamics(generator, 6, 7);
+    const Eigen::VectorXd xdot = random_matrix(generator, 6, 1);
+    const Eigen::VectorXd v = d.jbar * xdot;
+    ASSERT_GT(v.norm(), 1e-6);
+    const Eigen::VectorXd scalar_tau = damp(d, 5.0, v);
+    const Eigen::VectorXd joint_tau = damp(d, per_joint, v);
+    ASSERT_EQ(scalar_tau.size(), 7);
+    ASSERT_EQ(joint_tau.size(), 7);
+    EXPECT_LE(scalar_tau.norm(), 1e-9 * 5.0 * v.norm()) << "trial " << trial;
+    EXPECT_LE(joint_tau.norm(), 1e-9 * per_joint.maxCoeff() * v.norm()) << "trial " << trial;
+    const Eigen::VectorXd full_velocity = -5.0 * (d.N.transpose() * v);
+    EXPECT_GT(full_velocity.norm(), 1e-6 * 5.0 * v.norm()) << "trial " << trial;
+  }
+}
+
+// Passivity: v^T tau = -(N v)^T D (N v) <= 0 for any D >= 0 (scalar or
+// diagonal per-joint) and any v, J and SPD M. Velocities are random, pure
+// task, pure null-space and mixed; shapes are the FR3's 6 x 7, a 3-row task
+// and the widest arm the stack bound admits.
+TEST(NullSpaceDamping, TheTorqueIsPassiveForAnyVelocity)
+{
+  std::mt19937 generator(23);
+  std::uniform_real_distribution<double> gain(0.0, 10.0);
+  const std::pair<int, int> shapes[] = {{6, 7}, {3, 7}, {6, cho_controller_base::kMaxArmDof}};
+  for (const auto & [rows, cols] : shapes) {
+    for (int trial = 0; trial < 200; ++trial) {
+      const Dynamics d = make_dynamics(generator, rows, cols);
+      const Eigen::VectorXd random_v = random_matrix(generator, cols, 1);
+      const Eigen::VectorXd task_v = d.jbar * random_matrix(generator, rows, 1);
+      const Eigen::VectorXd null_v = d.N * random_matrix(generator, cols, 1);
+      const Eigen::VectorXd velocities[] = {random_v, task_v, null_v, task_v + 1e-3 * null_v};
+      const double scalar = gain(generator);
+      Eigen::VectorXd per_joint(cols);
+      for (int i = 0; i < cols; ++i) {
+        per_joint(i) = (i % 3 == 0) ? 0.0 : gain(generator);
+      }
+      for (const Eigen::VectorXd & v : velocities) {
+        const Eigen::VectorXd scalar_tau = damp(d, scalar, v);
+        const Eigen::VectorXd joint_tau = damp(d, per_joint, v);
+        ASSERT_EQ(scalar_tau.size(), cols);
+        ASSERT_EQ(joint_tau.size(), cols);
+        EXPECT_LE(v.dot(scalar_tau), 1e-12) << rows << " x " << cols << ", trial " << trial;
+        EXPECT_LE(v.dot(joint_tau), 1e-12) << rows << " x " << cols << ", trial " << trial;
+        const Eigen::VectorXd nv = d.N * v;
+        const double scalar_power = -scalar * nv.squaredNorm();
+        const double joint_power = -nv.dot(per_joint.asDiagonal() * nv);
+        EXPECT_NEAR(v.dot(scalar_tau), scalar_power, 1e-9 * std::max(1.0, -scalar_power));
+        EXPECT_NEAR(v.dot(joint_tau), joint_power, 1e-9 * std::max(1.0, -joint_power));
+        // (c) on every shape: no task acceleration.
+        const Eigen::MatrixXd j_minv = d.J * d.M.inverse();
+        EXPECT_LT((j_minv * scalar_tau).norm(), 1e-9 * std::max(1.0, scalar_tau.norm()));
+        EXPECT_LT((j_minv * joint_tau).norm(), 1e-9 * std::max(1.0, joint_tau.norm()));
+      }
+    }
+  }
+}
+
+// A velocity where damping the full v, -(I - J^T jbar^T) D v, would feed energy
+// in, and the helper does not. With z the Euclidean null-space part of jbar x,
+// v = jbar x - z / 2 gives v^T (I - J^T jbar^T) v = -|z|^2 / 4 (z is 0 only
+// for special M, a multiple of I among them; checked nonzero here), so the
+// full-velocity form has v^T tau = D |z|^2 / 4 > 0; -N^T D N v keeps
+// v^T tau = -D |N v|^2 < 0.
+TEST(NullSpaceDamping, AVelocityThatDampingTheFullVelocityWouldPowerIsDampedPassively)
+{
+  const Dynamics d = make_dynamics();
+  const Eigen::MatrixXd euclidean_null =
+    Eigen::MatrixXd::Identity(7, 7) - d.J.completeOrthogonalDecomposition().pseudoInverse() * d.J;
+  std::mt19937 generator(29);
+  for (int trial = 0; trial < 10; ++trial) {
+    const Eigen::VectorXd task_v = d.jbar * random_matrix(generator, 6, 1);
+    const Eigen::VectorXd z = euclidean_null * task_v;
+    ASSERT_GT(z.norm(), 1e-6);
+    const Eigen::VectorXd v = task_v - 0.5 * z;
+    const double damping = 2.0;
+    const Eigen::VectorXd full_velocity = -damping * (d.N.transpose() * v);
+    EXPECT_NEAR(v.dot(full_velocity), 0.25 * damping * z.squaredNorm(), 1e-9) << "trial " << trial;
+    EXPECT_GT(v.dot(full_velocity), 0.0);
+    const Eigen::VectorXd tau = damp(d, damping, v);
+    EXPECT_NEAR(v.dot(tau), -damping * (d.N * v).squaredNorm(), 1e-9) << "trial " << trial;
+    EXPECT_LT(v.dot(tau), 0.0) << "trial " << trial;
+  }
+}
+
+// The caller's types: a fixed 6 x 7 J and jbar passed as the transpose of the
+// 6 x 7 j_eef_inv = Lambda J M^-1, Lambda from J M^-1 J^T + 1e-4 I as the
+// Franka task-space controllers regularize it. The result is still -N^T D N v
+// for that jbar, and passive.
+TEST(NullSpaceDamping, TheControllersFixedSizeTypesGiveTheSameTorque)
+{
+  using Matrix67 = Eigen::Matrix<double, 6, 7>;
+  using Matrix7 = Eigen::Matrix<double, 7, 7>;
+  using Vector7 = Eigen::Matrix<double, 7, 1>;
+  const Dynamics d = make_dynamics();
+  const Matrix67 J = d.J;
+  const Matrix7 M = d.M;
+  const Matrix7 M_inv = M.llt().solve(Matrix7::Identity());
+  Eigen::Matrix<double, 6, 6> Lambda_inv = J * M_inv * J.transpose();
+  Lambda_inv.diagonal().array() += 1e-4;
+  const Matrix67 j_eef_inv = Lambda_inv.llt().solve(Eigen::Matrix<double, 6, 6>::Identity()) * J * M_inv;
+  const Matrix7 N = Matrix7::Identity() - j_eef_inv.transpose() * J;
+  std::mt19937 generator(31);
+  for (int trial = 0; trial < 20; ++trial) {
+    const Vector7 v = random_matrix(generator, 7, 1);
+    const Vector7 tau = null_space_damping_torque(J, j_eef_inv.transpose(), 4.0, v);
+    const Vector7 expected = -4.0 * N.transpose() * N * v;
+    EXPECT_LT((tau - expected).norm(), 1e-9 * expected.norm()) << "trial " << trial;
+    EXPECT_LE(v.dot(tau), 1e-12) << "trial " << trial;
+    Vector7 per_joint;
+    per_joint << 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0;
+    const Vector7 joint_tau = null_space_damping_torque(J, j_eef_inv.transpose(), per_joint, v);
+    const Vector7 joint_expected = -N.transpose() * per_joint.asDiagonal() * N * v;
+    EXPECT_LT((joint_tau - joint_expected).norm(), 1e-9 * joint_expected.norm()) << "trial " << trial;
+    EXPECT_LE(v.dot(joint_tau), 1e-12) << "trial " << trial;
+  }
+}
+
+// A size mismatch is refused with NaN, sized to J's columns (capped at
+// kMaxArmDof): v or the per-joint damping of the wrong length, jbar not of J's
+// transpose's size, and a J wider than the stack bound.
+TEST(NullSpaceDamping, ASizeMismatchGivesNaN)
+{
+  const Dynamics d = make_dynamics();
+  const Eigen::VectorXd v = Eigen::VectorXd::Ones(7);
+  const Eigen::VectorXd short_v = Eigen::VectorXd::Ones(6);
+  const Eigen::VectorXd damping = Eigen::VectorXd::Ones(7);
+  const Eigen::VectorXd short_damping = Eigen::VectorXd::Ones(6);
+  const auto all_nan = [](const Eigen::VectorXd & tau) {return tau.array().isNaN().all();};
+
+  const Eigen::VectorXd short_velocity = null_space_damping_torque(d.J, d.jbar, 1.0, short_v);
+  ASSERT_EQ(short_velocity.size(), 7);
+  EXPECT_TRUE(all_nan(short_velocity));
+  const Eigen::VectorXd short_velocity_joint = null_space_damping_torque(d.J, d.jbar, damping, short_v);
+  ASSERT_EQ(short_velocity_joint.size(), 7);
+  EXPECT_TRUE(all_nan(short_velocity_joint));
+
+  const Eigen::VectorXd short_gain = null_space_damping_torque(d.J, d.jbar, short_damping, v);
+  ASSERT_EQ(short_gain.size(), 7);
+  EXPECT_TRUE(all_nan(short_gain));
+
+  const Eigen::MatrixXd jbar_transposed = d.jbar.transpose();
+  const Eigen::VectorXd wrong_jbar = null_space_damping_torque(d.J, jbar_transposed, 1.0, v);
+  ASSERT_EQ(wrong_jbar.size(), 7);
+  EXPECT_TRUE(all_nan(wrong_jbar));
+  const Eigen::VectorXd wrong_jbar_joint = null_space_damping_torque(d.J, jbar_transposed, damping, v);
+  ASSERT_EQ(wrong_jbar_joint.size(), 7);
+  EXPECT_TRUE(all_nan(wrong_jbar_joint));
+
+  constexpr int kWide = cho_controller_base::kMaxArmDof + 1;
+  const Eigen::MatrixXd wide_j = Eigen::MatrixXd::Ones(6, kWide);
+  const Eigen::MatrixXd wide_jbar = Eigen::MatrixXd::Ones(kWide, 6);
+  const Eigen::VectorXd wide_v = Eigen::VectorXd::Ones(kWide);
+  const Eigen::VectorXd too_wide = null_space_damping_torque(wide_j, wide_jbar, 1.0, wide_v);
+  ASSERT_EQ(too_wide.size(), cho_controller_base::kMaxArmDof);
+  EXPECT_TRUE(all_nan(too_wide));
 }
 
 }  // namespace

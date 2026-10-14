@@ -33,6 +33,7 @@ so a single sample is equivalent.
 
 import rclpy
 from geometry_msgs.msg import Wrench, WrenchStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
@@ -101,8 +102,15 @@ def main(args=None):
     node = IsaacFTSensor()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # Stopping the launch: rclpy's signal handler shuts the context down, and spin() reports that
+        # as ExternalShutdownException, or as KeyboardInterrupt when a SIGINT reaches Python first.
         pass
+    except RuntimeError:
+        # rclpy's RCLError, from a wait set or publish on a context that was shut down between two
+        # cycles. Only that case is a normal exit; with the context alive it is a real error.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

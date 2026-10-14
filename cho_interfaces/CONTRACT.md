@@ -207,7 +207,9 @@ otherwise.
   controller's deactivation: it is aborted at once, with the reason in
   `message`.
 - **Canceled**: on request. The arm holds where it is when the cancel takes
-  effect, not where the goal started. (The MoveIt bridge: see
+  effect, not where the goal started. Franka's `vla_controller` in position and
+  velocity modes first brings its reference to rest within its acceleration limit,
+  and holds there; the result goes out when the cancel takes effect. (The MoveIt bridge: see
   [The MoveIt bridge](#the-moveit-bridge) for how it stops an execution.)
 
 Feedback (`percent_complete`) is published at up to 10 Hz.

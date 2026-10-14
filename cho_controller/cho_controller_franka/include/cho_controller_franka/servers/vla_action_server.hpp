@@ -68,9 +68,12 @@ inline constexpr double kVlaDlsLambda = 0.1;
 // One goal, two lifecycles. handle_accepted() opens the session goal before
 // activate_goal() publishes the action goal, and compute() steps the session
 // only while the action goal is active, so the session starts its goal on the
-// cycle that first sees the action goal. The ends the session decides (cancel,
+// cycle that first sees the action goal -- or, while the controller's reference
+// is still coming to rest from the goal before, on the first cycle after it is
+// at rest (set_reference_settling()). The ends the session decides (cancel,
 // success, goal_timeout_sec, a dead stream) are finished here with
-// finish_goal_rt(). A deactivation ends the session goal from the controller's
+// finish_goal_rt() on the cycle the session reports them, at rest or not
+// (compute()). A deactivation ends the session goal from the controller's
 // on_deactivate(), and GoalPhase's finisher aborts the action goal.
 class VLAActionServer : public BaseActionServer<VLAAction, TaskTrajectory>
 {
@@ -104,6 +107,24 @@ public:
     // RT thread immediately after compute(), so plain members are sufficient.
     cho_vla_core::ActionSpace action_space() const { return active_action_space_; }
     const Vector6d & twist_des() const { return twist_des_; }
+
+    // The reference limiter's bounds as init() configured them. Their joint
+    // part (max_joint_ref_vel, max_joint_ref_acc, max_joint_ref_jerk, the joint
+    // window) bounds VLAController's stop when a goal ends in motion.
+    const cho_vla_core::ReferenceLimiter::Params & limiter_params() const
+    {
+        return session_.params().limiter;
+    }
+
+    // From the controller, on the control thread, before each compute(): true
+    // while its position/velocity reference is still coming to rest from a goal
+    // that ended in motion. compute() then records the anchor history and
+    // returns false without stepping the session, so a goal accepted meanwhile
+    // starts once the reference is at rest, holding where it stopped, and its
+    // cancel, success request and goal timeout take effect from then on. Started
+    // under a moving reference, its first followed cycle would seed the limiter
+    // at rest (HostCommand::Seed::kRest) and stop the reference in one cycle.
+    void set_reference_settling(bool settling) { reference_settling_ = settling; }
 
     // The EE pose and its LOCAL_WORLD_ALIGNED Jacobian (6x7, the convention of
     // State::J_arm_world) at the given arm joints. The model is the
@@ -234,6 +255,8 @@ private:
     bool hold_latched_ {false};
     pinocchio::SE3 hold_pose_ {pinocchio::SE3::Identity()};
     Vector7d hold_joints_ {Vector7d::Zero()};
+    // set_reference_settling().
+    bool reference_settling_ {false};
 };
 
 } // namespace franka
