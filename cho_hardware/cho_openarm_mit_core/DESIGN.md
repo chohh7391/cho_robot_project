@@ -73,55 +73,28 @@ limiter).
 ## SAFE hold
 
 `ArmConsumer`'s SAFE hold is `q_des = q_measured, dq_des = 0`, the per-joint
-safe gains, and `tau_ff = tau_measured`: the joint torque measured in the same
-read as the pose (`observe(position, velocity, effort)`), clamped per joint to
-the hold's effort limit (the profile's `tau_ff_magnitude` on the real adapter).
-A new session (`configure()`) is seeded with the torque measured at the seed
-read. The `ArmConsumer` class comment in `mit_protocol.hpp` gives the reasons.
+safe gains, and as `tau_ff` the joint torque measured in the same read as the
+pose (`observe(position, velocity, effort)`). A new session (`configure()`) is
+seeded with the torque measured at the seed read. The `ArmConsumer` class
+comment in `mit_protocol.hpp` gives the reasons.
 
-A hold latched in motion is bounded. Every commit carries the producer's
-gravity estimate per joint, `hold_torque` (`ArmCommand::hold_torque`, the
-`<joint>/hold_torque` command interfaces at claim indices 39-45; NaN is no
-estimate; a finite `|h|` over the `tau_ff` bound, or an infinite one, rejects
-the commit like an out-of-range `tau_ff`). The consumer keeps `h` from the last
-accepted commit of the session (a rejected or discarded commit leaves it;
-`configure()` and `cleanup()` forget it). Wherever a hold is built (SAFE
-request, rejected commit, lease expiry, switch, stop; `hold_effort_now()` for
-an adapter's own fallback), with `band = torque.safe_hold_torque_band` and the
-threshold `torque.safe_hold_motion_velocity`:
-
-```
-in_motion = any joint of the latch read with |dq| >= threshold (non-finite dq: in motion)
-tau_ff    = in_motion and h finite ? clamp(tau_measured, h - band, h + band) : tau_measured
-tau_ff    = clamp(tau_ff, -effort_limit, effort_limit)
-```
-
-(`hold_in_motion()`, `bounded_hold_torque()`). Moving, the measured torque
-carries the motion's inertial and contact torque, which the hold would keep
-as a constant push; the band keeps only what the producer's model explains.
-At rest the measured torque stays, however far from `h`: it supports a payload
-the model does not know. In motion such a payload is supported only up to the
-band. The real profiles' band is the joints' identified static friction
-(`friction_level` of `cho_bringup_openarm`'s `config/real/controllers_mit.yaml`),
-so a hold error inside it stays still only while below the breakaway friction,
-and a latch finds the arm moving (the sag bound:
-[Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque));
-`mujoco_sim_safe`'s is a bound, not a friction. The constructors without a band
-never bound (band and threshold `+inf`). `test_safe_hold_torque` checks the rule on
-every path.
+Latched in motion, the hold bounds that torque around the producer's gravity
+estimate `h` of the last accepted commit (`ArmCommand::hold_torque`, claim
+indices 39-45), so it does not keep the motion's inertial torque as a constant
+push. The rule is `bounded_hold_torque()` in `mit_protocol.hpp`; the client
+contract, with what bounds `h` and when it is kept, is
+[Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque).
+`test_safe_hold_torque` checks it on every path.
 
 The MuJoCo `Limiter` holds the same tuple, its measured torque being the
 torque it applied in the previous cycle (the simulator's measured joint
-torque), clamped to `tau_ff_magnitude`; `reset()` seeds a new session from
-it the same way and forgets `h`. `submit()` takes the commit's `hold_torque`
-(rejected past the joint's `tau_ff_magnitude`), and the latch bounds the
-torque by the rule above with that cycle's `dq`. A latch (`request_safe()` or
-a lease expiry) sets `q_des` to
-the measured pose, which removes the spring's share `kp * (q_des - q)` in that
-cycle, so the latched `tau_ff` applies in that cycle too, past the `tau_ff`
-slew: at rest the output continues from the torque before the latch. The
-gains still slew to the safe gains, and the final torque keeps its saturation
-and slew. `test_mit_limiter` checks the torque across the latch at 1 kHz;
-`test_limiter_vs_consumer` that both consumers bound a hold in motion alike.
-`mit_command_v1.yaml`'s `safe_seed` (`tau_ff: measured_torque`, with its
-`tau_ff_bound`) names this hold for both adapters.
+torque); its hold effort limit is `tau_ff_magnitude`. `reset()` seeds a new
+session from that torque and forgets `h`. A latch (`request_safe()` or a lease
+expiry) sets `q_des` to the measured pose, which removes the spring's share
+`kp * (q_des - q)` in that cycle, so the latched `tau_ff` applies in that cycle
+too, past the `tau_ff` slew: at rest the output continues from the torque
+before the latch. The gains still slew to the safe gains, and the final torque
+keeps its saturation and slew. `test_mit_limiter` checks the torque across the
+latch at 1 kHz; `test_limiter_vs_consumer` that both consumers bound a hold in
+motion alike. `mit_command_v1.yaml`'s `safe_seed` (`tau_ff: measured_torque`,
+with its `tau_ff_bound`) names this hold for both adapters.

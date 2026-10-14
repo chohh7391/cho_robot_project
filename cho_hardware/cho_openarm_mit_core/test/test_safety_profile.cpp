@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 using cho_openarm_mit_core::SafetyBackend;
 using cho_openarm_mit_core::load_safety_profile_file;
@@ -38,6 +39,30 @@ std::string replace_once(std::string text, const std::string & from, const std::
   const auto at = text.find(from);
   if (at == std::string::npos) throw std::runtime_error("test mutation source not found");
   text.replace(at, from.size(), to); return text;
+}
+
+// The band a profile's torque section carries, read from the YAML text itself.
+std::array<double, 7> band_in_yaml(const std::string & text, const std::string & profile)
+{
+  const auto band = YAML::Load(text)["profiles"][profile]["torque"]["safe_hold_torque_band"];
+  if (!band.IsSequence() || band.size() != 7) throw std::runtime_error("no 7-value band in " + profile);
+  std::array<double, 7> out{};
+  for (std::size_t i = 0; i < 7; ++i) out[i] = band[i].as<double>();
+  return out;
+}
+
+// The text with the first value of `profile`'s safe_hold_torque_band replaced by `first`.
+std::string with_first_band_value(const std::string & text, const std::string & profile, const std::string & first)
+{
+  const auto profile_at = text.find("\n  " + profile + ":\n");
+  if (profile_at == std::string::npos) throw std::runtime_error("profile not found: " + profile);
+  const std::string key = "safe_hold_torque_band: [";
+  const auto key_at = text.find(key, profile_at);
+  if (key_at == std::string::npos) throw std::runtime_error("band key not found in " + profile);
+  const auto value_at = key_at + key.size();
+  const auto value_end = text.find(',', value_at);
+  if (value_end == std::string::npos) throw std::runtime_error("band has one value");
+  return text.substr(0, value_at) + first + text.substr(value_end);
 }
 }
 
@@ -105,11 +130,12 @@ TEST(SafetyProfile, TheSafeHoldBoundIsLoadedForEveryLoadableProfile)
   const std::array<double, 7> mujoco_band{0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1};
   EXPECT_EQ(mujoco.safe_hold_torque_band, mujoco_band);
   EXPECT_DOUBLE_EQ(mujoco.safe_hold_motion_velocity, 0.1);
-  // The real band is the identified static friction (friction_level).
-  const std::array<double, 7> real_band{1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2};
+  // The real band is the identified static friction (friction_level); its value is the
+  // YAML's, not a second copy here (the comparison with friction_level is in
+  // cho_bringup_openarm's test_real_mit_launch_boundaries.py).
   for (const char * name : {"real_conservative_commissioning", "real_return_to_zero_commissioning"}) {
     const auto real = load_safety_profile_yaml(source(), name, SafetyBackend::REAL, "left");
-    EXPECT_EQ(real.safe_hold_torque_band, real_band) << name;
+    EXPECT_EQ(real.safe_hold_torque_band, band_in_yaml(source(), name)) << name;
     EXPECT_DOUBLE_EQ(real.safe_hold_motion_velocity, 0.1) << name;
   }
 }
@@ -142,9 +168,7 @@ TEST(SafetyProfile, AMissingOrOutOfRangeSafeHoldBoundRejects)
   EXPECT_NO_THROW(load_mujoco(replace_once(
     source(), mujoco_band, "safe_hold_torque_band: [0.0, 0.5, 0.5, 0.5, 0.1, 0.1, 7.0]")));
   // A real profile is checked the same way.
-  const auto real_over = replace_once(
-    source(), "safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]",
-    "safe_hold_torque_band: [40.5, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]");
+  const auto real_over = with_first_band_value(source(), "real_conservative_commissioning", "40.5");
   EXPECT_THROW(load_safety_profile_yaml(
     real_over, "real_conservative_commissioning", SafetyBackend::REAL, "single"), std::invalid_argument);
 }

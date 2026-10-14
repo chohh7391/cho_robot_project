@@ -81,8 +81,7 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
     // torque.safe_hold_torque_band and safe_hold_motion_velocity (ArmConsumer
     // validates them: band >= 0, velocity > 0, +inf allowed). Absent: +inf, a
     // hold that is always the measured torque.
-    constexpr double kNever = std::numeric_limits<double>::infinity();
-    safe_hold_torque_band_.fill(kNever);
+    safe_hold_torque_band_.fill(kUnbounded);
     if (const auto band = numbers(info_, "safe_hold_torque_band"); band.size() == 1)
       safe_hold_torque_band_.fill(band[0]);
     else if (!band.empty())
@@ -90,7 +89,7 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
     const auto velocity = numbers(info_, "safe_hold_motion_velocity");
     if (velocity.size() > 1)
       throw std::invalid_argument("safe_hold_motion_velocity");
-    safe_hold_motion_velocity_ = velocity.empty() ? kNever : velocity[0];
+    safe_hold_motion_velocity_ = velocity.empty() ? kUnbounded : velocity[0];
     double initial_position = 0.0;
     if (const auto initial = info_.hardware_parameters.find("initial_position");
       initial != info_.hardware_parameters.end()) {
@@ -109,6 +108,15 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
       offset != info_.hardware_parameters.end()) {
       mirror_position_offset_ = std::stod(offset->second);
       if (!std::isfinite(mirror_position_offset_)) throw std::invalid_argument("mirror_position_offset");
+    }
+    // Test knob, default 0: the mirrored "measured" effort is the accepted
+    // tau_ff plus this offset -- a torque the producer's model does not
+    // explain (a payload, a contact), which a hold latched in motion must not
+    // keep beyond its band.
+    if (const auto offset = info_.hardware_parameters.find("mirror_effort_offset");
+      offset != info_.hardware_parameters.end()) {
+      mirror_effort_offset_ = std::stod(offset->second);
+      if (!std::isfinite(mirror_effort_offset_)) throw std::invalid_argument("mirror_effort_offset");
     }
     std::array<double, kJointsPerArm> damping{}, stiffness{}, effort_limit{};
     damping.fill(safe_hold_damping_);
@@ -481,12 +489,12 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
         if (left_.status() == MitStatus::ACTIVE) {
           state_[i][0] = left_.submitted().joints[i].position + mirror_position_offset_;
           state_[i][1] = left_.submitted().joints[i].velocity;
-          state_[i][2] = left_.submitted().joints[i].effort;
+          state_[i][2] = left_.submitted().joints[i].effort + mirror_effort_offset_;
         }
         if (right_.status() == MitStatus::ACTIVE) {
           state_[i + 7][0] = right_.submitted().joints[i].position + mirror_position_offset_;
           state_[i + 7][1] = right_.submitted().joints[i].velocity;
-          state_[i + 7][2] = right_.submitted().joints[i].effort;
+          state_[i + 7][2] = right_.submitted().joints[i].effort + mirror_effort_offset_;
         }
       }
     } else if (bimanual_ && pair_ && pair_->left().status() == MitStatus::ACTIVE &&
@@ -494,16 +502,16 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
       for (size_t i = 0; i < 7; ++i) {
         state_[i][0] = pair_->left().submitted().joints[i].position + mirror_position_offset_;
         state_[i][1] = pair_->left().submitted().joints[i].velocity;
-        state_[i][2] = pair_->left().submitted().joints[i].effort;
+        state_[i][2] = pair_->left().submitted().joints[i].effort + mirror_effort_offset_;
         state_[i + 7][0] = pair_->right().submitted().joints[i].position + mirror_position_offset_;
         state_[i + 7][1] = pair_->right().submitted().joints[i].velocity;
-        state_[i + 7][2] = pair_->right().submitted().joints[i].effort;
+        state_[i + 7][2] = pair_->right().submitted().joints[i].effort + mirror_effort_offset_;
       }
     } else if (!bimanual_ && left_.status() == MitStatus::ACTIVE) {
       for (size_t i = 0; i < 7; ++i) {
         state_[i][0] = left_.submitted().joints[i].position + mirror_position_offset_;
         state_[i][1] = left_.submitted().joints[i].velocity;
-        state_[i][2] = left_.submitted().joints[i].effort;
+        state_[i][2] = left_.submitted().joints[i].effort + mirror_effort_offset_;
       }
     }
   }

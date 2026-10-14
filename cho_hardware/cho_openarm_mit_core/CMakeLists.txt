@@ -68,7 +68,12 @@ if(BUILD_TESTING)
   # ArmConsumer, PairedConsumer and the limiter.
   ament_add_gtest(test_safe_hold_torque test/test_safe_hold_torque.cpp)
   target_link_libraries(test_safe_hold_torque ${PROJECT_NAME})
-  foreach(profile_test test_safety_profile test_mit_limiter test_limiter_vs_consumer test_safe_hold_torque)
+  # The consumers' API (no unbounded constructor, no velocity-less observe) and the
+  # one hold-torque validity rule.
+  ament_add_gtest(test_consumer_contract test/test_consumer_contract.cpp)
+  target_link_libraries(test_consumer_contract ${PROJECT_NAME})
+  foreach(profile_test test_safety_profile test_mit_limiter test_limiter_vs_consumer test_safe_hold_torque
+      test_consumer_contract)
     target_compile_definitions(${profile_test} PRIVATE
       OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
   endforeach()

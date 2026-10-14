@@ -15,7 +15,6 @@
 #pragma once
 #include <array>
 #include <cstdint>
-#include <limits>
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 namespace cho_openarm_mit_core
@@ -29,10 +28,9 @@ namespace cho_openarm_mit_core
 // (ArmConsumer); test_limiter_vs_consumer measures the difference. Only a
 // MUJOCO profile, at its own update rate, is accepted.
 //
-// The hold follows ArmConsumer's rule: latched in motion (the latching
-// cycle's dq, hold_in_motion() against the profile's
-// safe_hold_motion_velocity), its tau_ff is bounded to the hold torque of the
-// last accepted commit +/- safe_hold_torque_band (bounded_hold_torque()).
+// The hold's tau_ff follows the same rule as ArmConsumer's,
+// bounded_hold_torque(), on the latching cycle's dq (for clients:
+// docs/openarm_mit_contract_v1.md, "Hold torque").
 class Limiter
 {
 public:
@@ -52,7 +50,7 @@ public:
   void reset(const std::array<double, kJointsPerArm> & measured);
   // A commit: the tuples and the producer's hold torque (NaN: none). False,
   // and nothing changes, if any value fails its check -- a hold torque that
-  // fails valid_hold_torque() against the joint's tau_ff_magnitude included.
+  // fails valid_hold_torque() included.
   bool submit(
     const std::array<Tuple, kJointsPerArm> & requested,
     const std::array<double, kJointsPerArm> & hold_torque, std::uint64_t generation,
@@ -67,8 +65,8 @@ public:
     last_tau_.fill(0);  // a faulted limiter commands nothing
   }
   // The next update() latches the hold: the measured position, and the torque
-  // applied in the previous cycle as tau_ff (see reset(); bounded if that
-  // update's dq shows motion, see the class comment), applied in that
+  // applied in the previous cycle as tau_ff (see reset(); through
+  // bounded_hold_torque() with that update's dq), applied in that
   // cycle rather than slewed to from the last accepted tau_ff. q_des moves to
   // the measured pose at once, taking the spring's share kp * (q_des - q) with
   // it, so only an immediate tau_ff keeps the output at the torque it had. A
@@ -91,9 +89,8 @@ private:
     std::array<double, kJointsPerArm> q_lo, q_hi, dq, kp, kd, kp_slew, kd_slew, safe_kp, safe_kd,
       tau_ff, tau_ff_slew, tau, tau_slew;
     std::uint64_t lease_cap;
-    std::array<double, kJointsPerArm> hold_torque_band{
-      detail::every_joint(std::numeric_limits<double>::infinity())};
-    double hold_motion_velocity{std::numeric_limits<double>::infinity()};
+    std::array<double, kJointsPerArm> hold_torque_band;
+    double hold_motion_velocity;
   };
   Limits limits_;
   std::array<Tuple, kJointsPerArm> command_{}, applied_{};

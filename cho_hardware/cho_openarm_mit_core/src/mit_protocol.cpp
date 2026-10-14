@@ -403,35 +403,6 @@ JointTuple bound_final_torque(
   return out;
 }
 
-namespace
-{
-std::array<double, kJointsPerArm> uniform(double value)
-{
-  std::array<double, kJointsPerArm> out{};
-  out.fill(value);
-  return out;
-}
-}  // namespace
-
-ArmConsumer::ArmConsumer(
-  ValidationLimits limits, double safe_hold_damping, double safe_hold_stiffness)
-: ArmConsumer(limits, uniform(safe_hold_damping), uniform(safe_hold_stiffness)) {}
-
-ArmConsumer::ArmConsumer(
-  ValidationLimits limits,
-  const std::array<double, kJointsPerArm> & safe_hold_damping,
-  const std::array<double, kJointsPerArm> & safe_hold_stiffness)
-: ArmConsumer(limits, safe_hold_damping, safe_hold_stiffness, uniform(limits.max_abs_effort)) {}
-
-ArmConsumer::ArmConsumer(
-  ValidationLimits limits,
-  const std::array<double, kJointsPerArm> & safe_hold_damping,
-  const std::array<double, kJointsPerArm> & safe_hold_stiffness,
-  const std::array<double, kJointsPerArm> & hold_effort_limit)
-: ArmConsumer(
-    limits, safe_hold_damping, safe_hold_stiffness, hold_effort_limit,
-    uniform(std::numeric_limits<double>::infinity()), std::numeric_limits<double>::infinity()) {}
-
 ArmConsumer::ArmConsumer(
   ValidationLimits limits,
   const std::array<double, kJointsPerArm> & safe_hold_damping,
@@ -442,7 +413,7 @@ ArmConsumer::ArmConsumer(
   hold_effort_limit_(hold_effort_limit), hold_torque_band_(hold_torque_band),
   hold_motion_velocity_(hold_motion_velocity)
 {
-  // +inf is allowed for both: the constructors without a band, never bounding.
+  // +inf is allowed for both: a hold that is never bounded, as the caller says.
   if (!(hold_motion_velocity_ > 0.0) ||
       !std::all_of(hold_torque_band_.begin(), hold_torque_band_.end(), [](double b) {return b >= 0.0;})) {
     throw std::invalid_argument("invalid MIT SAFE hold torque bound");
@@ -509,13 +480,6 @@ void ArmConsumer::observe(const std::array<double, kJointsPerArm> & measured)
 
 void ArmConsumer::observe(
   const std::array<double, kJointsPerArm> & measured,
-  const std::array<double, kJointsPerArm> & measured_effort)
-{
-  observe(measured, std::array<double, kJointsPerArm>{}, measured_effort);
-}
-
-void ArmConsumer::observe(
-  const std::array<double, kJointsPerArm> & measured,
   const std::array<double, kJointsPerArm> & measured_velocity,
   const std::array<double, kJointsPerArm> & measured_effort)
 {
@@ -546,6 +510,16 @@ void ArmConsumer::sample_effort(const std::array<double, kJointsPerArm> & effort
   }
 }
 
+bool ArmConsumer::valid_hold_torques(const std::array<double, kJointsPerArm> & hold_torque) const
+{
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    // hold_effort_limit_[i] is this joint's hold effort limit: the bound
+    // hold_effort_now() clamps its hold tau_ff to.
+    if (!valid_hold_torque(hold_torque[i], hold_effort_limit_[i])) return false;
+  }
+  return true;
+}
+
 bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_succeeded)
 {
   if (session_ == 0 || latched_ || permanent_latched_) {
@@ -558,9 +532,7 @@ bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_su
       !is_exact_nonnegative_integer(c.lease_cycles) || c.lease_cycles == 0.0 ||
       c.lease_cycles > static_cast<double>(limits_.max_lease_cycles) ||
       !std::all_of(c.joints.begin(), c.joints.end(), [this](const auto & j) {return validate_tuple(j, limits_);}) ||
-      !std::all_of(c.hold_torque.begin(), c.hold_torque.end(), [this](double h) {
-        return valid_hold_torque(h, limits_.max_abs_effort);
-      })) {
+      !valid_hold_torques(c.hold_torque)) {
     // An invalid snapshot is diagnostic failure, but must also schedule a hardware-owned
     // measured-position hold so the last ACTIVE tuple is not left on the transport.
     status_ = MitStatus::INVALID; permanent_latched_ = true;
@@ -604,10 +576,9 @@ bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
   if (status_ != MitStatus::SAFE_TRANSITION || !transport_succeeded) return false;
   // The MIT equation runs inside the motor with no gravity model, so a hold
   // that zeroed tau_ff would drop the arm at the moment it stops being
-  // commanded. It carries the torque measured with the pose it holds, bounded
-  // to the hold torque if latched in motion, and clamped to the hold's effort
-  // limit (see the class comment); the per-joint safe gains then resist
-  // motion away from that pose.
+  // commanded. It carries the torque measured with the pose it holds
+  // (hold_effort_now()); the per-joint safe gains then resist motion away from
+  // that pose.
   const auto effort = hold_effort_now();
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     submitted_.joints[i] = {
@@ -635,21 +606,24 @@ void ArmConsumer::inject_fault()
   latched_ = true; permanent_latched_ = true; status_ = MitStatus::FAULT;
 }
 
-PairedConsumer::PairedConsumer(ValidationLimits limits, std::uint64_t session, double safe_hold_damping)
-: left_(limits, safe_hold_damping), right_(limits, safe_hold_damping)
+namespace
 {
-  std::array<double, kJointsPerArm> q{}; left_.configure(session, q); right_.configure(session, q);
+// PairedConsumer's and BimanualCommandRouter's arm (see PairedConsumer).
+ArmConsumer paired_arm(
+  const ValidationLimits & limits, const double safe_hold_damping,
+  const std::array<double, kJointsPerArm> & hold_torque_band, const double hold_motion_velocity)
+{
+  return ArmConsumer(
+    limits, detail::every_joint(safe_hold_damping), detail::every_joint(0.0),
+    detail::every_joint(limits.max_abs_effort), hold_torque_band, hold_motion_velocity);
 }
+}  // namespace
 
 PairedConsumer::PairedConsumer(
   ValidationLimits limits, std::uint64_t session, double safe_hold_damping,
   const std::array<double, kJointsPerArm> & hold_torque_band, double hold_motion_velocity)
-: left_(
-    limits, uniform(safe_hold_damping), uniform(0.0), uniform(limits.max_abs_effort),
-    hold_torque_band, hold_motion_velocity),
-  right_(
-    limits, uniform(safe_hold_damping), uniform(0.0), uniform(limits.max_abs_effort),
-    hold_torque_band, hold_motion_velocity)
+: left_(paired_arm(limits, safe_hold_damping, hold_torque_band, hold_motion_velocity)),
+  right_(paired_arm(limits, safe_hold_damping, hold_torque_band, hold_motion_velocity))
 {
   std::array<double, kJointsPerArm> q{}; left_.configure(session, q); right_.configure(session, q);
 }
@@ -672,16 +646,6 @@ void PairedConsumer::observe(
 {
   left_.observe(left_measured);
   right_.observe(right_measured);
-}
-
-void PairedConsumer::observe(
-  const std::array<double, kJointsPerArm> & left_measured,
-  const std::array<double, kJointsPerArm> & right_measured,
-  const std::array<double, kJointsPerArm> & left_effort,
-  const std::array<double, kJointsPerArm> & right_effort)
-{
-  left_.observe(left_measured, left_effort);
-  right_.observe(right_measured, right_effort);
 }
 
 void PairedConsumer::observe(
@@ -752,8 +716,11 @@ void PairedConsumer::inject_fault(bool left)
   if (left) {left_.inject_fault();} else {right_.inject_fault();}
 }
 
-BimanualCommandRouter::BimanualCommandRouter(ValidationLimits limits, double safe_hold_damping)
-: left_(limits, safe_hold_damping), right_(limits, safe_hold_damping) {}
+BimanualCommandRouter::BimanualCommandRouter(
+  ValidationLimits limits, double safe_hold_damping,
+  const std::array<double, kJointsPerArm> & hold_torque_band, double hold_motion_velocity)
+: left_(paired_arm(limits, safe_hold_damping, hold_torque_band, hold_motion_velocity)),
+  right_(paired_arm(limits, safe_hold_damping, hold_torque_band, hold_motion_velocity)) {}
 
 bool BimanualCommandRouter::configure(
   std::uint64_t session, const std::array<double, kJointsPerArm> & left_measured,

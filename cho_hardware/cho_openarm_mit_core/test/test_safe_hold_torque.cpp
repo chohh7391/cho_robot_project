@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 #include "cho_openarm_mit_core/mit_limiter.hpp"
 #include "cho_openarm_mit_core/mit_protocol.hpp"
@@ -53,7 +54,8 @@ constexpr double kMotion = 0.1;     // rad/s, the profile's safe_hold_motion_vel
 constexpr double kBand = 0.5;       // N m
 constexpr double kHold = 2.0;       // N m, a producer's gravity estimate
 constexpr double kContaminated = 3.5;
-// max_abs_effort (the tau_ff validation bound) is 50.
+// max_abs_effort (the tau_ff validation bound) is 50; banded()'s hold effort
+// limit, which also bounds a valid hold torque, is 40.
 constexpr ValidationLimits kLimits{3.5, 10.0, 200.0, 10.0, 50.0, 100};
 
 A filled(double value)
@@ -80,6 +82,13 @@ ArmCommand command(std::uint64_t session, double generation, double position, co
 ArmConsumer banded(const A & band = filled(kBand), double motion = kMotion)
 {
   return ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), band, motion);
+}
+
+// A consumer that never bounds a hold: band and motion velocity +inf, stated.
+ArmConsumer unbounded(
+  const A & damping, const A & stiffness, const A & effort_limit = filled(kLimits.max_abs_effort))
+{
+  return ArmConsumer(kLimits, damping, stiffness, effort_limit, filled(kInf), kInf);
 }
 
 // A moving read: joint `moving` at `speed`, the others at rest.
@@ -117,7 +126,7 @@ TEST(HoldRule, AC3_BoundedHoldTorqueClampsAroundTheEstimateOnlyInMotion)
   EXPECT_DOUBLE_EQ(bounded_hold_torque(-30.0, 2.0, 0.5, 40.0, false), -30.0);
   // No estimate: the measured torque, in motion too.
   EXPECT_DOUBLE_EQ(bounded_hold_torque(5.5, kNaN, 0.5, 40.0, true), 5.5);
-  // An infinite band (the existing constructors) never clamps.
+  // An infinite band (an explicitly unbounded consumer) never clamps.
   EXPECT_DOUBLE_EQ(bounded_hold_torque(5.5, 2.0, kInf, 40.0, true), 5.5);
   EXPECT_DOUBLE_EQ(bounded_hold_torque(-5.5, 2.0, kInf, 40.0, true), -5.5);
 }
@@ -147,7 +156,7 @@ TEST(HoldRule, AC3_HoldInMotionIsTheLargestJointSpeedAgainstTheThreshold)
   EXPECT_TRUE(hold_in_motion(velocity_of(2, kNaN), kMotion));
   EXPECT_TRUE(hold_in_motion(velocity_of(2, kInf), kMotion));
   EXPECT_TRUE(hold_in_motion(velocity_of(2, -kInf), kMotion));
-  // An infinite threshold (the existing constructors) is never reached by a finite speed.
+  // An infinite threshold (an explicitly unbounded consumer) is never reached by a finite speed.
   EXPECT_FALSE(hold_in_motion(filled(100.0), kInf));
 }
 
@@ -362,7 +371,8 @@ TEST(ArmConsumerHold, AC1_AnEstimateOverTheTauFfBoundRejectsTheCommit)
   const MitStatus rejected = reference.status();
   EXPECT_EQ(rejected, MitStatus::SAFE_TRANSITION);
 
-  for (const double bad : {50.5, -50.5, kInf, -kInf}) {
+  // Past the hold's effort limit (40) is invalid, inside max_abs_effort (50) too.
+  for (const double bad : {40.5, -40.5, 50.5, -50.5, kInf, -kInf}) {
     auto consumer = banded();
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     A hold = filled(kHold);
@@ -375,15 +385,16 @@ TEST(ArmConsumerHold, AC1_AnEstimateOverTheTauFfBoundRejectsTheCommit)
 
 TEST(ArmConsumerHold, AC1_AnEstimateAtTheBoundIsAccepted)
 {
+  // The bound is the hold's effort limit, 40.
   auto consumer = banded();
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   A hold = filled(kHold);
-  hold[0] = 50.0;
-  hold[1] = -50.0;
+  hold[0] = 40.0;
+  hold[1] = -40.0;
   hold[2] = kNaN;
   EXPECT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, hold)));
-  EXPECT_DOUBLE_EQ(consumer.held_hold_torque()[0], 50.0);
-  EXPECT_DOUBLE_EQ(consumer.held_hold_torque()[1], -50.0);
+  EXPECT_DOUBLE_EQ(consumer.held_hold_torque()[0], 40.0);
+  EXPECT_DOUBLE_EQ(consumer.held_hold_torque()[1], -40.0);
   EXPECT_TRUE(std::isnan(consumer.held_hold_torque()[2]));
 }
 
@@ -534,14 +545,14 @@ TEST(ArmConsumerHold, AC3_HoldEffortNowAppliesTheRuleToTheCurrentSample)
   }
 }
 
-TEST(ArmConsumerHold, AC3_ThePositionAndTorqueObserveOverloadMeansAtRest)
+TEST(ArmConsumerHold, AC3_AReadAtZeroVelocityAfterAMovingOneMeansAtRest)
 {
   auto consumer = banded();
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
   consumer.observe(filled(0.35), velocity_of(2, 0.5), filled(kHold + kContaminated));
-  // The older two-argument form carries no velocity: the sample becomes 0.
-  consumer.observe(filled(0.35), filled(kHold + kContaminated));
+  // The latest read decides: dq = 0 is at rest.
+  consumer.observe(filled(0.35), filled(0.0), filled(kHold + kContaminated));
   for (const double effort : consumer.hold_effort_now()) {
     EXPECT_DOUBLE_EQ(effort, kHold + kContaminated);
   }
@@ -562,13 +573,13 @@ TEST(ArmConsumerHold, AC3_ANonFiniteTorqueSampleKeepsThePreviousOneAndTheRuleSti
   EXPECT_DOUBLE_EQ(consumer.submitted().joints[3].effort, kHold + kBand);
 }
 
-// -- the existing constructors never clamp ------------------------------------------------
+// -- an explicitly unbounded consumer never clamps ---------------------------------------
 
-TEST(ArmConsumerHold, AC3_ConstructorsWithoutABandBehaveAsBefore)
+TEST(ArmConsumerHold, AC3_AnUnboundedConsumerKeepsTheMeasuredTorqueInMotion)
 {
   const A measured = filled(kHold + kContaminated);
   {
-    ArmConsumer consumer(kLimits, 2.0, 30.0);
+    auto consumer = unbounded(filled(2.0), filled(30.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -578,7 +589,7 @@ TEST(ArmConsumerHold, AC3_ConstructorsWithoutABandBehaveAsBefore)
     }
   }
   {
-    ArmConsumer consumer(kLimits, filled(2.0), filled(3.0));
+    auto consumer = unbounded(filled(2.0), filled(3.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -586,7 +597,7 @@ TEST(ArmConsumerHold, AC3_ConstructorsWithoutABandBehaveAsBefore)
     EXPECT_DOUBLE_EQ(consumer.submitted().joints[0].effort, kHold + kContaminated);
   }
   {
-    ArmConsumer consumer(kLimits, filled(2.0), filled(3.0), filled(40.0));
+    auto consumer = unbounded(filled(2.0), filled(3.0), filled(40.0));
     ASSERT_TRUE(consumer.configure(1, filled(0.0)));
     ASSERT_TRUE(consumer.accept_and_write(command(1, 1, 0.4, filled(kHold))));
     consumer.observe(filled(0.35), velocity_of(0, 5.0), measured);
@@ -595,9 +606,9 @@ TEST(ArmConsumerHold, AC3_ConstructorsWithoutABandBehaveAsBefore)
   }
 }
 
-TEST(ArmConsumerHold, AC1_ConstructorsWithoutABandStillValidateTheEstimate)
+TEST(ArmConsumerHold, AC1_AnUnboundedConsumerStillValidatesTheEstimate)
 {
-  ArmConsumer consumer(kLimits, 2.0, 30.0);
+  auto consumer = unbounded(filled(2.0), filled(30.0));
   ASSERT_TRUE(consumer.configure(1, filled(0.0)));
   EXPECT_FALSE(consumer.accept_and_write(command(1, 1, 0.4, filled(51.0))));
   EXPECT_EQ(consumer.status(), MitStatus::SAFE_TRANSITION);
@@ -727,6 +738,17 @@ TEST(LimiterHold, AC2_TheProfileCarriesTheBandAndTheMotionThreshold)
     EXPECT_LT(p.safe_hold_torque_band[i] + 1.0, kContaminated) << i;
     EXPECT_LE(1.0 + kContaminated, p.tau_ff_max[i]) << i;
   }
+  // A bound the profile never set (SafetyProfile's NaN default) is rejected,
+  // not taken as unbounded, by both consumers.
+  const cho_openarm_mit_core::SafetyProfile unset{};
+  auto no_band = p;
+  no_band.safe_hold_torque_band = unset.safe_hold_torque_band;
+  EXPECT_THROW(Limiter(no_band, 1000), std::invalid_argument);
+  EXPECT_THROW(banded(unset.safe_hold_torque_band), std::invalid_argument);
+  auto no_velocity = p;
+  no_velocity.safe_hold_motion_velocity = unset.safe_hold_motion_velocity;
+  EXPECT_THROW(Limiter(no_velocity, 1000), std::invalid_argument);
+  EXPECT_THROW(banded(filled(kBand), unset.safe_hold_motion_velocity), std::invalid_argument);
 }
 
 TEST(LimiterHold, AC5_AnExplicitSafeInMotionBoundsTheMeasuredTorqueToTheEstimatePlusBand)

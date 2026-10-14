@@ -61,7 +61,14 @@ private:
   // (no estimate). The single arm is "left".
   void clear_hold_torque(bool left, bool right);
   ValidationLimits limits_{6.4, 20.0, 500.0, 50.0, 100.0, 100};  // test-double only
-  ArmConsumer left_{limits_}, right_{limits_};
+  // Placeholders until on_init() replaces both with consumers built from the
+  // hardware parameters: explicitly unbounded (band and motion velocity +inf),
+  // damping 1, stiffness 0, the hold's effort limit max_abs_effort.
+  static constexpr double kUnbounded = std::numeric_limits<double>::infinity();
+  ArmConsumer left_{
+    limits_, detail::every_joint(1.0), detail::every_joint(0.0),
+    detail::every_joint(limits_.max_abs_effort), detail::every_joint(kUnbounded), kUnbounded};
+  ArmConsumer right_{left_};
   std::unique_ptr<PairedConsumer> pair_;
   std::array<std::array<double, 5>, 14> command_{};
   // <joint>/hold_torque of every arm joint (claim index kHoldTorqueOffset + i
@@ -84,11 +91,15 @@ private:
   double safe_hold_damping_{1.0};
   // Hardware parameters safe_hold_torque_band (one value or seven, [N m]) and
   // safe_hold_motion_velocity ([rad/s]), the consumers' bound on a hold
-  // latched in motion (ArmConsumer). Both default to +inf: never bounded, the
-  // measured torque, as before the hold torque existed.
-  std::array<double, kJointsPerArm> safe_hold_torque_band_{};
-  double safe_hold_motion_velocity_{std::numeric_limits<double>::infinity()};
+  // latched in motion (ArmConsumer). The test double's explicit default, in the
+  // members and in on_init() when a parameter is absent, is +inf (kUnbounded):
+  // never bounded, the measured torque, as before the hold torque existed.
+  std::array<double, kJointsPerArm> safe_hold_torque_band_{detail::every_joint(kUnbounded)};
+  double safe_hold_motion_velocity_{kUnbounded};
   double mirror_position_offset_{0.0};
+  // Hardware parameter mirror_effort_offset [N m], added to the mirrored
+  // measured effort of every arm joint (on_init()).
+  double mirror_effort_offset_{0.0};
   // The controller-switch rule every OpenArm MIT backend shares, so the
   // controller integration tests run against the real adapter's rule: a stop is
   // accepted SAFE or not, the hardware itself puts the arm in SAFE, and the

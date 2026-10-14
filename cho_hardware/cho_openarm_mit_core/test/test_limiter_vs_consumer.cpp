@@ -199,7 +199,7 @@ public:
   void step(const Joints & q, const ArmCommand * commit, Joints & tau_real, Joints & tau_sim)
   {
     const Joints dq{};
-    consumer_.observe(q, applied_);
+    consumer_.observe(q, dq, applied_);
     if (safe_requested_) {
       consumer_.request_safe_transition(true);
       ASSERT_TRUE(consumer_.submit_safe_transition(true));

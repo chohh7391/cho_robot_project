@@ -55,8 +55,8 @@ namespace cho_controller_openarm_mit
 //          tau_ff = nle. Simpler than the task path: no Jacobian, no
 //          pseudo-inverse, no singularity to handle.
 //
-// Both carry the inherited hold torque, gravity_scale * gravity_joint_scale *
-// g(q) at the measured q (TaskSpaceImpedanceController::update()).
+// Both carry the inherited hold torque, the scaled gravity torque at the measured
+// q (TaskSpaceImpedanceController::update(), gravity_scales()).
 //
 // That holds under drive_side_impedance: true only. Under the legacy law
 // (drive_side_impedance: false, the real bimanual config) the base class sends

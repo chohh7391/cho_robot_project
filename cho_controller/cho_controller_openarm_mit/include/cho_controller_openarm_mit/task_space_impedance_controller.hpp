@@ -231,6 +231,19 @@ protected:
   // torques are never rate-limited: a rate limiter inside a closed loop adds
   // phase lag proportional to error amplitude and is a limit-cycle source.
   double slew_model_feedforward(std::size_t joint, double desired, double dt);
+  // gravity_scale * gravity_joint_scale[i] for every joint: the one place the
+  // two are multiplied. The model feed-forward and the hold torque both scale
+  // the gravity term by it. gravity_scale_ is loaded once per call, so a
+  // runtime set cannot give two joints of one computation different scales.
+  std::array<double, 7> gravity_scales() const
+  {
+    const double gravity_scale = gravity_scale_.load(std::memory_order_acquire);
+    std::array<double, 7> scales{};
+    for (std::size_t i = 0; i < 7; ++i) {
+      scales[i] = gravity_scale * gravity_joint_scale_[i].load(std::memory_order_acquire);
+    }
+    return scales;
+  }
   bool configure_task_model();
   bool task_pose_and_jacobian(
     const std::array<double, 7> & q, pinocchio::SE3 & pose, Jacobian & jacobian);
@@ -346,9 +359,8 @@ protected:
   // Atomic and runtime-settable: finding the value at which a hand-placed
   // posture holds is a measurement, and making it need a relaunch per step
   // would turn a five-point sweep into five re-homings of the arm.
-  // It scales the hold torque too (gravity_scale * gravity_joint_scale * g(q),
-  // update()), so a value below 1 also narrows what a SAFE hold latched in
-  // motion supports.
+  // It scales the hold torque too (gravity_scales(), update()), so a value
+  // below 1 also narrows what a SAFE hold latched in motion supports.
   std::atomic<double> gravity_scale_{1.0};
   // Per-joint multiplier on the model term, applied on top of gravity_scale.
   // Negative inverts that joint, which exists to test a suspected axis-sign

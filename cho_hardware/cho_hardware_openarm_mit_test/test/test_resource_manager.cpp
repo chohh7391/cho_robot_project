@@ -398,7 +398,8 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kActiveStatus = static_cast<double>(cho_openarm_mit_core::MitStatus::ACTIVE);
 constexpr double kSafeStatus = static_cast<double>(cho_openarm_mit_core::MitStatus::SAFE);
-// The SAFE hold's bound in motion, in the form of mujoco_sim_safe's profile.
+// The SAFE hold's bound in motion: a fixture value of this test double's
+// parameters, not a shipped profile's.
 constexpr std::array<double, 7> kBand{0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1};
 const std::string kBound =
     "<param name='safe_hold_torque_band'>[0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]</param>"
@@ -631,6 +632,57 @@ TEST(ResourceManager, APairHoldLatchedInMotionIsBoundedOnBothArms) {
           << arm->joint(j, "effort");
     }
   }
+}
+
+TEST(ResourceManager, TheMirroredEffortIsTheAcceptedTauFfPlusMirrorEffortOffset) {
+  const std::array<double, 7> tau_ff{1.0, -2.0, 0.5, 0.0, 0.3, -0.2, 4.0};
+  const std::array<double, 7> none{kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN};
+  // Absent: the accepted tau_ff, as before the knob existed.
+  for (const double offset : {0.0, 3.0, -1.5}) {
+    const std::string params =
+        offset == 0.0 ? std::string()
+                      : "<param name='mirror_effort_offset'>" + std::to_string(offset) + "</param>";
+    hardware_interface::ResourceManager rm(urdf(params), true, true);
+    auto session = rm.claim_state_interface("openarm_arm/mit_session_id");
+    Producer arm(rm, "");
+    arm.commit(session.get_value(), 1.0, tau_ff, 0.0, none);
+    ASSERT_TRUE(write(rm));
+    for (std::size_t j = 0; j < 7; ++j) {
+      auto effort = rm.claim_state_interface(arm.joint(j, "effort"));
+      EXPECT_DOUBLE_EQ(effort.get_value(), tau_ff[j] + offset) << "offset " << offset << ", joint " << j + 1;
+    }
+  }
+}
+
+TEST(ResourceManager, TheMirrorEffortOffsetAppliesToBothArmsOfAPair) {
+  hardware_interface::ResourceManager rm(
+      bimanual_urdf("<param name='mirror_effort_offset'>3.0</param>"), true, true);
+  auto session = rm.claim_state_interface("openarm_left_arm/mit_session_id");
+  Producer left(rm, "left"), right(rm, "right");
+  auto token = rm.claim_command_interface(cho_openarm_mit_core::kPairOwnershipCommand);
+  const std::array<double, 7> tau_ff{1.0, -2.0, 0.5, 0.0, 0.3, -0.2, 4.0};
+  const std::array<double, 7> none{kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN};
+  token.set_value(session.get_value());
+  left.commit(session.get_value(), 1.0, tau_ff, 0.0, none);
+  right.commit(session.get_value(), 1.0, tau_ff, 0.0, none);
+  ASSERT_TRUE(write(rm));
+  for (const auto *arm : {&left, &right}) {
+    for (std::size_t j = 0; j < 7; ++j) {
+      auto effort = rm.claim_state_interface(arm->joint(j, "effort"));
+      EXPECT_DOUBLE_EQ(effort.get_value(), tau_ff[j] + 3.0) << arm->joint(j, "effort");
+    }
+  }
+}
+
+TEST(ResourceManager, ANonFiniteMirrorEffortOffsetFailsInitialisation) {
+  const auto initialised = [](const std::string &v) {
+    hardware_interface::ResourceManager rm(
+        urdf("<param name='mirror_effort_offset'>" + v + "</param>"), false, false);
+    return rm.get_components_status().at("mit_fake").state.id() ==
+           lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED;
+  };
+  EXPECT_TRUE(initialised("3.0"));
+  for (const auto *bad : {"nan", "inf", "-inf", "x"}) EXPECT_FALSE(initialised(bad)) << bad;
 }
 
 TEST(ResourceManager, AnInvalidHoldBoundParameterFailsInitialisation) {

@@ -202,22 +202,22 @@ moves.
 | `BimanualFollowJointTrajectoryController`, `SingleArmFollowJointTrajectoryController` | NaN |
 
 `g` is `pinocchio::computeGeneralizedGravity` on the controller's `robot_description` model at the
-measured `q` of the cycle, clamped per joint to the profile's `tau_ff_magnitude` (the bound the
-consumer validates it against; a larger one rejects the commit), not to `torque_limit`. It is
-gravity alone, with no Coriolis, friction, null-space or joint-limit term and no slew: the
-`tau_ff` these producers emit is the slewed model term plus feedback, and while the arm moves it is
-not what holds the arm still. It is written on every commit, the seed and the return-to-zero ramp
-included (`DirectControllerBase::model_hold_torque()`, `commit()`); a joint whose estimate is not
-finite gets NaN. The raw-topic producers' `tau_ff` is the caller's and they own no model.
+measured `q` of the cycle, clamped per joint to the profile's `tau_ff_magnitude` (the joint's hold
+effort limit, the contract's validity bound), not to `torque_limit`. The scale is
+`TaskSpaceImpedanceController::gravity_scales()`, the same one the feed-forward's model term
+uses. It is gravity alone, with no Coriolis, friction, null-space or joint-limit term and no slew:
+the `tau_ff` these producers emit is the slewed model term plus feedback, and while the arm moves
+it is not what holds the arm still. It is written on every commit, the seed and the return-to-zero
+ramp included (`DirectControllerBase::model_hold_torque()`, `commit()`); a joint whose estimate is
+not finite gets NaN. The raw-topic producers' `tau_ff` is the caller's and they own no model.
 
-A SAFE latched while any joint moves at `torque.safe_hold_motion_velocity` or faster holds
-`clamp(tau_measured, h - band, h + band)` (`band = torque.safe_hold_torque_band`), so it holds at
-most `h + band`: a payload the model does not know, or a `gravity_scale` below 1, is then supported
-only up to the band. At rest the hold is the measured torque, whatever `h` is. With NaN the hold is
-the measured torque in motion too. The hardware resets the interfaces to NaN at activation and at
-every controller switch, so the next producer never inherits the previous one's estimate.
-`test_hold_torque_producers` checks the table on the fake consumer (the FollowJointTrajectory row on
-the paired controller).
+What the consumer does with `h` (the bound a hold latched in motion takes around it, the validity
+rule, the profile keys) is the contract's
+[Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque); a payload the model does not
+know, or a `gravity_scale` below 1, is supported by a hold latched in motion only that far. The
+hardware resets the interfaces to NaN at activation and at every controller switch, so the next
+producer never inherits the previous one's estimate. `test_hold_torque_producers` checks the table
+on the fake consumer (the FollowJointTrajectory row on the paired controller).
 
 ## Action contract of the direct and TaskSpace producers
 

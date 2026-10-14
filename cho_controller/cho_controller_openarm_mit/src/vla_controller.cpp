@@ -750,6 +750,7 @@ bool VlaController::write_joint_reference_target(
   }
   if (!model_nle(q, dq, nle)) {return false;}
 
+  const auto gravity = gravity_scales();
   for (std::size_t joint = 0; joint < 7; ++joint) {
     const auto index = static_cast<Eigen::Index>(joint);
     // The reference offset against MEASURED position is what the drive turns
@@ -777,8 +778,7 @@ bool VlaController::write_joint_reference_target(
     // model term. No Jacobian, no pseudo-inverse, no singularity.
     target.feedforward[joint] = slew_model_feedforward(
       joint,
-      gravity_scale_.load(std::memory_order_acquire) *
-      gravity_joint_scale_[joint].load(std::memory_order_acquire) * nle[joint],
+      gravity[joint] * nle[joint],
       dt);
   }
   return true;

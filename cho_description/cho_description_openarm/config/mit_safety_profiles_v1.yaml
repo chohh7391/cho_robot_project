@@ -62,14 +62,11 @@ profiles:
       tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
-      # SAFE hold only; the hold's tau_ff is the measured torque. A hold latched
-      # while any joint's measured |dq| >= safe_hold_motion_velocity [rad/s]
-      # bounds it to the producer's hold_torque (its gravity estimate) +/- this
-      # band [N*m], so the motion's inertial and contact torque is not held. A
-      # latch at rest keeps the measured torque unbounded. The MJCF joints carry
-      # frictionloss 0.02 N*m, so this is not a friction level but a bound on
-      # the hold's distance from the estimate; real_conservative_commissioning
-      # explains the rule.
+      # SAFE hold only: the bound a hold latched in motion takes around the
+      # producer's hold_torque, and the |dq| [rad/s] from which a latch counts
+      # as in motion (the rule: docs/openarm_mit_contract_v1.md, "Hold torque").
+      # The MJCF joints carry frictionloss 0.02 N*m, so the band [N*m] is not a
+      # friction level but a bound on the hold's distance from the estimate.
       safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
       safe_hold_motion_velocity: 0.1
       ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
@@ -177,18 +174,13 @@ profiles:
       tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
-      # SAFE hold only. The hold's tau_ff is the torque measured in the latch's
-      # own read. A hold latched while the arm moves - any joint's measured
-      # |dq| >= safe_hold_motion_velocity [rad/s] - would carry that motion's
-      # inertial and contact torque as a constant, so it is bounded to the
-      # producer's hold_torque (its gravity estimate) +/- safe_hold_torque_band
-      # [N*m]; a joint without an estimate keeps the measured torque. The band
-      # is the identified static friction of cho_bringup_openarm's
-      # config/real/controllers_mit.yaml (friction_level): a hold-torque error
-      # inside it stays still only while below the breakaway friction, and a
-      # latch finds the arm moving (docs/openarm_mit_contract_v1.md, "Hold
-      # torque"). A latch at rest is not bounded: the measured torque there is
-      # what supports a payload the producer's model does not know.
+      # SAFE hold only: the bound a hold latched in motion takes around the
+      # producer's hold_torque, and the |dq| [rad/s] from which a latch counts
+      # as in motion (the rule: docs/openarm_mit_contract_v1.md, "Hold torque").
+      # The band [N*m] is the identified static friction: it equals every
+      # friction_level in cho_bringup_openarm's config/real/controllers_mit*.yaml,
+      # and that package's test_real_mit_launch_boundaries.py fails when they
+      # differ. Change them together.
       safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
       safe_hold_motion_velocity: 0.1
       # What the real consumer does, which the loader requires a REAL profile

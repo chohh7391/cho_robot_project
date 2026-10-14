@@ -196,27 +196,34 @@ A hold latched while the arm moves must not keep the motion's inertial and conta
 constant push. So wherever a hold is built (a SAFE request, a rejected commit, lease expiry, a
 switch, a stop, the real adapter's write-watchdog frame), with `h` the `hold_torque` of the last
 commit the consumer accepted in this session, `band = torque.safe_hold_torque_band` and
-`threshold = torque.safe_hold_motion_velocity` of the profile:
+`threshold = torque.safe_hold_motion_velocity` of the profile, and `effort_limit` the joint's hold
+effort limit:
 
 ```text
 in_motion = any joint of the latch read has |dq| >= threshold      (non-finite dq: in motion)
 tau_ff    = clamp(tau_measured, h - band, h + band)  if in_motion and h is finite, else tau_measured
-tau_ff    = clamp(tau_ff, -tau_ff_magnitude, +tau_ff_magnitude)
+tau_ff    = clamp(tau_ff, -effort_limit, +effort_limit)
 ```
 
-`dq`, `q` and `tau_measured` come from the same read. A session's first hold has no `h`, so it is
+`effort_limit` is the profile's `torque.tau_ff_magnitude` on the real and MuJoCo backends (the test
+fake: its `max_abs_effort`). `dq`, `q` and `tau_measured` come from the same read. A session's
+first hold has no `h`, so it is
 the measured torque. At rest the hold is the measured torque, however far from `h`: it keeps
 supporting a payload the producer's model does not know, which a hold latched in motion supports
-only up to the band. The real profiles' band is the joints' identified static friction,
-`[1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2] N m`, so an error of `h` inside it leaves the arm still while
-it stays below the breakaway friction (a latch finds the arm moving, so there is no margin when the
-clamp is active); `mujoco_sim_safe`'s band is a bound, not a friction. Both keys are required in
-every profile the loader parses. The real profiles' threshold is `0.1 rad/s`; it must stay above the
-joints' measured `|dq|` at rest, or every latch counts as in motion.
+only up to the band. The real profiles' band is the joints' identified static friction: their
+`torque.safe_hold_torque_band` in
+[`mit_safety_profiles_v1.yaml`](../cho_description/cho_description_openarm/config/mit_safety_profiles_v1.yaml)
+equals the `friction_level` of `cho_bringup_openarm/config/real/controllers_mit*.yaml` (a test
+enforces it). An error of `h` inside it leaves the arm still while it stays below the breakaway
+friction (a latch finds the arm moving, so there is no margin when the clamp is active);
+`mujoco_sim_safe`'s band is a bound, not a friction. Both keys are required in every profile the
+loader parses. The real profiles' threshold is `0.1 rad/s`; it must stay above the joints' measured
+`|dq|` at rest, or every latch counts as in motion.
 
-- Value: NaN is no estimate (that joint keeps the measured torque in motion too). A finite `h` with
-  `|h| > tau_ff_magnitude` of its joint, or an infinite one, makes the whole commit invalid, handled
-  like an out-of-bound `tau_ff` (a rejected commit; measured SAFE).
+- Value: valid iff `h` is NaN (no estimate: that joint keeps the measured torque in motion too) or
+  finite with `|h| <= effort_limit` of its joint. Any other `h`, an infinite one included, makes the
+  whole commit invalid on every backend: the real consumer rejects it (measured SAFE) and the MuJoCo
+  limiter refuses it. An out-of-range `tau_ff` is different in MuJoCo, which clamps it.
 - Retention: the consumer keeps `h` of the last ACCEPTED commit of the session, never reads the
   interface at hold time, and forgets it (all NaN) when a session is seeded, at cleanup and when the
   session ends. A rejected or discarded commit leaves it.
@@ -265,7 +272,7 @@ values); a gripper fault faults its same-bus arm on the real adapter
 The MuJoCo consumer, for each generation:
 
 1. snapshot and validate generation, lease, order, finite values, non-negative gains and a
-   `hold_torque` that is NaN or at most `tau_ff_magnitude` in magnitude;
+   `hold_torque` the [Hold torque](#hold-torque) value rule accepts;
 2. clamp requested targets/gains/feed-forward to configured per-joint command bounds;
 3. apply gain and feed-forward slew limits relative to the last accepted tuple;
 4. evaluate the MIT equation from current state;
@@ -275,7 +282,7 @@ The MuJoCo consumer, for each generation:
 
 The real consumer validates the same snapshot and, instead of clamping, rejects a commit with any
 joint outside the profile's position window, command velocity, `kp_max`, `kd_max` or
-`tau_ff_magnitude`, or with a `hold_torque` outside `tau_ff_magnitude` (measured SAFE). It applies
+`tau_ff_magnitude`, or with a `hold_torque` the same value rule rejects (measured SAFE). It applies
 no slew: the motor evaluates the MIT equation, and the direct producers slew their return-to-zero gain ramps and model feed-forward with the profile's
 `kp_slew_per_s`, `kd_slew_per_s` and `tau_ff_slew_per_s`; `final_slew_per_s` has no effect there.
 It does keep `final_magnitude`, through what it sends: every tuple that goes out (a commit, its

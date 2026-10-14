@@ -613,3 +613,55 @@ def test_xacro_default_expected_update_rate_is_the_real_profile_rate():
     assert urdf and int(urdf.group(1)) == rate
     macro = re.search(r'mit_expected_update_rate_hz:=(\d+)', DESCRIPTION.read_text())
     assert macro and int(macro.group(1)) == rate
+
+
+def _values_of_key(node, key):
+    """Every value stored under `key`, anywhere in a parsed YAML tree."""
+    found = []
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                found.append(value)
+            found.extend(_values_of_key(value, key))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_values_of_key(value, key))
+    return found
+
+
+def test_real_safe_hold_torque_band_equals_every_friction_level():
+    # The SAFE hold's band in motion is the identified static friction of the real
+    # controllers' joints, kept in two places: the profile's
+    # torque.safe_hold_torque_band and the controllers' friction_level. This is
+    # the only thing that keeps them equal.
+    configs = sorted((PACKAGE / 'config' / 'real').glob('controllers_mit*.yaml'))
+    assert configs, 'no real controllers_mit*.yaml'
+    levels = []
+    for config in configs:
+        for level in _values_of_key(yaml.safe_load(config.read_text()), 'friction_level'):
+            levels.append((config.name, level))
+    assert levels, 'no friction_level in any real controllers_mit*.yaml'
+
+    profiles = yaml.safe_load(SAFETY.read_text())['profiles']
+    real_bands = {
+        name: profile['torque']['safe_hold_torque_band']
+        for name, profile in profiles.items()
+        if name.startswith('real_') and profile['torque']['safe_hold_torque_band'] is not None
+    }
+    assert real_bands, 'no real profile carries a safe_hold_torque_band'
+    for profile_name, band in real_bands.items():
+        assert len(band) == 7, profile_name
+        for config_name, level in levels:
+            assert level == band, (
+                f'{config_name}: friction_level {level} differs from '
+                f'{profile_name}.torque.safe_hold_torque_band {band}')
+    # The profiles agree with each other as well.
+    assert len({tuple(band) for band in real_bands.values()}) == 1
+
+
+def test_friction_level_walk_finds_nested_and_listed_keys():
+    # The walk that the band comparison relies on must see a key at any depth,
+    # inside lists included, and nothing that only contains the name.
+    tree = {'a': {'friction_level': [1.0]}, 'b': [{'c': {'friction_level': [2.0]}}],
+            'friction_level_scale': [3.0], 'd': 'friction_level'}
+    assert _values_of_key(tree, 'friction_level') == [[1.0], [2.0]]

@@ -792,10 +792,11 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
     // Per-joint safe-hold gains from the profile.  Collapsing them onto the
     // smallest wrist value would leave the DM8009 shoulder and DM4340 elbow
     // with a fraction of a N*m/rad while the hold has no gravity model.
-    // The hold's tau_ff is the measured joint torque (ArmConsumer), bounded
-    // per joint by the same tau_ff_max a producer's commit is validated against;
-    // latched in motion (|dq| >= safe_hold_motion_velocity on any joint), first
-    // to the accepted commit's hold torque +/- safe_hold_torque_band.
+    // The hold's tau_ff is the measured joint torque (ArmConsumer), and a hold
+    // latched in motion is bounded to the last accepted commit's hold torque
+    // (docs/openarm_mit_contract_v1.md, "Hold torque"). tau_ff_max is its
+    // per-joint hold effort limit: the bound the hold's tau_ff is clamped to
+    // and the one the consumer validates a commit's hold torque against.
     consumer_ = std::make_unique<cho_openarm_mit_core::ArmConsumer>(
       limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness,
       safety_profile_.tau_ff_max, safety_profile_.safe_hold_torque_band,
@@ -1723,8 +1724,10 @@ bool OpenArmMitRealSystem::apply_producer_input()
   bool per_joint_limits_valid = true;
   for (std::size_t index = 0; index < kArmDof; ++index) {
     const auto & tuple = command.joints[index];
-    // The hold torque is NaN (no estimate) or inside the same per-joint
-    // tau_ff_max as the tuple's tau_ff; anything else rejects the commit.
+    // The commit's hold torque is not checked here: the consumer validates it
+    // against its hold effort limit, tau_ff_max (valid_hold_torque()), in
+    // accept_and_write() below, and a commit it rejects takes the same path as
+    // one that fails these checks.
     per_joint_limits_valid =
       per_joint_limits_valid &&
       tuple.position >= safety_profile_.position_lower[index] &&
@@ -1733,8 +1736,7 @@ bool OpenArmMitRealSystem::apply_producer_input()
       safety_profile_.command_velocity[index] &&
       tuple.stiffness <= safety_profile_.kp_max[index] &&
       tuple.damping <= safety_profile_.kd_max[index] &&
-      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index] &&
-      cho_openarm_mit_core::valid_hold_torque(command.hold_torque[index], safety_profile_.tau_ff_max[index]);
+      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
   }
   // A commit is evaluated once, accepted or not. A rejected one used to be
   // re-evaluated every cycle, and each rejection re-latched the SAFE hold to

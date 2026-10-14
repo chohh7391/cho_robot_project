@@ -205,15 +205,18 @@ def test_authoritative_profile_does_not_drift_from_urdf_gains_limits_or_pinned_p
 
 
 def test_safe_hold_bound_is_in_every_profile_with_the_pinned_values():
-    # band = static friction on the real profiles (the identified friction_level
-    # of cho_bringup_openarm's controllers_mit.yaml): a hold-torque error inside
-    # it stays still while below the breakaway friction. The sim has no
-    # identified friction, so its values are a separate, smaller bound.
-    friction_level = [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+    # The real profiles' band is the identified static friction, whose value is
+    # cho_bringup_openarm's friction_level (compared with it in that package's
+    # test_real_mit_launch_boundaries.py); here the two commissioning profiles
+    # carry the same band, and the mirror carries what the profiles file does.
+    # The sim has no identified friction, so its values are a separate, smaller
+    # bound with its own pinned literal.
+    real_band = SAFETY["profiles"]["real_conservative_commissioning"]["torque"]["safe_hold_torque_band"]
+    assert isinstance(real_band, list) and len(real_band) == 7
     expected = {
         "mujoco_sim_safe": ([0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1], 0.1),
-        "real_conservative_commissioning": (friction_level, 0.1),
-        "real_return_to_zero_commissioning": (friction_level, 0.1),
+        "real_conservative_commissioning": (real_band, 0.1),
+        "real_return_to_zero_commissioning": (real_band, 0.1),
         "real_conservative_unapproved": (None, None),
     }
     assert set(expected) == set(SAFETY["profiles"])

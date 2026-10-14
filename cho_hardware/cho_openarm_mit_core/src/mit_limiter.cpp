@@ -48,7 +48,8 @@ Limiter::Limiter(const SafetyProfile & p, std::size_t rate)
 {
   if (p.backend != SafetyBackend::MUJOCO || p.name.empty() || rate != p.update_rate_hz)
     throw std::invalid_argument("explicit MuJoCo safety profile/update rate mismatch");
-  // +inf is allowed for both (never bounds), as on ArmConsumer.
+  // As on ArmConsumer: +inf is allowed for both (a hold that is never
+  // bounded); NaN, a profile that never set them, is rejected.
   if (
     !(p.safe_hold_motion_velocity > 0.0) ||
     !std::all_of(p.safe_hold_torque_band.begin(), p.safe_hold_torque_band.end(), [](double b) {
@@ -82,6 +83,8 @@ bool Limiter::submit(
     if (
       !std::isfinite(r[i].q) || !std::isfinite(r[i].dq) || !std::isfinite(r[i].kp) ||
       !std::isfinite(r[i].kd) || !std::isfinite(r[i].tau) || r[i].kp < 0 || r[i].kd < 0 ||
+      // tau_ff[i] (the profile's tau_ff_magnitude) is this joint's hold effort
+      // limit: the bound update() clamps its hold tau_ff to.
       !valid_hold_torque(hold[i], limits_.tau_ff[i]))
       return false;
   command_ = r;
@@ -116,8 +119,7 @@ std::array<double, kJointsPerArm> Limiter::update(
     // fall toward it. Applied at once, the output continues from the previous
     // cycle's torque, as the real adapter's hold does. The gains still slew to
     // the safe gains. Latched in motion, that torque carries the motion's
-    // inertial share too, and is bounded to the hold torque +/- band (the
-    // class comment).
+    // inertial share too: bounded_hold_torque().
     const bool in_motion = hold_in_motion(dq, limits_.hold_motion_velocity);
     for (std::size_t i = 0; i < kJointsPerArm; ++i) {
       command_[i].q = q[i];

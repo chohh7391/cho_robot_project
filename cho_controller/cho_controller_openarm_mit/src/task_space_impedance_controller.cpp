@@ -1198,12 +1198,13 @@ bool TaskSpaceImpedanceController::write_cartesian_torque_target(
   friction_torque(dq, target.velocity, friction);
   feedback += friction;
 
+  const auto gravity = gravity_scales();
   for (std::size_t i = 0; i < 7; ++i) {
     // Only the model term is rate-limited. The feedback terms are bounded in
     // magnitude by max_task_wrench above and by the profile/controller torque
     // limits below; rate-limiting them would put a limit-cycle source inside
     // the closed loop.
-    const double model = slew_model_feedforward(i, gravity_scale_.load(std::memory_order_acquire) * gravity_joint_scale_[i].load(std::memory_order_acquire) * nle[i], dt);
+    const double model = slew_model_feedforward(i, gravity[i] * nle[i], dt);
     const double bounded_feedback = std::clamp(
       feedback[i], -feedforward_limit_[i], feedforward_limit_[i]);
     target.feedforward[i] = std::clamp(
@@ -1394,7 +1395,8 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
     // The same slewed model tracker as the Cartesian path, so the gravity
     // term neither steps in at the first ACTIVE cycle nor at the mode
     // boundary into Cartesian control.
-    for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity_scale_.load(std::memory_order_acquire) * gravity_joint_scale_[i].load(std::memory_order_acquire) * nle[i], slew_dt);
+    const auto gravity = gravity_scales();
+    for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity[i] * nle[i], slew_dt);
     if (u >= 1.0) {
       bool converged = true;
       for (std::size_t i = 0; i < 7; ++i) converged = converged && std::abs(q[i] - return_to_zero_target_[i]) <= startup_tolerance_;
@@ -1474,7 +1476,8 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
     const auto q = measured(); std::array<double, 7> dq{}, nle{};
     for (std::size_t i = 0; i < 7; ++i) dq[i] = state_interfaces_[2 * i + 1].get_value();
     if (!model_nle(q, dq, nle)) {fault(ActionReason::COMPUTE_FAILED); return controller_interface::return_type::ERROR;}
-    for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity_scale_.load(std::memory_order_acquire) * gravity_joint_scale_[i].load(std::memory_order_acquire) * nle[i], slew_dt);
+    const auto gravity = gravity_scales();
+    for (std::size_t i = 0; i < 7; ++i) target.feedforward[i] = slew_model_feedforward(i, gravity[i] * nle[i], slew_dt);
   }
   auto command_kp = startup_command ? startup_kp_ : kp_;
   auto command_kd = startup_command ? startup_kd_ : current_kd();
@@ -1512,17 +1515,13 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   auto command = map_direct_mit_command(
     command_mode, target, q, command_kp, command_kd, torque_limit_);
   clamp_command_positions(command);
-  // The hold torque: the model term's gravity part, scaled as it is, at the
-  // measured q -- on every commit, the seed, the return-to-zero ramp, the
-  // pre-latch hold and Cartesian control (VlaController's joint and task
-  // chunks) alike. Not the slewed tau_ff: the consumer bounds a hold latched
-  // in motion to h +/- band, and h must be what holds the arm still there.
-  std::array<double, 7> scale{};
-  const double gravity_scale = gravity_scale_.load(std::memory_order_acquire);
-  for (std::size_t i = 0; i < 7; ++i) {
-    scale[i] = gravity_scale * gravity_joint_scale_[i].load(std::memory_order_acquire);
-  }
-  command.hold_torque = model_hold_torque(q, scale);
+  // The hold torque: the model term's gravity part at the measured q, scaled
+  // like the feed-forward (gravity_scales()), on every commit: the seed, the
+  // return-to-zero ramp, the pre-latch hold and Cartesian control
+  // (VlaController's joint and task chunks) alike. Not the slewed tau_ff: it is
+  // what holds the arm still, which a hold latched in motion is bounded around
+  // (docs/openarm_mit_contract_v1.md#hold-torque).
+  command.hold_torque = model_hold_torque(q, gravity_scales());
   commit(command);
   return controller_interface::return_type::OK;
 }

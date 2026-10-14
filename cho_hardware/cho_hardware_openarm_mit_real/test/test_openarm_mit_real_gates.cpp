@@ -2593,23 +2593,39 @@ TEST(OpenArmMitRealProfile, EachBackendsProfileMustNameWhatItsConsumerDoes)
 
 // ---------------------------------------------------------------------------
 // The hold torque (<joint>/hold_torque, claim indices 39-45). A producer writes
-// its gravity estimate h with every commit. A hold latched while the arm moves
-// -- any joint of the latch read at |dq| >= the profile's
-// safe_hold_motion_velocity -- carries the measured torque bounded to
-// h +/- safe_hold_torque_band of the last commit accepted in the session, so
-// the inertial or contact torque of that instant is not held as a constant
-// push. At rest it carries the measured torque, a payload the model does not
-// know included. A joint without an estimate (NaN) keeps the measured torque.
+// its gravity estimate h with every commit. The rule for a hold latched in
+// motion or at rest is bounded_hold_torque()'s, stated for clients in
+// docs/openarm_mit_contract_v1.md, "Hold torque"; the expectations below apply
+// it by hand to the band and threshold of the profile the fixture loads.
 // ---------------------------------------------------------------------------
 namespace
 {
-// real_conservative_commissioning's torque.safe_hold_torque_band [N m] and
-// torque.safe_hold_motion_velocity [rad/s].
-constexpr std::array<double, 7> kBand{1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2};
-constexpr double kMotionVelocity = 0.1;
+// real_conservative_commissioning as the fixture loads it: its
+// torque.safe_hold_torque_band [N m] and torque.safe_hold_motion_velocity
+// [rad/s] are read from the shipped profile, not copied here.
+const cho_openarm_mit_core::SafetyProfile & shipped_profile()
+{
+  static const auto profile = cho_openarm_mit_core::load_safety_profile_file(
+    OPENARM_SAFETY_PROFILE_SOURCE, "real_conservative_commissioning",
+    cho_openarm_mit_core::SafetyBackend::REAL, "single");
+  return profile;
+}
+
+const std::array<double, 7> & shipped_band()
+{
+  return shipped_profile().safe_hold_torque_band;
+}
+
+double shipped_motion_velocity()
+{
+  return shipped_profile().safe_hold_motion_velocity;
+}
+
 // A gravity estimate inside every joint's tau_ff_max [40, 40, 27, 27, 7, 7, 7].
 constexpr std::array<double, 7> kHoldTorque{5.0, -8.0, 3.0, 2.0, 0.5, -0.3, 0.1};
-// The inertial or contact torque a moving latch read carries on top of it.
+// The inertial or contact torque a moving latch read carries on top of it; it
+// must exceed every joint's shipped band, or a bound is never seen to act
+// (TheFixtureContaminationExceedsTheShippedBand).
 constexpr double kContamination = 3.5;
 const std::array<double, 7> kAtRest{};
 
@@ -2628,7 +2644,7 @@ std::array<double, 7> bounded(const std::array<double, 7> & h)
 {
   std::array<double, 7> out{};
   for (std::size_t index = 0; index < 7; ++index) {
-    out[index] = index % 2 == 0 ? h[index] + kBand[index] : h[index] - kBand[index];
+    out[index] = index % 2 == 0 ? h[index] + shipped_band()[index] : h[index] - shipped_band()[index];
   }
   return out;
 }
@@ -2718,7 +2734,7 @@ TEST(OpenArmMitRealHoldTorque, ASafeRequestInMotionBoundsTheMeasuredTorqueToTheH
   // One joint moving is enough, in either direction, and the threshold itself
   // counts as motion.
   for (const auto & velocity :
-    {one_joint_moving(3, 0.5), one_joint_moving(6, -0.5), one_joint_moving(0, kMotionVelocity)})
+    {one_joint_moving(3, 0.5), one_joint_moving(6, -0.5), one_joint_moving(0, shipped_motion_velocity())})
   {
     std::array<double, 7> tau_ff{}, published{};
     safe_request_hold(kHoldTorque, velocity, contaminated(kHoldTorque), tau_ff, published);
@@ -2745,9 +2761,9 @@ TEST(OpenArmMitRealHoldTorque, AtRestTheHoldKeepsTheMeasuredTorqueHoweverFarFrom
   // Velocity noise just under the threshold, on every joint, is still rest.
   std::array<double, 7> just_below{};
   for (std::size_t index = 0; index < 7; ++index) {
-    just_below[index] = (index % 2 == 0 ? 1.0 : -1.0) * 0.0999;
+    just_below[index] = (index % 2 == 0 ? 1.0 : -1.0) * 0.999 * shipped_motion_velocity();
   }
-  ASSERT_LT(0.0999, kMotionVelocity);
+  ASSERT_LT(0.0, shipped_motion_velocity());
   safe_request_hold(kHoldTorque, just_below, contaminated(kHoldTorque), tau_ff, published);
   expect_equal(tau_ff, contaminated(kHoldTorque), "just below the motion velocity");
 }
@@ -2823,9 +2839,21 @@ Spoil set_command(const std::string & name, const double value)
 }
 }  // namespace
 
+TEST(OpenArmMitRealHoldTorque, TheFixtureContaminationExceedsTheShippedBand)
+{
+  // A bound that never acts would leave the in-motion expectations passing
+  // for the wrong reason.
+  ASSERT_GT(shipped_motion_velocity(), 0.0);
+  for (std::size_t index = 0; index < 7; ++index) {
+    EXPECT_LT(shipped_band()[index], kContamination) << "joint " << index + 1;
+  }
+}
+
 TEST(OpenArmMitRealHoldTorque, AnEstimateOutsideTheTauFfBoundIsRejectedLikeAnOutOfRangeTauFf)
 {
-  // The reference: joint 5's tau_ff past its 7 N m.
+  // The reference: joint 5's tau_ff past its 7 N m, rejected by the adapter's
+  // own tuple check. A hold torque past the same bound is rejected by the
+  // consumer's validity rule instead; the outcome must be the same.
   CommitOutcome reference;
   second_commit(set_command("openarm_joint5/effort", 7.5), reference);
   ASSERT_EQ(reference.status, kSafe);

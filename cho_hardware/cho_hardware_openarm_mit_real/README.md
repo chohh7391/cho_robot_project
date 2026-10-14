@@ -171,21 +171,12 @@ endpoints (`gripper_motor_closed`/`_open`, `gripper_joint_closed`/`_open`) and
   [SAFE hold](../cho_openarm_mit_core/DESIGN.md#safe-hold).
 - **A hold latched in motion is bounded to the hold torque.** Each commit
   carries the producer's gravity estimate per joint, `<joint>/hold_torque`
-  [N·m] (NaN: none). When any joint of the latch read has
-  `|dq| >= torque.safe_hold_motion_velocity` (0.1 rad/s in both real profiles),
-  each joint's tau_ff is the measured torque clamped to
-  `h ± torque.safe_hold_torque_band`, `h` being the hold torque of the last
-  commit accepted in this session; a joint without one keeps the measured
-  torque. The real profiles' band is the joints' identified static friction
-  (`friction_level` of `cho_bringup_openarm`'s `config/real/controllers_mit.yaml`),
-  `[1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]` N·m; a hold error inside it stays still
-  only while below the breakaway friction, and a latch finds the arm moving
-  ([Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque) gives the
-  sag bound). At rest the hold keeps the measured torque however
-  far from `h`: it supports a payload the producer's model does not know, which
-  a hold latched in motion supports only up to the band. The watchdog's last
-  frame follows the same rule (`ArmConsumer::hold_effort_now()` at each read).
-  A new session forgets `h`.
+  [N·m] (NaN: none). A SAFE hold latched while the arm moves keeps the measured
+  torque only within a band around the last accepted estimate; at rest it keeps
+  the measured torque as it is. The rule, the band's source and the sag bound
+  are in [Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque);
+  `ArmConsumer` applies it (`bounded_hold_torque()`), and the watchdog's last
+  frame follows it at each read. A new session forgets the estimate.
 - **The effort commands read the hold's tau_ff.** Whenever the arm is not ACTIVE,
   `write()` sets each joint's `effort` command to the feed-forward the hold
   applies; activation sets them to the new session's (the measured torque);
@@ -197,10 +188,11 @@ endpoints (`gripper_motor_closed`/`_open`, `gripper_joint_closed`/`_open`) and
   producer's commit.
 - **A commit is validated, not clamped.** Each tuple must lie inside the
   profile's per-joint position window, command velocity, `kp_max`, `kd_max` and
-  `tau_ff_magnitude`, and each hold torque must be NaN or finite with
-  `|h| <= tau_ff_magnitude`; a commit with any joint outside is rejected. The
-  motor evaluates the MIT equation itself; this adapter applies no slew. The
-  hold torque is never sent.
+  `tau_ff_magnitude`, and each hold torque must be valid by the
+  [Hold torque](../../docs/openarm_mit_contract_v1.md#hold-torque) rule, which
+  `ArmConsumer` checks against `tau_ff_magnitude`; a commit with any joint
+  outside is rejected. The motor evaluates the MIT equation itself; this
+  adapter applies no slew. The hold torque is never sent.
 - **What goes out is bounded to the final torque.** Every tuple sent (commit,
   ACTIVE re-send, SAFE hold, the write watchdog's last hold) has `q_des`, then
   `dq_des`, moved toward the latest measured state until

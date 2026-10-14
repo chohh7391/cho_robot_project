@@ -177,6 +177,16 @@ if(BUILD_TESTING)
   target_compile_definitions(test_hold_torque_producers PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
+  # A real producer (VlaController) on the fake consumer: the hold a SAFE latch
+  # builds in motion (bounded by the producer's last accepted h) and at rest.
+  ament_add_gtest(test_hold_torque_end_to_end test/test_hold_torque_end_to_end.cpp TIMEOUT 120)
+  target_link_libraries(test_hold_torque_end_to_end ${PROJECT_NAME})
+  ament_target_dependencies(test_hold_torque_end_to_end
+    cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
+    rclcpp rclcpp_action cho_interfaces std_srvs)
+  target_compile_definitions(test_hold_torque_end_to_end PRIVATE
+    OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
+
   ament_add_gtest(test_task_space_return_to_zero test/test_task_space_return_to_zero.cpp)
   target_link_libraries(test_task_space_return_to_zero ${PROJECT_NAME})
   ament_target_dependencies(test_task_space_return_to_zero

@@ -20,8 +20,9 @@ equation: tau_raw = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
 # (non_finite_allowed below is about the five fields above).
 #   none:       NaN, no estimate for that joint
 #   bound:      a finite value must satisfy |hold_torque| <= tau_ff_magnitude of
-#               the joint, and +/-inf is invalid; either makes the whole arm
-#               command invalid (invalid_policy), like an out-of-bound tau_ff
+#               the joint (the bound its hold's tau_ff is clamped to), and +/-inf
+#               is invalid; either makes the whole arm command invalid
+#               (invalid_policy), on every backend
 #   retained:   the consumer keeps the hold_torque of the last ACCEPTED commit
 #               of the current session; it never reads the interface at hold
 #               time, and forgets it when a session is seeded or ends
@@ -302,15 +303,10 @@ gripper_contract: separate_position_control
 #
 # A latch in motion is the exception: there the measured torque also carries
 # the motion's inertial and contact torque, and a hold built on it would pull
-# the arm toward the pose it happened to be passing. When any joint's measured
-# |dq| in the latch's read is at least the profile's safe_hold_motion_velocity,
-# each joint with a hold_torque (hold_interface above) takes the measured torque
-# bounded to hold_torque +/- safe_hold_torque_band, then the usual clamp. On the
-# real profiles the band is the joint's identified static friction, so a
-# hold_torque error inside it leaves the arm still while it stays below the
-# breakaway friction (the latch finds the arm moving). A joint without a finite
-# hold_torque, and every latch at rest, keep the measured torque: at rest it is
-# what supports a payload the producer's model does not know.
+# the arm toward the pose it happened to be passing, so it is bounded around
+# the producer's hold_torque (hold_interface above). The rule, the band and the
+# threshold are docs/openarm_mit_contract_v1.md, "Hold torque"; the values are
+# each profile's torque section in mit_safety_profiles_v1.yaml, mirrored here.
 safe_seed:
   q_des: measured_position
   dq_des: 0.0
