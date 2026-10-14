@@ -321,8 +321,7 @@ Every FR5 bringup is `control_mode:=position`, which is also the only mode
 on the bimanual torso, run once per arm (the 14-joint `both` profile is refused).
 `trajectory_replay` runs on the single-arm profile only. The torso as a whole has no
 task tree; it is driven by sending action goals directly (see
-[Recipes](controllers_and_bringup.md#recipes)). Other position/velocity task trees
-and the gripper/task-space roles are still open — see `todo/OPENARM_TODO.md`.
+[Recipes](controllers_and_bringup.md#recipes)).
 
 ## Trajectory replay
 

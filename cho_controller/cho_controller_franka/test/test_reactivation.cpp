@@ -22,7 +22,7 @@
 //
 // The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
 // change of action space within one goal (AC8, AC11, AC18 C3). The 4th-stage
-// VLA fixes (REVIEW_FIX_PLAN S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
+// VLA review fixes (S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
 // tests named AC1..AC10 further down, a goal that ends in motion (review S2)
 // the ones named S2_, and one that ends while its reference accelerates (review
 // C1) the ones named C1_; their expected values come from the spec and from hand

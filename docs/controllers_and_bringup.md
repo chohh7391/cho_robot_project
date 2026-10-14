@@ -78,8 +78,7 @@ The simulation configs also load the stock `simulation_gripper_controller`
 
 **Chained prototype** (`cho_controller_chain`): declared in the MuJoCo config for
 `control_mode:=torque` and spawned by no bringup. Loading them by hand:
-[its README](../cho_controller/cho_controller_chain/README.md); the design:
-[CONTROLLER_CHAINING_DESIGN.md](../todo/CONTROLLER_CHAINING_DESIGN.md).
+[its README](../cho_controller/cho_controller_chain/README.md).
 
 | Instance | Plugin | What it does |
 | --- | --- | --- |

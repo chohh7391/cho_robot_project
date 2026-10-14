@@ -4,8 +4,6 @@ Prototype of chained control on Humble's ros2_control (controller_manager 2.54):
 robot-independent joint impedance law that exports per-joint reference interfaces, and two
 reference generators in front of it that serve the `JointSpace` and `TaskSpace` actions. It runs
 beside the existing controllers on the Franka MuJoCo torque bringup and no bringup spawns it.
-Design, Humble's chaining rules and the migration plan:
-[todo/CONTROLLER_CHAINING_DESIGN.md](../../todo/CONTROLLER_CHAINING_DESIGN.md).
 
 ## Plugins
 
