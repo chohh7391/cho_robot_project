@@ -65,6 +65,17 @@ Eigen::Vector3d seed_rate(const Eigen::Vector3d & rate, const double bound)
   return (bound > 0.0 && size > bound) ? Eigen::Vector3d(rate * (bound / size)) : rate;
 }
 
+// An acceleration handed to seed_with_rates(), for translation or rotation:
+// zero where apply() keeps no acceleration state there (`tracked` false) or if
+// any component is not finite, else each component clamped into the per-axis
+// bound Ruckig plans with.
+Eigen::Vector3d seed_acceleration(
+  const Eigen::Vector3d & acceleration, const bool tracked, const double axis_bound)
+{
+  if (!tracked || !acceleration.allFinite()) {return Eigen::Vector3d::Zero();}
+  return acceleration.cwiseMax(-axis_bound).cwiseMin(axis_bound);
+}
+
 // The velocity bound, part one: the target state. Ruckig's velocity interface
 // ignores max_velocity. It reaches the target velocity WITH the target
 // acceleration and keeps that acceleration for whatever is left of the step,
@@ -186,6 +197,13 @@ void ReferenceLimiter::seed(const Reference & reference, const double now)
 
 void ReferenceLimiter::seed_with_rates(const Reference & reference, const double now)
 {
+  seed_with_rates(reference, Vector7::Zero(), Vector6::Zero(), now);
+}
+
+void ReferenceLimiter::seed_with_rates(
+  const Reference & reference, const Vector7 & joint_acceleration,
+  const Vector6 & task_acceleration, const double now)
+{
   seed(reference, now);
   Vector7 joint_rate;
   for (Eigen::Index joint = 0; joint < static_cast<Eigen::Index>(kJoints); ++joint) {
@@ -193,11 +211,26 @@ void ReferenceLimiter::seed_with_rates(const Reference & reference, const double
     const double bound = params_.max_joint_velocity(joint);
     joint_rate(joint) = !std::isfinite(rate) ? 0.0
       : (bound > 0.0 ? std::clamp(rate, -bound, bound) : rate);
+    // Only the joints apply() plans keep acceleration state (an unplanned one
+    // is clamped or passed through, at zero acceleration).
+    const double acceleration = joint_acceleration(joint);
+    const double acceleration_bound = params_.max_joint_acceleration(joint);
+    previous_joint_acceleration_(joint) =
+      (bound > 0.0 && acceleration_bound > 0.0 && std::isfinite(acceleration))
+      ? std::clamp(acceleration, -acceleration_bound, acceleration_bound) : 0.0;
   }
   const Eigen::Vector3d linear =
     seed_rate(reference.twist.head<3>(), params_.max_linear_velocity);
   const Eigen::Vector3d angular =
     seed_rate(reference.twist.tail<3>(), params_.max_angular_velocity);
+  // Per axis at a/sqrt(3), the bounds apply() hands Ruckig.
+  previous_linear_acceleration_ = seed_acceleration(
+    task_acceleration.head<3>(),
+    params_.max_linear_velocity > 0.0 && params_.max_linear_acceleration > 0.0,
+    params_.max_linear_acceleration / std::sqrt(3.0));
+  previous_angular_acceleration_ = seed_acceleration(
+    task_acceleration.tail<3>(), params_.max_angular_acceleration > 0.0,
+    params_.max_angular_acceleration / std::sqrt(3.0));
 
   // The tracked rates: where Ruckig's velocity interface starts this cycle's
   // profile (joints and translation always, rotation under

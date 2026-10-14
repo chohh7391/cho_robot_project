@@ -13,10 +13,48 @@ interfaces:
   - {name: damping, symbol: kd, unit: N*m*s/rad, minimum: 0.0}
   - {name: effort, symbol: tau_ff, unit: N*m, minimum: null}
 equation: tau_raw = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
+# One more command interface per joint, outside the equation: the producer's own
+# estimate of the joint torque that holds the arm against gravity at the
+# measured pose. The hardware never sends it to the motor; it only uses it when
+# it builds a SAFE hold (safe_seed below). It is the one command that may be NaN
+# (non_finite_allowed below is about the five fields above).
+#   none:       NaN, no estimate for that joint
+#   bound:      a finite value must satisfy |hold_torque| <= tau_ff_magnitude of
+#               the joint, and +/-inf is invalid; either makes the whole arm
+#               command invalid (invalid_policy), like an out-of-bound tau_ff
+#   retained:   the consumer keeps the hold_torque of the last ACCEPTED commit
+#               of the current session; it never reads the interface at hold
+#               time, and forgets it when a session is seeded or ends
+#   reset:      the hardware writes NaN to every hold_torque at activation and at
+#               a controller switch, so one producer's value is never carried
+#               into the next producer's commit (the consumer's retained value
+#               stays: the switch's own SAFE hold, and any hold before the
+#               incoming producer's first accepted commit, uses the outgoing
+#               producer's)
+hold_interface:
+  name: hold_torque
+  symbol: tau_hold
+  unit: N*m
+  none: nan
+  bound: abs_at_most_tau_ff_magnitude_else_reject_whole_arm_command
+  retained: last_accepted_commit_of_the_session
+  reset: nan_at_activation_and_controller_switch
 state_interfaces: [position, velocity, effort]
 invalid_policy: reject_whole_arm_command
 non_finite_allowed: false
-claim_policy: all_five_per_joint
+# A controller claims every command interface of an arm or none (a partial
+# claim is refused at the switch): claim_order and claim_width below.
+claim_policy: all_arm_command_interfaces
+# One arm's complete command claim, in this order: the five fields of joints 1-7
+# (index 5 * joint + field), the four protocol commands below, then hold_torque
+# of joints 1-7. The paired FJT claims two arms and the pair token (46 + 46 + 1).
+claim_order: [joint_fields, protocol_commands, hold_torque]
+claim_indices:
+  joint_fields: [0, 34]
+  protocol_commands: [35, 38]
+  hold_torque: [39, 45]
+claim_width: {arm: 46, paired_fjt: 93}
+paired_token_index: 92
 atomicity: one_ros2_control_update_per_arm
 topology: single_synchronous_controller_manager
 protocol_interfaces:
@@ -100,6 +138,8 @@ numeric_policy:
         tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
+        safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
+        safe_hold_motion_velocity: 0.1
         ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
       timing:
         lease_default_cycles: 20
@@ -144,6 +184,8 @@ numeric_policy:
         tau_ff_slew_per_s: null
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: null
+        safe_hold_torque_band: null
+        safe_hold_motion_velocity: null
         ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: null
@@ -188,6 +230,8 @@ numeric_policy:
         tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+        safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+        safe_hold_motion_velocity: 0.1
         ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: 38
@@ -231,6 +275,8 @@ numeric_policy:
         tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
         final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
         final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+        safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+        safe_hold_motion_velocity: 0.1
         ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       timing:
         lease_default_cycles: 38
@@ -253,9 +299,24 @@ gripper_contract: separate_position_control
 # torque, and applies it in the latching cycle. A new session's first hold
 # is seeded with the torque measured at the seed read: about zero on motors
 # enabled just now, the gravity torque on an arm that was being held.
+#
+# A latch in motion is the exception: there the measured torque also carries
+# the motion's inertial and contact torque, and a hold built on it would pull
+# the arm toward the pose it happened to be passing. When any joint's measured
+# |dq| in the latch's read is at least the profile's safe_hold_motion_velocity,
+# each joint with a hold_torque (hold_interface above) takes the measured torque
+# bounded to hold_torque +/- safe_hold_torque_band, then the usual clamp. On the
+# real profiles the band is the joint's identified static friction, so a
+# hold_torque error inside it leaves the arm still while it stays below the
+# breakaway friction (the latch finds the arm moving). A joint without a finite
+# hold_torque, and every latch at rest, keep the measured torque: at rest it is
+# what supports a payload the producer's model does not know.
 safe_seed:
   q_des: measured_position
   dq_des: 0.0
   kp: safe_hold_stiffness
   kd: safe_hold_damping
   tau_ff: measured_torque
+  tau_ff_bound: hold_torque_plus_minus_safe_hold_torque_band
+  tau_ff_bound_when: any_joint_measured_abs_velocity_at_least_safe_hold_motion_velocity
+  tau_ff_bound_needs: finite_hold_torque_of_the_last_accepted_commit_of_the_session

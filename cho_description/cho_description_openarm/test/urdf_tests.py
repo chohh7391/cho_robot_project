@@ -32,6 +32,10 @@ import xacro
 ARM_JOINTS = [f'openarm_joint{i}' for i in range(1, 8)]
 FINGER_JOINT = 'openarm_finger_joint1'
 
+# The MIT arm joint's command interfaces, in claim order: the five-tuple, then the
+# producer's gravity estimate for the SAFE hold (mit_command_v1.yaml, hold_interface).
+MIT_ARM_COMMANDS = ['position', 'velocity', 'stiffness', 'damping', 'effort', 'hold_torque']
+
 PLUGIN_FOR = {
     'mujoco': 'mujoco_ros2_control/MujocoSystemInterface',
     'gazebo': 'ign_ros2_control/IgnitionSystem',
@@ -64,6 +68,16 @@ def ros2_control_joints(root):
                 {s.get('name') for s in joint.findall('state_interface')},
             )
     return out
+
+
+def commands(joint):
+    return [c.get('name') for c in joint.findall('command_interface')]
+
+
+def command_count(block):
+    """Command interfaces one ros2_control block exports: joints plus GPIO."""
+    return len(block.findall('joint/command_interface')) + len(
+        block.findall('gpio/command_interface'))
 
 
 @pytest.mark.parametrize('hardware', sorted(PLUGIN_FOR))
@@ -224,12 +238,13 @@ def test_real_mit_single_arm_is_exactly_seven_axis_with_full_protocol():
     # supervised hold, and no activation while a motor has no CAN timeout.
     assert block.find("hardware/param[@name='mit_stop_behavior']").text == 'hold'
     assert block.find("hardware/param[@name='mit_allow_no_can_timeout']").text.lower() == 'false'
-    # The real MIT adapter exposes one five-field tuple per joint.  A duplicate
-    # effort entry makes ResourceManager reject the entire component before the
-    # adapter has a chance to export its interfaces.
-    assert all([c.get('name') for c in joint.findall('command_interface')] ==
-               ['position', 'velocity', 'stiffness', 'damping', 'effort']
+    # The real MIT adapter exposes one five-field tuple per joint plus its
+    # hold_torque.  A duplicate effort entry makes ResourceManager reject the
+    # entire component before the adapter has a chance to export its interfaces.
+    assert all([c.get('name') for c in joint.findall('command_interface')] == MIT_ARM_COMMANDS
                for joint in block.findall('joint'))
+    # One arm claims 35 joint fields, 7 hold torques and 4 protocol commands.
+    assert command_count(block) == 35 + 7 + 4
     gpio = block.find("gpio[@name='openarm_arm']")
     assert gpio is not None
     assert {c.get('name') for c in gpio.findall('command_interface')} == {
@@ -286,9 +301,9 @@ def test_bimanual_real_mit_has_one_seven_axis_component_and_gpio_per_side():
             'cho_hardware_openarm_mit_real/OpenArmMitRealSystem')
         assert {j.get('name') for j in block.findall('joint')} == {
             f'openarm_{side}_joint{i}' for i in range(1, 8)}
-        assert all([c.get('name') for c in joint.findall('command_interface')] ==
-                   ['position', 'velocity', 'stiffness', 'damping', 'effort']
+        assert all([c.get('name') for c in joint.findall('command_interface')] == MIT_ARM_COMMANDS
                    for joint in block.findall('joint'))
+        assert command_count(block) == 35 + 7 + 4
         assert block.find(f"gpio[@name='openarm_{side}_arm']") is not None
 
 
@@ -335,10 +350,12 @@ def test_real_mit_hand_adds_a_plain_finger_joint_outside_the_arm_contract():
         'position', 'max_effort']
     assert [s.get('name') for s in finger.findall('state_interface')] == [
         'position', 'velocity', 'effort']
-    # The arm joints are untouched by the hand.
+    # The arm joints are untouched by the hand, and only they carry hold_torque.
     for name in ARM_JOINTS:
-        assert [c.get('name') for c in joints[name].findall('command_interface')] == [
-            'position', 'velocity', 'stiffness', 'damping', 'effort']
+        assert [c.get('name') for c in joints[name].findall('command_interface')] == (
+            MIT_ARM_COMMANDS)
+    # 35 joint fields + 7 hold torques + 4 protocol commands + the finger's two.
+    assert command_count(block) == 35 + 7 + 4 + 2
     assert block.find("hardware/param[@name='hand']").text.lower() == 'true'
     for name in ('gripper_send_can_id', 'gripper_motor_open', 'gripper_max_force',
                  'gripper_write_decimation'):
@@ -361,6 +378,48 @@ def test_a_visualization_only_arm_gets_a_state_only_finger_too(selected, inactiv
         if joint.get('name').endswith('finger_joint1'))
     assert [c.get('name') for c in selected_finger.findall('command_interface')] == [
         'position', 'max_effort']
+
+
+def test_mujoco_mit_single_arm_declares_the_hold_torque_on_arm_joints_only():
+    block = build(hardware='mujoco', mujoco_mit_prototype='true').find('ros2_control')
+    assert block.find('hardware/plugin').text == 'cho_hardware_openarm_mit_mujoco/MitMujocoSystem'
+    joints = {joint.get('name'): joint for joint in block.findall('joint')}
+    assert set(joints) == set(ARM_JOINTS) | {FINGER_JOINT}
+    for name in ARM_JOINTS:
+        assert commands(joints[name]) == MIT_ARM_COMMANDS, name
+    # The finger is a position servo outside the arm contract.
+    assert commands(joints[FINGER_JOINT]) == ['position']
+    # 35 joint fields + 7 hold torques + the finger's one + 4 protocol commands.
+    assert command_count(block) == 35 + 7 + 1 + 4
+
+
+def test_mujoco_mit_bimanual_declares_the_hold_torque_on_every_arm_joint():
+    block = build(hardware='mujoco', mujoco_mit_prototype='true',
+                  bimanual='true').find('ros2_control')
+    joints = {joint.get('name'): joint for joint in block.findall('joint')}
+    assert set(joints) == set(BIMANUAL_ARM_JOINTS) | set(BIMANUAL_FINGERS)
+    for name in BIMANUAL_ARM_JOINTS:
+        assert commands(joints[name]) == MIT_ARM_COMMANDS, name
+    for name in BIMANUAL_FINGERS:
+        assert commands(joints[name]) == ['position'], name
+    # Two arms of 35 + 7 + 4, the two fingers, and the pair ownership token.
+    assert command_count(block) == 2 * (35 + 7 + 4) + 2 + 1
+
+
+@pytest.mark.parametrize('mappings', [
+    {'hardware': 'mujoco'},
+    {'hardware': 'mujoco', 'control_mode': 'position'},
+    {'hardware': 'mock'},
+    {'hardware': 'real'},
+    {'hardware': 'gazebo'},
+    {'hardware': 'isaac'},
+])
+def test_hold_torque_is_only_declared_by_the_mit_backends(mappings):
+    # A component that does not export the interface (upstream OpenArmHW, the
+    # stock MuJoCo plugin, the mock system) makes the ResourceManager reject the
+    # whole URDF.
+    root = build(**mappings)
+    assert all('hold_torque' not in commands(joint) for joint in root.findall('ros2_control/joint'))
 
 
 @pytest.mark.parametrize('hardware', ['mujoco', 'gazebo', 'mock'])

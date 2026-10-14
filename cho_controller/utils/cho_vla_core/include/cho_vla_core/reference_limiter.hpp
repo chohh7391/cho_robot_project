@@ -188,9 +188,9 @@ public:
   // its own, and the other is reset there as on every cycle. Each rate is
   // clamped into its configured velocity bound (per joint; translation and
   // rotation on their norms) and a non-finite one starts at zero. Acceleration
-  // state starts at zero. The joints are clamped into the window as in seed();
-  // the rates are not changed by that. A cycle at the seed's own time emits the
-  // seed with these rates.
+  // state starts at zero (the overload below seeds it too). The joints are
+  // clamped into the window as in seed(); the rates are not changed by that. A
+  // cycle at the seed's own time emits the seed with these rates.
   //
   // `now` is the time the seeded value was commanded at. A host seeding with
   // what the previous cycle commanded passes that cycle's time (when it is
@@ -208,6 +208,34 @@ public:
   // joint rate. Seeding at rest there would drop a moving reference's rate to
   // zero in one cycle and re-accelerate it, the arm falling behind meanwhile.
   void seed_with_rates(const Reference & reference, double now);
+
+  // As seed_with_rates(reference, now), but the acceleration state starts at
+  // what the host's reference is accelerating at instead of at zero:
+  // `joint_acceleration` per joint [rad/s^2], `task_acceleration` linear
+  // [m/s^2] then world-aligned angular [rad/s^2], the twist's convention. The
+  // rates, position and acceleration are one state, all at `now`: for a
+  // reference known only by its positions, the rate at its last position is the
+  // last step's rate plus half a step of acceleration. With zero accelerations
+  // it is exactly the overload above.
+  //
+  // An acceleration is taken only where apply() keeps acceleration state -- a
+  // joint with both a velocity and an acceleration bound, translation with
+  // both, rotation under max_angular_acceleration -- and is zero elsewhere. It
+  // is clamped into the bound apply() plans with: per joint, and per axis at
+  // a/sqrt(3) for translation and rotation. A non-finite one starts at zero
+  // (per joint; the whole vector for translation and for rotation). A rate on
+  // its bound with an acceleration out of it is projected back as apply() and
+  // come_to_rest() project any profile.
+  //
+  // For a host that hands a reference which may be accelerating to a stop or to
+  // another source: Franka's VLAController seeds its goal-end stop with it.
+  // Seeded at zero acceleration there, come_to_rest() drops an acceleration a
+  // to zero in one cycle, a jerk of a / step (4000 rad/s^3 at 4 rad/s^2 and
+  // 1 ms); seeded with it, the stop takes the acceleration down within the jerk
+  // bound from its first cycle.
+  void seed_with_rates(
+    const Reference & reference, const Vector7 & joint_acceleration,
+    const Vector6 & task_acceleration, double now);
 
   // Limit `reference` in place. Does nothing until seed() or seed_with_rates()
   // has been called. In the active space, the emitted rates and one cycle's

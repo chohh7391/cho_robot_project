@@ -30,6 +30,12 @@
 
 namespace cho_controller_openarm_mit
 {
+namespace
+{
+// model_hold_torque()'s scale for a producer with no gravity_scale.
+constexpr std::array<double, 7> kUnscaled{{1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
+}  // namespace
+
 ArmCommand map_direct_mit_command(
   DirectMitMode mode, const DirectMitTarget & target, const std::array<double, 7> & measured,
   const std::array<double, 7> & kp, const std::array<double, 7> & kd,
@@ -520,7 +526,7 @@ bool DirectControllerBase::protocol_ok() const
 
 controller_interface::CallbackReturn DirectControllerBase::on_activate(const rclcpp_lifecycle::State &)
 {
-  if(command_interfaces_.size()!=39||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
+  if(command_interfaces_.size()!=kArmCommandCount||state_interfaces_.size()!=19)return CallbackReturn::ERROR;
   // Goals from before this activation end; the API opens again once seeded.
   abort_goals_from_before();
   publish_protocol_snapshot();
@@ -529,13 +535,15 @@ controller_interface::CallbackReturn DirectControllerBase::on_activate(const rcl
   const double s=state_interfaces_[14].get_value();if(!is_exact_nonnegative_integer(s)||s==0)return CallbackReturn::ERROR;
   const double ack=state_interfaces_[15].get_value();if(!is_exact_nonnegative_integer(ack)||ack>=kMaxExactInteger)return CallbackReturn::ERROR;
   session_=static_cast<std::uint64_t>(s);base_generation_=static_cast<std::uint64_t>(ack);generation_=base_generation_;requested_safe_generation_=0;wait_cycles_=0;command_age_cycles_=0;consumed_sequence_=command_sequence_.load();external_command_seen_=false;safe_stopped_.store(false);stop_failed_.store(false);stop_requested_.store(false);action_ready_.store(false);action_cancel_id_.store(0);action_id_=0;action_last_started_id_=(*action_goal_buffer_.readFromNonRT()).id;action_public_id_.store(0);action_control_time_=0.0;action_time_offset_.store(get_node()->now().seconds(),std::memory_order_release);action_percent_.store(0.0);return_to_zero_active_=false;return_to_zero_elapsed_=0.0;return_to_zero_handoff_active_=false;return_to_zero_handoff_elapsed_=0.0;seed_={};seed_.position=measured();
-  // The consumer's SAFE hold keeps applying the outgoing producer's last tau_ff,
+  // The consumer's SAFE hold applies a tau_ff of its own -- the measured torque,
+  // bounded to the last accepted hold_torque +/- band when latched in motion --
   // because the drive has no gravity model of its own. Seeding with tau_ff = 0
   // dropped that support for the seed cycle and then slewed it back from zero:
-  // the arm sagged on every producer switch. The effort command interfaces still
-  // hold what the outgoing producer wrote (0 in a fresh session, whose hold
-  // carries 0 too), so the seed carries it and the feed-forward slew starts
-  // from it.
+  // the arm sagged on every producer switch. The effort command interfaces carry
+  // the hold's tau_ff while the arm holds, so the seed carries it and the
+  // feed-forward slew starts from it.
+  // The hold_torque interfaces are not read: the hardware reset them to NaN at
+  // the switch that activates this producer, and every commit writes its own.
   for (std::size_t i = 0; i < 7; ++i) {
     const double held = command_interfaces_[5 * i + 4].get_value();
     const double limit = std::min(feedforward_limit_[i], torque_limit_[i]);
@@ -717,9 +725,16 @@ controller_interface::return_type DirectControllerBase::update(const rclcpp::Tim
       return_to_zero_handoff_source_kp_, return_to_zero_handoff_source_kd_,
       return_to_zero_handoff_elapsed_, active_kp, active_kd);
   }
-  commit(map_direct_mit_command(
-    state_ == State::SEEDING ? DirectMitMode::POSITION : mode_, target, measured(),
-    active_kp, active_kd, torque_limit_));
+  const auto q = measured();
+  auto command = map_direct_mit_command(
+    state_ == State::SEEDING ? DirectMitMode::POSITION : mode_, target, q,
+    active_kp, active_kd, torque_limit_);
+  // The action adapter's hold torque: g(q) on every commit, the seed included.
+  // The raw-topic producers keep ArmCommand's NaN (no estimate).
+  if (uses_joint_space_action()) {
+    command.hold_torque = model_hold_torque(q, kUnscaled);
+  }
+  commit(command);
   return controller_interface::return_type::OK;
 }
 
@@ -776,8 +791,38 @@ void DirectControllerBase::commit(const ArmCommand & command)
   }
   command_interfaces_[35].set_value(static_cast<double>(session_));
   command_interfaces_[36].set_value(lease_);
+  // Part of the commit, so written on every one: a value an earlier commit
+  // or producer left there is never carried.
+  for (std::size_t i = 0; i < 7; ++i) {
+    command_interfaces_[kHoldTorqueOffset + i].set_value(command.hold_torque[i]);
+  }
   // Last: the consumer snapshots the tuple when it sees a new generation.
   command_interfaces_[37].set_value(static_cast<double>(generation_));
+}
+
+std::array<double, 7> DirectControllerBase::model_hold_torque(
+  const std::array<double, 7> & q, const std::array<double, 7> & scale)
+{
+  std::array<double, 7> hold{};
+  hold.fill(kNoHoldTorque);
+  if (!action_model_ || !action_model_data_) return hold;
+  for (std::size_t i = 0; i < 7; ++i) {
+    if (!std::isfinite(q[i])) return hold;
+    action_model_q_[action_q_indices_[i]] = q[i];
+  }
+  try {
+    const Eigen::VectorXd & gravity =
+      pinocchio::computeGeneralizedGravity(*action_model_, *action_model_data_, action_model_q_);
+    for (std::size_t i = 0; i < 7; ++i) {
+      const double h = scale[i] * gravity[action_v_indices_[i]];
+      if (std::isfinite(h)) {
+        hold[i] = std::clamp(h, -feedforward_limit_[i], feedforward_limit_[i]);
+      }
+    }
+  } catch (const std::exception &) {
+    hold.fill(kNoHoldTorque);
+  }
+  return hold;
 }
 
 rclcpp_action::GoalResponse DirectControllerBase::action_goal(

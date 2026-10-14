@@ -389,7 +389,7 @@ std::string urdf()
       << "<param name='max_abs_position'>6.4</param><param name='max_abs_velocity'>20</param><param name='max_stiffness'>500</param><param name='max_damping'>50</param><param name='max_abs_effort'>100</param><param name='max_lease_cycles'>100</param><param name='safe_hold_damping'>2</param><param name='initial_position'>0.1</param></hardware>";
   for (int i = 1; i <= 7; ++i) {
     out << "<joint name='openarm_joint" << i << "'>";
-    for (const auto * name : {"position", "velocity", "stiffness", "damping", "effort"})
+    for (const auto * name : {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
       out << "<command_interface name='" << name << "'/>";
     for (const auto * name : {"position", "velocity", "effort"})
       out << "<state_interface name='" << name << "'/>";
@@ -439,7 +439,7 @@ std::string right_bimanual_control_urdf()
       << "<param name='arm_side'>right</param></hardware>";
   for (int i = 1; i <= 7; ++i) {
     out << "<joint name='openarm_right_joint" << i << "'>";
-    for (const auto * name : {"position", "velocity", "stiffness", "damping", "effort"})
+    for (const auto * name : {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
       out << "<command_interface name='" << name << "'/>";
     for (const auto * name : {"position", "velocity", "effort"})
       out << "<state_interface name='" << name << "'/>";

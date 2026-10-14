@@ -255,7 +255,7 @@ v_ref·a_ref 가 0 으로 바뀌어 토크가 그 순간 `M(q) (a_ref + Kp (q_re
 MIT tuple `(q_des, dq_des, kp, kd, tau_ff)` 는 그 자체로 drive 안에서 계산되는 관절 수준 법칙이다:
 `tau = kp (q_des - q) + kd (dq_des - dq) + tau_ff`. chain 에서 법칙 자리는 producer 다.
 
-- 법칙(chainable producer)이 session / lease / SAFE 프로토콜(`DirectControllerBase` 의 몫)과 arm 의 39개
+- 법칙(chainable producer)이 session / lease / SAFE 프로토콜(`DirectControllerBase` 의 몫)과 arm 의 46개
   command interface 를 갖고, reference 에서 `q_des = q_ref`, `dq_des = v_ref`, 관절별 고정 kp·kd,
   `tau_ff = M(q) a_ref + h(q, dq)`(profile 의 `tau_ff_slew_per_s` 로 slew)를 쓴다.
 - 그러면 생성기 교체는 MIT command interface 를 건드리지 않아 `SwitchGate` 의 SAFE 전환이 goal 종류마다

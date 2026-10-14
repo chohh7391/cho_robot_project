@@ -296,8 +296,10 @@ private:
     std::array<bool, kArmDof> * moved = nullptr) const;
   // The hold the watchdog thread sends if writes stop: the hold the consumer
   // last dispatched, or, while it is ACTIVE, a measured SAFE hold built from
-  // the latest read -- bounded to the final torque at the read it is stored
-  // after, as dispatch() would. Under transport_mutex_.
+  // the latest read with the consumer's rule (ArmConsumer::hold_effort_now():
+  // bounded to the hold torque if that read shows motion) -- bounded to the
+  // final torque at the read it is stored after, as dispatch() would. Under
+  // transport_mutex_.
   void remember_fallback_hold(const std::array<cho_openarm_mit_core::JointTuple, kArmDof> & hold);
   void remember_measured_fallback_hold();
   // Before an activation enables the motors: false (logged, with how to set
@@ -327,6 +329,11 @@ private:
   bool apply_producer_input();
   // The effort command interfaces := the tau_ff the consumer's hold applies.
   void publish_held_effort();
+  // The <joint>/hold_torque command interfaces := NaN (no estimate), so a
+  // value the previous producer or session left there never arrives with the
+  // next producer's commit: at construction, activation, every discard of a
+  // leftover commit (perform, an abandoned switch) and close_transport().
+  void reset_hold_torque_commands();
   void watchdog_loop();
   void start_watchdog();
   void stop_watchdog() noexcept;
@@ -335,6 +342,11 @@ private:
   TransportFactory factory_;
   std::unique_ptr<MitTransport> transport_;
   std::array<std::array<double, 5>, kArmDof> command_{};
+  // <joint>/hold_torque [N m] (claim index kHoldTorqueOffset + i): the
+  // producer's gravity estimate, read with each commit into
+  // ArmCommand::hold_torque. Never sent; the consumer keeps the accepted one
+  // to bound a hold latched in motion. NaN (no estimate) until written.
+  std::array<double, kArmDof> hold_torque_command_{};
   std::array<std::array<double, 3>, kArmDof> state_{};
   std::array<double, 9> protocol_{};
   // position [m], velocity [m/s], effort [N] of the finger joint. Separate

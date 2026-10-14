@@ -36,7 +36,7 @@ namespace cho_controller_openarm_mit
 // It derives from TaskSpaceImpedanceController and overrides exactly one
 // thing: write_task_target(), the single point where the Cartesian reference is
 // produced. Everything that makes the MIT path safe is inherited unchanged --
-// the 39-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero
+// the 46-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero
 // startup ramp, the drive-side impedance law, the dynamically consistent
 // null-space posture, the joint-limit spring, the friction feed-forward, the
 // gravity scaling, and max_reference_offset. The VLA goal API replaces the
@@ -54,6 +54,9 @@ namespace cho_controller_openarm_mit
 //          joint velocity clamped to the profile command velocity, fixed kp/kd,
 //          tau_ff = nle. Simpler than the task path: no Jacobian, no
 //          pseudo-inverse, no singularity to handle.
+//
+// Both carry the inherited hold torque, gravity_scale * gravity_joint_scale *
+// g(q) at the measured q (TaskSpaceImpedanceController::update()).
 //
 // That holds under drive_side_impedance: true only. Under the legacy law
 // (drive_side_impedance: false, the real bimanual config) the base class sends

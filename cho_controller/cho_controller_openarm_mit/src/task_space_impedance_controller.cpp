@@ -1508,9 +1508,21 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   const auto command_mode = state_ == State::SEEDING ? DirectMitMode::POSITION :
     ((task_command && !drive_side_impedance_) ? DirectMitMode::TRACKING_DAMPED_TORQUE
                                               : DirectMitMode::IMPEDANCE);
+  const auto q = measured();
   auto command = map_direct_mit_command(
-    command_mode, target, measured(), command_kp, command_kd, torque_limit_);
+    command_mode, target, q, command_kp, command_kd, torque_limit_);
   clamp_command_positions(command);
+  // The hold torque: the model term's gravity part, scaled as it is, at the
+  // measured q -- on every commit, the seed, the return-to-zero ramp, the
+  // pre-latch hold and Cartesian control (VlaController's joint and task
+  // chunks) alike. Not the slewed tau_ff: the consumer bounds a hold latched
+  // in motion to h +/- band, and h must be what holds the arm still there.
+  std::array<double, 7> scale{};
+  const double gravity_scale = gravity_scale_.load(std::memory_order_acquire);
+  for (std::size_t i = 0; i < 7; ++i) {
+    scale[i] = gravity_scale * gravity_joint_scale_[i].load(std::memory_order_acquire);
+  }
+  command.hold_torque = model_hold_torque(q, scale);
   commit(command);
   return controller_interface::return_type::OK;
 }

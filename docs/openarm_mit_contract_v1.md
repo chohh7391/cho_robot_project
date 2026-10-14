@@ -16,6 +16,15 @@ tau_raw = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
 Pure torque has `kp=kd=0`; damped torque has `kp=0,kd>0`. Gains are runtime commands, not URDF-time
 scales. The machine-readable draft is `cho_description_openarm/config/mit_command_v1.yaml`.
 
+Each joint also has a sixth command interface outside the equation, `<joint>/hold_torque` [N m]: the
+producer's estimate of the torque that holds that joint against gravity at the measured pose (NaN:
+no estimate). The hardware never sends it to the motor; the consumer uses it only when it builds a
+SAFE hold while the arm moves ([Hold torque](#hold-torque)). One arm's complete command claim is 46
+interfaces in this order: the five fields of joints 1..7 (index `5*joint + field`), the four
+protocol commands below (35-38), then `hold_torque` of joints 1..7 (39-45). The paired
+`FollowJointTrajectory` producer claims two arms and the pair token: 46 + 46 + 1 = 93, token at
+index 92. State interfaces are unchanged (26 per arm exported, 19 claimed by a producer).
+
 Five doubles alone cannot prove atomicity, freshness, or consumption. Therefore v1 also reserves
 arm-scoped protocol interfaces (ROS handle form `<arm_resource>/<interface>`):
 
@@ -48,7 +57,7 @@ activated: the consumer keeps its ack across controller switches within a sessio
 producer of a session (ack 0) starts at one, and a second producer that restarted at one would be
 rejected as stale. All producers share one state machine for this
 (`DirectControllerBase::protocol_step()`; TaskSpace and VLA run it too). It writes all 35 joint
-fields, session echo and `lease_cycles`, then writes `commit_generation` last. The consumer
+fields, the 7 hold torques, session echo and `lease_cycles`, then writes `commit_generation` last. The consumer
 snapshots only after observing a new generation, validates the entire snapshot, then updates
 `ack_generation`. Each generation value is evaluated once, accepted or not: a rejected commit puts
 the arm in measured SAFE once, and is not re-evaluated (or the hold re-latched) while the producer
@@ -66,8 +75,9 @@ fail configuration rather than claim equivalent atomicity.
 
 ## Producer architecture and MoveIt
 
-Every OpenArm arm producer claims the complete five-per-joint set plus all four arm-scoped command
-interfaces and reads `ack_generation/status`. Splitting fields between controllers is forbidden.
+Every OpenArm arm producer claims the complete five-per-joint set, the seven `hold_torque` and all
+four arm-scoped command interfaces (46) and reads `ack_generation/status`. Splitting fields between
+controllers is forbidden.
 
 The standard `joint_trajectory_controller` claims position only, so it cannot be the MIT producer.
 MoveIt instead targets a Cho-owned `FollowJointTrajectory` controller that preserves the standard
@@ -91,7 +101,7 @@ last `tau_ff` is in [the core's SAFE hold](../cho_hardware/cho_openarm_mit_core/
 MuJoCo applies the same rule, `tau_measured` being the torque its limiter applied in the previous
 cycle, in effect from the latching cycle on so the torque continues across the latch; the test
 fake with its mirrored state. `mit_command_v1.yaml`'s `safe_seed` is this tuple
-(`tau_ff: measured_torque`).
+(`tau_ff: measured_torque`, bounded as in [Hold torque](#hold-torque)).
 
 On activation the consumer itself enters SAFE from the state measured by the seed read: the
 measured pose, and the measured torque as `tau_ff` -- about zero on motors enabled just now, the
@@ -104,9 +114,9 @@ outgoing producer's leftover commit is discarded. So a producer switch does not 
 gravity support for a cycle, and a rejected or discarded commit's `tau_ff` never becomes a seed.
 The producer waits for the matching ack before ramping.
 
-The FollowJointTrajectory producers carry `tau_ff=0` throughout, by design: they have no dynamics
-model, their seed is the measured SAFE-gain hold, and between goals they hold where they began --
-the seed or the last trajectory point -- not the latest measurement. Activated after a producer that
+The FollowJointTrajectory producers carry `tau_ff=0` and `hold_torque=NaN` throughout, by design:
+they have no dynamics model, their seed is the measured SAFE-gain hold, and between goals they hold
+where they began -- the seed or the last trajectory point -- not the latest measurement. Activated after a producer that
 was supporting the arm, the seed therefore drops the hold's gravity torque onto the safe-gain spring
 (a sag of about `tau_g / safe_hold_stiffness`), and trajectories carry gravity on their explicit
 stiffness alone. That is accepted for the MuJoCo prototype, where these producers run; a constant
@@ -180,6 +190,50 @@ ACTIVE, and could not use the switch rule's discard of the commit the producer l
 interfaces as the control loop last read them (`controller_active=0` once deactivated); no non-RT
 callback reads the loaned interfaces.
 
+## Hold torque
+
+A hold latched while the arm moves must not keep the motion's inertial and contact torque as a
+constant push. So wherever a hold is built (a SAFE request, a rejected commit, lease expiry, a
+switch, a stop, the real adapter's write-watchdog frame), with `h` the `hold_torque` of the last
+commit the consumer accepted in this session, `band = torque.safe_hold_torque_band` and
+`threshold = torque.safe_hold_motion_velocity` of the profile:
+
+```text
+in_motion = any joint of the latch read has |dq| >= threshold      (non-finite dq: in motion)
+tau_ff    = clamp(tau_measured, h - band, h + band)  if in_motion and h is finite, else tau_measured
+tau_ff    = clamp(tau_ff, -tau_ff_magnitude, +tau_ff_magnitude)
+```
+
+`dq`, `q` and `tau_measured` come from the same read. A session's first hold has no `h`, so it is
+the measured torque. At rest the hold is the measured torque, however far from `h`: it keeps
+supporting a payload the producer's model does not know, which a hold latched in motion supports
+only up to the band. The real profiles' band is the joints' identified static friction,
+`[1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2] N m`, so an error of `h` inside it leaves the arm still while
+it stays below the breakaway friction (a latch finds the arm moving, so there is no margin when the
+clamp is active); `mujoco_sim_safe`'s band is a bound, not a friction. Both keys are required in
+every profile the loader parses. The real profiles' threshold is `0.1 rad/s`; it must stay above the
+joints' measured `|dq|` at rest, or every latch counts as in motion.
+
+- Value: NaN is no estimate (that joint keeps the measured torque in motion too). A finite `h` with
+  `|h| > tau_ff_magnitude` of its joint, or an infinite one, makes the whole commit invalid, handled
+  like an out-of-bound `tau_ff` (a rejected commit; measured SAFE).
+- Retention: the consumer keeps `h` of the last ACCEPTED commit of the session, never reads the
+  interface at hold time, and forgets it (all NaN) when a session is seeded, at cleanup and when the
+  session ends. A rejected or discarded commit leaves it.
+- Reset: the hardware writes NaN to every `hold_torque` command at activation and, for every arm the
+  switch gate names, in `perform_command_mode_switch()`, so one producer's value is never carried
+  into the next producer's commit. The consumer's retained `h` is not reset by it: the switch's own
+  SAFE hold, and any hold before the incoming producer's first accepted commit, is bounded by the
+  outgoing producer's `h`.
+- Writers: `TaskSpaceImpedanceController` and `VlaController` write
+  `gravity_scale * gravity_joint_scale[i] * g_i(q)`; `JointImpedanceActionController` writes `g_i(q)`
+  (`g` from Pinocchio on the controller's model at the measured `q`, clamped to `tau_ff_magnitude`,
+  no Coriolis, friction, spring or slew); the raw-topic producers and the `FollowJointTrajectory`
+  pair write NaN. Written on every commit before the generation
+  ([producers](../cho_controller/cho_controller_openarm_mit/DESIGN.md#hold-torque)).
+- The name does not end in `/effort`: the MuJoCo adapter forwards claims ending in `/effort` to its
+  base, and this one is the wrapper's own.
+
 ## Consumers
 
 | Backend | Plugin | Arms per component |
@@ -210,7 +264,8 @@ values); a gripper fault faults its same-bus arm on the real adapter
 
 The MuJoCo consumer, for each generation:
 
-1. snapshot and validate generation, lease, order, finite values and non-negative gains;
+1. snapshot and validate generation, lease, order, finite values, non-negative gains and a
+   `hold_torque` that is NaN or at most `tau_ff_magnitude` in magnitude;
 2. clamp requested targets/gains/feed-forward to configured per-joint command bounds;
 3. apply gain and feed-forward slew limits relative to the last accepted tuple;
 4. evaluate the MIT equation from current state;
@@ -220,8 +275,8 @@ The MuJoCo consumer, for each generation:
 
 The real consumer validates the same snapshot and, instead of clamping, rejects a commit with any
 joint outside the profile's position window, command velocity, `kp_max`, `kd_max` or
-`tau_ff_magnitude` (measured SAFE). It applies no slew: the motor evaluates the MIT equation, and
-the direct producers slew their return-to-zero gain ramps and model feed-forward with the profile's
+`tau_ff_magnitude`, or with a `hold_torque` outside `tau_ff_magnitude` (measured SAFE). It applies
+no slew: the motor evaluates the MIT equation, and the direct producers slew their return-to-zero gain ramps and model feed-forward with the profile's
 `kp_slew_per_s`, `kd_slew_per_s` and `tau_ff_slew_per_s`; `final_slew_per_s` has no effect there.
 It does keep `final_magnitude`, through what it sends: every tuple that goes out (a commit, its
 ACTIVE re-sends, every SAFE hold, the write watchdog's last hold) has `q_des`, then `dq_des` if the
@@ -282,7 +337,9 @@ its profile and validates the CAN interface **before opening a CAN socket**.
   homing gains) and `kp_slew_per_s` (350 /s); loadable by the real adapter, not selected by the launch.
 
 Every profile's torque bound (`physical_torque`, `tau_ff_magnitude`, `final_magnitude`) is the
-manufacturer peak `[40,40,27,27,7,7,7] N m`, not the packet's tMax encoding range. Timing priority is
+manufacturer peak `[40,40,27,27,7,7,7] N m`, not the packet's tMax encoding range. The torque
+section's `safe_hold_torque_band` (per joint, `0 <= band <= tau_ff_magnitude`) and
+`safe_hold_motion_velocity` (`> 0`, rad/s) are the [hold torque](#hold-torque) rule's two values. Timing priority is
 hardware fault, controller-write watchdog, stale state, then lease. The real profiles' timing values
 are commissioning choices, not measured CAN or motor guarantees; `openarm_can::recv_all()`'s 500 us
 first-response polling default is neither an all-joint deadline nor a bimanual skew guarantee. No

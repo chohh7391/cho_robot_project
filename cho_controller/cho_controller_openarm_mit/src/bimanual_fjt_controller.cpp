@@ -27,7 +27,11 @@ namespace cho_controller_openarm_mit
 {
 namespace
 {
-constexpr std::size_t kArmCommandWidth = 39;
+// One arm's command claims (complete_claims()); the pair token follows both
+// arms (PairedArmOwnership).
+constexpr std::size_t kArmCommandWidth = kArmCommandCount;
+constexpr std::size_t kPairTokenIndex = 2 * kArmCommandWidth;
+static_assert(PairedArmOwnership::command_count == kPairTokenIndex + 1, "the pair token is last");
 constexpr std::size_t kSession = 0, kAck = 1, kSafeGeneration = 2, kSafeAck = 3, kStatus = 4;
 double seconds(const builtin_interfaces::msg::Duration & d) {return d.sec + 1e-9 * d.nanosec;}
 }  // namespace
@@ -288,11 +292,15 @@ void BimanualFollowJointTrajectoryController::write_pair(
       command_interfaces_[out].set_value(q[in]); command_interfaces_[out + 1].set_value(dq[in]);
       command_interfaces_[out + 2].set_value(kp[in]); command_interfaces_[out + 3].set_value(kd[in]);
       command_interfaces_[out + 4].set_value(0.0);
+      // No model, so no gravity estimate: the consumer holds at the measured
+      // torque. Written on every commit, so nothing a previous producer left
+      // in the interface is carried.
+      command_interfaces_[base + kHoldTorqueOffset + j].set_value(kNoHoldTorque);
     }
     command_interfaces_[base + 35].set_value(static_cast<double>(session_));
     command_interfaces_[base + 36].set_value(lease_cycles_);
   }
-  if (paired_) command_interfaces_[78].set_value(static_cast<double>(session_));
+  if (paired_) command_interfaces_[kPairTokenIndex].set_value(static_cast<double>(session_));
   command_interfaces_[37].set_value(static_cast<double>(generation_));
   if (paired_) command_interfaces_[kArmCommandWidth + 37].set_value(static_cast<double>(generation_));
   last_command_ = q; last_velocity_ = dq;
@@ -407,7 +415,7 @@ void BimanualFollowJointTrajectoryController::request_stop(StopReason reason)
   }
   const auto request_generation = maximum_safe + 1.0;
   safe_request_generation_ = static_cast<std::uint64_t>(request_generation);
-  if (paired_) command_interfaces_[78].set_value(static_cast<double>(session_));
+  if (paired_) command_interfaces_[kPairTokenIndex].set_value(static_cast<double>(session_));
   command_interfaces_[38].set_value(request_generation);
   if (paired_) command_interfaces_[kArmCommandWidth + 38].set_value(request_generation);
   // STOPPING owns a fresh timeout budget. SEEDING and execution handshakes

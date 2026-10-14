@@ -64,7 +64,11 @@ if(BUILD_TESTING)
   # The MuJoCo limiter against the real consumer, on the same SEEDING commits.
   ament_add_gtest(test_limiter_vs_consumer test/test_limiter_vs_consumer.cpp)
   target_link_libraries(test_limiter_vs_consumer ${PROJECT_NAME})
-  foreach(profile_test test_safety_profile test_mit_limiter test_limiter_vs_consumer)
+  # The SAFE hold's bound in motion (the producer's hold torque +/- band), on
+  # ArmConsumer, PairedConsumer and the limiter.
+  ament_add_gtest(test_safe_hold_torque test/test_safe_hold_torque.cpp)
+  target_link_libraries(test_safe_hold_torque ${PROJECT_NAME})
+  foreach(profile_test test_safety_profile test_mit_limiter test_limiter_vs_consumer test_safe_hold_torque)
     target_compile_definitions(${profile_test} PRIVATE
       OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
   endforeach()

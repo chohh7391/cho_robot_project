@@ -74,6 +74,14 @@ std::array<double, kJointsPerArm> vector7(const YAML::Node & node, const std::st
   }
   return out;
 }
+
+double finite_number(const YAML::Node & node, const std::string & where)
+{
+  if (!node || !node.IsScalar() || node.IsNull()) throw std::invalid_argument(where + " must be a finite number");
+  const double value = node.as<double>();
+  if (!std::isfinite(value)) throw std::invalid_argument(where + " must be a finite number");
+  return value;
+}
 }  // namespace
 
 SafetyProfile load_safety_profile_yaml(
@@ -178,7 +186,8 @@ SafetyProfile load_safety_profile_yaml(
     "measured_position_hold_uses_same_gain_and_torque_slew" :
     "measured_position_and_torque_hold_at_safe_gains_no_slew";
   const auto torque = profile["torque"];
-  exact_keys(torque, {"tau_ff_magnitude", "tau_ff_slew_per_s", "final_magnitude", "final_slew_per_s", "ordering", "slew_reference"}, "torque");
+  exact_keys(torque, {"tau_ff_magnitude", "tau_ff_slew_per_s", "final_magnitude", "final_slew_per_s",
+    "safe_hold_torque_band", "safe_hold_motion_velocity", "ordering", "slew_reference"}, "torque");
   if (scalar(torque["ordering"], "ordering") != expected_ordering ||
       scalar(torque["slew_reference"], "slew_reference") != expected_slew_reference) {
     throw std::invalid_argument("invalid torque ordering enum for this backend");
@@ -187,6 +196,9 @@ SafetyProfile load_safety_profile_yaml(
   out.tau_ff_slew = vector7(torque["tau_ff_slew_per_s"], "tau_ff_slew_per_s");
   out.final_torque = vector7(torque["final_magnitude"], "final_magnitude");
   out.final_slew = vector7(torque["final_slew_per_s"], "final_slew_per_s");
+  out.safe_hold_torque_band = vector7(torque["safe_hold_torque_band"], "safe_hold_torque_band");
+  out.safe_hold_motion_velocity = finite_number(
+    torque["safe_hold_motion_velocity"], "safe_hold_motion_velocity");
   const auto timing = profile["timing"];
   exact_keys(timing, {"priority", "lease_default_cycles", "lease_cap_cycles", "producer_refresh_cycles",
     "controller_write_watchdog_ms", "state_stale_cycles", "counters_advance_on", "bimanual_send_skew_us",
@@ -221,8 +233,13 @@ SafetyProfile load_safety_profile_yaml(
         out.kp_slew[i] <= 0.0 ||
         out.kd_slew[i] <= 0.0 || out.safe_stiffness[i] < 0.0 || out.safe_stiffness[i] > out.kp_max[i] ||
         out.safe_damping[i] < 0.0 || out.safe_damping[i] > out.kd_max[i] ||
-        out.tau_ff_slew[i] <= 0.0 || out.final_slew[i] <= 0.0) throw std::invalid_argument("invalid numeric safety ordering");
+        out.tau_ff_slew[i] <= 0.0 || out.final_slew[i] <= 0.0 ||
+        // A band past tau_ff_magnitude would bound nothing a hold can carry.
+        out.safe_hold_torque_band[i] < 0.0 || out.safe_hold_torque_band[i] > out.tau_ff_max[i]) {
+      throw std::invalid_argument("invalid numeric safety ordering");
+    }
   }
+  if (!(out.safe_hold_motion_velocity > 0.0)) throw std::invalid_argument("invalid SAFE hold motion velocity");
   if (!(out.refresh_cycles < out.lease_default && out.lease_default <= out.lease_cap)) {
     throw std::invalid_argument("invalid lease ordering");
   }
@@ -317,6 +334,29 @@ bool validate_tuple(const JointTuple & t, const ValidationLimits & l)
          t.damping <= l.max_damping && std::abs(t.effort) <= l.max_abs_effort;
 }
 
+bool valid_hold_torque(const double hold_torque, const double limit)
+{
+  return std::isnan(hold_torque) || (std::isfinite(hold_torque) && std::abs(hold_torque) <= limit);
+}
+
+bool hold_in_motion(const std::array<double, kJointsPerArm> & dq, const double motion_velocity)
+{
+  return std::any_of(dq.begin(), dq.end(), [motion_velocity](double v) {
+      return !std::isfinite(v) || std::abs(v) >= motion_velocity;
+    });
+}
+
+double bounded_hold_torque(
+  const double measured, const double hold_torque, const double band, const double effort_limit,
+  const bool in_motion)
+{
+  double tau = measured;
+  if (in_motion && std::isfinite(hold_torque)) {
+    tau = std::min(std::max(tau, hold_torque - band), hold_torque + band);
+  }
+  return std::min(std::max(tau, -effort_limit), effort_limit);
+}
+
 namespace
 {
 // The point between 0 and `error` nearest [lower, upper]: an error shrunk
@@ -388,9 +428,25 @@ ArmConsumer::ArmConsumer(
   const std::array<double, kJointsPerArm> & safe_hold_damping,
   const std::array<double, kJointsPerArm> & safe_hold_stiffness,
   const std::array<double, kJointsPerArm> & hold_effort_limit)
+: ArmConsumer(
+    limits, safe_hold_damping, safe_hold_stiffness, hold_effort_limit,
+    uniform(std::numeric_limits<double>::infinity()), std::numeric_limits<double>::infinity()) {}
+
+ArmConsumer::ArmConsumer(
+  ValidationLimits limits,
+  const std::array<double, kJointsPerArm> & safe_hold_damping,
+  const std::array<double, kJointsPerArm> & safe_hold_stiffness,
+  const std::array<double, kJointsPerArm> & hold_effort_limit,
+  const std::array<double, kJointsPerArm> & hold_torque_band, const double hold_motion_velocity)
 : limits_(limits), safe_hold_damping_(safe_hold_damping), safe_hold_stiffness_(safe_hold_stiffness),
-  hold_effort_limit_(hold_effort_limit)
+  hold_effort_limit_(hold_effort_limit), hold_torque_band_(hold_torque_band),
+  hold_motion_velocity_(hold_motion_velocity)
 {
+  // +inf is allowed for both: the constructors without a band, never bounding.
+  if (!(hold_motion_velocity_ > 0.0) ||
+      !std::all_of(hold_torque_band_.begin(), hold_torque_band_.end(), [](double b) {return b >= 0.0;})) {
+    throw std::invalid_argument("invalid MIT SAFE hold torque bound");
+  }
   const std::array<double, 5> numeric{limits.max_abs_position, limits.max_abs_velocity,
     limits.max_stiffness, limits.max_damping, limits.max_abs_effort};
   if (!std::all_of(numeric.begin(), numeric.end(), [](double x) {return std::isfinite(x) && x >= 0.0;}) ||
@@ -423,9 +479,9 @@ bool ArmConsumer::configure(
   safe_generation_ = 0; safe_ack_generation_ = 0; latched_ = false; permanent_latched_ = false; safe_recoverable_ = false; status_ = MitStatus::SAFE;
   // A new session starts with no accepted command. Its first SAFE hold takes
   // the torque measured at the seed read, not anything an earlier session's
-  // producer commanded.
+  // producer commanded -- nor its hold torque.
   submitted_ = ArmCommand{};
-  measured_effort_.fill(0.0);
+  forget_samples_and_hold_torque();
   sample_effort(measured_effort);
   return true;
 }
@@ -434,7 +490,14 @@ void ArmConsumer::cleanup()
 {
   session_ = 0; ack_generation_ = 0; safe_generation_ = 0; safe_ack_generation_ = 0;
   age_cycles_ = 0; accepted_lease_cycles_ = 0; latched_ = false; permanent_latched_ = false; safe_recoverable_ = false;
-  submitted_ = ArmCommand{}; measured_.fill(0.0); measured_effort_.fill(0.0); status_ = MitStatus::DISABLED;
+  submitted_ = ArmCommand{}; measured_.fill(0.0); forget_samples_and_hold_torque(); status_ = MitStatus::DISABLED;
+}
+
+void ArmConsumer::forget_samples_and_hold_torque()
+{
+  measured_velocity_.fill(0.0);
+  measured_effort_.fill(0.0);
+  hold_torque_.fill(kNoHoldTorque);
 }
 
 void ArmConsumer::observe(const std::array<double, kJointsPerArm> & measured)
@@ -448,8 +511,30 @@ void ArmConsumer::observe(
   const std::array<double, kJointsPerArm> & measured,
   const std::array<double, kJointsPerArm> & measured_effort)
 {
+  observe(measured, std::array<double, kJointsPerArm>{}, measured_effort);
+}
+
+void ArmConsumer::observe(
+  const std::array<double, kJointsPerArm> & measured,
+  const std::array<double, kJointsPerArm> & measured_velocity,
+  const std::array<double, kJointsPerArm> & measured_effort)
+{
   observe(measured);
+  measured_velocity_ = measured_velocity;
   sample_effort(measured_effort);
+}
+
+std::array<double, kJointsPerArm> ArmConsumer::hold_effort_now() const
+{
+  const bool in_motion = hold_in_motion(measured_velocity_, hold_motion_velocity_);
+  std::array<double, kJointsPerArm> out{};
+  for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+    // measured_effort_ is already inside the effort limit; clamping it again
+    // after the band gives the same result as clamping the raw sample once.
+    out[i] = bounded_hold_torque(
+      measured_effort_[i], hold_torque_[i], hold_torque_band_[i], hold_effort_limit_[i], in_motion);
+  }
+  return out;
 }
 
 void ArmConsumer::sample_effort(const std::array<double, kJointsPerArm> & effort)
@@ -472,7 +557,10 @@ bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_su
       static_cast<std::uint64_t>(c.generation) <= ack_generation_ ||
       !is_exact_nonnegative_integer(c.lease_cycles) || c.lease_cycles == 0.0 ||
       c.lease_cycles > static_cast<double>(limits_.max_lease_cycles) ||
-      !std::all_of(c.joints.begin(), c.joints.end(), [this](const auto & j) {return validate_tuple(j, limits_);})) {
+      !std::all_of(c.joints.begin(), c.joints.end(), [this](const auto & j) {return validate_tuple(j, limits_);}) ||
+      !std::all_of(c.hold_torque.begin(), c.hold_torque.end(), [this](double h) {
+        return valid_hold_torque(h, limits_.max_abs_effort);
+      })) {
     // An invalid snapshot is diagnostic failure, but must also schedule a hardware-owned
     // measured-position hold so the last ACTIVE tuple is not left on the transport.
     status_ = MitStatus::INVALID; permanent_latched_ = true;
@@ -482,6 +570,7 @@ bool ArmConsumer::accept_and_write(const ArmCommand & c, const bool transport_su
   if (!transport_succeeded) {status_ = MitStatus::FAULT; latched_ = true; permanent_latched_ = true; return false;}
   // Whole command is copied only after complete validation and successful transport submission.
   submitted_ = c;
+  hold_torque_ = c.hold_torque;
   age_cycles_ = 0;
   accepted_lease_cycles_ = static_cast<std::uint64_t>(c.lease_cycles);
   status_ = MitStatus::ACTIVE;
@@ -513,15 +602,16 @@ void ArmConsumer::request_safe_transition(bool recoverable)
 bool ArmConsumer::submit_safe_transition(const bool transport_succeeded)
 {
   if (status_ != MitStatus::SAFE_TRANSITION || !transport_succeeded) return false;
+  // The MIT equation runs inside the motor with no gravity model, so a hold
+  // that zeroed tau_ff would drop the arm at the moment it stops being
+  // commanded. It carries the torque measured with the pose it holds, bounded
+  // to the hold torque if latched in motion, and clamped to the hold's effort
+  // limit (see the class comment); the per-joint safe gains then resist
+  // motion away from that pose.
+  const auto effort = hold_effort_now();
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
-    // The MIT equation runs inside the motor with no gravity model, so a hold
-    // that zeroed tau_ff would drop the arm at the moment it stops being
-    // commanded. It carries the torque measured with the pose it holds (see
-    // the class comment), already clamped to the hold's effort limit; the
-    // per-joint safe gains then resist motion away from that pose.
     submitted_.joints[i] = {
-      measured_[i], 0.0, safe_hold_stiffness_[i], safe_hold_damping_[i],
-      measured_effort_[i]};
+      measured_[i], 0.0, safe_hold_stiffness_[i], safe_hold_damping_[i], effort[i]};
   }
   safe_ack_generation_ = safe_generation_;
   status_ = MitStatus::SAFE;
@@ -547,6 +637,19 @@ void ArmConsumer::inject_fault()
 
 PairedConsumer::PairedConsumer(ValidationLimits limits, std::uint64_t session, double safe_hold_damping)
 : left_(limits, safe_hold_damping), right_(limits, safe_hold_damping)
+{
+  std::array<double, kJointsPerArm> q{}; left_.configure(session, q); right_.configure(session, q);
+}
+
+PairedConsumer::PairedConsumer(
+  ValidationLimits limits, std::uint64_t session, double safe_hold_damping,
+  const std::array<double, kJointsPerArm> & hold_torque_band, double hold_motion_velocity)
+: left_(
+    limits, uniform(safe_hold_damping), uniform(0.0), uniform(limits.max_abs_effort),
+    hold_torque_band, hold_motion_velocity),
+  right_(
+    limits, uniform(safe_hold_damping), uniform(0.0), uniform(limits.max_abs_effort),
+    hold_torque_band, hold_motion_velocity)
 {
   std::array<double, kJointsPerArm> q{}; left_.configure(session, q); right_.configure(session, q);
 }
@@ -579,6 +682,18 @@ void PairedConsumer::observe(
 {
   left_.observe(left_measured, left_effort);
   right_.observe(right_measured, right_effort);
+}
+
+void PairedConsumer::observe(
+  const std::array<double, kJointsPerArm> & left_measured,
+  const std::array<double, kJointsPerArm> & right_measured,
+  const std::array<double, kJointsPerArm> & left_velocity,
+  const std::array<double, kJointsPerArm> & right_velocity,
+  const std::array<double, kJointsPerArm> & left_effort,
+  const std::array<double, kJointsPerArm> & right_effort)
+{
+  left_.observe(left_measured, left_velocity, left_effort);
+  right_.observe(right_measured, right_velocity, right_effort);
 }
 
 bool PairedConsumer::write_pair(const ArmCommand & left, const ArmCommand & right, const bool transport_succeeded)
@@ -812,6 +927,7 @@ std::vector<std::string> complete_claims(const std::string & side)
   out.push_back(arm + "/mit_session_echo"); out.push_back(arm + "/mit_lease_cycles");
   out.push_back(arm + "/mit_commit_generation");
   out.push_back(arm + "/mit_safe_request_generation");
+  for (const auto & joint : names) out.push_back(joint + "/" + kHoldTorqueInterface);
   return out;
 }
 

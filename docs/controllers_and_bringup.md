@@ -183,8 +183,12 @@ Two ways to own an arm, and they are mutually exclusive.
 | Driven by | `cho_interfaces` action goals (JointSpace / TaskSpace / VLA), the chunk topic, or `~/command` | `control_msgs/FollowJointTrajectory`, i.e. MoveIt |
 | Controllers | `joint_position`, `joint_impedance`, `task_space_impedance`, `vla` | `single_arm_…`, `bimanual_…` |
 | Ownership mode | `DIRECT_INDEPENDENT` | `MOVEIT_PAIRED` (paired) / `DIRECT_INDEPENDENT` (single-arm) |
-| Interfaces claimed | 39 command / 19 state, per arm | 79 command / 39 state for the pair; 39/19 for one arm |
+| Interfaces claimed | 46 command / 19 state, per arm | 93 command / 39 state for the pair; 46/19 for one arm |
 | Pair-ownership token | never claimed | claimed exclusively by the paired controller |
+
+The 46 command interfaces of an arm are the 35 joint fields, the 4 protocol commands and 7
+`<joint>/hold_torque`, the producer's gravity estimate for a SAFE hold latched in motion
+([Hold torque](openarm_mit_contract_v1.md#hold-torque)); the FJT controllers write NaN there.
 
 FJT is `FollowJointTrajectory`. The single-arm FJT is
 `BimanualFollowJointTrajectoryController` in unpaired mode, so it claims one

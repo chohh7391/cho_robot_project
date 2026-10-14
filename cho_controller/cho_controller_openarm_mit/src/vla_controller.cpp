@@ -522,7 +522,7 @@ void VlaController::vla_non_rt_tick_impl()
 
   const cho_vla_core::GripperCommand pending = session_.take_gripper();
   if (pending != cho_vla_core::GripperCommand::kNone && enable_gripper_) {
-    // This producer owns no finger interface (its 39 are the arm's); a hand is
+    // This producer owns no finger interface (its 46 are the arm's); a hand is
     // driven by the robot-independent cho_controller_gripper on its own
     // interfaces, so a requested edge can only be logged here.
     RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,

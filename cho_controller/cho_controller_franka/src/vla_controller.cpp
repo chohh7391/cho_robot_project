@@ -167,6 +167,9 @@ void VLAController::latch_activation_state()
   // modes from the measurement.
   q_ref_ = (control_mode_ == ControlMode::kPosition) ? activation_seed_ : state_.q_arm;
   q_ref_rate_.setZero();
+  q_ref_acceleration_.setZero();
+  twist_acceleration_.setZero();
+  previous_twist_valid_ = false;
   end_stopping_ = false;
   ref_fk_dirty_ = true;
   activation_state_latched_ = true;
@@ -392,31 +395,54 @@ void VLAController::arm_kinematics_world(
 void VLAController::come_to_rest(const double dt)
 {
   if (!end_stopping_) {
-    // From where q_ref_ is and the rate it moved at last cycle, at zero
-    // acceleration, in the space the goal last ran (the session's hold stops
-    // there too). A task_ik_gain fault stops in joint space: task_step() is what
-    // the fault refuses.
+    // From where q_ref_ is, how fast and how it accelerates, in the space the
+    // goal last ran (the session's hold stops there too). A task_ik_gain fault
+    // stops in joint space: task_step() is what the fault refuses.
     cho_vla_core::Reference from;
     from.space = (action_server_->action_space() == cho_vla_core::ActionSpace::kTask && !task_ik_gain_fault_)
       ? cho_vla_core::ActionSpace::kTask : cho_vla_core::ActionSpace::kJoint;
     from.joints = q_ref_;
-    from.joint_velocity = q_ref_rate_;
+    // The acceleration as the stop takes it: inside each joint's bound (the
+    // limiter would clamp it there anyway, and the rate below must agree), zero
+    // where the limiter keeps none. A joint that did not move over the last step
+    // -- held, or pinned at the joint window -- starts at rest: the rate step
+    // that stopped it is no acceleration it still has, and carried on it would
+    // back the joint off where it stands.
+    const cho_vla_core::ReferenceLimiter::Params & bounds = end_stop_.params();
+    Vector7d joint_acceleration = Vector7d::Zero();
+    for (int i = 0; i < 7; ++i) {
+      const double bound = bounds.max_joint_acceleration(i);
+      if (q_ref_rate_(i) != 0.0 && bounds.max_joint_velocity(i) > 0.0 && bound > 0.0 &&
+        std::isfinite(q_ref_acceleration_(i)))
+      {
+        joint_acceleration(i) = std::clamp(q_ref_acceleration_(i), -bound, bound);
+      }
+    }
+    // q_ref_rate_ is the rate over the last step, so at its middle; at q_ref_
+    // the reference moves half a step of acceleration faster. Seeded with the
+    // mid-step rate and the acceleration, the stop's first step would fall short
+    // by a dt^2 / 2, a jerk of a / (2 dt); with the rate carried on, its third
+    // difference is the limiter's own jerk times dt^3 / 6.
+    from.joint_velocity = q_ref_rate_ + 0.5 * dt * joint_acceleration;
+    Vector6d task_acceleration = Vector6d::Zero();
     if (from.space == cho_vla_core::ActionSpace::kTask) {
       // Task space: the pose and twist task_step() tracked last cycle, the
       // goal's last reference (update() leaves *_des alone until after this),
       // not FK(q_ref_). The IK runs a steady error behind a moving target, which
       // makes up for the part of each step the damped solve leaves unmapped (11 %
       // at FR3's home pose); a stop from FK(q_ref_) would drop that error and the
-      // TCP's speed with it in one cycle.
+      // TCP's speed with it in one cycle. The twist is the session limiter's own
+      // rate at that pose; its change over the last cycle is the acceleration.
       from.pose = state_.H_ee_des;
       from.twist = action_server_->twist_des();
+      task_acceleration = twist_acceleration_;
     } else {
       from.pose = state_.H_ee_ref;
     }
     end_stop_space_ = from.space;
     end_stop_clock_ = 0.0;
     end_stop_settling_ = 0.0;
-    end_stop_.seed_with_rates(from, end_stop_clock_);
+    end_stop_.seed_with_rates(from, joint_acceleration, task_acceleration, end_stop_clock_);
     end_stopping_ = true;
   }
   // One nominal period per cycle, as q_ref_ advances, and well inside the step
@@ -504,7 +530,20 @@ void VLAController::write_open_loop(
     come_to_rest(dt);
   }
   // else: at rest -> q_ref_ stays frozen, holding where it is.
-  q_ref_rate_ = (q_ref_ - q_ref_prev) / dt;
+  const Vector7d q_ref_rate = (q_ref_ - q_ref_prev) / dt;
+  q_ref_acceleration_ = (q_ref_rate - q_ref_rate_) / dt;
+  q_ref_rate_ = q_ref_rate;
+  // What an end stop in task space starts from next cycle (come_to_rest(),
+  // which has run by now on this one). Only across cycles that both ran in task
+  // space: in joint space the twist is zero, and the next goal starts its own.
+  if (vla_running && space == cho_vla_core::ActionSpace::kTask) {
+    twist_acceleration_ = previous_twist_valid_ ? Vector6d((twist_des - previous_twist_) / dt) : Vector6d::Zero();
+    previous_twist_ = twist_des;
+    previous_twist_valid_ = true;
+  } else {
+    twist_acceleration_.setZero();
+    previous_twist_valid_ = false;
+  }
 
   // Keep the shared reference fields synced with q_ref_. VLAActionServer::compute()
   // seeds a new goal from state_.q_arm_ref/H_ee_ref; without this, a second goal

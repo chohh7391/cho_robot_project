@@ -21,7 +21,8 @@
 // what it applied last. Both run real_conservative_commissioning at its
 // 750 Hz, the limiter's copy relabelled MUJOCO (which its constructor needs).
 //
-// Then the measured SAFE hold both latch after it, at rest and pushed.
+// Then the measured SAFE hold both latch after it, at rest and pushed, and
+// the bound both put on a hold latched in motion.
 //
 // Measured per joint, printed and recorded as test properties: when the two
 // torques agree for good, and their largest difference before that.
@@ -150,7 +151,8 @@ public:
     sim_(mujoco_copy(real_)),
     limiter_(sim_, kRate),
     consumer_(
-      real_adapter_limits(real_), real_.safe_damping, real_.safe_stiffness, real_.tau_ff_max)
+      real_adapter_limits(real_), real_.safe_damping, real_.safe_stiffness, real_.tau_ff_max,
+      real_.safe_hold_torque_band, real_.safe_hold_motion_velocity)
   {
   }
   const SafetyProfile & profile() const { return real_; }
@@ -164,8 +166,9 @@ public:
     for (std::size_t j = 0; j < kJointsPerArm; ++j)
       c[j] = {kSeed[j], 0.0, real_.safe_stiffness[j], real_.safe_damping[j], held[j]};
     const Joints dq{};
+    const ArmCommand no_estimate;  // its hold_torque: none
     for (std::uint64_t k = 1; k <= 2 * kRate; ++k) {
-      ASSERT_TRUE(limiter_.submit(c, k, real_.lease_default));
+      ASSERT_TRUE(limiter_.submit(c, no_estimate.hold_torque, k, real_.lease_default));
       (void)limiter_.update(kSeed, dq, kDt);
     }
     limiter_.request_safe();
@@ -209,7 +212,7 @@ public:
       ASSERT_TRUE(real_adapter_accepts(real_, c));
       ASSERT_TRUE(consumer_.accept_and_write(c));
       ASSERT_TRUE(limiter_.submit(
-        limiter_tuples(c), generation_, static_cast<std::uint64_t>(c.lease_cycles)));
+        limiter_tuples(c), c.hold_torque, generation_, static_cast<std::uint64_t>(c.lease_cycles)));
     }
     tau_sim = limiter_.update(q, dq, kDt);
     if (commit != nullptr) {
@@ -413,4 +416,61 @@ TEST(LimiterVsConsumer, SafeHoldAfterSeeding)
   report(
     "safe_pushed", "the SAFE hold pushed 0.02 rad, 0.5 s after the latch (kp slewing down)",
     pushed);
+}
+
+TEST(LimiterVsConsumer, BothBoundAHoldLatchedInMotionTheSameWay)
+{
+  // A commit carrying the producer's hold torque h (kHeld), applied as a pure
+  // tau_ff of h + 3.5 N m: the motion's inertial share on top of gravity. SAFE
+  // latches with joint 4 moving at twice the profile's motion velocity, or at
+  // rest. Moving, both backends hold h + band; at rest, the torque applied.
+  constexpr double kInertial = 3.5;
+  const SafetyProfile real = real_profile();
+  for (const bool moving : {true, false}) {
+    Joints dq{};
+    if (moving) dq[3] = 2.0 * real.safe_hold_motion_velocity;
+    ArmCommand commit;
+    commit.session_echo = 1;
+    commit.lease_cycles = static_cast<double>(real.lease_default);
+    Joints applied{};
+    for (std::size_t j = 0; j < kJointsPerArm; ++j) {
+      ASSERT_LT(real.safe_hold_torque_band[j], kInertial) << j;
+      applied[j] = kHeld[j] + kInertial;
+      commit.joints[j] = {kSeed[j], 0.0, 0.0, 0.0, applied[j]};
+      commit.hold_torque[j] = kHeld[j];
+    }
+
+    // MuJoCo: the limiter applies the commit until every slew is done.
+    Limiter limiter(mujoco_copy(real), kRate);
+    limiter.reset(kSeed);
+    Joints tau{};
+    for (std::uint64_t k = 1; k <= 2 * kRate; ++k) {
+      ASSERT_TRUE(limiter.submit(
+        limiter_tuples(commit), commit.hold_torque, k,
+        static_cast<std::uint64_t>(commit.lease_cycles)));
+      tau = limiter.update(kSeed, Joints{}, kDt);
+    }
+    for (std::size_t j = 0; j < kJointsPerArm; ++j) ASSERT_NEAR(tau[j], applied[j], 1e-9) << j;
+    limiter.request_safe();
+    (void)limiter.update(kSeed, dq, kDt);
+
+    // Real: the consumer accepts the commit and reads the torque applied.
+    ArmConsumer consumer(
+      real_adapter_limits(real), real.safe_damping, real.safe_stiffness, real.tau_ff_max,
+      real.safe_hold_torque_band, real.safe_hold_motion_velocity);
+    ASSERT_TRUE(consumer.configure(1, kSeed));
+    commit.generation = 1;
+    ASSERT_TRUE(consumer.accept_and_write(commit));
+    consumer.observe(kSeed, dq, applied);
+    consumer.request_safe_transition(true);
+    ASSERT_TRUE(consumer.submit_safe_transition(true));
+
+    for (std::size_t j = 0; j < kJointsPerArm; ++j) {
+      const double expected = moving ? kHeld[j] + real.safe_hold_torque_band[j] : applied[j];
+      EXPECT_NEAR(consumer.submitted().joints[j].effort, expected, 1e-12)
+        << "joint " << j << (moving ? " moving" : " at rest");
+      EXPECT_NEAR(limiter.held_effort(j), expected, 1e-9)
+        << "joint " << j << (moving ? " moving" : " at rest");
+    }
+  }
 }

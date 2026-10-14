@@ -88,7 +88,7 @@ std::string urdf()
     << "<param name='safe_hold_damping'>2</param></hardware>";
   for (int i = 1; i <= 7; ++i) {
     x << "<joint name='openarm_joint" << i << "'>";
-    for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort"})
+    for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
       x << "<command_interface name='" << n << "'/>";
     for (const auto * n : {"position", "velocity", "effort"})
       x << "<state_interface name='" << n << "'/>";

@@ -135,8 +135,20 @@ protected:
     COMMAND,  // compute a command and commit() it
   };
   ProtocolStep protocol_step();
-  // The tuple, session and lease, then the next generation last.
+  // The tuple, session, lease and command.hold_torque (claim indices
+  // kHoldTorqueOffset..+6; NaN = no estimate, ArmCommand's default), then the
+  // next generation last.
   void commit(const ArmCommand & command);
+  // The producer's gravity estimate that bounds the consumer's SAFE hold when
+  // it is latched in motion (<joint>/hold_torque, written with every commit):
+  // h_i = clamp(scale_i * g_i(q), +/- feedforward_limit_[i]), g from
+  // pinocchio::computeGeneralizedGravity on the action model at q. Gravity
+  // only, never slewed: no Coriolis, friction or spring term, because the
+  // consumer compares it with the torque that holds the arm still. A joint
+  // with no finite result -- no model, a non-finite q or scale -- gets
+  // kNoHoldTorque (NaN). Allocation-free: the model data is sized at configure.
+  std::array<double, 7> model_hold_torque(
+    const std::array<double, 7> & q, const std::array<double, 7> & scale);
   // Every way out of ACTIVE -- a SAFE stop on request, a SAFE the controller
   // requests itself (an acknowledgement timeout, a failed check), a fault (the
   // hardware left the state this producer expects: a controller switch, lease
@@ -229,7 +241,7 @@ protected:
   // A controller-owned startup phase. Direct MIT launch paths enable it by
   // default; the controller-level false default remains fail-closed for other
   // integration paths. Keeping it in the already-active producer prevents
-  // another controller from racing for these same 39 interfaces.
+  // another controller from racing for these same 46 interfaces.
   bool return_to_zero_{false};
   double return_to_zero_duration_{0.0};
   double return_to_zero_tolerance_{0.05};
@@ -331,7 +343,8 @@ protected:
   // Pinocchio is configured only for the canonical JointSpace-action
   // impedance adapter.  The vectors and Data are allocated once during
   // configure so the control update merely fills fixed model coordinates and
-  // reads nle (gravity + Coriolis) by joint-name-resolved velocity index.
+  // reads nle (gravity + Coriolis) by joint-name-resolved velocity index, and
+  // g alone for the hold torque (model_hold_torque()).
   std::unique_ptr<pinocchio::Model> action_model_;
   std::unique_ptr<pinocchio::Data> action_model_data_;
   Eigen::VectorXd action_model_q_;
@@ -344,6 +357,9 @@ protected:
   std::array<std::atomic<double>, 7> action_last_feedforward_{};
 };
 
+// The raw-topic producers. tau_ff is the caller's (~/command) and they own no
+// model, so every commit carries hold_torque NaN: the consumer holds at the
+// measured torque, unbounded.
 #define CHO_DECLARE_DIRECT_MIT_CONTROLLER(Name, Mode) \
   class Name final : public DirectControllerBase {public: Name() : DirectControllerBase(Mode) {}};
 CHO_DECLARE_DIRECT_MIT_CONTROLLER(JointPositionController, DirectMitMode::POSITION)
@@ -359,6 +375,8 @@ CHO_DECLARE_DIRECT_MIT_CONTROLLER(CompensatedTorqueController, DirectMitMode::CO
 // /joint_impedance_mit_controller/joint_space JointSpace API.
 // The topic-oriented JointImpedanceController remains available only as a
 // low-level diagnostic producer and is not selected by the MuJoCo launch.
+// Its hold torque is g(q) from the action model (model_hold_torque(), scale 1):
+// this controller has no gravity_scale.
 class JointImpedanceActionController final : public DirectControllerBase
 {
 public:

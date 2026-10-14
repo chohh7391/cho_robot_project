@@ -54,11 +54,19 @@ private:
   void discard_leftover_commits(const std::array<bool, 2> & arms);
   // The effort command interfaces of arm i := the tau_ff its hold applies.
   void publish_held_effort(std::size_t i);
+  // The hold_torque command interfaces of arm i := NaN (no estimate), at
+  // activation and for every arm a controller switch performs on: a value the
+  // outgoing producer wrote is never submitted for the incoming one.
+  void clear_hold_torque(std::size_t i);
   struct Arm
   {
     std::string side, resource;
     std::array<std::string, N> joints{};
     std::array<std::array<double, 5>, N> command{};
+    // <joint>/hold_torque (claim index kHoldTorqueOffset + j): the producer's
+    // gravity estimate, submitted with each commit (Limiter::submit()); not
+    // part of the MIT tuple.
+    std::array<double, N> hold_torque{};
     std::array<double, 8> protocol{};
     double safe_request{0};
     std::array<hardware_interface::CommandInterface *, N> raw_effort{};

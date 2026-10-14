@@ -62,6 +62,16 @@ profiles:
       tau_ff_slew_per_s: [100.0, 100.0, 67.5, 67.5, 17.5, 17.5, 17.5]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [200.0, 200.0, 135.0, 135.0, 35.0, 35.0, 35.0]
+      # SAFE hold only; the hold's tau_ff is the measured torque. A hold latched
+      # while any joint's measured |dq| >= safe_hold_motion_velocity [rad/s]
+      # bounds it to the producer's hold_torque (its gravity estimate) +/- this
+      # band [N*m], so the motion's inertial and contact torque is not held. A
+      # latch at rest keeps the measured torque unbounded. The MJCF joints carry
+      # frictionloss 0.02 N*m, so this is not a friction level but a bound on
+      # the hold's distance from the estimate; real_conservative_commissioning
+      # explains the rule.
+      safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
+      safe_hold_motion_velocity: 0.1
       ordering: tau_ff_saturation_then_slew_then_mit_equation_then_final_saturation_then_final_slew
       slew_reference: last_successfully_submitted_command
     timing:
@@ -98,7 +108,7 @@ profiles:
       # Manufacturer PEAK torque; see mujoco_sim_safe.
       physical_torque: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
     gains: {kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], return_to_zero_kp_max: [10.0, 10.0, 10.0, 8.0, 2.0, 2.0, 2.0], return_to_zero_kd_max: [1.0, 1.0, 0.8, 0.8, 0.3, 0.3, 0.25], kp_slew_per_s: null, kd_slew_per_s: null, safe_hold_stiffness: null, safe_hold_damping: null}
-    torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive, slew_reference: producer_side_no_consumer_slew}
+    torque: {tau_ff_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], tau_ff_slew_per_s: null, final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0], final_slew_per_s: null, safe_hold_torque_band: null, safe_hold_motion_velocity: null, ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive, slew_reference: producer_side_no_consumer_slew}
     timing: {priority: hardware_fault_then_write_watchdog_then_state_stale_then_lease, lease_default_cycles: null, lease_cap_cycles: null, producer_refresh_cycles: null, controller_write_watchdog_ms: null, state_stale_cycles: null, counters_advance_on: successful_consumer_write_cycle, bimanual_send_skew_us: null, bimanual_send_skew_gate: measure_before_enforcement, skew_telemetry: absolute_difference_between_first_left_and_first_right_can_submit_steady_clock_us}
     safe_transition: {normal_policy: measured_position_and_torque_hold_at_safe_gains_no_slew, fault_exception: immediate_transport_disable_no_slew}
   # This is deliberately a commissioning-only operating envelope, not a
@@ -167,6 +177,20 @@ profiles:
       tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+      # SAFE hold only. The hold's tau_ff is the torque measured in the latch's
+      # own read. A hold latched while the arm moves - any joint's measured
+      # |dq| >= safe_hold_motion_velocity [rad/s] - would carry that motion's
+      # inertial and contact torque as a constant, so it is bounded to the
+      # producer's hold_torque (its gravity estimate) +/- safe_hold_torque_band
+      # [N*m]; a joint without an estimate keeps the measured torque. The band
+      # is the identified static friction of cho_bringup_openarm's
+      # config/real/controllers_mit.yaml (friction_level): a hold-torque error
+      # inside it stays still only while below the breakaway friction, and a
+      # latch finds the arm moving (docs/openarm_mit_contract_v1.md, "Hold
+      # torque"). A latch at rest is not bounded: the measured torque there is
+      # what supports a payload the producer's model does not know.
+      safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+      safe_hold_motion_velocity: 0.1
       # What the real consumer does, which the loader requires a REAL profile
       # to state: a commit with any joint outside the bounds above is rejected
       # (measured SAFE), nothing is clamped or slewed, and the motor evaluates
@@ -246,6 +270,9 @@ profiles:
       tau_ff_slew_per_s: [50.0, 50.0, 30.0, 30.0, 10.0, 10.0, 10.0]
       final_magnitude: [40.0, 40.0, 27.0, 27.0, 7.0, 7.0, 7.0]
       final_slew_per_s: [100.0, 100.0, 60.0, 60.0, 20.0, 20.0, 20.0]
+      # SAFE hold bound; see real_conservative_commissioning.
+      safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+      safe_hold_motion_velocity: 0.1
       # The real consumer's ordering; see real_conservative_commissioning.
       ordering: reject_out_of_bounds_then_target_clip_to_final_magnitude_then_mit_equation_in_drive
       slew_reference: producer_side_no_consumer_slew

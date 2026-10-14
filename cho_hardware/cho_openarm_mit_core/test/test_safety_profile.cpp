@@ -14,6 +14,7 @@
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 
+#include <array>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -95,4 +96,55 @@ TEST(SafetyProfile, NullWrongTypesAndEnumsReject)
   EXPECT_THROW(load_safety_profile_yaml(wrong_enum, "mujoco_sim_safe", SafetyBackend::MUJOCO, "single"), std::invalid_argument);
   const auto defaulted = replace_once(source(), "default_profile: null", "default_profile: mujoco_sim_safe");
   EXPECT_THROW(load_safety_profile_yaml(defaulted, "mujoco_sim_safe", SafetyBackend::MUJOCO, "single"), std::invalid_argument);
+}
+
+TEST(SafetyProfile, TheSafeHoldBoundIsLoadedForEveryLoadableProfile)
+{
+  const auto mujoco = load_safety_profile_file(
+    OPENARM_SAFETY_PROFILE_SOURCE, "mujoco_sim_safe", SafetyBackend::MUJOCO, "single");
+  const std::array<double, 7> mujoco_band{0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1};
+  EXPECT_EQ(mujoco.safe_hold_torque_band, mujoco_band);
+  EXPECT_DOUBLE_EQ(mujoco.safe_hold_motion_velocity, 0.1);
+  // The real band is the identified static friction (friction_level).
+  const std::array<double, 7> real_band{1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2};
+  for (const char * name : {"real_conservative_commissioning", "real_return_to_zero_commissioning"}) {
+    const auto real = load_safety_profile_yaml(source(), name, SafetyBackend::REAL, "left");
+    EXPECT_EQ(real.safe_hold_torque_band, real_band) << name;
+    EXPECT_DOUBLE_EQ(real.safe_hold_motion_velocity, 0.1) << name;
+  }
+}
+
+TEST(SafetyProfile, AMissingOrOutOfRangeSafeHoldBoundRejects)
+{
+  const std::string mujoco_band = "safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]";
+  const std::string mujoco_velocity = "safe_hold_motion_velocity: 0.1";
+  const auto load_mujoco = [](const std::string & text) {
+      return load_safety_profile_yaml(text, "mujoco_sim_safe", SafetyBackend::MUJOCO, "single");
+    };
+  for (const auto & bad : {
+      replace_once(source(), "      " + mujoco_band + "\n", ""),
+      replace_once(source(), "      " + mujoco_velocity + "\n", ""),
+      // Six values, a negative one, one past tau_ff_magnitude (7 on a wrist), null.
+      replace_once(source(), mujoco_band, "safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1]"),
+      replace_once(source(), mujoco_band, "safe_hold_torque_band: [0.5, 0.5, -0.5, 0.5, 0.1, 0.1, 0.1]"),
+      replace_once(source(), mujoco_band, "safe_hold_torque_band: [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 7.5]"),
+      replace_once(source(), mujoco_band, "safe_hold_torque_band: null"),
+      // Zero, negative, infinite, null, a list.
+      replace_once(source(), mujoco_velocity, "safe_hold_motion_velocity: 0.0"),
+      replace_once(source(), mujoco_velocity, "safe_hold_motion_velocity: -0.1"),
+      replace_once(source(), mujoco_velocity, "safe_hold_motion_velocity: .inf"),
+      replace_once(source(), mujoco_velocity, "safe_hold_motion_velocity: null"),
+      replace_once(source(), mujoco_velocity, "safe_hold_motion_velocity: [0.1]")})
+  {
+    EXPECT_THROW(load_mujoco(bad), std::exception);
+  }
+  // The bounds themselves load: a zero band, a band equal to tau_ff_magnitude.
+  EXPECT_NO_THROW(load_mujoco(replace_once(
+    source(), mujoco_band, "safe_hold_torque_band: [0.0, 0.5, 0.5, 0.5, 0.1, 0.1, 7.0]")));
+  // A real profile is checked the same way.
+  const auto real_over = replace_once(
+    source(), "safe_hold_torque_band: [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]",
+    "safe_hold_torque_band: [40.5, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]");
+  EXPECT_THROW(load_safety_profile_yaml(
+    real_over, "real_conservative_commissioning", SafetyBackend::REAL, "single"), std::invalid_argument);
 }

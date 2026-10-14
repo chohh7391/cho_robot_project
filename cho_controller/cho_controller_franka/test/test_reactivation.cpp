@@ -23,8 +23,9 @@
 // The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
 // change of action space within one goal (AC8, AC11, AC18 C3). The 4th-stage
 // VLA fixes (REVIEW_FIX_PLAN S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
-// tests named AC1..AC10 further down, and a goal that ends in motion (review S2)
-// the ones named S2_; their expected values come from the spec and from hand
+// tests named AC1..AC10 further down, a goal that ends in motion (review S2)
+// the ones named S2_, and one that ends while its reference accelerates (review
+// C1) the ones named C1_; their expected values come from the spec and from hand
 // arithmetic, not from the controller.
 #include <algorithm>
 #include <array>
@@ -193,6 +194,17 @@ Mat3 rot_z(const double a)
   const double c = std::cos(a);
   const double s = std::sin(a);
   return {{{c, -s, 0.0}, {s, c, 0.0}, {0.0, 0.0, 1.0}}};
+}
+
+// A turn by `a` about the unit axis `u` (Rodrigues).
+Mat3 rot_about(const Vec3 & u, const double a)
+{
+  const double c = std::cos(a);
+  const double s = std::sin(a);
+  const double t = 1.0 - c;
+  return {{{c + u[0] * u[0] * t, u[0] * u[1] * t - u[2] * s, u[0] * u[2] * t + u[1] * s},
+    {u[1] * u[0] * t + u[2] * s, c + u[1] * u[1] * t, u[1] * u[2] * t - u[0] * s},
+    {u[2] * u[0] * t - u[1] * s, u[2] * u[1] * t + u[0] * s, c + u[2] * u[2] * t}}};
 }
 
 Pose fr3_tcp(const Doubles & q)
@@ -1666,6 +1678,35 @@ protected:
     return velocity_mode() ? v_[k][6] : (q_[k][6] - q_[k - 1][6]) / kDt;
   }
 
+  // Joint 7's commanded acceleration at period k (k >= 2).
+  double acceleration(const std::size_t k) const
+  {
+    return velocity_mode() ? (v_[k][6] - v_[k - 1][6]) / kDt
+                           : (q_[k][6] - 2.0 * q_[k - 1][6] + q_[k - 2][6]) / (kDt * kDt);
+  }
+
+  // The jerk the session's limiter adds to what it emits, per rad/s of the
+  // rate, beyond its own jerk bound. It integrates over steps measured in ROS
+  // seconds as a double, which resolves one ulp of the clock's reading (2^-22 s,
+  // 2.4e-7 s, at today's epoch): each step is the period give or take that, and
+  // the third difference of a rate v integrated over them is off by up to
+  // 2 ulp * v. The controller's own stop runs on a clock of its own, exact.
+  double rounding_jerk_per_rate() const
+  {
+    const double t = harness_->now().seconds();
+    return 2.0 * (std::nextafter(t, std::numeric_limits<double>::infinity()) - t) / (kDt * kDt * kDt);
+  }
+
+  // Joint 7's largest commanded rate from period `from` on.
+  double peak_rate(const std::size_t from) const
+  {
+    double peak = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 1); k < q_.size(); ++k) {
+      peak = std::max(peak, std::abs(rate(k)));
+    }
+    return peak;
+  }
+
   // The largest commanded acceleration and jerk over every joint, from period
   // `from` on: differences of the commanded joints (position mode) or of the
   // commanded rates (velocity mode).
@@ -1843,8 +1884,7 @@ protected:
     ASSERT_GT(stop_at, 0u) << "joint 7 never slowed";
     // Ended at a steady rate, so at zero acceleration: the stop's jerk, from the
     // last periods it followed on, is the limiter's own, give or take its
-    // sampling. The stop is seeded at zero acceleration, so ending while the
-    // reference accelerates would step that acceleration to zero in one period.
+    // sampling. Ending while the reference accelerates: end_while_accelerating().
     const double jerk = worst_jerk(stop_at);
     RecordProperty("largest_command_jerk_rad_s3", std::to_string(jerk));
     EXPECT_LE(jerk, kJerk * 1.5) << "the command's jerk reached " << jerk << " rad/s^3 on the way to rest";
@@ -2033,6 +2073,224 @@ protected:
     EXPECT_LT(speed(tcp.size() - 1), 1e-9) << "the TCP is still moving";
   }
 
+  // Review C1: a goal canceled while its reference ACCELERATES. Joint 7 starts
+  // from rest toward kAcceleratingRate; the limiter takes it there at up to
+  // max_joint_ref_acc, its acceleration ramping at kJerk. The goal is canceled
+  // once the commanded acceleration has reached 3 rad/s^2, and the stop takes
+  // it down within kJerk too: seeded at zero acceleration it dropped it to zero
+  // in one period, a / dt = 3000-4000 rad/s^3. Judged from the cancel request
+  // on, so over the last periods the session follows as well, early in the
+  // ramp (some 0.05 rad/s), with the jerk its clock's rounding adds there
+  // (rounding_jerk_per_rate(), some 25 rad/s^3 at that rate).
+  void end_while_accelerating()
+  {
+    constexpr double kAcceleratingRate = 0.3;  // joint 7 [rad/s]
+    ASSERT_NO_FATAL_FAILURE(start(5.0));
+    harness_->cycle(20);
+    std::vector<Doubles> rows;
+    for (int k = 0; k < 100; ++k) {
+      Doubles row(7, 0.0);
+      row[6] = kAcceleratingRate * 0.1 * k;
+      rows.push_back(row);
+    }
+    // Sampled from the publish on, not from when the telemetry reports the chunk
+    // taken (up to a telemetry period later, by when the ramp is over).
+    publish("joint", "from_anchor", "", "", rows, 0.1);
+    const Result result = client_->async_get_result(goal_);
+    sample();
+    bool accelerating = false;
+    for (int i = 0; i < 2000 && !accelerating; ++i) {
+      step();
+      accelerating = q_.size() >= 3 && acceleration(q_.size() - 1) >= 3.0;
+    }
+    ASSERT_TRUE(accelerating) << "joint 7 never accelerated at 3 rad/s^2 (" << telemetry_.chunks_accepted
+                              << " chunks taken, last refusal: " << telemetry_.last_reject << ")";
+    ASSERT_FALSE(ready(result)) << "the goal ended before this test ended it";
+    const std::size_t ended_at = q_.size() - 1;
+    RecordProperty("rate_at_cancel_rad_s", std::to_string(rate(ended_at)));
+    const CancelAnswer cancel = client_->async_cancel_goal(goal_);
+    for (int i = 0; i < 1000 && !ready(result); ++i) {
+      step();
+    }
+    ASSERT_TRUE(ready(result)) << "the goal was never canceled";
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    EXPECT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+    for (int i = 0; i < 500; ++i) {
+      step();
+    }
+
+    const double jerk = worst_jerk(ended_at);
+    const double allowed = kJerk * 1.5 + rounding_jerk_per_rate() * peak_rate(ended_at);
+    RecordProperty("largest_command_jerk_rad_s3", std::to_string(jerk));
+    RecordProperty("allowed_command_jerk_rad_s3", std::to_string(allowed));
+    EXPECT_LE(jerk, allowed) << "the command's jerk reached " << jerk << " rad/s^3 on the way to rest";
+    const double largest = worst_acceleration(ended_at);
+    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(largest));
+    EXPECT_LE(largest, kAccelerationLimit * 1.05)
+      << "the command accelerated at " << largest << " rad/s^2 on the way to rest";
+    const std::size_t rest = rests_at(ended_at);
+    ASSERT_LT(rest, q_.size()) << "joint 7 never came to rest";
+    RecordProperty("periods_from_cancel_to_rest", std::to_string(rest - ended_at));
+    const std::size_t back_at = goes_back_at(ended_at);
+    EXPECT_EQ(back_at, 0u) << "joint 7 went backwards at period " << back_at;
+    EXPECT_LT(moves_from(rest + 2), 1e-12) << "the reference moved after it had come to rest";
+  }
+
+  // Review C1, in a hold: the stream goes quiet (stream_timeout 0.3 s) while
+  // joint 7 turns at kRate, the session's own stop (kStopping, AC2 S17)
+  // decelerates it, and the goal is canceled while that stop still decelerates
+  // at 2.5 rad/s^2 or more (from kRate it peaks at sqrt(v j) = 3.2 rad/s^2). The
+  // controller's stop starts from that state and takes the deceleration down
+  // within kJerk; seeded at zero acceleration it dropped it in one period. As
+  // in end_while_accelerating(), the session's last periods before the end add
+  // its clock's rounding jerk, here at under kRate (some 30 rad/s^3).
+  void cancel_while_the_hold_decelerates()
+  {
+    ASSERT_NO_FATAL_FAILURE(start(0.3));
+    harness_->cycle(20);
+    std::vector<Doubles> rows;
+    for (int k = 0; k < 100; ++k) {
+      Doubles row(7, 0.0);
+      row[6] = kRate * 0.1 * k;
+      rows.push_back(row);
+    }
+    publish("joint", "from_anchor", "", "", rows, 0.1);
+    const Result result = client_->async_get_result(goal_);
+    sample();
+    std::size_t steady_from = 0;
+    for (int i = 0; i < 2000 && steady_from == 0; ++i) {
+      step();
+      if (rate(q_.size() - 1) > 0.95 * kRate) {
+        steady_from = q_.size() - 1;
+      }
+    }
+    ASSERT_GT(steady_from, 0u) << "joint 7 never reached the chunk's rate (" << telemetry_.chunks_accepted
+                               << " chunks taken, last refusal: " << telemetry_.last_reject << ")";
+    bool decelerating = false;
+    for (int i = 0; i < 5000 && !decelerating; ++i) {
+      step();
+      decelerating = acceleration(q_.size() - 1) <= -2.5;
+    }
+    ASSERT_TRUE(decelerating) << "the hold never decelerated joint 7 at 2.5 rad/s^2";
+    ASSERT_FALSE(ready(result)) << "the goal ended before this test ended it";
+    const std::size_t ended_at = q_.size() - 1;
+    RecordProperty("rate_at_cancel_rad_s", std::to_string(rate(ended_at)));
+    const CancelAnswer cancel = client_->async_cancel_goal(goal_);
+    for (int i = 0; i < 1000 && !ready(result); ++i) {
+      step();
+    }
+    ASSERT_TRUE(ready(result)) << "the goal was never canceled";
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    for (int i = 0; i < 300; ++i) {
+      step();
+    }
+
+    const double jerk = worst_jerk(ended_at);
+    const double allowed = kJerk * 1.5 + rounding_jerk_per_rate() * peak_rate(ended_at);
+    RecordProperty("largest_command_jerk_rad_s3", std::to_string(jerk));
+    RecordProperty("allowed_command_jerk_rad_s3", std::to_string(allowed));
+    EXPECT_LE(jerk, allowed) << "the command's jerk reached " << jerk << " rad/s^3 on the way to rest";
+    const double largest = worst_acceleration(steady_from + 100);
+    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(largest));
+    EXPECT_LE(largest, kAccelerationLimit * 1.05)
+      << "the command accelerated at " << largest << " rad/s^2 into the hold and on to rest";
+    const std::size_t rest = rests_at(ended_at);
+    ASSERT_LT(rest, q_.size()) << "joint 7 never came to rest";
+    const std::size_t back_at = goes_back_at(steady_from + 1);
+    EXPECT_EQ(back_at, 0u) << "joint 7 went backwards at period " << back_at;
+    EXPECT_LT(moves_from(rest + 2), 1e-12) << "the reference moved after it had come to rest";
+  }
+
+  // Review C1, task space: the TCP held in place and turned about a diagonal
+  // axis of the base frame, toward kTurnRate, when the goal is canceled 20
+  // periods into the turn, while the limiter still ramps its angular
+  // acceleration (max_task_ang_acc, 10 rad/s^2 by default, jerk 250 rad/s^3 on
+  // the norm): 5-6 rad/s^2 then, with the cancel's own latency. The stop takes
+  // it down within that jerk. Seeded at zero acceleration it dropped it in one
+  // period: a TCP jerk of a / dt (6000 rad/s^3; task_step() follows the twist)
+  // and a joint jerk of 3700 rad/s^3, past libfranka's 5000 once scaled to the
+  // 10 rad/s^2 bound. The TCP's is judged against the limiter's bound, the
+  // joints' against a fifth of libfranka's.
+  void end_task_turn_while_accelerating()
+  {
+    constexpr double kTurnRate = 0.5;              // [rad/s]
+    constexpr double kAngularJerk = 10.0 / 0.04;   // [rad/s^3], the default max_task_ang_acc's
+    constexpr double kJointJerkBound = 1000.0;     // [rad/s^3], libfranka's kMaxJointJerk / 5
+    ASSERT_NO_FATAL_FAILURE(start(5.0));
+    harness_->cycle(20);
+    const Pose at_hold = fr3_tcp(commanded());
+    const double third = 1.0 / std::sqrt(3.0);
+    const Vec3 axis{third, third, third};
+    std::vector<Doubles> rows;  // 2 s, far longer than the test runs
+    for (int k = 0; k < 20; ++k) {
+      rows.push_back(pose_row(at_hold.p, mul(rot_about(axis, kTurnRate * 0.1 * k), at_hold.R)));
+    }
+    // Sampled from the publish on, as end_while_accelerating() does.
+    publish("task", "absolute", "", "quaternion", rows, 0.1);
+    const Result result = client_->async_get_result(goal_);
+
+    std::vector<Pose> tcp;
+    const auto step_tcp = [&] {
+        step();
+        tcp.push_back(fr3_tcp(q_.back()));
+      };
+    // The TCP's world-aligned turn over period k, its rotation vector.
+    const auto turn = [&](const std::size_t k) {return log_so3(mul(tcp[k].R, transpose(tcp[k - 1].R)));};
+    sample();
+    tcp.push_back(fr3_tcp(q_.back()));
+    std::size_t turning_from = 0;
+    for (int i = 0; i < 2000 && turning_from == 0; ++i) {
+      step_tcp();
+      if (norm(turn(tcp.size() - 1)) / kDt > 1e-3) {
+        turning_from = tcp.size() - 1;
+      }
+    }
+    ASSERT_GT(turning_from, 0u) << "the TCP never turned (" << telemetry_.chunks_accepted
+                                << " chunks taken, last refusal: " << telemetry_.last_reject << ")";
+    for (int i = 0; i < 20; ++i) {
+      step_tcp();
+    }
+    ASSERT_FALSE(ready(result)) << "the goal ended before this test ended it";
+    const std::size_t ended_at = tcp.size() - 1;
+    RecordProperty("tcp_rate_at_cancel_rad_s", std::to_string(norm(turn(ended_at)) / kDt));
+    const CancelAnswer cancel = client_->async_cancel_goal(goal_);
+    for (int i = 0; i < 1000 && !ready(result); ++i) {
+      step_tcp();
+    }
+    ASSERT_TRUE(ready(result)) << "the goal was never canceled";
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    EXPECT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+    for (int i = 0; i < 1500; ++i) {
+      step_tcp();
+    }
+
+    // The TCP's angular acceleration and jerk: first and second differences of
+    // its turn per period.
+    double angular_acceleration = 0.0;
+    double angular_jerk = 0.0;
+    for (std::size_t k = std::max<std::size_t>(ended_at, 3); k < tcp.size(); ++k) {
+      const Vec3 now = turn(k);
+      const Vec3 before = turn(k - 1);
+      const Vec3 earlier = turn(k - 2);
+      angular_acceleration = std::max(angular_acceleration, norm(sub(now, before)) / (kDt * kDt));
+      angular_jerk = std::max(
+        angular_jerk, norm(add(sub(now, before), sub(earlier, before))) / (kDt * kDt * kDt));
+    }
+    const double joint_jerk = worst_jerk(ended_at);
+    RecordProperty("largest_tcp_angular_acceleration_rad_s2", std::to_string(angular_acceleration));
+    RecordProperty("largest_tcp_angular_jerk_rad_s3", std::to_string(angular_jerk));
+    RecordProperty("largest_joint_command_jerk_rad_s3", std::to_string(joint_jerk));
+    EXPECT_LE(angular_jerk, kAngularJerk * 1.5)
+      << "the TCP's angular jerk reached " << angular_jerk << " rad/s^3 on the way to rest";
+    EXPECT_LE(joint_jerk, kJointJerkBound)
+      << "the joint command's jerk reached " << joint_jerk << " rad/s^3 on the way to rest";
+    EXPECT_LE(angular_acceleration, 10.0 * 1.05)
+      << "the TCP accelerated at " << angular_acceleration << " rad/s^2 on the way to rest";
+    // It does stop, and stays put.
+    EXPECT_LT(norm(turn(tcp.size() - 1)), 1e-12) << "the TCP is still turning";
+    EXPECT_LT(norm(sub(tcp.back().p, at_hold.p)), 1e-3) << "the TCP left its place";
+  }
+
   std::vector<Doubles> q_;
   std::vector<Doubles> v_;
   std::size_t steady_from_{0};
@@ -2076,6 +2334,13 @@ TEST_F(VlaEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAcce
 TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndIsCanceledThere) {hand_over(End::kCancel);}
 TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndSucceedsThere) {hand_over(End::kSuccess);}
 TEST_F(VlaEnd, S2_ATaskGoalCanceledInMotionStopsOnItsLineWithinTheTaskAccelerationLimit) {end_task_in_motion();}
+TEST_F(VlaEnd, C1_APositionGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
+TEST_F(VlaEndVelocity, C1_AVelocityGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
+TEST_F(VlaEnd, C1_AGoalCanceledWhileItsHoldDeceleratesStopsWithinTheJerkLimit) {cancel_while_the_hold_decelerates();}
+TEST_F(VlaEnd, C1_ATaskGoalCanceledWhileItsTurnAcceleratesStopsWithinTheJerkLimit)
+{
+  end_task_turn_while_accelerating();
+}
 
 // AC10 (S15), Franka host: chunks 0.5 s apart with a 1 s horizon and a goal
 // stream_timeout of 0.2 s never put the host into hold while the horizon lasts;

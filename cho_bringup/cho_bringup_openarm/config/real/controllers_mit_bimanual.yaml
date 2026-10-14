@@ -27,7 +27,7 @@
         type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
       # One VLA producer per arm: cho_vla_core is 7-DoF and each claims its own
-      # arm's 39 MIT interfaces.
+      # arm's 46 MIT interfaces.
       left_vla_mit_controller:
         type: cho_controller_openarm_mit/VlaController
 

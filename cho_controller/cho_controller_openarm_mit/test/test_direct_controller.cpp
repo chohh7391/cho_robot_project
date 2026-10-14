@@ -58,11 +58,13 @@ TEST(DirectMitMapping, CompensationIsSummedBeforeFinalLimit)
 
 TEST(DirectMitClaims, LeftAndRightAreIndependentAndComplete)
 {
-  const auto lc=complete_claims("left"),rc=complete_claims("right");EXPECT_EQ(lc.size(),39);EXPECT_EQ(rc.size(),39);
+  const auto lc=complete_claims("left"),rc=complete_claims("right");EXPECT_EQ(lc.size(),46);EXPECT_EQ(rc.size(),46);
   for(const auto& n:lc)EXPECT_EQ(std::find(rc.begin(),rc.end(),n),rc.end());
-  const auto single=complete_claims("");EXPECT_EQ(single.size(),39);
+  const auto single=complete_claims("");EXPECT_EQ(single.size(),46);
   EXPECT_EQ(single.front(),"openarm_joint1/position");
-  EXPECT_EQ(single.back(),"openarm_arm/mit_safe_request_generation");
+  EXPECT_EQ(single[38],"openarm_arm/mit_safe_request_generation");
+  EXPECT_EQ(single[39],"openarm_joint1/hold_torque");
+  EXPECT_EQ(single.back(),"openarm_joint7/hold_torque");
 }
 
 TEST(DirectMitSafeStop, RejectsOlderInflightAckAndRequiresExactOwnGeneration)

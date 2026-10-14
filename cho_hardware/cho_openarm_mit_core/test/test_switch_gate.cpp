@@ -47,6 +47,37 @@ ArmCommand command(double session, double generation, double position)
   return c;
 }
 
+TEST(SwitchGate, AnArmsClaimsAreTheJointFieldsTheProtocolHandlesThenTheHoldTorques) {
+  using cho_openarm_mit_core::kArmCommandCount;
+  using cho_openarm_mit_core::kHoldTorqueOffset;
+  for (const std::string side : {"", "left", "right"}) {
+    const auto claims = complete_claims(side);
+    ASSERT_EQ(claims.size(), kArmCommandCount) << side;
+    ASSERT_EQ(claims.size(), 46u) << side;
+    const std::string joint = side.empty() ? "openarm_joint" : "openarm_" + side + "_joint";
+    const std::string arm = side.empty() ? "openarm_arm" : "openarm_" + side + "_arm";
+    const std::array<std::string, 5> fields{"position", "velocity", "stiffness", "damping", "effort"};
+    for (std::size_t i = 0; i < kJointsPerArm; ++i) {
+      for (std::size_t k = 0; k < fields.size(); ++k) {
+        EXPECT_EQ(claims[5 * i + k], joint + std::to_string(i + 1) + "/" + fields[k]);
+      }
+      EXPECT_EQ(claims[kHoldTorqueOffset + i], joint + std::to_string(i + 1) + "/hold_torque");
+    }
+    EXPECT_EQ(claims[35], arm + "/mit_session_echo");
+    EXPECT_EQ(claims[36], arm + "/mit_lease_cycles");
+    EXPECT_EQ(claims[37], arm + "/mit_commit_generation");
+    EXPECT_EQ(claims[38], arm + "/mit_safe_request_generation");
+    EXPECT_EQ(kHoldTorqueOffset, 39u);
+  }
+  // A switch naming the 39 interfaces without the hold torques names part of
+  // the arm, and is refused.
+  auto without_hold_torque = complete_claims("");
+  without_hold_torque.resize(kHoldTorqueOffset);
+  EXPECT_EQ(classify_arm_claim(without_hold_torque, ""), ArmClaim::PARTIAL);
+  SwitchGate gate;
+  EXPECT_FALSE(gate.prepare(without_hold_torque, {}, ""));
+}
+
 TEST(SwitchGate, ClaimsAreClassifiedPerArm) {
   const auto left = complete_claims("left");
   auto partial = left;

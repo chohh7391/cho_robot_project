@@ -493,7 +493,7 @@ def test_vla_controller_is_selectable_on_real_hardware_for_the_task_path():
 def test_bimanual_vla_controllers_are_per_arm_and_independent():
     """One VLA controller per arm, not one driving both.
 
-    cho_vla_core is 7-DoF, and each controller claims its own arm's 39 MIT
+    cho_vla_core is 7-DoF, and each controller claims its own arm's 46 MIT
     interfaces, so a bimanual build spawns two. They must differ in every field
     that binds a controller to an arm -- a shared chunk topic in particular would
     make both arms follow the same chunk, which is only ever right by accident.

@@ -116,6 +116,15 @@ its resume seeds at rest. `kEnded`: the goal ended this cycle, with its
 terminal and reason, which are also queued for `poll_terminal()`. The
 timeline is sampled in `kRunning` only, never before the first chunk.
 
+The session's limiter is not stepped after `kEnded`, so a reference still moving
+then is the host's to stop. Franka in position and velocity mode runs a
+`ReferenceLimiter` of its own from that cycle on: seeded with
+`seed_with_rates()` from what it commands, rate and acceleration included, at
+the session's bounds, then `come_to_rest()` each cycle in the space the goal last
+ran ([Coming to rest](#coming-to-rest)). Until that reference is at rest it
+does not step the session, so a goal accepted meanwhile starts there, holding
+where the stop ended (`VLAActionServer::set_reference_settling()`).
+
 `begin_goal()` opens a goal (ids rise from 1 and are never reused) and clears
 the timeline, the telemetry, the seq order and pending gripper and success
 requests; the control loop starts it on its next `step()`. A goal ends on a
@@ -342,6 +351,13 @@ two cases, and they differ in the rates:
   position/velocity-mode seed, a servo-model plant) an arm 6.8 mm behind the
   path before the switch fell 18.9 mm behind after it.
 
+An overload of `seed_with_rates()` takes the accelerations too (per joint;
+linear, then world-aligned angular) and seeds them, each clamped into the bound
+`apply()` plans with and zero where `apply()` keeps no acceleration state, for
+a host handing on a reference that may be accelerating: Franka's goal-end stop
+([Coming to rest](#coming-to-rest)). With zero accelerations it is the overload
+above.
+
 Under `clamp_joint_window` both clamp the seeded joints into the window, where
 every joint cycle's output lies; a joint inside it is seeded unchanged. A host
 command outside the window (a law's `q + offset` before the host's own window
@@ -381,6 +397,14 @@ once. The host commands the output, and the hold stands where it ends. Before a
 seed it returns `valid` false. The clock stays current, so the next `apply()`
 continues from the stop's position and rate, its first cycle without
 feed-forward as after a seed: no re-seed is needed to resume.
+
+Franka's goal-end stop ([Session](#session)) runs `come_to_rest()` on a
+limiter of its own, seeded with the reference's acceleration as well as its
+rate, so a goal that ends while its reference accelerates is taken down within
+the jerk bound. A stop seeded at zero acceleration steps it to zero in its first
+cycle, a jerk of `a/dt` (4000 rad/s³ at 4 rad/s² and 1 ms, against libfranka's
+5000). A host that knows its reference only by positions passes the last step's
+rate carried on by half a step of acceleration, the rate at its last position.
 
 ## Chunk combination
 

@@ -39,8 +39,8 @@
 
 ### OpenArm MIT 쪽
 
-- `cho_controller_openarm_mit`는 **프로듀서 전용** 패키지(DESIGN.md). 39개 MIT 커맨드 인터페이스
-  (7 조인트 × 5 필드 + 프로토콜 4)를 클레임하고 세션/ACK/lease/SAFE 프로토콜을 `DirectControllerBase`가 소유.
+- `cho_controller_openarm_mit`는 **프로듀서 전용** 패키지(DESIGN.md). 46개 MIT 커맨드 인터페이스
+  (7 조인트 × 5 필드 + 프로토콜 4 + hold_torque 7)를 클레임하고 세션/ACK/lease/SAFE 프로토콜을 `DirectControllerBase`가 소유.
 - 출력은 MIT 튜플 `(q_des, dq_des, kp, kd, tau_ff)` 하나. `TaskSpaceImpedanceController`(drive-side, 기본)는
   `q_des = q + J⁺(x_des ⊖ x)`, `dq_des = J⁺ v_des`, kp/kd 고정, `tau_ff = nle + tau_null + tau_limit`.
 - **raw-topic 프로듀서 경로는 워치독 초과 시 SAFE 요청** ([direct_controller.cpp:607](../cho_controller/cho_controller_openarm_mit/src/direct_controller.cpp:607)).

@@ -1,5 +1,5 @@
 # Opt-in OpenArm MIT direct-controller configuration for the bimanual MuJoCo
-# model.  Each controller claims exactly one arm's 39 MIT interfaces.  The
+# model.  Each controller claims exactly one arm's 46 MIT interfaces.  The
 # launch selector may activate left, right, or both instances concurrently;
 # `both_independent` is intentionally not a 14-axis transaction.  MoveIt owns
 # the only paired 14-axis controller in controllers_mit_moveit_bimanual.yaml.
@@ -28,7 +28,7 @@
 
       # Same producers as above with the reference coming from VLA action
       # chunks. One per arm: cho_vla_core is 7-DoF, and each controller claims
-      # its own arm's 39 MIT interfaces, so the two are fully independent.
+      # its own arm's 46 MIT interfaces, so the two are fully independent.
       left_vla_mit_controller:
         type: cho_controller_openarm_mit/VlaController
 

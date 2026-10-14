@@ -199,7 +199,7 @@ std::string urdf(const double initial_position = 0.0, const double mirror_offset
   x << "</hardware>";
   for (int i = 1; i <= 7; ++i) {
     x << "<joint name='openarm_joint" << i << "'>";
-    for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort"}) {
+    for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"}) {
       x << "<command_interface name='" << n << "'/>";
     }
     for (const auto * n : {"position", "velocity", "effort"}) {
@@ -389,7 +389,7 @@ struct CycleSample
 // unless the TCP (tcp_pose()) would cross below the plane z = `wall_z`. Then
 // the measured joints stop where the straight joint path from the last
 // measurement meets the plane (bisection), with zero velocity. NaN is no wall.
-// The 39 command interfaces, the protocol state and the switch rule are the
+// The 46 command interfaces, the protocol state and the switch rule are the
 // fake's own.
 class WallPlant : public hardware_interface::SystemInterface
 {
@@ -1378,7 +1378,7 @@ TEST_F(Fixture, ConfiguresAndKeepsTheInheritedReferenceOffsetBound)
 
 TEST_F(Fixture, ExposesNoTaskSpaceActionServer)
 {
-  // Two servers on the same 39 interfaces could both drive; uses_task_space_action()
+  // Two servers on the same 46 interfaces could both drive; uses_task_space_action()
   // is false so only the VLA API exists.
   ASSERT_EQ(configured, controller_interface::return_type::OK);
   const std::string vla_prefix = std::string(kNamespace) + "/" + kControllerName + "/vla/_action/";

@@ -14,12 +14,23 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "cho_openarm_mit_core/mit_limiter.hpp"
 using cho_openarm_mit_core::Limiter;
 namespace
 {
 constexpr std::size_t N = cho_openarm_mit_core::kJointsPerArm;
 using Tuple = Limiter::Tuple;
+// The commits here carry no hold torque; the hold's bound in motion is
+// test_safe_hold_torque's.
+std::array<double, N> no_hold_torque()
+{
+  std::array<double, N> h{};
+  h.fill(cho_openarm_mit_core::kNoHoldTorque);
+  return h;
+}
+const std::array<double, N> kNoHold = no_hold_torque();
 auto profile()
 {
   return cho_openarm_mit_core::load_safety_profile_file(
@@ -33,6 +44,19 @@ TEST(MitLimiter, RequiresExplicitProfileRate)
   EXPECT_THROW(Limiter l(p, 999), std::invalid_argument);
   Limiter l(p, 1000);
 }
+TEST(MitLimiter, RejectsAnInvalidSafeHoldBound)
+{
+  for (const double band : {-0.1, std::nan("")}) {
+    auto p = profile();
+    p.safe_hold_torque_band[2] = band;
+    EXPECT_THROW(Limiter l(p, 1000), std::invalid_argument) << band;
+  }
+  for (const double velocity : {0.0, -0.1, std::nan("")}) {
+    auto p = profile();
+    p.safe_hold_motion_velocity = velocity;
+    EXPECT_THROW(Limiter l(p, 1000), std::invalid_argument) << velocity;
+  }
+}
 TEST(MitLimiter, EquationAndPureTorque)
 {
   auto p = profile();
@@ -41,7 +65,7 @@ TEST(MitLimiter, EquationAndPureTorque)
   l.reset(q);
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {1, .5, 2, 3, 4};
-  ASSERT_TRUE(l.submit(c, 1, 5));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, 5));
   auto t = l.update(q, dq, 1);
   for (std::size_t i = 0; i < N; ++i) {
     double target = std::max(p.position_lower[i], std::min(1.0, p.position_upper[i]));
@@ -49,7 +73,7 @@ TEST(MitLimiter, EquationAndPureTorque)
     EXPECT_DOUBLE_EQ(t[i], expected);
   }
   for (auto & x : c) x = {0, 0, 0, 0, 1};
-  ASSERT_TRUE(l.submit(c, 2, 5));
+  ASSERT_TRUE(l.submit(c, kNoHold, 2, 5));
   t = l.update(q, dq, 1);
   for (auto x : t) EXPECT_DOUBLE_EQ(x, 1);
 }
@@ -60,13 +84,13 @@ TEST(MitLimiter, ClampSlewLeaseAndFaultSafe)
   l.reset(q);
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {99, 99, 99, 99, 99};
-  ASSERT_TRUE(l.submit(c, 1, 2));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, 2));
   auto t = l.update(q, dq, .001);
   for (auto x : t) EXPECT_LE(std::abs(x), .2);
   t = l.update(q, dq, .001);
   EXPECT_TRUE(l.safe());
   l.reset(q);
-  ASSERT_TRUE(l.submit(c, 1, 5));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, 5));
   l.fault();
   t = l.update(q, dq, .001);
   EXPECT_TRUE(l.safe());
@@ -77,12 +101,12 @@ TEST(MitLimiter, RejectInvalidReplayAndLease)
   std::array<double, N> q{};
   l.reset(q);
   std::array<Tuple, N> c{};
-  EXPECT_FALSE(l.submit(c, 0, 1));
-  EXPECT_FALSE(l.submit(c, 1, 0));
-  EXPECT_TRUE(l.submit(c, 1, 2));
-  EXPECT_FALSE(l.submit(c, 1, 2));
+  EXPECT_FALSE(l.submit(c, kNoHold, 0, 1));
+  EXPECT_FALSE(l.submit(c, kNoHold, 1, 0));
+  EXPECT_TRUE(l.submit(c, kNoHold, 1, 2));
+  EXPECT_FALSE(l.submit(c, kNoHold, 1, 2));
   c[3].kp = -1;
-  EXPECT_FALSE(l.submit(c, 2, 2));
+  EXPECT_FALSE(l.submit(c, kNoHold, 2, 2));
   EXPECT_EQ(l.ack(), 1u);
 }
 TEST(MitLimiter, UsesProfileLeaseCapAndRejectedCommandDoesNotReplaceAccepted)
@@ -93,15 +117,15 @@ TEST(MitLimiter, UsesProfileLeaseCapAndRejectedCommandDoesNotReplaceAccepted)
   l.reset(q);
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {0, 0, 0, 0, 1};
-  ASSERT_TRUE(l.submit(c, 1, p.lease_cap));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, p.lease_cap));
   auto before = l.update(q, dq, 1);
   for (auto & x : c) x.tau = 2;
   c[0].kp = -1;
-  EXPECT_FALSE(l.submit(c, 2, p.lease_cap));
+  EXPECT_FALSE(l.submit(c, kNoHold, 2, p.lease_cap));
   auto after = l.update(q, dq, 1);
   EXPECT_EQ(l.ack(), 1u);
   EXPECT_EQ(before, after);
-  EXPECT_FALSE(l.submit(c, 2, p.lease_cap + 1));
+  EXPECT_FALSE(l.submit(c, kNoHold, 2, p.lease_cap + 1));
 }
 TEST(MitLimiter, ExplicitSafeCapturesMeasuredPositionInsteadOfStaleTarget)
 {
@@ -110,7 +134,7 @@ TEST(MitLimiter, ExplicitSafeCapturesMeasuredPositionInsteadOfStaleTarget)
   l.reset(q);
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {1, 0, 5, .5, 0};
-  ASSERT_TRUE(l.submit(c, 1, 20));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, 20));
   const auto applied = l.update(q, dq, 1);
   q.fill(.4);
   l.request_safe();
@@ -133,7 +157,7 @@ TEST(MitLimiter, SafeHoldKeepsTheTorqueAppliedNotTheLastAcceptedFeedforward)
   l.reset(q);
   std::array<Tuple, N> c{};
   for (auto & x : c) x = {0.5, 0, 2, 0, 1};
-  ASSERT_TRUE(l.submit(c, 1, 20));
+  ASSERT_TRUE(l.submit(c, kNoHold, 1, 20));
   const auto applied = l.update(q, dq, 1);
   for (std::size_t i = 0; i < N; ++i) ASSERT_NEAR(applied[i], 2.0, 1e-12) << i;
   l.request_safe();
@@ -170,7 +194,7 @@ void expect_the_latch_continues_the_torque(bool explicit_safe)
   std::uint64_t generation = 0;
   for (int cycle = 0; cycle < 1000; ++cycle) {
     if (cycle % 10 == 0) {
-      ASSERT_TRUE(l.submit(c, ++generation, kLease));
+      ASSERT_TRUE(l.submit(c, kNoHold, ++generation, kLease));
     }
     before = l.update(q, dq, kDt);
   }
@@ -220,7 +244,7 @@ TEST(MitLimiter, AResetOfAHoldingLimiterKeepsItsTorqueAndAFaultedOneHasNone)
   // inside the lease.
   for (int cycle = 0; cycle < 500; ++cycle) {
     if (cycle % 50 == 0) {
-      ASSERT_TRUE(l.submit(c, static_cast<std::uint64_t>(cycle / 50 + 1), 100));
+      ASSERT_TRUE(l.submit(c, kNoHold, static_cast<std::uint64_t>(cycle / 50 + 1), 100));
     }
     tau = l.update(q, dq, .001);
   }

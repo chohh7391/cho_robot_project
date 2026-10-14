@@ -266,7 +266,8 @@ TEST(Pair, RequiresEqualGenerationAndLatchesPairWithoutPartialAck) {
   EXPECT_EQ(transport.left().status(), MitStatus::FAULT);
 }
 TEST(Claims, ExactFivePlusProtocolAndJointOrder) {
-  EXPECT_EQ(complete_claims("left").size(), 39u);
+  // 35 joint fields, 4 protocol fields, then 7 hold_torque.
+  EXPECT_EQ(complete_claims("left").size(), 46u);
   auto both = joint_names("left");
   auto r = joint_names("right");
   both.insert(both.end(), r.begin(), r.end());
@@ -422,7 +423,8 @@ TEST(ControllerSurface, ClaimsBothCompleteArmsAndExclusivePairToken) {
   expected.insert(expected.end(), right.begin(), right.end());
   expected.push_back(kPairOwnershipCommand);
   EXPECT_EQ(cfg.names, expected);
-  EXPECT_EQ(cfg.names.size(), 79u);
+  EXPECT_EQ(cfg.names.size(), 93u);
+  EXPECT_EQ(cfg.names[92], kPairOwnershipCommand);
   auto states = c.state_interface_configuration();
   EXPECT_EQ(states.type,
             controller_interface::interface_configuration_type::INDIVIDUAL);

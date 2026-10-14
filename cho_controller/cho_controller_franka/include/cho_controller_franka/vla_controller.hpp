@@ -119,6 +119,18 @@ private:
     // q_ref_'s rate over the last cycle [rad/s]: its step over the nominal
     // period, the velocity output stage's feed-forward.
     Vector7d q_ref_rate_ {Vector7d::Zero()};
+    // q_ref_'s acceleration over the last cycle [rad/s^2]: the change in
+    // q_ref_rate_ over the nominal period, i.e. its second difference over dt^2.
+    Vector7d q_ref_acceleration_ {Vector7d::Zero()};
+    // A task goal's reference acceleration, linear [m/s^2] then world-aligned
+    // angular [rad/s^2]: the change in the twist it ran at (VLAActionServer::
+    // twist_des()) over the last cycle, over the nominal period. Zero unless
+    // that cycle and the one before both ran a goal in task space.
+    Vector6d twist_acceleration_ {Vector6d::Zero()};
+    // The twist the last cycle ran at, for the next one's twist_acceleration_;
+    // valid only while consecutive cycles run in task space.
+    Vector6d previous_twist_ {Vector6d::Zero()};
+    bool previous_twist_valid_ {false};
 
     // Position and velocity: q_ref_ moving with no goal driving it -- the goal
     // ended (canceled, succeeded, timed out, aborted) or a task_ik_gain fault
@@ -129,11 +141,18 @@ private:
     // space the goal last ran, as the session's hold does: joint space within
     // max_joint_ref_acc per joint; task space within max_task_lin_acc and
     // max_task_ang_acc, q_ref_ following through task_step(), so the TCP stops
-    // on its path. A task_ik_gain fault stops in joint space. Seeded at zero
-    // acceleration from q_ref_ and q_ref_rate_ (task space: the goal's last
-    // reference pose and twist, which task_step() was tracking), bounded by the
-    // server's limiter_params(), on a clock of its own advanced by the nominal
-    // period.
+    // on its path. A task_ik_gain fault stops in joint space. Seeded with the
+    // reference's rate AND acceleration (ReferenceLimiter::seed_with_rates()
+    // with accelerations), so a goal that ends while its reference accelerates
+    // -- or while the session's own stop decelerates it (kStopping) -- is taken
+    // down within the jerk bound, not stepped to zero acceleration in one cycle
+    // (a / dt: 4000 rad/s^3 at max_joint_ref_acc 4 and 1 ms, against libfranka's
+    // 5000). Joint space: q_ref_, q_ref_rate_ carried half a period on by the
+    // acceleration (the rate at q_ref_'s instant), and q_ref_acceleration_
+    // inside max_joint_ref_acc, zero for a joint that did not move last cycle.
+    // Task space: the goal's last reference pose and twist, which task_step()
+    // was tracking, and twist_acceleration_. Bounded by the server's
+    // limiter_params(), on a clock of its own advanced by the nominal period.
     cho_vla_core::ReferenceLimiter end_stop_;
     cho_vla_core::ActionSpace end_stop_space_ {cho_vla_core::ActionSpace::kJoint};
     double end_stop_clock_ {0.0};

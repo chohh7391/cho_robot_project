@@ -28,18 +28,42 @@ double slew(double x, double old, double rate, double dt)
 }
 }  // namespace
 Limiter::Limiter(const SafetyProfile & p, std::size_t rate)
-: limits_{p.position_lower, p.position_upper, p.command_velocity, p.kp_max,       p.kd_max,
-          p.kp_slew,        p.kd_slew,        p.safe_stiffness,   p.safe_damping, p.tau_ff_max,
-          p.tau_ff_slew,    p.final_torque,   p.final_slew,       p.lease_cap}
+: limits_{
+    p.position_lower,
+    p.position_upper,
+    p.command_velocity,
+    p.kp_max,
+    p.kd_max,
+    p.kp_slew,
+    p.kd_slew,
+    p.safe_stiffness,
+    p.safe_damping,
+    p.tau_ff_max,
+    p.tau_ff_slew,
+    p.final_torque,
+    p.final_slew,
+    p.lease_cap,
+    p.safe_hold_torque_band,
+    p.safe_hold_motion_velocity}
 {
   if (p.backend != SafetyBackend::MUJOCO || p.name.empty() || rate != p.update_rate_hz)
     throw std::invalid_argument("explicit MuJoCo safety profile/update rate mismatch");
+  // +inf is allowed for both (never bounds), as on ArmConsumer.
+  if (
+    !(p.safe_hold_motion_velocity > 0.0) ||
+    !std::all_of(p.safe_hold_torque_band.begin(), p.safe_hold_torque_band.end(), [](double b) {
+      return b >= 0.0;
+    }))
+    throw std::invalid_argument("invalid MuJoCo SAFE hold torque bound");
 }
 void Limiter::reset(const std::array<double, kJointsPerArm> & q)
 {
   // last_tau_ is kept: it is the torque being applied, the reference of the
   // final slew, and (clamped) the new hold's tau_ff. Zeroing both dropped an
   // arm that was being held, for as long as the slew took to bring it back.
+  // The new session has no hold torque yet, so the hold is that torque
+  // whatever dq is.
+  hold_torque_.fill(kNoHoldTorque);
   for (std::size_t i = 0; i < kJointsPerArm; ++i) {
     const double held = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
     command_[i] = applied_[i] = {q[i], 0, limits_.safe_kp[i], limits_.safe_kd[i], held};
@@ -50,15 +74,18 @@ void Limiter::reset(const std::array<double, kJointsPerArm> & q)
   capture_safe_position_ = false;
 }
 bool Limiter::submit(
-  const std::array<Tuple, kJointsPerArm> & r, std::uint64_t gen, std::uint64_t lease)
+  const std::array<Tuple, kJointsPerArm> & r, const std::array<double, kJointsPerArm> & hold,
+  std::uint64_t gen, std::uint64_t lease)
 {
   if (fault_ || gen == 0 || gen <= ack_ || lease == 0 || lease > limits_.lease_cap) return false;
   for (std::size_t i = 0; i < kJointsPerArm; ++i)
     if (
       !std::isfinite(r[i].q) || !std::isfinite(r[i].dq) || !std::isfinite(r[i].kp) ||
-      !std::isfinite(r[i].kd) || !std::isfinite(r[i].tau) || r[i].kp < 0 || r[i].kd < 0)
+      !std::isfinite(r[i].kd) || !std::isfinite(r[i].tau) || r[i].kp < 0 || r[i].kd < 0 ||
+      !valid_hold_torque(hold[i], limits_.tau_ff[i]))
       return false;
   command_ = r;
+  hold_torque_ = hold;
   lease_ = lease;
   age_ = 0;
   ack_ = gen;
@@ -88,10 +115,14 @@ std::array<double, kJointsPerArm> Limiter::update(
     // cycle, and a tau_ff still slewing from the commit's would let the output
     // fall toward it. Applied at once, the output continues from the previous
     // cycle's torque, as the real adapter's hold does. The gains still slew to
-    // the safe gains.
+    // the safe gains. Latched in motion, that torque carries the motion's
+    // inertial share too, and is bounded to the hold torque +/- band (the
+    // class comment).
+    const bool in_motion = hold_in_motion(dq, limits_.hold_motion_velocity);
     for (std::size_t i = 0; i < kJointsPerArm; ++i) {
       command_[i].q = q[i];
-      command_[i].tau = clamp(last_tau_[i], -limits_.tau_ff[i], limits_.tau_ff[i]);
+      command_[i].tau = bounded_hold_torque(
+        last_tau_[i], hold_torque_[i], limits_.hold_torque_band[i], limits_.tau_ff[i], in_motion);
       applied_[i].tau = command_[i].tau;
     }
     capture_safe_position_ = false;

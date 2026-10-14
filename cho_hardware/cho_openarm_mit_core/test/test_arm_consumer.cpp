@@ -19,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <gtest/gtest.h>
+#include <limits>
 #include <stdexcept>
 
 namespace
@@ -132,6 +133,45 @@ TEST(ArmConsumer, ALeaseExpiryHoldsTheLatestPoseToo) {
   EXPECT_FALSE(consumer.successful_write_cycle());  // the 10-cycle lease ran out
   ASSERT_TRUE(consumer.submit_safe_transition(true));
   EXPECT_DOUBLE_EQ(consumer.submitted().joints[0].position, 0.38);
+}
+
+TEST(ArmConsumer, TheHoldBoundMustBeANonNegativeBandAndAPositiveMotionVelocity) {
+  const auto inf = std::numeric_limits<double>::infinity();
+  // +inf on both is what the constructors without a band use.
+  EXPECT_NO_THROW(ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(inf), inf));
+  EXPECT_NO_THROW(ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(0.0), 0.1));
+  for (const double band : {-0.1, std::nan("")}) {
+    auto bands = filled(0.5);
+    bands[6] = band;
+    EXPECT_THROW(
+      ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), bands, 0.1), std::invalid_argument);
+  }
+  for (const double velocity : {0.0, -0.1, std::nan("")}) {
+    EXPECT_THROW(
+      ArmConsumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(0.5), velocity),
+      std::invalid_argument);
+  }
+}
+
+TEST(ArmConsumer, APositionOnlyReadingKeepsTheVelocityAndTorqueSamplesTogether) {
+  // The velocity that decides "in motion" belongs to the torque it bounds: a
+  // read without either leaves both.
+  ArmConsumer consumer(kLimits, filled(2.0), filled(3.0), filled(40.0), filled(0.5), 0.1);
+  ASSERT_TRUE(consumer.configure(1, filled(0.0)));
+  auto c = command(1, 1, 0.4);
+  c.hold_torque = filled(2.0);
+  ASSERT_TRUE(consumer.accept_and_write(c));
+  auto moving = filled(0.0);
+  moving[1] = 0.5;
+  consumer.observe(filled(0.35), moving, filled(6.0));
+  consumer.observe(filled(0.36));
+  for (const double effort : consumer.hold_effort_now()) EXPECT_DOUBLE_EQ(effort, 2.5);
+  consumer.request_safe_transition(true);
+  ASSERT_TRUE(consumer.submit_safe_transition(true));
+  EXPECT_DOUBLE_EQ(consumer.submitted().joints[0].position, 0.36);
+  EXPECT_DOUBLE_EQ(consumer.submitted().joints[0].effort, 2.5);
+  // The measured sample itself is unchanged by the rule.
+  EXPECT_DOUBLE_EQ(consumer.hold_effort()[0], 6.0);
 }
 
 TEST(ArmConsumer, ANonFiniteReadingKeepsThePreviousPose) {

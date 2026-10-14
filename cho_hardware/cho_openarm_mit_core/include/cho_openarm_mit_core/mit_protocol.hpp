@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
@@ -28,6 +29,30 @@ constexpr std::size_t kFieldsPerJoint = 5;
 constexpr double kMaxExactInteger = 9007199254740991.0;
 constexpr const char * kPairOwnershipCommand = "openarm_bimanual/mit_pair_ownership";
 constexpr const char * kPairStopReadyState = "openarm_bimanual/mit_pair_stop_ready";
+
+// One arm's command interfaces as a producer claims them (complete_claims()):
+// <joint>/{position, velocity, stiffness, damping, effort} at
+// kFieldsPerJoint * i + k, the four protocol handles at 35..38, then
+// <joint>/hold_torque at kHoldTorqueOffset + i.
+inline constexpr std::size_t kHoldTorqueOffset = 39;
+inline constexpr std::size_t kArmCommandCount = 46;
+static_assert(kHoldTorqueOffset == kJointsPerArm * kFieldsPerJoint + 4, "hold_torque follows the GPIO");
+static_assert(kArmCommandCount == kHoldTorqueOffset + kJointsPerArm, "one hold_torque per joint");
+// The per-joint interface name. It must not end in "/effort": the MuJoCo
+// adapter forwards those claims to its base system.
+inline constexpr const char * kHoldTorqueInterface = "hold_torque";
+// A hold_torque of "no estimate" for that joint.
+inline constexpr double kNoHoldTorque = std::numeric_limits<double>::quiet_NaN();
+
+namespace detail
+{
+constexpr std::array<double, kJointsPerArm> every_joint(const double value)
+{
+  std::array<double, kJointsPerArm> out{};
+  for (auto & x : out) x = value;
+  return out;
+}
+}  // namespace detail
 
 enum class MitStatus : std::uint8_t
 {
@@ -58,6 +83,12 @@ struct SafetyProfile
   // canonical upstream homing set outright.
   std::array<double, kJointsPerArm> return_to_zero_kp_max{}, return_to_zero_kd_max{};
   std::array<double, kJointsPerArm> tau_ff_max{}, tau_ff_slew{}, final_torque{}, final_slew{};
+  // The SAFE hold's bound (ArmConsumer, Limiter): torque.safe_hold_torque_band
+  // [N m] and torque.safe_hold_motion_velocity [rad/s]. The loader always sets
+  // both; the infinite defaults of a profile built by hand never bound a hold.
+  std::array<double, kJointsPerArm> safe_hold_torque_band{
+    detail::every_joint(std::numeric_limits<double>::infinity())};
+  double safe_hold_motion_velocity{std::numeric_limits<double>::infinity()};
   std::size_t lease_default{0}, lease_cap{0}, refresh_cycles{0}, watchdog_ms{0}, stale_cycles{0};
 };
 
@@ -72,6 +103,10 @@ struct SafetyProfile
 // limiter saturates and slews (mit_limiter.hpp); the real adapter rejects,
 // bounds only the final torque (bound_final_torque()) and leaves every slew to
 // the producers. A profile naming the other backend's behaviour is rejected.
+//
+// The torque section's safe_hold_torque_band (seven values, 0 <= band <=
+// tau_ff_magnitude) and safe_hold_motion_velocity (> 0) are required: they
+// bound the SAFE hold (ArmConsumer).
 //
 // `arm_side` selects which mount's joint-position window is loaded: "single"
 // (or "") for the one-arm mount, "left"/"right" for the bimanual torso, whose
@@ -138,6 +173,10 @@ struct ArmCommand
   double session_echo{0.0};
   double lease_cycles{0.0};
   double generation{0.0};
+  // <joint>/hold_torque: the producer's estimate of the joint's gravity torque
+  // [N m], kNoHoldTorque (NaN) for none. Not part of the MIT equation and
+  // never sent: it only bounds a SAFE hold latched in motion (ArmConsumer).
+  std::array<double, kJointsPerArm> hold_torque{detail::every_joint(kNoHoldTorque)};
 };
 
 struct ValidationLimits
@@ -153,6 +192,20 @@ struct ValidationLimits
 
 bool is_exact_nonnegative_integer(double value);
 bool validate_tuple(const JointTuple & tuple, const ValidationLimits & limits);
+// A commit's hold_torque on one joint: kNoHoldTorque (NaN), or finite with
+// |hold_torque| <= limit (the joint's tau_ff bound). Anything else, an
+// infinity included, makes the whole commit invalid.
+bool valid_hold_torque(double hold_torque, double limit);
+
+// The SAFE hold's rule (see ArmConsumer). A hold is latched in motion when any
+// joint of its read has |dq| >= motion_velocity; a non-finite dq counts as
+// motion. An infinite motion_velocity is never reached by a finite dq.
+bool hold_in_motion(const std::array<double, kJointsPerArm> & dq, double motion_velocity);
+// One joint's hold tau_ff: the measured torque, bounded to
+// [hold_torque - band, hold_torque + band] when the hold is latched in motion
+// and hold_torque is finite, then clamped to +/- effort_limit.
+double bounded_hold_torque(
+  double measured, double hold_torque, double band, double effort_limit, bool in_motion);
 
 // The real consumer's final torque bound. The drive evaluates
 //   tau = kp * (q_des - q) + kd * (dq_des - dq) + tau_ff
@@ -169,7 +222,7 @@ JointTuple bound_final_torque(
 
 // The hardware-owned SAFE hold is
 //   q_des = q_measured, dq_des = 0, kp = safe_hold_stiffness, kd = safe_hold_damping,
-//   tau_ff = tau_measured
+//   tau_ff = tau_measured (bounded to h +/- band if latched in motion, see below)
 // where q_measured and tau_measured come from the same read: the pose the arm
 // is at when the hold is latched, and the joint torque the motors were
 // measured applying there. The torque is clamped per joint to the hold's
@@ -187,9 +240,26 @@ JointTuple bound_final_torque(
 // the gravity torque -- of the real arm with its real payload, not a model's
 // -- so the hold continues the support the arm actually had: no torque step
 // at the boundary, and a residual inside the joints' static friction moves
-// nothing. Moving or in contact, it also carries the inertial or contact
-// torque of that instant, which the safe gains then resist; that is the
-// trade-off against a gravity model, whose error would never go away.
+// nothing.
+//
+// Moving or in contact, the measured torque also carries the inertial or
+// contact torque of that instant, which the hold would keep as a constant
+// push. So a hold latched in motion -- any joint of the latch read at
+// |dq| >= hold_motion_velocity (hold_in_motion()) -- bounds the measured
+// torque per joint to h +/- hold_torque_band, h being the producer's gravity
+// estimate (ArmCommand::hold_torque) of the last commit accepted in this
+// session; a joint without one (NaN) keeps the measured torque. Then the
+// effort limit clamp (bounded_hold_torque()). At rest the hold is the
+// measured torque however far it is from h: it supports a payload the
+// producer's model does not know. The real profiles' band is the joints'
+// identified static friction: an error of h inside it stays still only while
+// below the breakaway friction, and a latch finds the arm moving; in motion an
+// unmodelled payload is supported only up to the band (docs/openarm_mit_contract_v1.md,
+// "Hold torque").
+//
+// h is captured on acceptance only (a rejected or discarded commit leaves it)
+// and forgotten (NaN) by configure() and cleanup(), so one producer's estimate
+// never bounds the next session's hold.
 class ArmConsumer
 {
 public:
@@ -198,6 +268,10 @@ public:
   // from their explicit safety profile: an MIT motor has no internal gravity
   // model, so a SAFE hold that collapsed seven joints onto the smallest wrist
   // gain could not hold the shoulder or elbow against gravity.
+  //
+  // The constructors without a band never bound a hold (band and motion
+  // velocity +inf): the measured torque, as before the hold torque existed.
+  // They still validate a commit's hold_torque.
   explicit ArmConsumer(
     ValidationLimits limits, double safe_hold_damping = 1.0,
     double safe_hold_stiffness = 0.0);
@@ -212,6 +286,15 @@ public:
     const std::array<double, kJointsPerArm> & safe_hold_damping,
     const std::array<double, kJointsPerArm> & safe_hold_stiffness,
     const std::array<double, kJointsPerArm> & hold_effort_limit);
+  // As above, with the hold's bound in motion (the profile's
+  // safe_hold_torque_band, each >= 0, +inf allowed, and
+  // safe_hold_motion_velocity, > 0): see the class comment.
+  ArmConsumer(
+    ValidationLimits limits,
+    const std::array<double, kJointsPerArm> & safe_hold_damping,
+    const std::array<double, kJointsPerArm> & safe_hold_stiffness,
+    const std::array<double, kJointsPerArm> & hold_effort_limit,
+    const std::array<double, kJointsPerArm> & hold_torque_band, double hold_motion_velocity);
   // A new session, seeded from the state read at activation: the first SAFE
   // hold of the session is at `measured` with the torque `measured_effort`
   // (see above). A motor that was enabled just now reads about zero; one that
@@ -226,16 +309,33 @@ public:
   // `q_des = q_measured` requires; without this it held the pose measured at
   // configure(), and a lease expiry or stop request pulled the arm back there.
   // Non-finite readings are ignored (the adapter faults on those itself).
-  // This overload leaves the torque sample as it was.
+  // This overload leaves the torque and velocity samples as they were.
   void observe(const std::array<double, kJointsPerArm> & measured);
   // The same, with the joint torques of that read: what the next hold's
   // tau_ff is latched from. Each value is clamped to the hold's effort limit;
-  // a non-finite one keeps that joint's previous sample.
+  // a non-finite one keeps that joint's previous sample. This overload has no
+  // velocity: the read counts as at rest (velocity sample 0).
   void observe(
     const std::array<double, kJointsPerArm> & measured,
     const std::array<double, kJointsPerArm> & measured_effort);
-  // What a SAFE hold latched now would carry as tau_ff.
+  // The same, with the joint velocities of that read, which decide whether a
+  // hold latched now is latched in motion. Kept as read: a non-finite value
+  // counts as motion.
+  void observe(
+    const std::array<double, kJointsPerArm> & measured,
+    const std::array<double, kJointsPerArm> & measured_velocity,
+    const std::array<double, kJointsPerArm> & measured_effort);
+  // The measured torque sample, clamped to the hold's effort limit. Not what a
+  // hold carries once a session has a hold torque: that is hold_effort_now().
   const std::array<double, kJointsPerArm> & hold_effort() const {return measured_effort_;}
+  // What a SAFE hold latched now would carry as tau_ff: bounded_hold_torque()
+  // per joint on the current samples (see the class comment).
+  std::array<double, kJointsPerArm> hold_effort_now() const;
+  // h: the hold_torque of the last commit accepted in this session, NaN where
+  // there is none.
+  const std::array<double, kJointsPerArm> & held_hold_torque() const {return hold_torque_;}
+  // A commit whose hold_torque fails valid_hold_torque() against
+  // max_abs_effort is rejected like an out-of-range tau_ff.
   bool accept_and_write(const ArmCommand & command, bool transport_succeeded = true);
   bool successful_write_cycle();
   void request_safe_transition(bool recoverable = false);
@@ -267,19 +367,28 @@ private:
   bool permanent_latched_{false};
   bool safe_recoverable_{false};
   std::array<double, kJointsPerArm> measured_{};
+  std::array<double, kJointsPerArm> measured_velocity_{};
   std::array<double, kJointsPerArm> measured_effort_{};
+  std::array<double, kJointsPerArm> hold_torque_{detail::every_joint(kNoHoldTorque)};
   ArmCommand submitted_{};
   std::uint64_t accepted_lease_cycles_{0};
   std::array<double, kJointsPerArm> safe_hold_damping_{};
   std::array<double, kJointsPerArm> safe_hold_stiffness_{};
   std::array<double, kJointsPerArm> hold_effort_limit_{};
+  std::array<double, kJointsPerArm> hold_torque_band_{};
+  double hold_motion_velocity_{0.0};
   void sample_effort(const std::array<double, kJointsPerArm> & effort);
+  void forget_samples_and_hold_torque();
 };
 
 class PairedConsumer
 {
 public:
   PairedConsumer(ValidationLimits limits, std::uint64_t session, double safe_hold_damping = 1.0);
+  // As above, with the hold's bound in motion on both arms (ArmConsumer).
+  PairedConsumer(
+    ValidationLimits limits, std::uint64_t session, double safe_hold_damping,
+    const std::array<double, kJointsPerArm> & hold_torque_band, double hold_motion_velocity);
   bool configure(
     std::uint64_t session, const std::array<double, kJointsPerArm> & left_measured,
     const std::array<double, kJointsPerArm> & right_measured,
@@ -293,6 +402,13 @@ public:
   void observe(
     const std::array<double, kJointsPerArm> & left_measured,
     const std::array<double, kJointsPerArm> & right_measured,
+    const std::array<double, kJointsPerArm> & left_effort,
+    const std::array<double, kJointsPerArm> & right_effort);
+  void observe(
+    const std::array<double, kJointsPerArm> & left_measured,
+    const std::array<double, kJointsPerArm> & right_measured,
+    const std::array<double, kJointsPerArm> & left_velocity,
+    const std::array<double, kJointsPerArm> & right_velocity,
     const std::array<double, kJointsPerArm> & left_effort,
     const std::array<double, kJointsPerArm> & right_effort);
   bool successful_write_cycle();
@@ -400,6 +516,8 @@ private:
 };
 
 std::vector<std::string> joint_names(const std::string & side);
+// The kArmCommandCount command interfaces a producer of the arm claims, in the
+// order of kHoldTorqueOffset's comment.
 std::vector<std::string> complete_claims(const std::string & side);
 // The single actuated finger joint. It is deliberately not part of
 // joint_names(): the gripper sits outside the MIT arm contract entirely, so its

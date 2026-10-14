@@ -24,11 +24,15 @@ namespace cho_controller_openarm_mit
 {
 using namespace cho_openarm_mit_core;
 
+// The claim layouts of the FollowJointTrajectory pair (bimanual_fjt_controller.cpp
+// indexes them): one arm is complete_claims(side), kArmCommandCount (46) names
+// with <joint>/hold_torque last; the pair is left, right, then the pair token
+// at index 2 * kArmCommandCount (92).
 struct DirectArmOwnership
 {
   static constexpr std::size_t dof = 7;
   static constexpr std::size_t arm_count = 1;
-  static constexpr std::size_t command_count = 39;
+  static constexpr std::size_t command_count = kArmCommandCount;
   static constexpr std::size_t state_count = 19;
 
   static std::vector<std::string> command_claims(const std::string & side)
@@ -56,7 +60,7 @@ struct PairedArmOwnership
 {
   static constexpr std::size_t dof = 14;
   static constexpr std::size_t arm_count = 2;
-  static constexpr std::size_t command_count = 79;
+  static constexpr std::size_t command_count = 2 * kArmCommandCount + 1;
   static constexpr std::size_t state_count = 39;
 
   static std::vector<std::string> command_claims()

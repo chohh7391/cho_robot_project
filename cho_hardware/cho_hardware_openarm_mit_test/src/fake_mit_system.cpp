@@ -15,18 +15,43 @@
 #include "cho_hardware_openarm_mit_test/fake_mit_system.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <pluginlib/class_list_macros.hpp>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 namespace cho_hardware_openarm_mit_test {
 namespace {
 // The feed-forward the arm's hold applies on joint i: the materialized hold's,
-// or -- in a fresh session, SAFE before any hold went out -- the torque the
-// session was seeded with, which is what its first hold will carry.
+// or -- in a fresh session, SAFE before any hold went out -- what its first
+// hold will carry (hold_effort_now(): the torque the session was seeded with,
+// since no commit, so no hold torque, was accepted yet).
 double held_effort(const ArmConsumer &c, std::size_t i) {
   return c.status() == MitStatus::SAFE && c.safe_ack_generation() == 0
-             ? c.hold_effort()[i]
+             ? c.hold_effort_now()[i]
              : c.submitted().joints[i].effort;
+}
+// An optional hardware parameter: one number, or kJointsPerArm of them
+// separated by spaces or commas (brackets allowed). "inf" is a number here.
+// Absent: empty.
+std::vector<double> numbers(const hardware_interface::HardwareInfo &i, const char *n) {
+  std::vector<double> out;
+  auto p = i.hardware_parameters.find(n);
+  if (p == i.hardware_parameters.end())
+    return out;
+  std::string text = p->second;
+  std::replace_if(text.begin(), text.end(),
+                  [](char c) { return c == ',' || c == '[' || c == ']'; }, ' ');
+  std::istringstream in(text);
+  for (std::string token; in >> token;) {
+    std::size_t used = 0;
+    out.push_back(std::stod(token, &used));
+    if (used != token.size())
+      throw std::invalid_argument(n);
+  }
+  if (out.size() != 1 && out.size() != kJointsPerArm)
+    throw std::invalid_argument(n);
+  return out;
 }
 double number(const hardware_interface::HardwareInfo &i, const char *n) {
   auto p = i.hardware_parameters.find(n);
@@ -52,6 +77,20 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
         number(info_, "max_stiffness"),    number(info_, "max_damping"),
         number(info_, "max_abs_effort"),   static_cast<uint64_t>(lease)};
     safe_hold_damping_ = number(info_, "safe_hold_damping");
+    // The SAFE hold's bound in motion, as the real profile's
+    // torque.safe_hold_torque_band and safe_hold_motion_velocity (ArmConsumer
+    // validates them: band >= 0, velocity > 0, +inf allowed). Absent: +inf, a
+    // hold that is always the measured torque.
+    constexpr double kNever = std::numeric_limits<double>::infinity();
+    safe_hold_torque_band_.fill(kNever);
+    if (const auto band = numbers(info_, "safe_hold_torque_band"); band.size() == 1)
+      safe_hold_torque_band_.fill(band[0]);
+    else if (!band.empty())
+      std::copy(band.begin(), band.end(), safe_hold_torque_band_.begin());
+    const auto velocity = numbers(info_, "safe_hold_motion_velocity");
+    if (velocity.size() > 1)
+      throw std::invalid_argument("safe_hold_motion_velocity");
+    safe_hold_motion_velocity_ = velocity.empty() ? kNever : velocity[0];
     double initial_position = 0.0;
     if (const auto initial = info_.hardware_parameters.find("initial_position");
       initial != info_.hardware_parameters.end()) {
@@ -71,8 +110,14 @@ FakeMitSystem::on_init(const hardware_interface::HardwareInfo &i) {
       mirror_position_offset_ = std::stod(offset->second);
       if (!std::isfinite(mirror_position_offset_)) throw std::invalid_argument("mirror_position_offset");
     }
-    left_ = ArmConsumer(limits_, safe_hold_damping_);
-    right_ = ArmConsumer(limits_, safe_hold_damping_);
+    std::array<double, kJointsPerArm> damping{}, stiffness{}, effort_limit{};
+    damping.fill(safe_hold_damping_);
+    effort_limit.fill(limits_.max_abs_effort);
+    left_ = ArmConsumer(limits_, damping, stiffness, effort_limit,
+                        safe_hold_torque_band_, safe_hold_motion_velocity_);
+    right_ = ArmConsumer(limits_, damping, stiffness, effort_limit,
+                         safe_hold_torque_band_, safe_hold_motion_velocity_);
+    clear_hold_torque(true, true);
     auto f = info_.hardware_parameters.find("fail_transport_generation");
     if (f != info_.hardware_parameters.end()) {
       double v = std::stod(f->second);
@@ -113,6 +158,7 @@ FakeMitSystem::on_configure(const rclcpp_lifecycle::State &) {
   pair_.reset();
   driving_ = false;
   command_ = {};
+  clear_hold_torque(true, true);
   left_protocol_.fill(0);
   right_protocol_.fill(0);
   pair_protocol_.fill(0);
@@ -138,8 +184,9 @@ FakeMitSystem::on_activate(const rclcpp_lifecycle::State &) {
     }
   }
   if (bimanual_) {
-    pair_ = std::make_unique<PairedConsumer>(limits_, next_session_,
-                                             safe_hold_damping_);
+    pair_ = std::make_unique<PairedConsumer>(
+        limits_, next_session_, safe_hold_damping_, safe_hold_torque_band_,
+        safe_hold_motion_velocity_);
     if (!pair_->configure(next_session_, l, r, le, re))
       return hardware_interface::CallbackReturn::ERROR;
     // The bimanual fake is also used to exercise the production ownership
@@ -154,8 +201,10 @@ FakeMitSystem::on_activate(const rclcpp_lifecycle::State &) {
   left_gate_.reset();
   right_gate_.reset();
   // A new session starts with no producer input: the effort commands read the
-  // feed-forward its hold applies (publish_held_effort()).
+  // feed-forward its hold applies (publish_held_effort()), and the hold
+  // torque reads NaN (none).
   command_ = {};
+  clear_hold_torque(true, true);
   left_protocol_.fill(0);
   right_protocol_.fill(0);
   pair_protocol_.fill(0);
@@ -209,6 +258,7 @@ FakeMitSystem::on_cleanup(const rclcpp_lifecycle::State &) {
   pair_.reset();
   ownership_selected_ = direct_ownership_active_ = false;
   command_ = {};
+  clear_hold_torque(true, true);
   left_protocol_.fill(0);
   right_protocol_.fill(0);
   pair_protocol_.fill(0);
@@ -251,6 +301,8 @@ FakeMitSystem::export_command_interfaces() {
   for (size_t i = 0; i < info_.joints.size(); ++i)
     for (size_t k = 0; k < 5; ++k)
       o.emplace_back(info_.joints[i].name, x[k], &command_[i][k]);
+  for (size_t i = 0; i < info_.joints.size(); ++i)
+    o.emplace_back(info_.joints[i].name, kHoldTorqueInterface, &hold_torque_[i]);
   auto add = [&](auto n, auto &p) {
     o.emplace_back(n, "mit_session_echo", &p[5]);
     o.emplace_back(n, "mit_lease_cycles", &p[6]);
@@ -281,27 +333,34 @@ hardware_interface::return_type FakeMitSystem::write(const rclcpp::Time &,
       c.joints[i] = {command_[off + i][0], command_[off + i][1],
                      command_[off + i][2], command_[off + i][3],
                      command_[off + i][4]};
+    for (size_t i = 0; i < 7; ++i)
+      c.hold_torque[i] = hold_torque_[off + i];
     c.session_echo = p[5];
     c.lease_cycles = p[6];
     c.generation = p[7];
     return c;
   };
   // The fake tracks its commands perfectly, so its state IS the measured pose
-  // and torque a SAFE transition must hold (ArmConsumer::observe).
+  // and torque a SAFE transition must hold (ArmConsumer::observe), and its
+  // velocity -- the accepted dq_des -- what decides whether a hold latched now
+  // is latched in motion. While the arm holds, the state keeps the last
+  // accepted tuple's values (the fake mirrors only an ACTIVE arm).
   {
-    std::array<double, 7> l{}, r{}, le{}, re{};
+    std::array<double, 7> l{}, r{}, ldq{}, rdq{}, le{}, re{};
     for (size_t i = 0; i < 7; ++i) {
       l[i] = state_[i][0];
+      ldq[i] = state_[i][1];
       le[i] = state_[i][2];
       if (bimanual_) {
         r[i] = state_[i + 7][0];
+        rdq[i] = state_[i + 7][1];
         re[i] = state_[i + 7][2];
       }
     }
-    left_.observe(l, le);
+    left_.observe(l, ldq, le);
     if (bimanual_) {
-      right_.observe(r, re);
-      if (pair_) pair_->observe(l, r, le, re);
+      right_.observe(r, rdq, re);
+      if (pair_) pair_->observe(l, r, ldq, rdq, le, re);
     }
   }
   bool ok = true;
@@ -479,6 +538,14 @@ bool FakeMitSystem::evaluate_commit(ArmConsumer &consumer, double &observed,
   if (status == MitStatus::ACTIVE) return consumer.successful_write_cycle();
   return status == MitStatus::SAFE_TRANSITION && consumer.submit_safe_transition(true);
 }
+void FakeMitSystem::clear_hold_torque(bool left, bool right) {
+  for (std::size_t i = 0; i < 7; ++i) {
+    if (left)
+      hold_torque_[i] = kNoHoldTorque;
+    if (right)
+      hold_torque_[i + 7] = kNoHoldTorque;
+  }
+}
 void FakeMitSystem::publish_held_effort() {
   // As the real adapter: while an arm holds, its effort command interfaces
   // read the tau_ff the hold applies (the last accepted one, 0 in a fresh
@@ -578,6 +645,9 @@ FakeMitSystem::perform_command_mode_switch(const std::vector<std::string> &start
   const bool fence_left = left_gate_.perform(start, stop, l);
   const bool fence_right = bimanual_ && right_gate_.perform(start, stop, "right");
   if (fence_left || fence_right) {
+    // The outgoing producer's hold torque is not the incoming one's: NaN until
+    // that one writes its own with its first commit.
+    clear_hold_torque(fence_left, fence_right);
     // Every consumer the incoming producer could read its ack from: the
     // ownership mode may have just changed.
     if (fence_left) {

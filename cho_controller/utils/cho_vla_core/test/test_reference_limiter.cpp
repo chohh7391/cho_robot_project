@@ -2885,4 +2885,281 @@ TEST(ComeToRest, S17_AC2_TrackingResumesFromTheRestPlace) {
   EXPECT_GE(ahead.joints(0), stop);
   EXPECT_LE(ahead.joints(0) - stop, 1.0 * 2 * kDt + 1e-9);   // velocity bound
 }
+
+// --------------------------------------------------------------------------
+// C1: seed_with_rates() with accelerations. A host hands a reference that is
+// still accelerating to come_to_rest() (Franka's goal-end stop). The history
+// before the seed is a constant acceleration, the state the host seeds with is
+// taken from it the way the host takes it, and the jerk is judged on the joined
+// trace's third differences: a C2 path whose jerk stays within j has every
+// third difference within j dt^3, so a stop that continues the acceleration
+// does too, one that drops it to zero does not (a / dt).
+// --------------------------------------------------------------------------
+
+// Third differences over dt^3, the largest per entry (`norm` false) or of the
+// vector's norm (true), over a trace of positions or of per-cycle steps.
+double worst_third_difference(const std::vector<Eigen::VectorXd> & positions, const bool norm)
+{
+  double worst = 0.0;
+  for (std::size_t i = 3; i < positions.size(); ++i) {
+    const Eigen::VectorXd third =
+      (positions[i] - 3.0 * positions[i - 1] + 3.0 * positions[i - 2] - positions[i - 3]) /
+      (kDt * kDt * kDt);
+    worst = std::max(worst, norm ? third.norm() : third.cwiseAbs().maxCoeff());
+  }
+  return worst;
+}
+
+double worst_second_difference(const std::vector<Eigen::VectorXd> & positions, const bool norm)
+{
+  double worst = 0.0;
+  for (std::size_t i = 2; i < positions.size(); ++i) {
+    const Eigen::VectorXd second =
+      (positions[i] - 2.0 * positions[i - 1] + positions[i - 2]) / (kDt * kDt);
+    worst = std::max(worst, norm ? second.norm() : second.cwiseAbs().maxCoeff());
+  }
+  return worst;
+}
+
+// Joints accelerating at a0 from v0, inside 1 rad/s and 4 rad/s^2 (jerk 100
+// rad/s^3, the a / 0.04 s default), different per joint and in sign; one
+// decelerates through zero.
+struct JointStopRun
+{
+  std::vector<Eigen::VectorXd> positions;
+  bool at_rest {false};
+};
+
+JointStopRun stop_accelerating_joints(const bool with_acceleration)
+{
+  Vector7 v0;
+  v0 << 0.3, -0.3, 0.2, 0.0, 0.5, -0.1, 0.25;
+  Vector7 a0;
+  a0 << 3.5, -3.5, -2.0, 4.0, 1.0, 3.0, -4.0;
+  const Vector7 p0 = Vector7::Constant(0.2);
+  JointStopRun run;
+  for (int k = -3; k <= 0; ++k) {
+    const double t = k * kDt;
+    run.positions.push_back(Eigen::VectorXd(p0 + v0 * t + 0.5 * a0 * t * t));
+  }
+  // As the host has it: the last two steps' rates and their change. The rate at
+  // the last position is the last step's carried on by half a step.
+  const std::size_t n = run.positions.size();
+  const Vector7 rate = (run.positions[n - 1] - run.positions[n - 2]) / kDt;
+  const Vector7 rate_before = (run.positions[n - 2] - run.positions[n - 3]) / kDt;
+  const Vector7 acceleration = (rate - rate_before) / kDt;
+
+  ReferenceLimiter limiter(joint_params(1.0, 4.0));
+  Reference from = joint_reference(0.0);
+  from.joints = run.positions.back();
+  if (with_acceleration) {
+    from.joint_velocity = rate + 0.5 * kDt * acceleration;
+    limiter.seed_with_rates(from, acceleration, Vector6::Zero(), 0.0);
+  } else {
+    from.joint_velocity = rate;
+    limiter.seed_with_rates(from, 0.0);
+  }
+  for (int i = 1; i <= 1500; ++i) {
+    run.positions.push_back(joints_of(limiter.come_to_rest(i * kDt)));
+  }
+  const std::size_t last = run.positions.size() - 1;
+  run.at_rest = (run.positions[last] - run.positions[last - 1]).cwiseAbs().maxCoeff() < 1e-12;
+  return run;
+}
+
+TEST(ComeToRest, C1_AJointStopSeededWithTheAccelerationKeepsItsJerkInsideTheBound) {
+  constexpr double kJerkBound = 4.0 / 0.04;
+  const JointStopRun run = stop_accelerating_joints(true);
+  const double jerk = worst_third_difference(run.positions, false);
+  RecordProperty("largest_jerk_rad_s3", std::to_string(jerk));
+  EXPECT_LE(jerk, kJerkBound * 1.001) << "the stop's jerk reached " << jerk << " rad/s^3";
+  EXPECT_LE(worst_second_difference(run.positions, false), 4.0 * 1.001);
+  EXPECT_TRUE(run.at_rest) << "the joints never came to rest";
+
+  // The same history seeded at zero acceleration steps it to zero in one cycle:
+  // up to 4 rad/s^2 over 1 ms, against the 100 rad/s^3 above.
+  const double dropped = worst_third_difference(stop_accelerating_joints(false).positions, false);
+  RecordProperty("largest_jerk_seeded_at_zero_acceleration_rad_s3", std::to_string(dropped));
+  EXPECT_GT(dropped, 10.0 * kJerkBound);
+}
+
+// Translation and a rotation about a diagonal axis, both accelerating, inside
+// Franka's task bounds (0.25 m/s, 1 m/s^2; 1.5 rad/s, 10 rad/s^2; jerk a / 0.04
+// s on each norm). The host seeds with the twist the reference moves at and its
+// change over the last cycle, which for this history is exact.
+struct TaskStopRun
+{
+  std::vector<Eigen::VectorXd> translations;
+  // Each cycle's world-aligned rotation vector, log3(R_k R_{k-1}^T).
+  std::vector<Eigen::VectorXd> turns;
+  bool at_rest {false};
+};
+
+TaskStopRun stop_accelerating_task(const bool with_acceleration)
+{
+  ReferenceLimiter::Params params;
+  params.max_linear_velocity = 0.25;
+  params.max_linear_acceleration = 1.0;
+  params.max_angular_velocity = 1.5;
+  params.max_angular_acceleration = 10.0;
+  const Eigen::Vector3d v0(0.1, -0.05, 0.08);
+  const Eigen::Vector3d a0(0.5, 0.4, -0.5);   // inside 1 / sqrt(3) per axis
+  const Eigen::Vector3d axis = Eigen::Vector3d::Ones().normalized();
+  const double w0 = 0.6;
+  const double b0 = 8.0;                      // [rad/s^2], 8 / sqrt(3) per axis
+  const Eigen::Vector3d x0(0.4, 0.1, 0.3);
+  const Eigen::Matrix3d R0 = pinocchio::exp3(Eigen::Vector3d(0.3, -0.2, 0.1));
+
+  TaskStopRun run;
+  std::vector<Eigen::Matrix3d> rotations;
+  for (int k = -3; k <= 0; ++k) {
+    const double t = k * kDt;
+    run.translations.push_back(Eigen::VectorXd(x0 + v0 * t + 0.5 * a0 * t * t));
+    rotations.push_back(pinocchio::exp3(Eigen::Vector3d(axis * (w0 * t + 0.5 * b0 * t * t))) * R0);
+  }
+  const auto twist_at = [&](const double t) {
+      Vector6 twist;
+      twist.head<3>() = v0 + a0 * t;
+      twist.tail<3>() = axis * (w0 + b0 * t);
+      return twist;
+    };
+  ReferenceLimiter limiter(params);
+  Reference from = task_reference(Eigen::Vector3d::Zero());
+  from.pose = SE3(rotations.back(), run.translations.back());
+  from.twist = twist_at(0.0);
+  if (with_acceleration) {
+    limiter.seed_with_rates(from, Vector7::Zero(), Vector6((twist_at(0.0) - twist_at(-kDt)) / kDt), 0.0);
+  } else {
+    limiter.seed_with_rates(from, 0.0);
+  }
+  for (int i = 1; i <= 1500; ++i) {
+    const Reference stop = limiter.come_to_rest(i * kDt);
+    run.translations.push_back(translation_of(stop));
+    rotations.push_back(stop.pose.rotation());
+  }
+  for (std::size_t k = 1; k < rotations.size(); ++k) {
+    run.turns.push_back(Eigen::VectorXd(
+        pinocchio::log3(Eigen::Matrix3d(rotations[k] * rotations[k - 1].transpose()))));
+  }
+  const std::size_t last = run.translations.size() - 1;
+  run.at_rest = (run.translations[last] - run.translations[last - 1]).norm() < 1e-12 &&
+    run.turns.back().norm() < 1e-12;
+  return run;
+}
+
+// Second differences of the per-cycle turns: the rotation's third difference.
+double worst_turn_jerk(const std::vector<Eigen::VectorXd> & turns)
+{
+  double worst = 0.0;
+  for (std::size_t i = 2; i < turns.size(); ++i) {
+    worst = std::max(worst, (turns[i] - 2.0 * turns[i - 1] + turns[i - 2]).norm() / (kDt * kDt * kDt));
+  }
+  return worst;
+}
+
+TEST(ComeToRest, C1_ATaskStopSeededWithTheAccelerationKeepsItsJerkInsideTheBounds) {
+  constexpr double kLinearJerk = 1.0 / 0.04;    // [m/s^3]
+  constexpr double kAngularJerk = 10.0 / 0.04;  // [rad/s^3]
+  const TaskStopRun run = stop_accelerating_task(true);
+  const double linear = worst_third_difference(run.translations, true);
+  const double angular = worst_turn_jerk(run.turns);
+  RecordProperty("largest_linear_jerk_m_s3", std::to_string(linear));
+  RecordProperty("largest_angular_jerk_rad_s3", std::to_string(angular));
+  EXPECT_LE(linear, kLinearJerk * 1.001) << "the translation's jerk reached " << linear << " m/s^3";
+  EXPECT_LE(angular, kAngularJerk * 1.001) << "the rotation's jerk reached " << angular << " rad/s^3";
+  EXPECT_LE(worst_second_difference(run.translations, true), 1.0 * 1.001);
+  EXPECT_TRUE(run.at_rest) << "the task reference never came to rest";
+
+  // Seeded at zero acceleration: 0.81 m/s^2 and 8 rad/s^2 dropped in one cycle.
+  const TaskStopRun dropped = stop_accelerating_task(false);
+  EXPECT_GT(worst_third_difference(dropped.translations, true), 10.0 * kLinearJerk);
+  EXPECT_GT(worst_turn_jerk(dropped.turns), 10.0 * kAngularJerk);
+}
+
+// The seeded acceleration is clamped into the bound apply() plans with, and a
+// non-finite one starts at zero, read back from the stop's first step: from
+// (p, v, a) at jerk j that is v dt + a dt^2 / 2 + j dt^3 / 6, so
+// 2 (step - v dt) / dt^2 is the seeded a within j dt / 3 (rotation, which
+// advances by the trapezoid of its rates: j dt / 2).
+TEST(ComeToRest, C1_TheSeededAccelerationIsClampedIntoTheBoundsAndAnInvalidOneIsZero) {
+  {
+    ReferenceLimiter limiter(joint_params(1.0, 4.0));   // jerk 100 rad/s^3
+    Reference from = joint_reference(0.1);
+    from.joint_velocity.setConstant(0.2);
+    Vector7 acceleration;
+    acceleration << 9.0, -9.0, 2.5, kNaN, kInfinity, -1.0, 0.0;
+    Vector7 expected;
+    expected << 4.0, -4.0, 2.5, 0.0, 0.0, -1.0, 0.0;
+    limiter.seed_with_rates(from, acceleration, Vector6::Zero(), 0.0);
+    const Reference first = limiter.come_to_rest(kDt);
+    const Vector7 seeded = 2.0 * (first.joints - from.joints - from.joint_velocity * kDt) / (kDt * kDt);
+    for (int joint = 0; joint < 7; ++joint) {
+      EXPECT_NEAR(seeded(joint), expected(joint), 100.0 * kDt / 3.0 + 1e-6) << "joint " << joint;
+    }
+  }
+  for (const bool valid : {true, false}) {
+    SCOPED_TRACE(valid ? "finite" : "a NaN in the linear part");
+    ReferenceLimiter::Params params;
+    params.max_linear_velocity = 0.5;
+    params.max_linear_acceleration = 1.0;    // 0.577 per axis, jerk 25 / sqrt(3)
+    params.max_angular_velocity = 1.5;
+    params.max_angular_acceleration = 2.0;   // 1.155 per axis, jerk 50 / sqrt(3)
+    ReferenceLimiter limiter(params);
+    Reference from = task_reference(Eigen::Vector3d(0.4, 0.1, 0.3));
+    from.twist << 0.05, 0.05, 0.05, 0.1, 0.1, 0.1;
+    Vector6 acceleration;
+    acceleration << 3.0, -3.0, 0.2, 0.0, 5.0, -0.5;
+    if (!valid) {acceleration(0) = kNaN;}
+    const double axis_linear = 1.0 / std::sqrt(3.0);
+    const double axis_angular = 2.0 / std::sqrt(3.0);
+    const Eigen::Vector3d expected_linear =
+      valid ? Eigen::Vector3d(axis_linear, -axis_linear, 0.2) : Eigen::Vector3d::Zero();
+    const Eigen::Vector3d expected_angular(0.0, axis_angular, -0.5);
+    limiter.seed_with_rates(from, Vector7::Zero(), acceleration, 0.0);
+    const Reference first = limiter.come_to_rest(kDt);
+    const Eigen::Vector3d linear = 2.0 *
+      (first.pose.translation() - from.pose.translation() - from.twist.head<3>() * kDt) / (kDt * kDt);
+    const Eigen::Vector3d turn = pinocchio::log3(
+      Eigen::Matrix3d(first.pose.rotation() * from.pose.rotation().transpose()));
+    const Eigen::Vector3d angular = 2.0 * (turn - from.twist.tail<3>() * kDt) / (kDt * kDt);
+    for (int axis = 0; axis < 3; ++axis) {
+      EXPECT_NEAR(linear(axis), expected_linear(axis), 25.0 / std::sqrt(3.0) * kDt / 3.0 + 1e-6)
+        << "linear axis " << axis;
+      EXPECT_NEAR(angular(axis), expected_angular(axis), 50.0 / std::sqrt(3.0) * kDt / 2.0 + 1e-6)
+        << "angular axis " << axis;
+    }
+  }
+}
+
+// With zero accelerations it is the rates-only seed, through apply() and the
+// stop alike.
+TEST(ComeToRest, C1_ZeroAccelerationsAreTheRatesOnlySeed) {
+  for (const ActionSpace space : {ActionSpace::kJoint, ActionSpace::kTask}) {
+    SCOPED_TRACE(space_name(space));
+    Reference start = seed_reference(space);
+    start.joint_velocity = commanded_joint_rate();
+    start.twist = commanded_twist();
+    ReferenceLimiter rates_only(all_bounds());
+    ReferenceLimiter with_accelerations(all_bounds());
+    rates_only.seed_with_rates(start, 0.0);
+    with_accelerations.seed_with_rates(start, Vector7::Zero(), Vector6::Zero(), 0.0);
+    for (int cycle = 1; cycle <= 400; ++cycle) {
+      const double now = kStep * cycle;
+      Reference expected = moving_reference(space, now);
+      Reference actual = moving_reference(space, now);
+      if (cycle <= 200) {
+        rates_only.apply(now, expected);
+        with_accelerations.apply(now, actual);
+      } else {
+        expected = rates_only.come_to_rest(now);
+        actual = with_accelerations.come_to_rest(now);
+      }
+      const double gap = emission_gap(actual, expected);
+      if (!(gap == 0.0)) {
+        ADD_FAILURE() << "cycle " << cycle << " differs by " << gap;
+        break;
+      }
+    }
+  }
+}
 }  // namespace

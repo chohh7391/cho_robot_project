@@ -106,6 +106,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -115,6 +116,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -124,6 +126,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -133,6 +136,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.3]
       state_interface name='velocity'
       state_interface name='effort'
@@ -142,6 +146,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -151,6 +156,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -160,6 +166,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -208,6 +215,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -217,6 +225,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -226,6 +235,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -235,6 +245,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.3]
       state_interface name='velocity'
       state_interface name='effort'
@@ -244,6 +255,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -253,6 +265,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'
@@ -262,6 +275,7 @@ DESCRIPTION #1
       command_interface name='stiffness'
       command_interface name='damping'
       command_interface name='effort'
+      command_interface name='hold_torque'
       state_interface name='position' [param name='initial_value': 0.0]
       state_interface name='velocity'
       state_interface name='effort'

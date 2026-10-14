@@ -35,6 +35,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace
@@ -232,7 +233,7 @@ TEST(OpenArmMitRealConfiguration, EachBimanualArmExportsItsOwnCompleteInterfaceS
     const auto states = system.export_state_interfaces();
     const auto commands = system.export_command_interfaces();
     EXPECT_EQ(states.size(), 26u);
-    EXPECT_EQ(commands.size(), 39u);
+    EXPECT_EQ(commands.size(), 46u);
 
     std::set<std::string> state_names;
     std::set<std::string> command_names;
@@ -248,7 +249,7 @@ TEST(OpenArmMitRealConfiguration, EachBimanualArmExportsItsOwnCompleteInterfaceS
       EXPECT_EQ(state_names.count(joint + "/velocity"), 1u);
       EXPECT_EQ(state_names.count(joint + "/effort"), 1u);
       for (const auto * interface :
-        {"position", "velocity", "stiffness", "damping", "effort"})
+        {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
       {
         EXPECT_EQ(command_names.count(joint + "/" + interface), 1u);
       }
@@ -257,6 +258,14 @@ TEST(OpenArmMitRealConfiguration, EachBimanualArmExportsItsOwnCompleteInterfaceS
     EXPECT_EQ(
       command_names.count("openarm_" + side + "_arm/mit_session_echo"),
       1u);
+    // Exactly what a producer claims (the 46 names of complete_claims()), in
+    // the same order: hold_torque after the protocol handles.
+    std::vector<std::string> exported;
+    for (const auto & command : commands) {
+      exported.push_back(command.get_name());
+    }
+    EXPECT_EQ(exported, cho_openarm_mit_core::complete_claims(side));
+    EXPECT_EQ(exported[cho_openarm_mit_core::kHoldTorqueOffset], "openarm_" + side + "_joint1/hold_torque");
   }
 }
 
@@ -271,7 +280,7 @@ TEST(OpenArmMitRealConfiguration, InitializationAloneDoesNotConstructTransport)
     system.on_init(hardware_info("real_conservative_commissioning", "false", "left")),
     hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(system.export_state_interfaces().size(), 26u);
-  EXPECT_EQ(system.export_command_interfaces().size(), 39u);
+  EXPECT_EQ(system.export_command_interfaces().size(), 46u);
   EXPECT_EQ(construction_attempts, 0);
   EXPECT_FALSE(system.socket_opened_for_test());
 }
@@ -358,7 +367,7 @@ TEST(
     system.on_init(hardware_info("real_conservative_commissioning", "True")),
     hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(system.export_state_interfaces().size(), 26u);
-  EXPECT_EQ(system.export_command_interfaces().size(), 39u);
+  EXPECT_EQ(system.export_command_interfaces().size(), 46u);
   ASSERT_EQ(
     system.on_configure(rclcpp_lifecycle::State{}),
     hardware_interface::CallbackReturn::SUCCESS);
@@ -736,10 +745,10 @@ TEST(OpenArmMitRealGripper, TheFingerIsExportedAsAPlainJointOutsideTheArmContrac
     hardware_interface::CallbackReturn::SUCCESS);
   const auto states = system.export_state_interfaces();
   const auto commands = system.export_command_interfaces();
-  // 26 arm states plus the finger's position/velocity/effort; 39 arm commands
+  // 26 arm states plus the finger's position/velocity/effort; 46 arm commands
   // plus the finger's position and max_effort.
   EXPECT_EQ(states.size(), 29u);
-  EXPECT_EQ(commands.size(), 41u);
+  EXPECT_EQ(commands.size(), 48u);
   std::set<std::string> command_names;
   for (const auto & command : commands) {
     command_names.insert(command.get_name());
@@ -750,7 +759,7 @@ TEST(OpenArmMitRealGripper, TheFingerIsExportedAsAPlainJointOutsideTheArmContrac
   // The gripper controller is a position controller; letting it claim an MIT
   // field would put the hand inside the arm's lease and SAFE protocol, which
   // the contract forbids.
-  for (const auto * field : {"velocity", "stiffness", "damping", "effort"}) {
+  for (const auto * field : {"velocity", "stiffness", "damping", "effort", "hold_torque"}) {
     EXPECT_EQ(command_names.count(finger + "/" + field), 0u) << field;
   }
 }
@@ -760,7 +769,7 @@ TEST(OpenArmMitRealGripper, WithoutTheHandNoFingerInterfaceExistsAtAll)
   OpenArmMitRealSystem system;
   ASSERT_EQ(system.on_init(hardware_info()), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(system.export_state_interfaces().size(), 26u);
-  EXPECT_EQ(system.export_command_interfaces().size(), 39u);
+  EXPECT_EQ(system.export_command_interfaces().size(), 46u);
 }
 
 TEST(OpenArmMitRealGripper, AJointListThatDisagreesWithTheHandFlagIsRejected)
@@ -1029,8 +1038,14 @@ TEST(OpenArmMitRealGripper, AGripperCanIdInsideTheArmsRangeIsRejected)
 
 namespace
 {
-// Writes a whole valid commit (every joint at `position`) for generation `generation`.
-void commit(
+constexpr double kNoEstimate = std::numeric_limits<double>::quiet_NaN();
+// A commit's hold_torque when the producer has no gravity model.
+constexpr std::array<double, 7> kNoEstimates{
+  kNoEstimate, kNoEstimate, kNoEstimate, kNoEstimate, kNoEstimate, kNoEstimate, kNoEstimate};
+
+// Writes a whole valid commit (every joint at `position`) for generation
+// `generation`, leaving the hold_torque command interfaces as they are.
+void commit_tuple_only(
   std::vector<hardware_interface::CommandInterface> & commands,
   std::vector<hardware_interface::StateInterface> & states, double generation, double position)
 {
@@ -1046,6 +1061,20 @@ void commit(
     command_interface(commands, joint + "/effort")->set_value(0.0);
   }
   command_interface(commands, "openarm_arm/mit_commit_generation")->set_value(generation);
+}
+
+// The same, with the producer's hold torque on every joint (by default none),
+// written before the generation as a producer does.
+void commit(
+  std::vector<hardware_interface::CommandInterface> & commands,
+  std::vector<hardware_interface::StateInterface> & states, double generation, double position,
+  const std::array<double, 7> & hold_torque = kNoEstimates)
+{
+  for (int index = 1; index <= 7; ++index) {
+    command_interface(commands, "openarm_joint" + std::to_string(index) + "/hold_torque")
+    ->set_value(hold_torque[index - 1]);
+  }
+  commit_tuple_only(commands, states, generation, position);
 }
 
 TEST(OpenArmMitRealSafety, ASafeRequestHoldsThePoseMeasuredLastNotTheActivationPose) {
@@ -1121,6 +1150,14 @@ TEST(OpenArmMitRealSwitch, APartialClaimOfTheArmIsRefused) {
   EXPECT_EQ(
     system.prepare_command_mode_switch({"some_other_robot/position"}, {}),
     hardware_interface::return_type::OK);
+  // The 39 interfaces of a producer that does not claim the hold torques are
+  // part of the arm too.
+  auto without_hold_torque = cho_openarm_mit_core::complete_claims("");
+  without_hold_torque.resize(cho_openarm_mit_core::kHoldTorqueOffset);
+  EXPECT_EQ(system.prepare_command_mode_switch(without_hold_torque, {}), hardware_interface::return_type::ERROR);
+  EXPECT_EQ(
+    system.prepare_command_mode_switch(cho_openarm_mit_core::complete_claims(""), {}),
+    hardware_interface::return_type::OK);
 }
 
 TEST(OpenArmMitRealSwitch, AnExternalSwitchSafesTheArmAndGatesCommitsUntilPerform) {
@@ -1139,12 +1176,13 @@ TEST(OpenArmMitRealSwitch, AnExternalSwitchSafesTheArmAndGatesCommitsUntilPerfor
   ASSERT_EQ(status->get_value(), kActive);
 
   // The controller_manager stops the producer without its SAFE handshake.
-  // Without a hand the arm's 35 fields and 4 protocol commands are all there is.
+  // Without a hand the arm's 35 fields, 4 protocol commands and 7 hold torques
+  // are all there is.
   std::vector<std::string> claims;
   for (const auto & command : commands) {
     claims.push_back(command.get_name());
   }
-  ASSERT_EQ(claims.size(), 39u);
+  ASSERT_EQ(claims.size(), 46u);
   ASSERT_EQ(system.prepare_command_mode_switch({}, claims), hardware_interface::return_type::OK);
   ASSERT_EQ(system.write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
   EXPECT_EQ(status->get_value(), kSafe);
@@ -2551,4 +2589,476 @@ TEST(OpenArmMitRealProfile, EachBackendsProfileMustNameWhatItsConsumerDoes)
       load_safety_profile_yaml(replace_all(text, pair[0], pair[1]), "mujoco_sim_safe", SafetyBackend::MUJOCO, "single"),
       std::invalid_argument) << pair[1];
   }
+}
+
+// ---------------------------------------------------------------------------
+// The hold torque (<joint>/hold_torque, claim indices 39-45). A producer writes
+// its gravity estimate h with every commit. A hold latched while the arm moves
+// -- any joint of the latch read at |dq| >= the profile's
+// safe_hold_motion_velocity -- carries the measured torque bounded to
+// h +/- safe_hold_torque_band of the last commit accepted in the session, so
+// the inertial or contact torque of that instant is not held as a constant
+// push. At rest it carries the measured torque, a payload the model does not
+// know included. A joint without an estimate (NaN) keeps the measured torque.
+// ---------------------------------------------------------------------------
+namespace
+{
+// real_conservative_commissioning's torque.safe_hold_torque_band [N m] and
+// torque.safe_hold_motion_velocity [rad/s].
+constexpr std::array<double, 7> kBand{1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2};
+constexpr double kMotionVelocity = 0.1;
+// A gravity estimate inside every joint's tau_ff_max [40, 40, 27, 27, 7, 7, 7].
+constexpr std::array<double, 7> kHoldTorque{5.0, -8.0, 3.0, 2.0, 0.5, -0.3, 0.1};
+// The inertial or contact torque a moving latch read carries on top of it.
+constexpr double kContamination = 3.5;
+const std::array<double, 7> kAtRest{};
+
+// h + 3.5 on joints 1, 3, 5, 7 and h - 3.5 on the others.
+std::array<double, 7> contaminated(const std::array<double, 7> & h)
+{
+  std::array<double, 7> out{};
+  for (std::size_t index = 0; index < 7; ++index) {
+    out[index] = index % 2 == 0 ? h[index] + kContamination : h[index] - kContamination;
+  }
+  return out;
+}
+
+// What the rule makes of contaminated(h) in motion: h + band, or h - band.
+std::array<double, 7> bounded(const std::array<double, 7> & h)
+{
+  std::array<double, 7> out{};
+  for (std::size_t index = 0; index < 7; ++index) {
+    out[index] = index % 2 == 0 ? h[index] + kBand[index] : h[index] - kBand[index];
+  }
+  return out;
+}
+
+std::array<double, 7> one_joint_moving(const std::size_t joint, const double velocity)
+{
+  std::array<double, 7> out{};
+  out[joint] = velocity;
+  return out;
+}
+
+std::array<double, 7> tau_ff_of(const std::array<cho_openarm_mit_core::JointTuple, 7> & tuples)
+{
+  std::array<double, 7> out{};
+  for (std::size_t index = 0; index < 7; ++index) {
+    out[index] = tuples[index].effort;
+  }
+  return out;
+}
+
+// What the effort command interfaces read (the hold's tau_ff while not ACTIVE).
+std::array<double, 7> effort_commands(std::vector<hardware_interface::CommandInterface> & commands)
+{
+  std::array<double, 7> out{};
+  for (int joint = 1; joint <= 7; ++joint) {
+    out[joint - 1] = effort_command(commands, joint);
+  }
+  return out;
+}
+
+std::array<double, 7> hold_torque_commands(std::vector<hardware_interface::CommandInterface> & commands)
+{
+  std::array<double, 7> out{};
+  for (int joint = 1; joint <= 7; ++joint) {
+    out[joint - 1] =
+      command_interface(commands, "openarm_joint" + std::to_string(joint) + "/hold_torque")->get_value();
+  }
+  return out;
+}
+
+void expect_all_nan(const std::array<double, 7> & values, const std::string & what)
+{
+  for (std::size_t index = 0; index < 7; ++index) {
+    EXPECT_TRUE(std::isnan(values[index])) << what << ", joint " << index + 1 << ": " << values[index];
+  }
+}
+
+void expect_equal(
+  const std::array<double, 7> & actual, const std::array<double, 7> & expected, const std::string & what)
+{
+  for (std::size_t index = 0; index < 7; ++index) {
+    EXPECT_DOUBLE_EQ(actual[index], expected[index]) << what << ", joint " << index + 1;
+  }
+}
+
+// Activates, accepts a commit carrying `hold_torque`, reads the arm at
+// (velocity, effort), then requests SAFE: the hold's tau_ff and the effort
+// command interfaces after it.
+void safe_request_hold(
+  const std::array<double, 7> & hold_torque, const std::array<double, 7> & velocity,
+  const std::array<double, 7> & effort, std::array<double, 7> & tau_ff,
+  std::array<double, 7> & published)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05, hold_torque);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  transport->next_velocity = velocity;
+  transport->next_effort = effort;
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  EXPECT_DOUBLE_EQ(transport->sent.back()[0].stiffness, 3.0);  // the hold's safe gains
+  tau_ff = tau_ff_of(transport->sent.back());
+  published = effort_commands(commands);
+}
+}  // namespace
+
+TEST(OpenArmMitRealHoldTorque, ASafeRequestInMotionBoundsTheMeasuredTorqueToTheHoldTorque)
+{
+  // One joint moving is enough, in either direction, and the threshold itself
+  // counts as motion.
+  for (const auto & velocity :
+    {one_joint_moving(3, 0.5), one_joint_moving(6, -0.5), one_joint_moving(0, kMotionVelocity)})
+  {
+    std::array<double, 7> tau_ff{}, published{};
+    safe_request_hold(kHoldTorque, velocity, contaminated(kHoldTorque), tau_ff, published);
+    expect_equal(tau_ff, bounded(kHoldTorque), "hold in motion");
+    // A producer activated now seeds from what the hold applies.
+    expect_equal(published, bounded(kHoldTorque), "effort commands");
+  }
+}
+
+TEST(OpenArmMitRealHoldTorque, AtRestTheHoldKeepsTheMeasuredTorqueHoweverFarFromTheHoldTorque)
+{
+  std::array<double, 7> tau_ff{}, published{};
+  safe_request_hold(kHoldTorque, kAtRest, contaminated(kHoldTorque), tau_ff, published);
+  expect_equal(tau_ff, contaminated(kHoldTorque), "at rest");
+  expect_equal(published, contaminated(kHoldTorque), "effort commands at rest");
+
+  // A payload the producer's model does not know: 10 N m past h on the
+  // shoulder, held as measured.
+  auto payload = kHoldTorque;
+  payload[0] += 10.0;
+  safe_request_hold(kHoldTorque, kAtRest, payload, tau_ff, published);
+  EXPECT_DOUBLE_EQ(tau_ff[0], 15.0);
+
+  // Velocity noise just under the threshold, on every joint, is still rest.
+  std::array<double, 7> just_below{};
+  for (std::size_t index = 0; index < 7; ++index) {
+    just_below[index] = (index % 2 == 0 ? 1.0 : -1.0) * 0.0999;
+  }
+  ASSERT_LT(0.0999, kMotionVelocity);
+  safe_request_hold(kHoldTorque, just_below, contaminated(kHoldTorque), tau_ff, published);
+  expect_equal(tau_ff, contaminated(kHoldTorque), "just below the motion velocity");
+}
+
+TEST(OpenArmMitRealHoldTorque, AJointWithoutAnEstimateKeepsTheMeasuredTorqueEvenInMotion)
+{
+  std::array<double, 7> tau_ff{}, published{};
+  safe_request_hold(kNoEstimates, one_joint_moving(1, 0.5), contaminated(kHoldTorque), tau_ff, published);
+  expect_equal(tau_ff, contaminated(kHoldTorque), "no estimate");
+
+  // Per joint: joints 2 and 5 without one, the others with one.
+  auto partial = kHoldTorque;
+  partial[1] = kNoEstimate;
+  partial[4] = kNoEstimate;
+  safe_request_hold(partial, one_joint_moving(1, 0.5), contaminated(kHoldTorque), tau_ff, published);
+  auto expected = bounded(kHoldTorque);
+  expected[1] = contaminated(kHoldTorque)[1];
+  expected[4] = contaminated(kHoldTorque)[4];
+  expect_equal(tau_ff, expected, "partial estimate");
+}
+
+namespace
+{
+struct CommitOutcome
+{
+  double status{0.0};
+  double ack{0.0};
+  double safe_generation{0.0};
+  double safe_ack{0.0};
+  bool targets_sent{false};  // a frame carried the second commit's targets
+  std::array<double, 7> tau_ff{};
+};
+
+using Spoil = std::function<void(std::vector<hardware_interface::CommandInterface> &)>;
+
+// Activates, accepts generation 1 with kHoldTorque, reads the arm moving with
+// a contaminated torque, then writes generation 2 (targets 0.06, kHoldTorque)
+// changed by `spoil`.
+void second_commit(const Spoil & spoil, CommitOutcome & out)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05, kHoldTorque);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  transport->next_velocity = one_joint_moving(1, 0.5);
+  transport->next_effort = contaminated(kHoldTorque);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  const auto sent_before = transport->sent.size();
+  commit(commands, states, 2.0, 0.06, kHoldTorque);
+  spoil(commands);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  out.status = status_of(*system);
+  out.ack = state_interface(states, "openarm_arm/mit_ack_generation")->get_value();
+  out.safe_generation = state_interface(states, "openarm_arm/mit_safe_generation")->get_value();
+  out.safe_ack = state_interface(states, "openarm_arm/mit_safe_ack_generation")->get_value();
+  for (auto sent = transport->sent.begin() + static_cast<std::ptrdiff_t>(sent_before);
+    sent != transport->sent.end(); ++sent)
+  {
+    out.targets_sent = out.targets_sent || (*sent)[0].position == 0.06;
+  }
+  out.tau_ff = tau_ff_of(transport->sent.back());
+}
+
+Spoil set_command(const std::string & name, const double value)
+{
+  return [name, value](std::vector<hardware_interface::CommandInterface> & commands) {
+           command_interface(commands, name)->set_value(value);
+         };
+}
+}  // namespace
+
+TEST(OpenArmMitRealHoldTorque, AnEstimateOutsideTheTauFfBoundIsRejectedLikeAnOutOfRangeTauFf)
+{
+  // The reference: joint 5's tau_ff past its 7 N m.
+  CommitOutcome reference;
+  second_commit(set_command("openarm_joint5/effort", 7.5), reference);
+  ASSERT_EQ(reference.status, kSafe);
+  ASSERT_EQ(reference.ack, 1.0);
+  ASSERT_FALSE(reference.targets_sent);
+  const double inf = std::numeric_limits<double>::infinity();
+  const std::vector<std::pair<std::string, double>> cases{
+    {"openarm_joint5/hold_torque", 7.5},
+    {"openarm_joint1/hold_torque", -40.5},
+    {"openarm_joint3/hold_torque", inf},
+    {"openarm_joint7/hold_torque", -inf}};
+  for (const auto & spoiled : cases) {
+    const auto what = spoiled.first + " = " + std::to_string(spoiled.second);
+    CommitOutcome outcome;
+    second_commit(set_command(spoiled.first, spoiled.second), outcome);
+    EXPECT_EQ(outcome.status, reference.status) << what;
+    EXPECT_EQ(outcome.ack, reference.ack) << what;
+    EXPECT_EQ(outcome.safe_generation, reference.safe_generation) << what;
+    EXPECT_EQ(outcome.safe_ack, reference.safe_ack) << what;
+    EXPECT_FALSE(outcome.targets_sent) << what;
+    // The rejection's hold is latched in motion with generation 1's estimate:
+    // a rejected commit's hold torque is never taken.
+    expect_equal(outcome.tau_ff, bounded(kHoldTorque), what);
+    expect_equal(outcome.tau_ff, reference.tau_ff, what);
+  }
+  // At the bound, and without an estimate, it is accepted.
+  CommitOutcome at_bound;
+  second_commit(
+    [](std::vector<hardware_interface::CommandInterface> & commands) {
+      const std::array<double, 7> limit{40.0, -40.0, 27.0, -27.0, 7.0, -7.0, kNoEstimate};
+      for (int joint = 1; joint <= 7; ++joint) {
+        command_interface(commands, "openarm_joint" + std::to_string(joint) + "/hold_torque")
+        ->set_value(limit[joint - 1]);
+      }
+    }, at_bound);
+  EXPECT_EQ(at_bound.status, kActive);
+  EXPECT_EQ(at_bound.ack, 2.0);
+  EXPECT_TRUE(at_bound.targets_sent);
+}
+
+TEST(OpenArmMitRealHoldTorque, EveryHoldPathLatchedInMotionIsBoundedAndAtRestIsNot)
+{
+  // The SAFE request and the rejected commit are above; here the lease expiry,
+  // the controller switch and the orderly stop.
+  enum class Path {LEASE, SWITCH, STOP};
+  for (const auto path : {Path::LEASE, Path::SWITCH, Path::STOP}) {
+    for (const bool moving : {true, false}) {
+      const std::string what =
+        std::string{path == Path::LEASE ? "lease" : path == Path::SWITCH ? "switch" : "stop"} +
+        (moving ? " in motion" : " at rest");
+      CountingTransport * transport = nullptr;
+      auto system = counting_system(transport);
+      activate(*system, transport);
+      auto commands = system->export_command_interfaces();
+      auto states = system->export_state_interfaces();
+      commit(commands, states, 1.0, 0.05, kHoldTorque);
+      ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+      ASSERT_EQ(status_of(*system), kActive) << what;
+      transport->next_velocity = moving ? one_joint_moving(4, -0.4) : kAtRest;
+      transport->next_effort = contaminated(kHoldTorque);
+      ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+      if (path == Path::LEASE) {
+        // The 10-cycle lease runs out with no new commit.
+        for (int cycle = 0; cycle < 20 && status_of(*system) == kActive; ++cycle) {
+          ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+        }
+        ASSERT_EQ(status_of(*system), kSafe) << what;
+      } else if (path == Path::SWITCH) {
+        const auto claims = claims_of(commands);
+        ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+        ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+        ASSERT_EQ(status_of(*system), kSafe) << what;
+      } else {
+        // The stop takes its own fresh read, of the same state.
+        ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+        ASSERT_EQ(status_of(*system), kDisabled) << what;
+      }
+      const auto hold = transport->sent.back();
+      EXPECT_DOUBLE_EQ(hold[0].stiffness, 3.0) << what;  // the hold, not the producer's tuple
+      const auto expected = moving ? bounded(kHoldTorque) : contaminated(kHoldTorque);
+      expect_equal(tau_ff_of(hold), expected, what);
+      expect_equal(effort_commands(commands), expected, what + ", effort commands");
+    }
+  }
+}
+
+TEST(OpenArmMitRealHoldTorque, TheWatchdogsFallbackHoldFollowsTheSameRule)
+{
+  for (const bool moving : {true, false}) {
+    CountingTransport * transport = nullptr;
+    auto system = counting_system(transport);
+    activate(*system, transport);
+    auto commands = system->export_command_interfaces();
+    auto states = system->export_state_interfaces();
+    commit(commands, states, 1.0, 0.05, kHoldTorque);
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    transport->next_velocity = moving ? one_joint_moving(2, 0.3) : kAtRest;
+    transport->next_effort = contaminated(kHoldTorque);
+    ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+    ASSERT_EQ(status_of(*system), kActive);
+    // controller_manager stops writing: the watchdog thread sends the measured
+    // hold the control thread built at that read.
+    const int sends = transport->send_calls.load();
+    ASSERT_TRUE(wait_for([&] {return transport->send_calls.load() > sends;}));
+    const auto last = transport->sent.back();
+    EXPECT_DOUBLE_EQ(last[0].stiffness, 3.0);  // the hold, not the producer's tuple
+    expect_equal(
+      tau_ff_of(last), moving ? bounded(kHoldTorque) : contaminated(kHoldTorque),
+      moving ? "watchdog in motion" : "watchdog at rest");
+  }
+}
+
+TEST(OpenArmMitRealHoldTorque, TheHoldTorqueCommandsReadNoEstimateAfterActivationAndAfterASwitch)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  expect_all_nan(hold_torque_commands(commands), "after the first activation");
+  commit(commands, states, 1.0, 0.05, kHoldTorque);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  const auto claims = claims_of(commands);
+  ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  // The outgoing producer writes once more before perform.
+  commit(commands, states, 2.0, 0.05, kHoldTorque);
+  ASSERT_EQ(system->perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  expect_all_nan(hold_torque_commands(commands), "after perform");
+
+  // A value left there across a deactivation is gone with the new session.
+  commit(commands, states, 3.0, 0.05, kHoldTorque);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(status_of(*system), kSafe);
+  expect_all_nan(hold_torque_commands(commands), "after the reactivation");
+}
+
+// The reset is of the interfaces: the consumer keeps the outgoing producer's
+// estimate until the incoming producer's first accepted commit replaces it. So
+// the estimate is never carried into the incoming producer's commit, but a hold
+// latched before that commit (the switch's own SAFE hold) is bounded by it.
+TEST(OpenArmMitRealHoldTorque, TheOutgoingProducersEstimateIsNotCarriedIntoTheIncomingProducersCommit)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  const auto * ack = state_interface(states, "openarm_arm/mit_ack_generation");
+  commit(commands, states, 1.0, 0.05, kHoldTorque);  // producer A, with a gravity model
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  const auto claims = claims_of(commands);
+  ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  commit(commands, states, 2.0, 0.05, kHoldTorque);  // A's leftover
+  ASSERT_EQ(system->perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  // Producer B commits without writing a hold torque.
+  commit_tuple_only(commands, states, ack->get_value() + 1.0, 0.02);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  // B's hold, latched in motion: no estimate, so the measured torque.
+  transport->next_velocity = one_joint_moving(1, 0.5);
+  transport->next_effort = contaminated(kHoldTorque);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  expect_equal(tau_ff_of(transport->sent.back()), contaminated(kHoldTorque), "producer B's hold");
+}
+
+TEST(OpenArmMitRealHoldTorque, ASwitchHoldBeforeTheIncomingProducersFirstCommitUsesTheOutgoingProducersEstimate)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05, kHoldTorque);  // producer A, with a gravity model
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kActive);
+  const auto claims = claims_of(commands);
+  // The switch latches its SAFE hold while the arm moves.
+  transport->next_velocity = one_joint_moving(1, 0.5);
+  transport->next_effort = contaminated(kHoldTorque);
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->prepare_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  // Bounded to A's estimate: perform resets the interfaces, not the consumer's value.
+  expect_equal(tau_ff_of(transport->sent.back()), bounded(kHoldTorque), "the switch's own hold");
+  ASSERT_EQ(system->perform_command_mode_switch(claims, claims), hardware_interface::return_type::OK);
+  expect_all_nan(hold_torque_commands(commands), "after perform");
+  // A hold built after perform, before B's first accepted commit, still is.
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  expect_equal(tau_ff_of(transport->sent.back()), bounded(kHoldTorque), "a hold before B's first commit");
+}
+
+TEST(OpenArmMitRealHoldTorque, ANewSessionForgetsTheHoldTorque)
+{
+  CountingTransport * transport = nullptr;
+  auto system = counting_system(transport);
+  activate(*system, transport);
+  auto commands = system->export_command_interfaces();
+  auto states = system->export_state_interfaces();
+  commit(commands, states, 1.0, 0.05, kHoldTorque);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  transport->next_effort = kHoldTorque;
+  ASSERT_EQ(system->on_deactivate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  // Reactivated out of the supervised hold while the arm is being moved: the
+  // seed hold is the measured torque.
+  transport->next_velocity = one_joint_moving(0, 0.5);
+  transport->next_effort = contaminated(kHoldTorque);
+  ASSERT_EQ(system->on_activate(rclcpp_lifecycle::State{}), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(status_of(*system), kSafe);
+  expect_equal(tau_ff_of(transport->sent.back()), contaminated(kHoldTorque), "the new session's first hold");
+  // No commit yet in this session: a hold latched in motion keeps the
+  // measured torque, the previous session's estimate is gone.
+  ASSERT_EQ(system->read(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  command_interface(commands, "openarm_arm/mit_safe_request_generation")
+  ->set_value(state_interface(states, "openarm_arm/mit_safe_generation")->get_value() + 1.0);
+  ASSERT_EQ(system->write(rclcpp::Time(0), kCycle), hardware_interface::return_type::OK);
+  ASSERT_EQ(status_of(*system), kSafe);
+  expect_equal(tau_ff_of(transport->sent.back()), contaminated(kHoldTorque), "a hold before any commit");
 }

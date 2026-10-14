@@ -28,7 +28,7 @@ Ownership has two mutually exclusive modes:
 - `DIRECT_INDEPENDENT`: either arm may be acquired/released independently. Each arm has its own
   generation, lease age, acknowledgement, and fault latch. The direct producers
   (`DirectControllerBase` and everything derived from it) and `SingleArmFollowJointTrajectoryController`
-  run in this mode, each claiming one arm's 39 command and reading its 19 state interfaces.
+  run in this mode, each claiming one arm's 46 command and reading its 19 state interfaces.
 - `MOVEIT_PAIRED`: both complete arms are owned together. A write requires equal generations and
   validates both snapshots before either acknowledgement is committed. Only
   `BimanualFollowJointTrajectoryController` runs in this mode.
@@ -37,8 +37,9 @@ Ownership has two mutually exclusive modes:
 the same implementation claiming one arm, so MoveIt can drive one arm of the torso. The paired
 controller exports `~/follow_joint_trajectory`, which resolves under the controller node to the
 standard controller-scoped action name and uses `control_msgs/action/FollowJointTrajectory`. It
-claims 79 command interfaces: 7 joints times 5 MIT fields plus 4 protocol fields for each arm, plus
-the exclusive `openarm_bimanual/mit_pair_ownership` command token. It reads both arms' measured
+claims 93 command interfaces: for each arm 7 joints times 5 MIT fields, 4 protocol fields and 7
+`<joint>/hold_torque` (46, `complete_claims()`), then the exclusive
+`openarm_bimanual/mit_pair_ownership` command token (index 92). It reads both arms' measured
 position/velocity and protocol state plus `openarm_bimanual/mit_pair_stop_ready` (39 state claims).
 Two independent seven-axis direct producers never claim this token, so aggregating their arm claims
 cannot impersonate the paired MoveIt transaction; do not activate a direct producer and the paired
@@ -67,14 +68,14 @@ controller-switch rule
 never wait or request a retry. Explicit safe-request transitions used for cancel/preempt are
 recoverable in the same session; a transport fault requires the hardware to be reactivated.
 
-The FollowJointTrajectory producers carry `tau_ff = 0` by design (no model; see the contract's
-producer section): switched in after a producer that supported the arm, their seed drops the hold's
-gravity torque onto the safe-gain spring. They run in the MuJoCo prototype only; the real bringup
-does not offer them.
+The FollowJointTrajectory producers carry `tau_ff = 0` and `hold_torque = NaN` by design (no model;
+see the contract's producer section): switched in after a producer that supported the arm, their
+seed drops the hold's gravity torque onto the safe-gain spring. They run in the MuJoCo prototype
+only; the real bringup does not offer them.
 
 ## Single-arm TaskSpace MIT impedance
 
-`TaskSpaceImpedanceController` is the direct single-arm Cartesian path. It claims the same 39
+`TaskSpaceImpedanceController` is the direct single-arm Cartesian path. It claims the same 46
 MIT command interfaces and exposes `/task_space_impedance_mit_controller/task_space`
 as `cho_interfaces/action/TaskSpace`; it is not MoveIt and has no raw tuple topic.
 `drive_side_impedance` selects one of two laws; the parameter defaults to `true`, and
@@ -180,8 +181,43 @@ admission cap.
 
 The hardware SAFE hold that a SAFE request reaches keeps the per-joint profile safe-hold gains and,
 as `tau_ff`, the measured joint torque, not this producer's last `tau_ff`
-([SAFE hold](../../cho_hardware/cho_openarm_mit_core/DESIGN.md#safe-hold)). The effort command
-interfaces read that torque while the arm holds, and the next producer seeds from it.
+([SAFE hold](../../cho_hardware/cho_openarm_mit_core/DESIGN.md#safe-hold)), bounded by the hold
+torque below when it is latched in motion. The effort command interfaces read that torque while the
+arm holds, and the next producer seeds from it.
+
+## Hold torque
+
+Every commit of every producer writes `<joint>/hold_torque` (claim indices 39-45 of the arm, after
+the 35 joint fields and the 4 protocol fields; written before the generation, like the tuple): the
+producer's estimate of the torque that holds each joint still against gravity, or NaN for no
+estimate. It is not part of the MIT tuple and never reaches the drive. The consumer keeps it from the
+last commit it accepted in the session and uses it only when it builds a SAFE hold while the arm
+moves.
+
+| Producer | `hold_torque` |
+| --- | --- |
+| `TaskSpaceImpedanceController`, `VlaController` (task and joint chunks) | `gravity_scale * gravity_joint_scale[i] * g_i(q)` |
+| `JointImpedanceActionController` | `g_i(q)` |
+| raw-topic producers (`JointPosition` ... `CompensatedTorque`) | NaN |
+| `BimanualFollowJointTrajectoryController`, `SingleArmFollowJointTrajectoryController` | NaN |
+
+`g` is `pinocchio::computeGeneralizedGravity` on the controller's `robot_description` model at the
+measured `q` of the cycle, clamped per joint to the profile's `tau_ff_magnitude` (the bound the
+consumer validates it against; a larger one rejects the commit), not to `torque_limit`. It is
+gravity alone, with no Coriolis, friction, null-space or joint-limit term and no slew: the
+`tau_ff` these producers emit is the slewed model term plus feedback, and while the arm moves it is
+not what holds the arm still. It is written on every commit, the seed and the return-to-zero ramp
+included (`DirectControllerBase::model_hold_torque()`, `commit()`); a joint whose estimate is not
+finite gets NaN. The raw-topic producers' `tau_ff` is the caller's and they own no model.
+
+A SAFE latched while any joint moves at `torque.safe_hold_motion_velocity` or faster holds
+`clamp(tau_measured, h - band, h + band)` (`band = torque.safe_hold_torque_band`), so it holds at
+most `h + band`: a payload the model does not know, or a `gravity_scale` below 1, is then supported
+only up to the band. At rest the hold is the measured torque, whatever `h` is. With NaN the hold is
+the measured torque in motion too. The hardware resets the interfaces to NaN at activation and at
+every controller switch, so the next producer never inherits the previous one's estimate.
+`test_hold_torque_producers` checks the table on the fake consumer (the FollowJointTrajectory row on
+the paired controller).
 
 ## Action contract of the direct and TaskSpace producers
 

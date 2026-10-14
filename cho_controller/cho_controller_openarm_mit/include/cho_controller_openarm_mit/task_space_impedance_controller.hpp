@@ -35,10 +35,10 @@ namespace cho_controller_openarm_mit
 {
 // Cartesian single-arm MIT impedance action controller.  It deliberately
 // remains a direct-controller vertical: MoveIt/FJT owns only paired 14-axis
-// planning.  The base class supplies the one-arm 39-interface MIT protocol.
+// planning.  The base class supplies the one-arm 46-interface MIT protocol.
 //
 // Not `final`: VlaController derives from it to reuse this exact producer --
-// the 39-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero phase,
+// the 46-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero phase,
 // the drive-side impedance law, the null-space posture, the joint-limit spring
 // and the reference-offset bound -- and replaces only where q_des/dq_des come
 // from. That is the same relationship JointImpedanceActionController has to
@@ -60,7 +60,7 @@ protected:
   bool supports_return_to_zero() const override {return true;}
   // Whether on_configure creates the cho_interfaces/TaskSpace action server and
   // its diagnostics service. A derived controller that owns a different goal API
-  // turns this off, so two servers can never both drive the same 39 interfaces.
+  // turns this off, so two servers can never both drive the same 46 interfaces.
   virtual bool uses_task_space_action() const {return true;}
   using Action = cho_interfaces::action::TaskSpace;
   using GoalHandle = rclcpp_action::ServerGoalHandle<Action>;
@@ -346,6 +346,9 @@ protected:
   // Atomic and runtime-settable: finding the value at which a hand-placed
   // posture holds is a measurement, and making it need a relaunch per step
   // would turn a five-point sweep into five re-homings of the arm.
+  // It scales the hold torque too (gravity_scale * gravity_joint_scale * g(q),
+  // update()), so a value below 1 also narrows what a SAFE hold latched in
+  // motion supports.
   std::atomic<double> gravity_scale_{1.0};
   // Per-joint multiplier on the model term, applied on top of gravity_scale.
   // Negative inverts that joint, which exists to test a suspected axis-sign

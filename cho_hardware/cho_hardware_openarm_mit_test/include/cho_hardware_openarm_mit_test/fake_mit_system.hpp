@@ -15,6 +15,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <string>
 #include <memory>
 #include <vector>
@@ -56,10 +57,18 @@ private:
   // SwitchGate::Cycle::enter_safe for one consumer: an arm that is not SAFE
   // enters measured SAFE now. True when that spent the cycle.
   static bool enter_switch_safe(ArmConsumer & consumer, bool & ok);
+  // The hold_torque command interfaces of the left and/or right arm := NaN
+  // (no estimate). The single arm is "left".
+  void clear_hold_torque(bool left, bool right);
   ValidationLimits limits_{6.4, 20.0, 500.0, 50.0, 100.0, 100};  // test-double only
   ArmConsumer left_{limits_}, right_{limits_};
   std::unique_ptr<PairedConsumer> pair_;
   std::array<std::array<double, 5>, 14> command_{};
+  // <joint>/hold_torque of every arm joint (claim index kHoldTorqueOffset + i
+  // of its arm): NaN (none) from activation and from every controller switch
+  // on that arm until a producer writes it; passed with each commit
+  // (ArmCommand::hold_torque).
+  std::array<double, 14> hold_torque_{};
   std::array<std::array<double, 3>, 14> state_{};
   std::array<double, 9> left_protocol_{};
   std::array<double, 9> right_protocol_{};
@@ -73,6 +82,12 @@ private:
   std::uint64_t next_session_{1};
   std::uint64_t fail_transport_generation_{0};
   double safe_hold_damping_{1.0};
+  // Hardware parameters safe_hold_torque_band (one value or seven, [N m]) and
+  // safe_hold_motion_velocity ([rad/s]), the consumers' bound on a hold
+  // latched in motion (ArmConsumer). Both default to +inf: never bounded, the
+  // measured torque, as before the hold torque existed.
+  std::array<double, kJointsPerArm> safe_hold_torque_band_{};
+  double safe_hold_motion_velocity_{std::numeric_limits<double>::infinity()};
   double mirror_position_offset_{0.0};
   // The controller-switch rule every OpenArm MIT backend shares, so the
   // controller integration tests run against the real adapter's rule: a stop is

@@ -92,6 +92,8 @@ private:
   void write_pair(
     const std::array<double, 14> & position, const std::array<double, 14> & velocity,
     double stiffness, double damping);
+  // Every commit: the tuple with tau_ff = 0 and hold_torque NaN (no model, so
+  // no gravity estimate), session and lease, then the generation last.
   void write_pair(
     const std::array<double, 14> & position, const std::array<double, 14> & velocity,
     const std::array<double, 14> & stiffness, const std::array<double, 14> & damping);

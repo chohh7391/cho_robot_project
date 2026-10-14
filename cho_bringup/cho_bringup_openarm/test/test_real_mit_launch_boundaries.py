@@ -441,15 +441,15 @@ def test_description_exposes_the_real_mit_plugin_contract_without_runtime_gates(
         assert f'name="{retired}"' not in source
     assert 'side="left"' in source and 'side="right"' in source and 'side="single"' in source
     # The real adapter drives the hand now, so the finger is emitted for it -
-    # but as an ordinary joint. A command interface of any MIT tuple field on
-    # the finger would let the gripper controller claim part of the arm
-    # contract, which the contract forbids.
+    # but as an ordinary joint. A command interface of any MIT tuple field, or
+    # the arm's hold_torque, on the finger would let the gripper controller
+    # claim part of the arm contract, which the contract forbids.
     assert 'name="hand"' in source
     assert 'name="gripper_motor_open"' in source
     assert '<command_interface name="max_effort"/>' in source
     finger_block = source[source.index('<xacro:macro name="one_hand_joints"'):]
     finger_block = finger_block[:finger_block.index('</xacro:macro>')]
-    for tuple_field in ('stiffness', 'damping'):
+    for tuple_field in ('stiffness', 'damping', 'hold_torque'):
         assert f'command_interface name="{tuple_field}"' not in finger_block
 
 

@@ -57,7 +57,7 @@ std::string urdf(bool bimanual, const std::string & single_side = "left")
       const auto joint = side.empty() ? "openarm_joint" + std::to_string(i) :
         "openarm_" + side + "_joint" + std::to_string(i);
       x << "<joint name='" << joint << "'>";
-      for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort"})
+      for (const auto * n : {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
         x << "<command_interface name='" << n << "'/>";
       for (const auto * n : {"position", "velocity", "effort"})
         x << "<state_interface name='" << n << "'/>";

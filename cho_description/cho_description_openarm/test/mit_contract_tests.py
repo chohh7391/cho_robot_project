@@ -52,7 +52,7 @@ def test_runtime_gains_and_safe_seed_are_fail_closed():
     assert by_symbol["kd"]["minimum"] == 0.0
     assert CONTRACT["non_finite_allowed"] is False
     assert CONTRACT["invalid_policy"] == "reject_whole_arm_command"
-    assert CONTRACT["claim_policy"] == "all_five_per_joint"
+    assert CONTRACT["claim_policy"] == "all_arm_command_interfaces"
     assert CONTRACT["safe_seed"] == {
         "q_des": "measured_position",
         "dq_des": 0.0,
@@ -61,7 +61,48 @@ def test_runtime_gains_and_safe_seed_are_fail_closed():
         # What both adapters hold with: ArmConsumer the drives' measured
         # torque, the MuJoCo limiter the torque it applied last cycle.
         "tau_ff": "measured_torque",
+        # Bounded to the producer's hold_torque only when the latch read shows
+        # motion; a latch at rest and a joint without an estimate keep the
+        # measured torque.
+        "tau_ff_bound": "hold_torque_plus_minus_safe_hold_torque_band",
+        "tau_ff_bound_when": "any_joint_measured_abs_velocity_at_least_safe_hold_motion_velocity",
+        "tau_ff_bound_needs": "finite_hold_torque_of_the_last_accepted_commit_of_the_session",
     }
+
+
+def test_hold_torque_is_a_nan_able_command_outside_the_equation():
+    # One per joint, claimed with the arm after the protocol commands. It is not
+    # one of the five MIT-equation fields and is not an "effort" interface (the
+    # MuJoCo adapter forwards claims ending in "/effort" to its base system).
+    hold = CONTRACT["hold_interface"]
+    assert hold["name"] == "hold_torque"
+    assert hold["unit"] == "N*m"
+    assert hold["none"] == "nan"
+    assert hold["bound"] == "abs_at_most_tau_ff_magnitude_else_reject_whole_arm_command"
+    assert hold["retained"] == "last_accepted_commit_of_the_session"
+    assert hold["reset"] == "nan_at_activation_and_controller_switch"
+    assert hold["name"] not in [entry["name"] for entry in CONTRACT["interfaces"]]
+    assert not hold["name"].endswith("effort")
+    assert "hold_torque" not in CONTRACT["equation"]
+    # The five fields stay finite; hold_torque's NaN is its own rule above.
+    assert CONTRACT["non_finite_allowed"] is False
+
+
+def test_claim_order_widths_and_pair_token_index():
+    assert CONTRACT["claim_order"] == ["joint_fields", "protocol_commands", "hold_torque"]
+    joints = len(CONTRACT["joint_order"]["single"])
+    fields = len(CONTRACT["interfaces"]) * joints
+    protocol = len(CONTRACT["protocol_interfaces"]["command"])
+    indices = CONTRACT["claim_indices"]
+    # Contiguous and in claim order: each block starts where the previous ends.
+    assert indices["joint_fields"] == [0, fields - 1] == [0, 34]
+    assert indices["protocol_commands"] == [fields, fields + protocol - 1] == [35, 38]
+    assert indices["hold_torque"] == [fields + protocol, fields + protocol + joints - 1] == [39, 45]
+    assert CONTRACT["claim_width"] == {"arm": 46, "paired_fjt": 93}
+    assert CONTRACT["claim_width"]["arm"] == indices["hold_torque"][1] + 1
+    # Two arms and the pair token, which is the last claim.
+    assert CONTRACT["claim_width"]["paired_fjt"] == 2 * CONTRACT["claim_width"]["arm"] + 1
+    assert CONTRACT["paired_token_index"] == CONTRACT["claim_width"]["paired_fjt"] - 1 == 92
 
 
 def test_gripper_is_not_part_of_mit_joint_order():
@@ -121,7 +162,8 @@ def test_authoritative_safety_source_and_contract_projection_do_not_drift():
         authoritative = SAFETY["profiles"][name]
         for key in ("status", "backend", "hardware_enable_allowed", "joint_limits", "gains"):
             assert projected[key] == authoritative[key]
-        for key in ("tau_ff_magnitude", "tau_ff_slew_per_s", "final_magnitude", "final_slew_per_s", "ordering"):
+        for key in ("tau_ff_magnitude", "tau_ff_slew_per_s", "final_magnitude", "final_slew_per_s",
+                    "safe_hold_torque_band", "safe_hold_motion_velocity", "ordering"):
             assert projected["torque"][key] == authoritative["torque"][key]
 
 
@@ -160,6 +202,45 @@ def test_authoritative_profile_does_not_drift_from_urdf_gains_limits_or_pinned_p
         assert all(v <= e for v, e in zip(limits, encodable))
         assert profile["torque"]["tau_ff_magnitude"] == peak
         assert profile["torque"]["final_magnitude"] == peak
+
+
+def test_safe_hold_bound_is_in_every_profile_with_the_pinned_values():
+    # band = static friction on the real profiles (the identified friction_level
+    # of cho_bringup_openarm's controllers_mit.yaml): a hold-torque error inside
+    # it stays still while below the breakaway friction. The sim has no
+    # identified friction, so its values are a separate, smaller bound.
+    friction_level = [1.0, 1.2, 0.8, 1.2, 0.25, 0.2, 0.2]
+    expected = {
+        "mujoco_sim_safe": ([0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1], 0.1),
+        "real_conservative_commissioning": (friction_level, 0.1),
+        "real_return_to_zero_commissioning": (friction_level, 0.1),
+        "real_conservative_unapproved": (None, None),
+    }
+    assert set(expected) == set(SAFETY["profiles"])
+    for source in (SAFETY["profiles"], _profiles()):
+        for name, (band, velocity) in expected.items():
+            torque = source[name]["torque"]
+            assert torque["safe_hold_torque_band"] == band, name
+            assert torque["safe_hold_motion_velocity"] == velocity, name
+
+
+def test_safe_hold_band_is_within_the_tau_ff_bound_and_motion_velocity_is_positive():
+    # The loader requires both keys of every profile it parses; the unapproved
+    # profile is rejected before parsing and carries nulls.
+    for name, profile in SAFETY["profiles"].items():
+        torque = profile["torque"]
+        if name == "real_conservative_unapproved":
+            assert torque["safe_hold_torque_band"] is None
+            assert torque["safe_hold_motion_velocity"] is None
+            continue
+        band = torque["safe_hold_torque_band"]
+        assert len(band) == 7, name
+        assert all(isfinite(value) for value in band), name
+        assert all(0.0 <= value <= bound for value, bound in zip(band, torque["tau_ff_magnitude"])), name
+        velocity = torque["safe_hold_motion_velocity"]
+        assert isfinite(velocity) and velocity > 0.0, name
+        # A threshold above the slowest joint's command velocity could never be reached.
+        assert velocity <= min(profile["joint_limits"]["command_velocity"]), name
 
 
 def test_limits_are_ordered_and_command_velocity_matches_upstream_limits():

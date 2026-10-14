@@ -63,6 +63,7 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_init(
       }
       a.limiter = std::make_unique<Limiter>(p, rate);
       a.shadow = std::make_unique<Limiter>(p, rate);
+      a.hold_torque.fill(cho_openarm_mit_core::kNoHoldTorque);
       // Nothing is accepted before the first activation, which starts a session.
       a.protocol[4] = 6;  // DISABLED
       // A switch abandoned after a successful prepare opens after one second.
@@ -95,6 +96,8 @@ std::vector<hardware_interface::CommandInterface> MitMujocoSystem::export_comman
     o.emplace_back(a.resource, "mit_lease_cycles", &a.protocol[6]);
     o.emplace_back(a.resource, "mit_commit_generation", &a.protocol[7]);
     o.emplace_back(a.resource, "mit_safe_request_generation", &a.safe_request);
+    for (std::size_t j = 0; j < N; ++j)
+      o.emplace_back(a.joints[j], cho_openarm_mit_core::kHoldTorqueInterface, &a.hold_torque[j]);
   }
   if (arms_.size() == 2)
     o.emplace_back("openarm_bimanual", "mit_pair_ownership", &pair_ownership_token_);
@@ -155,9 +158,11 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_activate(const rclcpp_lif
     // A new session starts with no producer input. A SAFE request left from
     // the previous session would read as a new one against a SAFE generation
     // back at 0, and the effort commands must read the new hold's tau_ff: a
-    // producer seeds its first commit from them.
+    // producer seeds its first commit from them. The hold torque reads NaN
+    // (none), and the limiter's reset() forgot the last one.
     a.safe_request = 0;
     for (auto & joint : a.command) joint.fill(0);
+    clear_hold_torque(i);
     publish_held_effort(i);
   }
   pair_ownership_token_ = 0;
@@ -171,7 +176,10 @@ hardware_interface::CallbackReturn MitMujocoSystem::on_deactivate(const rclcpp_l
   // As the real adapter's orderly stop: the arm is left in a measured SAFE
   // hold that keeps running (hold_without_producers()) instead of being
   // dropped. Zeroing the torque here dropped it for one cycle, after which the
-  // INACTIVE write() went on evaluating producer commits.
+  // INACTIVE write() went on evaluating producer commits. The first INACTIVE
+  // update() latches it under the limiter's rule: bounded to the last accepted
+  // commit's hold torque if that cycle's dq shows motion, else the measured
+  // torque.
   for (auto & a : arms_) {
     a.limiter->request_safe();
     a.protocol[4] = 6;  // DISABLED: no producer input is accepted
@@ -265,6 +273,9 @@ std::vector<std::string> MitMujocoSystem::filter_base_claims(
         break;
       }
     }
+    // Of the wrapper's own claims only <joint>/effort reaches the base (it owns
+    // the actuator's effort mode). <joint>/hold_torque, like stiffness and
+    // damping, exists only on this wrapper.
     const bool raw_arm_effort =
       wrapper_claim && claim.size() >= 7 && claim.substr(claim.size() - 7) == "/effort";
     if (raw_arm_effort || !wrapper_claim) out.push_back(claim);
@@ -371,8 +382,12 @@ hardware_interface::return_type MitMujocoSystem::perform_command_mode_switch(
   // Here, not in write(): controller_manager activates the incoming producer
   // right after this, and it continues its generations from the ack.
   std::array<bool, 2> fence{false, false};
-  for (std::size_t i = 0; i < arms_.size(); ++i)
+  for (std::size_t i = 0; i < arms_.size(); ++i) {
     fence[i] = arms_[i].gate.perform(start, stop, arms_[i].side);
+    // The incoming producer writes its own hold torque with its first commit;
+    // until then nothing of the outgoing one's may be submitted.
+    if (fence[i]) clear_hold_torque(i);
+  }
   discard_leftover_commits(fence);
   return result;
 }
@@ -409,6 +424,10 @@ void MitMujocoSystem::publish_held_effort(std::size_t i)
 {
   auto & a = arms_[i];
   for (std::size_t j = 0; j < N; ++j) a.command[j][4] = a.limiter->held_effort(j);
+}
+void MitMujocoSystem::clear_hold_torque(std::size_t i)
+{
+  arms_[i].hold_torque.fill(cho_openarm_mit_core::kNoHoldTorque);
 }
 hardware_interface::return_type MitMujocoSystem::write(
   const rclcpp::Time & t, const rclcpp::Duration & p)
@@ -496,9 +515,12 @@ hardware_interface::return_type MitMujocoSystem::write(
     std::array<Limiter::Tuple, N> c{};
     for (std::size_t j = 0; j < N; ++j)
       c[j] = {a.command[j][0], a.command[j][1], a.command[j][2], a.command[j][3], a.command[j][4]};
+    // The hold torque goes with the commit: the limiter validates it with the
+    // tuples and keeps it, accepted, to bound a hold latched in motion.
     if (
       !encoding ||
-      !a.shadow->submit(c, static_cast<std::uint64_t>(g), static_cast<std::uint64_t>(l))) {
+      !a.shadow->submit(
+        c, a.hold_torque, static_cast<std::uint64_t>(g), static_cast<std::uint64_t>(l))) {
       valid[i] = false;
       continue;
     }

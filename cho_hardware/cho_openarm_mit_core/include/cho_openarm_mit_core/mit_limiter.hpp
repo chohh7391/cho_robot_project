@@ -15,6 +15,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <limits>
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 namespace cho_openarm_mit_core
@@ -27,6 +28,11 @@ namespace cho_openarm_mit_core
 // (see request_safe()). The real adapter validates and rejects instead
 // (ArmConsumer); test_limiter_vs_consumer measures the difference. Only a
 // MUJOCO profile, at its own update rate, is accepted.
+//
+// The hold follows ArmConsumer's rule: latched in motion (the latching
+// cycle's dq, hold_in_motion() against the profile's
+// safe_hold_motion_velocity), its tau_ff is bounded to the hold torque of the
+// last accepted commit +/- safe_hold_torque_band (bounded_hold_torque()).
 class Limiter
 {
 public:
@@ -41,10 +47,15 @@ public:
   // the real adapter (ArmConsumer): about the gravity torque when the arm was
   // being held (an INACTIVE hold, a reactivation), zero before the first
   // activation and after a fault. The final-torque slew continues from that
-  // torque instead of restarting from zero.
+  // torque instead of restarting from zero. The hold torque is forgotten: the
+  // new session has none until its first accepted commit.
   void reset(const std::array<double, kJointsPerArm> & measured);
+  // A commit: the tuples and the producer's hold torque (NaN: none). False,
+  // and nothing changes, if any value fails its check -- a hold torque that
+  // fails valid_hold_torque() against the joint's tau_ff_magnitude included.
   bool submit(
-    const std::array<Tuple, kJointsPerArm> & requested, std::uint64_t generation,
+    const std::array<Tuple, kJointsPerArm> & requested,
+    const std::array<double, kJointsPerArm> & hold_torque, std::uint64_t generation,
     std::uint64_t lease);
   std::array<double, kJointsPerArm> update(
     const std::array<double, kJointsPerArm> & q, const std::array<double, kJointsPerArm> & dq,
@@ -56,7 +67,8 @@ public:
     last_tau_.fill(0);  // a faulted limiter commands nothing
   }
   // The next update() latches the hold: the measured position, and the torque
-  // applied in the previous cycle as tau_ff (see reset()), applied in that
+  // applied in the previous cycle as tau_ff (see reset(); bounded if that
+  // update's dq shows motion, see the class comment), applied in that
   // cycle rather than slewed to from the last accepted tau_ff. q_des moves to
   // the measured pose at once, taking the spring's share kp * (q_des - q) with
   // it, so only an immediate tau_ff keeps the output at the torque it had. A
@@ -79,10 +91,15 @@ private:
     std::array<double, kJointsPerArm> q_lo, q_hi, dq, kp, kd, kp_slew, kd_slew, safe_kp, safe_kd,
       tau_ff, tau_ff_slew, tau, tau_slew;
     std::uint64_t lease_cap;
+    std::array<double, kJointsPerArm> hold_torque_band{
+      detail::every_joint(std::numeric_limits<double>::infinity())};
+    double hold_motion_velocity{std::numeric_limits<double>::infinity()};
   };
   Limits limits_;
   std::array<Tuple, kJointsPerArm> command_{}, applied_{};
   std::array<double, kJointsPerArm> last_tau_{};
+  // The hold torque of the last accepted commit of this session (NaN: none).
+  std::array<double, kJointsPerArm> hold_torque_{detail::every_joint(kNoHoldTorque)};
   std::uint64_t ack_{0}, lease_{0}, age_{0};
   bool safe_{true}, fault_{false}, capture_safe_position_{false};
 };

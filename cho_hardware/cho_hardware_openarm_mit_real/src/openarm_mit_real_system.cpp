@@ -601,7 +601,10 @@ bool canonical_can_name(const std::string & name)
 }  // namespace
 
 OpenArmMitRealSystem::OpenArmMitRealSystem(TransportFactory factory)
-: factory_(factory ? std::move(factory) : default_factory()) {}
+: factory_(factory ? std::move(factory) : default_factory())
+{
+  reset_hold_torque_commands();
+}
 
 OpenArmMitRealSystem::~OpenArmMitRealSystem()
 {
@@ -790,10 +793,13 @@ hardware_interface::CallbackReturn OpenArmMitRealSystem::on_configure(
     // smallest wrist value would leave the DM8009 shoulder and DM4340 elbow
     // with a fraction of a N*m/rad while the hold has no gravity model.
     // The hold's tau_ff is the measured joint torque (ArmConsumer), bounded
-    // per joint by the same tau_ff_max a producer's commit is validated against.
+    // per joint by the same tau_ff_max a producer's commit is validated against;
+    // latched in motion (|dq| >= safe_hold_motion_velocity on any joint), first
+    // to the accepted commit's hold torque +/- safe_hold_torque_band.
     consumer_ = std::make_unique<cho_openarm_mit_core::ArmConsumer>(
       limits_, safety_profile_.safe_damping, safety_profile_.safe_stiffness,
-      safety_profile_.tau_ff_max);
+      safety_profile_.tau_ff_max, safety_profile_.safe_hold_torque_band,
+      safety_profile_.safe_hold_motion_velocity);
     auto candidate = factory_(transport_config_);
     if (!candidate || !candidate->initialize()) {
       return hardware_interface::CallbackReturn::ERROR;
@@ -853,6 +859,12 @@ std::vector<hardware_interface::CommandInterface> OpenArmMitRealSystem::export_c
   output.emplace_back(arm_resource_name(), "mit_lease_cycles", &protocol_[6]);
   output.emplace_back(arm_resource_name(), "mit_commit_generation", &protocol_[7]);
   output.emplace_back(arm_resource_name(), "mit_safe_request_generation", &protocol_[8]);
+  // After the protocol handles, as complete_claims() orders them; arm joints
+  // only (the finger is outside the MIT contract).
+  for (std::size_t index = 0; index < kArmDof; ++index) {
+    output.emplace_back(
+      info_.joints[index].name, cho_openarm_mit_core::kHoldTorqueInterface, &hold_torque_command_[index]);
+  }
   if (hand_) {
     output.emplace_back(gripper_joint_, "position", &gripper_command_[0]);
     // Newtons at the finger. The adapter scales it into the drive's per-unit
@@ -1207,9 +1219,12 @@ bool OpenArmMitRealSystem::finish_activation()
   // interfaces read the feed-forward the hold applies -- the torque measured
   // at the seed read -- because an incoming producer seeds its first commit
   // from them; whatever the previous session's producer left there is not it.
+  // Nor its hold torque: the consumer forgot it (configure()), and the
+  // interfaces read "no estimate" until the next producer writes one.
   for (auto & joint : command_) {
     joint.fill(0.0);
   }
+  reset_hold_torque_commands();
   publish_held_effort();
   protocol_.fill(0.0);
   protocol_[0] = static_cast<double>(consumer_->session());
@@ -1340,13 +1355,15 @@ OpenArmMitRealSystem::read(const rclcpp::Time &, const rclcpp::Duration &)
       transition_to_safe(true, "non-finite motor state");
       return hardware_interface::return_type::ERROR;
     }
-    std::array<double, kArmDof> measured{}, measured_effort{};
+    std::array<double, kArmDof> measured{}, measured_velocity{}, measured_effort{};
     for (std::size_t index = 0; index < kArmDof; ++index) {
       measured[index] = state_[index][0];
+      measured_velocity[index] = state_[index][1];
       measured_effort[index] = state_[index][2];
     }
-    // The pose and the torque a SAFE hold latched now would take.
-    consumer_->observe(measured, measured_effort);
+    // The pose and the torque a SAFE hold latched now would take, and the
+    // velocity that says whether it would be latched in motion.
+    consumer_->observe(measured, measured_velocity, measured_effort);
     if (consumer_->status() == cho_openarm_mit_core::MitStatus::ACTIVE) {
       remember_measured_fallback_hold();
     }
@@ -1437,6 +1454,9 @@ void OpenArmMitRealSystem::discard_leftover_commit()
   if (consumer_) {
     publish_held_effort();
   }
+  // And its hold torque: a commit of the incoming producer carries what that
+  // producer writes there, or no estimate, never the outgoing one's value.
+  reset_hold_torque_commands();
 }
 
 bool OpenArmMitRealSystem::dispatch_safe_hold(const bool force_new_generation)
@@ -1481,12 +1501,15 @@ void OpenArmMitRealSystem::remember_fallback_hold(
 void OpenArmMitRealSystem::remember_measured_fallback_hold()
 {
   // What a SAFE hold latched from this read would be (ArmConsumer), for the
-  // watchdog thread, which must not touch the consumer.
+  // watchdog thread, which must not touch the consumer: hold_effort_now(), the
+  // measured torque bounded to the hold torque if this read shows motion --
+  // not hold_effort(), the raw sample.
+  const auto effort = consumer_->hold_effort_now();
   std::array<cho_openarm_mit_core::JointTuple, kArmDof> hold{};
   for (std::size_t index = 0; index < kArmDof; ++index) {
     hold[index] = {
       state_[index][0], 0.0, safety_profile_.safe_stiffness[index],
-      safety_profile_.safe_damping[index], consumer_->hold_effort()[index]};
+      safety_profile_.safe_damping[index], effort[index]};
   }
   remember_fallback_hold(hold);
 }
@@ -1696,9 +1719,12 @@ bool OpenArmMitRealSystem::apply_producer_input()
   command.session_echo = protocol_[5];
   command.lease_cycles = protocol_[6];
   command.generation = protocol_[7];
+  command.hold_torque = hold_torque_command_;
   bool per_joint_limits_valid = true;
   for (std::size_t index = 0; index < kArmDof; ++index) {
     const auto & tuple = command.joints[index];
+    // The hold torque is NaN (no estimate) or inside the same per-joint
+    // tau_ff_max as the tuple's tau_ff; anything else rejects the commit.
     per_joint_limits_valid =
       per_joint_limits_valid &&
       tuple.position >= safety_profile_.position_lower[index] &&
@@ -1707,7 +1733,8 @@ bool OpenArmMitRealSystem::apply_producer_input()
       safety_profile_.command_velocity[index] &&
       tuple.stiffness <= safety_profile_.kp_max[index] &&
       tuple.damping <= safety_profile_.kd_max[index] &&
-      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index];
+      std::abs(tuple.effort) <= safety_profile_.tau_ff_max[index] &&
+      cho_openarm_mit_core::valid_hold_torque(command.hold_torque[index], safety_profile_.tau_ff_max[index]);
   }
   // A commit is evaluated once, accepted or not. A rejected one used to be
   // re-evaluated every cycle, and each rejection re-latched the SAFE hold to
@@ -1772,11 +1799,16 @@ bool OpenArmMitRealSystem::apply_producer_input()
 void OpenArmMitRealSystem::publish_held_effort()
 {
   // Every hold carries the joint torque measured when it was latched
-  // (ArmConsumer), so that is what submitted() carries in any status but
-  // ACTIVE.
+  // (ArmConsumer; bounded to the hold torque if latched in motion), so that is
+  // what submitted() carries in any status but ACTIVE.
   for (std::size_t index = 0; index < kArmDof; ++index) {
     command_[index][4] = consumer_->submitted().joints[index].effort;
   }
+}
+
+void OpenArmMitRealSystem::reset_hold_torque_commands()
+{
+  hold_torque_command_.fill(cho_openarm_mit_core::kNoHoldTorque);
 }
 
 hardware_interface::return_type OpenArmMitRealSystem::prepare_command_mode_switch(
@@ -1817,7 +1849,9 @@ hardware_interface::return_type OpenArmMitRealSystem::perform_command_mode_switc
   // this is the one place the outgoing producer's leftover commit can be
   // discarded before anything reads the ack: the incoming producer continues
   // its generations from that ack. The next write() puts the arm in SAFE again
-  // if anything ran since prepare, then evaluates commits.
+  // if anything ran since prepare, then evaluates commits. The discard also
+  // resets the effort commands to the hold's tau_ff and the hold_torque
+  // commands to NaN (an arm that is not active resets them at activation).
   if (switch_gate_.perform(start_interfaces, stop_interfaces, arm_side_) && active_.load()) {
     discard_leftover_commit();
   }
@@ -1985,12 +2019,13 @@ void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion, const bo
         state_[index] = {position[index], velocity[index], effort[index]};
       }
     }
-    std::array<double, kArmDof> measured{}, measured_effort{};
+    std::array<double, kArmDof> measured{}, measured_velocity{}, measured_effort{};
     for (std::size_t index = 0; index < kArmDof; ++index) {
       measured[index] = state_[index][0];
+      measured_velocity[index] = state_[index][1];
       measured_effort[index] = state_[index][2];
     }
-    consumer_->observe(measured, measured_effort);
+    consumer_->observe(measured, measured_velocity, measured_effort);
     if (stop_behavior_ == StopBehavior::DISABLE) {
       bool delivered = false;
       {
@@ -2002,7 +2037,8 @@ void OpenArmMitRealSystem::stop_with_final_frame(const char * occasion, const bo
         arm_resource_name().c_str(), occasion, delivered ? "" : "NOT ");
     } else {
       // A measured SAFE hold: the pose and the joint torque of this read (see
-      // ArmConsumer), with the profile's safe gains.
+      // ArmConsumer; bounded to the hold torque if this read shows motion),
+      // with the profile's safe gains.
       if (!dispatch_safe_hold(true)) {
         transition_to_safe(true, "the stop's final SAFE hold could not be sent");
         return;
@@ -2070,6 +2106,7 @@ void OpenArmMitRealSystem::close_transport() noexcept
   for (auto & joint : command_) {
     joint.fill(0.0);
   }
+  reset_hold_torque_commands();
 }
 
 hardware_interface::CallbackReturn

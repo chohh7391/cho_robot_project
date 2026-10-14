@@ -147,6 +147,19 @@ Behaviour of the current code on the real path that has not been run on hardware
   while the re-enabled arm goes through ENABLING.
 - Final-torque bound: every tuple on the bus stays within the profile's final torque; compare the
   measured joint torque with the bound (it is approximate by about `kp·|dq|·(read age + one cycle)`).
+- A SAFE latched while the arm moves, in contact or with a payload: each joint's hold torque is
+  the measured torque bounded to the producer's `hold_torque` ± `torque.safe_hold_torque_band`
+  ([Hold torque](openarm_mit_contract_v1.md#hold-torque)). With a payload in motion the hold sags by
+  at most `(|payload torque| + band + |model error|) / safe_hold_stiffness` per joint, `model error`
+  being the true gravity torque minus `hold_torque`. A latch while the joint decelerates against the
+  load reaches it: the measured torque is outside the band on the load's side, so the hold is the
+  band's edge. Check the sag against that bound. A hold error inside the band stays still only while
+  it is below the joint's breakaway friction, and the latch finds the arm moving: check the
+  motion after the latch, not the friction value alone. A SAFE latched at rest keeps the measured
+  torque and so the payload, however far it is from `hold_torque`.
+- Each joint's `|dq|` at rest on the real arm, read through the adapter: it must stay well below
+  `torque.safe_hold_motion_velocity` (0.1 rad/s), or every latch counts as in motion and an
+  unmodelled payload is supported only up to the band.
 - Drive-side `reference_offset_weight` (single arm): the null-space joint motion under a load at the
   hand, against the weight-1 behaviour.
 - `return_to_zero` on `vla_mit_controller`: it runs with the startup gains.

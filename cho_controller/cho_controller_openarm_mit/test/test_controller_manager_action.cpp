@@ -58,7 +58,7 @@ std::string urdf() {
     for (int i = 1; i <= 7; ++i) {
       x << "<joint name='openarm_" << side << "_joint" << i << "'>";
       for (const auto *n :
-           {"position", "velocity", "stiffness", "damping", "effort"})
+           {"position", "velocity", "stiffness", "damping", "effort", "hold_torque"})
         x << "<command_interface name='" << n << "'/>";
       for (const auto *n : {"position", "velocity", "effort"})
         x << "<state_interface name='" << n << "'/>";
