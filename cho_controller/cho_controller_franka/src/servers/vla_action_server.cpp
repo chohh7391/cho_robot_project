@@ -759,8 +759,9 @@ void VLAActionServer::commanded_now(const State & state, cho_vla_core::Reference
 
 void VLAActionServer::finish_goal_rt(GoalPhase terminal, State & state, const char * reason)
 {
-    // Latch the idle-hold anchors at the terminal pose; the controller's idle
-    // branch servos to *_init once is_running() turns false.
+    // Latch the idle-hold anchors at the terminal pose. The effort law's idle
+    // branch springs to *_init once is_running() turns false; the position and
+    // velocity modes hold their own reference instead (VLAController::update()).
     state.H_ee_init = state.H_ee;
     state.q_arm_init = state.q_arm;
     finish_from_rt(terminal, reason);
@@ -863,11 +864,11 @@ bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
             // when it takes effect (cho_interfaces/CONTRACT.md, Outcomes), not
             // when the arm is at rest. In position and velocity modes the
             // reference is still moving then; VLAController brings it to rest
-            // within max_joint_ref_acc and holds where it stops
-            // (write_open_loop()), and a goal accepted before it is at rest waits
-            // for it (set_reference_settling()). Frozen here, or set to the
-            // measurement, it would stop in one cycle: v/dt, 100 rad/s^2 at
-            // 0.1 rad/s and 1 ms.
+            // within the limiter's bounds, in the space it last ran, and holds
+            // where it stops (write_open_loop()), and a goal accepted before it
+            // is at rest waits for it (set_reference_settling()). Frozen here,
+            // or set to the measurement, it would stop in one cycle: v/dt,
+            // 100 rad/s^2 at 0.1 rad/s and 1 ms.
             if (step.reason == cho_vla_core::EndReason::kSucceeded &&
                 !(is_position_mode() || is_velocity_mode()))
             {

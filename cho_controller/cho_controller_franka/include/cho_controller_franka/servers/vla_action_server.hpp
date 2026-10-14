@@ -105,12 +105,13 @@ public:
     // twist (world-aligned; zero in joint space and while holding). The desired
     // joint rate goes out in State::v_arm_des. Read by the controller on the same
     // RT thread immediately after compute(), so plain members are sufficient.
+    // Between goals action_space() is the space the last one ran in, which the
+    // controller's stop at its end takes.
     cho_vla_core::ActionSpace action_space() const { return active_action_space_; }
     const Vector6d & twist_des() const { return twist_des_; }
 
-    // The reference limiter's bounds as init() configured them. Their joint
-    // part (max_joint_ref_vel, max_joint_ref_acc, max_joint_ref_jerk, the joint
-    // window) bounds VLAController's stop when a goal ends in motion.
+    // The reference limiter's bounds as init() configured them: they bound
+    // VLAController's stop when a goal ends in motion too.
     const cho_vla_core::ReferenceLimiter::Params & limiter_params() const
     {
         return session_.params().limiter;
@@ -121,9 +122,12 @@ public:
     // that ended in motion. compute() then records the anchor history and
     // returns false without stepping the session, so a goal accepted meanwhile
     // starts once the reference is at rest, holding where it stopped, and its
-    // cancel, success request and goal timeout take effect from then on. Started
-    // under a moving reference, its first followed cycle would seed the limiter
-    // at rest (HostCommand::Seed::kRest) and stop the reference in one cycle.
+    // cancel, success request and goal timeout take effect from then on.
+    // Started under a moving reference, its first cycle (kWaiting) would latch
+    // its hold at the *_des of the cycle before -- a point the reference has
+    // already passed -- and the controller would drive the reference there,
+    // stopping it in one cycle; its first followed reference would seed the
+    // limiter at rest (HostCommand::Seed::kRest) the same way.
     void set_reference_settling(bool settling) { reference_settling_ = settling; }
 
     // The EE pose and its LOCAL_WORLD_ALIGNED Jacobian (6x7, the convention of

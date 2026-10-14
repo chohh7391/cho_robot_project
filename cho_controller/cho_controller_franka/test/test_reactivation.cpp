@@ -23,8 +23,9 @@
 // The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
 // change of action space within one goal (AC8, AC11, AC18 C3). The 4th-stage
 // VLA fixes (REVIEW_FIX_PLAN S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
-// tests named AC1..AC10 further down; their expected values come from the spec
-// and from hand arithmetic, not from the controller.
+// tests named AC1..AC10 further down, and a goal that ends in motion (review S2)
+// the ones named S2_; their expected values come from the spec and from hand
+// arithmetic, not from the controller.
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1567,22 +1568,31 @@ TEST_F(VlaStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLi
   EXPECT_GT(last[6], q[steady_from][6]) << "the hold target is behind where the motion was";
 }
 
-// S2: the goal ends while joint 7 turns at 0.1 rad/s -- canceled, succeeded,
-// or past goal_timeout_sec -- in position mode (the commanded joints) and in
-// velocity mode (the commanded rates, on a mock arm that integrates them into
-// its joints). Velocity mode runs with kp_joint_vel 0, so the commanded rate is
-// the reference's own: the tracking term is continuous whatever the reference
-// does, and against the mock's two-period lag it moves the arm back by that
-// lag after any stop. As for the hold (AC2, S17), the reference comes to rest
-// inside the limiter's acceleration bound, not in one period: frozen, or pulled
-// to the measurement on success, it would stop at v / dt = 100 rad/s^2. It
-// stands where it stops: never back, put from then on, and a goal sent after it
-// holds there. The result goes out when the end takes effect, before the
-// reference is at rest (VLAActionServer::compute()).
+// S2: a goal ends while its reference moves -- canceled, succeeded, or past
+// goal_timeout_sec. Position mode reads the commanded joints; velocity mode the
+// commanded rates, on a mock arm that integrates them into its joints, with
+// kp_joint_vel 0, so the commanded rate is the reference's own: the tracking
+// term is continuous whatever the reference does, and against the mock's
+// two-period lag it moves the arm back by that lag after any stop. As for the
+// hold (AC2, S17), the reference comes to rest inside the limiter's bounds, in
+// the space the goal last ran, not in one period: frozen, or pulled to the
+// measurement on success, it would stop at v / dt = 100 rad/s^2. It stands
+// where it stops: never back, put from then on. The result goes out when the
+// end takes effect, before the reference is at rest. A goal sent while it is
+// still stopping starts once it is at rest, so the stop runs its whole course
+// and that goal's own end takes effect only then
+// (VLAActionServer::set_reference_settling()).
 class VlaEnd : public VlaStream
 {
 protected:
   enum class End {kCancel, kSuccess, kGoalTimeout};
+  using Result = std::shared_future<rclcpp_action::ClientGoalHandle<Vla>::WrappedResult>;
+  using CancelAnswer = std::shared_future<rclcpp_action::Client<Vla>::CancelResponse::SharedPtr>;
+
+  static constexpr double kRate = 0.1;               // joint 7 [rad/s]
+  static constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
+  static constexpr double kJerk = kAccelerationLimit / 0.04;  // [rad/s^3], the limiter's, max_joint_ref_jerk unset
+  static constexpr double kDt = ControllerManagerHarness::kPeriod;
 
   virtual bool velocity_mode() const {return false;}
   // [s]; 0 leaves goal_timeout_sec off.
@@ -1630,21 +1640,123 @@ protected:
     return true;
   }
 
-  void end_in_motion(const End how)
+  static bool ready(const Result & result)
   {
-    constexpr double kRate = 0.1;               // joint 7 [rad/s]
-    constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
-    constexpr double kJerk = kAccelerationLimit / 0.04;  // the limiter's, max_joint_ref_jerk unset
-    constexpr double kDt = ControllerManagerHarness::kPeriod;
-    // From kRate at zero acceleration, kRate < a^2 / j: a stop 2 sqrt(v / j)
-    // long (63 ms) and v sqrt(v / j) far (3.2 mrad); see ReferenceLimiter::come_to_rest().
-    const double stop_distance = kRate * std::sqrt(kRate / kJerk);
-    ASSERT_NO_FATAL_FAILURE(start());  // stream_timeout_sec 5: no hold while this runs
-    harness_->cycle(20);
-    auto result = client_->async_get_result(goal_);
-    const auto ended = [&result] {return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;};
+    return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+  }
 
-    std::vector<Doubles> rows;  // 10 s of constant rate, far longer than the test runs
+  // q_: the joints (position mode: as commanded). v_: velocity mode's commanded rates.
+  void sample()
+  {
+    q_.push_back(harness_->states(kJoints, "position"));
+    if (velocity_mode()) {
+      v_.push_back(harness_->states(kJoints, "velocity"));
+    }
+  }
+
+  void step()
+  {
+    tick();
+    sample();
+  }
+
+  // Joint 7's commanded rate at period k.
+  double rate(const std::size_t k) const
+  {
+    return velocity_mode() ? v_[k][6] : (q_[k][6] - q_[k - 1][6]) / kDt;
+  }
+
+  // The largest commanded acceleration and jerk over every joint, from period
+  // `from` on: differences of the commanded joints (position mode) or of the
+  // commanded rates (velocity mode).
+  double worst_acceleration(const std::size_t from) const
+  {
+    double worst = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 2); k < q_.size(); ++k) {
+      for (std::size_t j = 0; j < 7; ++j) {
+        const double a = velocity_mode()
+          ? (v_[k][j] - v_[k - 1][j]) / kDt
+          : (q_[k][j] - 2.0 * q_[k - 1][j] + q_[k - 2][j]) / (kDt * kDt);
+        worst = std::max(worst, std::abs(a));
+      }
+    }
+    return worst;
+  }
+
+  double worst_jerk(const std::size_t from) const
+  {
+    double worst = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 3); k < q_.size(); ++k) {
+      for (std::size_t j = 0; j < 7; ++j) {
+        const double jerk = velocity_mode()
+          ? (v_[k][j] - 2.0 * v_[k - 1][j] + v_[k - 2][j]) / (kDt * kDt)
+          : (q_[k][j] - 3.0 * q_[k - 1][j] + 3.0 * q_[k - 2][j] - q_[k - 3][j]) / (kDt * kDt * kDt);
+        worst = std::max(worst, std::abs(jerk));
+      }
+    }
+    return worst;
+  }
+
+  // The first period after `after` at which joint 7 is 5e-5 rad/s below its
+  // steady rate: the stop's second (the first slows it by j dt^2 / 6, 1.7e-5).
+  // 0 if none. The limiter's rate, timed in ROS seconds as a double, wobbles by
+  // ~2e-5 while it follows.
+  std::size_t slows_at(const std::size_t after) const
+  {
+    for (std::size_t k = after + 1; k < q_.size(); ++k) {
+      if (rate(k) < steady_rate_ - 5e-5) {
+        return k;
+      }
+    }
+    return 0;
+  }
+
+  // The first period after `after` at which no joint is commanded to move;
+  // q_.size() if none.
+  std::size_t rests_at(const std::size_t after) const
+  {
+    for (std::size_t k = after + 1; k < q_.size(); ++k) {
+      const double moved = velocity_mode()
+        ? max_abs_difference(v_[k], Doubles(7, 0.0)) * kDt
+        : max_abs_difference(q_[k], q_[k - 1]);
+      if (moved < 1e-12) {
+        return k;
+      }
+    }
+    return q_.size();
+  }
+
+  // The first period from `from` on at which joint 7 is behind where it was
+  // the period before; 0 if none.
+  std::size_t goes_back_at(const std::size_t from) const
+  {
+    for (std::size_t k = std::max<std::size_t>(from, 1); k < q_.size(); ++k) {
+      if (q_[k][6] - q_[k - 1][6] < -1e-12) {
+        return k;
+      }
+    }
+    return 0;
+  }
+
+  // The most any joint moves from period `from` on, from where it is then.
+  double moves_from(const std::size_t from) const
+  {
+    double moved = 0.0;
+    for (std::size_t k = from; k < q_.size(); ++k) {
+      moved = std::max(moved, max_abs_difference(q_[k], q_[from]));
+    }
+    return moved;
+  }
+
+  // A goal turning joint 7 at kRate (a 10 s chunk), run until it does, and 1 s
+  // more: the limiter closes the gap its start-up left at 10 1/s, so the rate
+  // settles well after it first reaches kRate, at steady_rate_, within 1e-4 of
+  // it. steady_from_ is the first period near it.
+  void start_turning(const double stream_timeout)
+  {
+    ASSERT_NO_FATAL_FAILURE(start(stream_timeout));
+    harness_->cycle(20);
+    std::vector<Doubles> rows;
     for (int k = 0; k < 100; ++k) {
       Doubles row(7, 0.0);
       row[6] = kRate * 0.1 * k;
@@ -1653,41 +1765,41 @@ protected:
     publish("joint", "from_anchor", "", "", rows, 0.1);
     ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
     ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
-
-    // q: the joints (position mode: as commanded). v: velocity mode's commanded rates.
-    std::vector<Doubles> q;
-    std::vector<Doubles> v;
-    const auto sample = [&] {
-        q.push_back(harness_->states(kJoints, "position"));
-        if (velocity_mode()) {
-          v.push_back(harness_->states(kJoints, "velocity"));
-        }
-      };
-    const auto step = [&] {
-        tick();
-        sample();
-      };
-    const auto rate = [&](const std::size_t k) {
-        return velocity_mode() ? v[k][6] : (q[k][6] - q[k - 1][6]) / kDt;
-      };
     sample();
-
-    // Up to speed, then 100 periods at it: the start-up transient is not what is measured.
-    std::size_t steady_from = 0;
-    for (int i = 0; i < 1000 && steady_from == 0; ++i) {
+    steady_from_ = 0;
+    for (int i = 0; i < 1000 && steady_from_ == 0; ++i) {
       step();
-      if (rate(q.size() - 1) > 0.95 * kRate) {
-        steady_from = q.size() - 1;
+      if (rate(q_.size() - 1) > 0.95 * kRate) {
+        steady_from_ = q_.size() - 1;
       }
     }
-    ASSERT_GT(steady_from, 0u) << "joint 7 never reached the chunk's rate";
-    for (int i = 0; i < 100; ++i) {
+    ASSERT_GT(steady_from_, 0u) << "joint 7 never reached the chunk's rate";
+    for (int i = 0; i < 1000; ++i) {
       step();
     }
-    ASSERT_FALSE(ended()) << "the goal ended before this test ended it, so nothing below would be tested";
-    const std::size_t ended_at = q.size() - 1;
+    steady_rate_ = rate(q_.size() - 1);
+    ASSERT_NEAR(steady_rate_, kRate, 1e-3 * kRate) << "joint 7 never settled at the chunk's rate";
+  }
 
-    std::shared_future<rclcpp_action::Client<Vla>::CancelResponse::SharedPtr> cancel;
+  // How far joint 7 goes from the stop's second period on. From v at zero
+  // acceleration, v < a^2 / j: a stop 2 sqrt(v / j) long (63 ms at kRate) and
+  // v sqrt(v / j) far (3.2 mrad), of which the first period takes v dt; see
+  // ReferenceLimiter::come_to_rest().
+  double stop_distance() const
+  {
+    return steady_rate_ * std::sqrt(steady_rate_ / kJerk) - steady_rate_ * kDt;
+  }
+
+  void end_in_motion(const End how)
+  {
+    // The goal timeout, if any, well after what start_turning() takes, and the
+    // stream out of hold until after it.
+    ASSERT_NO_FATAL_FAILURE(start_turning(goal_timeout() > 0.0 ? goal_timeout() + 3.0 : 5.0));
+    const Result result = client_->async_get_result(goal_);
+    ASSERT_FALSE(ready(result)) << "the goal ended before this test ended it, so nothing below would be tested";
+    const std::size_t ended_at = q_.size() - 1;
+
+    CancelAnswer cancel;
     switch (how) {
       case End::kCancel:
         cancel = client_->async_cancel_goal(goal_);
@@ -1699,11 +1811,11 @@ protected:
         break;
     }
     // Until the result arrives, then 300 periods more.
-    for (int i = 0; i < 5000 && !ended(); ++i) {
+    for (int i = 0; i < 10000 && !ready(result); ++i) {
       step();
     }
-    ASSERT_TRUE(ended()) << "the goal was never ended";
-    const std::size_t result_at = q.size() - 1;
+    ASSERT_TRUE(ready(result)) << "the goal was never ended";
+    const std::size_t result_at = q_.size() - 1;
     for (int i = 0; i < 300; ++i) {
       step();
     }
@@ -1723,68 +1835,215 @@ protected:
         break;
     }
 
-    // The commanded acceleration, from the steady motion on: the second
-    // difference of the commanded joints, or the difference of the commanded rates.
-    double worst_acceleration = 0.0;
-    for (std::size_t k = std::max<std::size_t>(steady_from + 100, 2); k < q.size(); ++k) {
-      for (std::size_t j = 0; j < 7; ++j) {
-        const double a = velocity_mode()
-          ? std::abs(v[k][j] - v[k - 1][j]) / kDt
-          : std::abs(q[k][j] - 2.0 * q[k - 1][j] + q[k - 2][j]) / (kDt * kDt);
-        worst_acceleration = std::max(worst_acceleration, a);
-      }
-    }
-    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(worst_acceleration));
-    EXPECT_LE(worst_acceleration, kAccelerationLimit * 1.05)
-      << "the command accelerated at " << worst_acceleration << " rad/s^2 on the way to rest";
-
-    // When the result came, and when joint 7 slowed below 1 % of its rate.
-    std::size_t slow_at = q.size() - 1;
-    for (std::size_t k = ended_at + 1; k < q.size(); ++k) {
-      if (std::abs(rate(k)) < 0.01 * kRate) {
-        slow_at = k;
-        break;
-      }
-    }
+    const double acceleration = worst_acceleration(steady_from_ + 100);
+    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(acceleration));
+    EXPECT_LE(acceleration, kAccelerationLimit * 1.05)
+      << "the command accelerated at " << acceleration << " rad/s^2 on the way to rest";
+    const std::size_t stop_at = slows_at(ended_at);
+    ASSERT_GT(stop_at, 0u) << "joint 7 never slowed";
+    // Ended at a steady rate, so at zero acceleration: the stop's jerk, from the
+    // last periods it followed on, is the limiter's own, give or take its
+    // sampling. The stop is seeded at zero acceleration, so ending while the
+    // reference accelerates would step that acceleration to zero in one period.
+    const double jerk = worst_jerk(stop_at);
+    RecordProperty("largest_command_jerk_rad_s3", std::to_string(jerk));
+    EXPECT_LE(jerk, kJerk * 1.5) << "the command's jerk reached " << jerk << " rad/s^3 on the way to rest";
+    const std::size_t rest = rests_at(stop_at);
+    ASSERT_LT(rest, q_.size()) << "joint 7 never came to rest";
     RecordProperty("periods_from_end_request_to_result", std::to_string(result_at - ended_at));
-    RecordProperty("periods_from_end_request_to_rest", std::to_string(slow_at - ended_at));
-    EXPECT_LT(result_at, slow_at) << "the result waited for the reference to come to rest";
-
-    // At rest, ahead of where the motion was when the end was asked for and
-    // within the stop's distance of where it was when the result came; never back.
-    const Doubles last = q.back();
-    EXPECT_LT(std::abs(rate(q.size() - 1)), 1e-3 * kRate) << "joint 7 is still moving";
-    std::size_t back_at = 0;
-    for (std::size_t k = steady_from + 1; k < q.size() && back_at == 0; ++k) {
-      if (q[k][6] - q[k - 1][6] < -1e-12) {
-        back_at = k;
-      }
-    }
+    RecordProperty("periods_of_the_stop", std::to_string(rest - stop_at));
+    EXPECT_LT(result_at, rest) << "the result waited for the reference to come to rest";
+    // The whole stop from kRate: neither frozen (no distance) nor running on.
+    EXPECT_NEAR(q_.back()[6] - q_[stop_at - 1][6], stop_distance(), 0.1 * stop_distance())
+      << "joint 7 did not stop as a stop from " << steady_rate_ << " rad/s does";
+    const std::size_t back_at = goes_back_at(steady_from_ + 1);
     EXPECT_EQ(back_at, 0u) << "joint 7 went backwards at period " << back_at << ", "
                            << back_at - ended_at << " after the end was asked for";
-    EXPECT_GT(last[6], q[ended_at][6]) << "the reference stopped behind where the motion was";
-    EXPECT_LT(last[6], q[result_at][6] + 1.5 * stop_distance) << "the reference ran on past its stop";
+    // Put once at rest; velocity mode's joints follow its rates two periods late.
+    EXPECT_LT(moves_from(rest + 2), 1e-12) << "the reference moved after it had come to rest";
 
     if (how != End::kCancel) {
       return;
     }
     // A goal sent now holds where the reference stopped.
+    const Doubles stopped = q_.back();
     ASSERT_NE(send(5.0), nullptr) << "the next goal was rejected";
     for (int i = 0; i < 200; ++i) {
       step();
     }
-    EXPECT_LT(max_abs_difference(q.back(), last), 1e-9) << "the next goal moved the reference from where it stopped";
+    EXPECT_LT(max_abs_difference(q_.back(), stopped), 1e-9)
+      << "the next goal moved the reference from where it stopped";
     if (velocity_mode()) {
-      EXPECT_LT(max_abs_difference(v.back(), Doubles(7, 0.0)), 1e-9) << "the next goal commands a rate while it holds";
+      EXPECT_LT(max_abs_difference(v_.back(), Doubles(7, 0.0)), 1e-9) << "the next goal commands a rate while it holds";
     }
   }
+
+  // The goal is canceled in motion and, as soon as its result is in, the next
+  // goal is sent and `next` asked for it, while the reference still slows.
+  void hand_over(const End next)
+  {
+    ASSERT_NO_FATAL_FAILURE(start_turning(5.0));
+    const Result first = client_->async_get_result(goal_);
+    const std::size_t ended_at = q_.size() - 1;
+    const CancelAnswer cancel = client_->async_cancel_goal(goal_);
+    for (int i = 0; i < 1000 && !ready(first); ++i) {
+      step();
+    }
+    ASSERT_TRUE(ready(first)) << "the goal was never canceled";
+    EXPECT_EQ(first.get().code, rclcpp_action::ResultCode::CANCELED);
+    ASSERT_GT(rate(q_.size() - 1), 0.1 * kRate)
+      << "the reference had nearly stopped when the result came, so the hand-over is not tested";
+
+    const auto next_goal = send(5.0);
+    ASSERT_NE(next_goal, nullptr) << "the next goal was rejected";
+    const Result second = client_->async_get_result(next_goal);
+    CancelAnswer next_cancel;
+    if (next == End::kCancel) {
+      next_cancel = client_->async_cancel_goal(next_goal);
+    } else {
+      ASSERT_TRUE(request_success()) << "the controller has no /franka_vla/success service";
+    }
+    const std::size_t asked_at = q_.size() - 1;
+    for (int i = 0; i < 2000 && !ready(second); ++i) {
+      step();
+    }
+    ASSERT_TRUE(ready(second)) << "the next goal was never ended";
+    const std::size_t second_at = q_.size() - 1;
+    for (int i = 0; i < 200; ++i) {
+      step();
+    }
+    const auto expected =
+      next == End::kCancel ? rclcpp_action::ResultCode::CANCELED : rclcpp_action::ResultCode::SUCCEEDED;
+    EXPECT_EQ(second.get().code, expected);
+
+    const double acceleration = worst_acceleration(steady_from_ + 100);
+    RecordProperty("largest_command_acceleration_rad_s2", std::to_string(acceleration));
+    EXPECT_LE(acceleration, kAccelerationLimit * 1.05)
+      << "the command accelerated at " << acceleration << " rad/s^2 across the hand-over";
+    const std::size_t stop_at = slows_at(ended_at);
+    ASSERT_GT(stop_at, 0u) << "joint 7 never slowed";
+    const std::size_t rest = rests_at(stop_at);
+    ASSERT_LT(rest, q_.size()) << "joint 7 never came to rest";
+    RecordProperty("periods_from_next_end_request_to_rest", std::to_string(rest - asked_at));
+    RecordProperty("periods_from_next_end_request_to_result", std::to_string(second_at - asked_at));
+    EXPECT_GT(rest, asked_at) << "the reference was at rest before the next goal's end was asked for";
+    // The stop runs its whole course, and the next goal's end takes effect after it.
+    EXPECT_NEAR(q_[rest][6] - q_[stop_at - 1][6], stop_distance(), 0.1 * stop_distance())
+      << "the next goal cut the stop short";
+    EXPECT_GT(second_at, rest) << "the next goal's end took effect before the reference was at rest";
+    EXPECT_LT(moves_from(rest), 1e-12) << "the next goal moved the reference from where it stopped";
+    const std::size_t back_at = goes_back_at(steady_from_ + 1);
+    EXPECT_EQ(back_at, 0u) << "joint 7 went backwards at period " << back_at << ", "
+                           << back_at - ended_at << " after the first end was asked for";
+  }
+
+  // The TCP moving along the base y axis at kSpeed, the orientation held, when
+  // the goal is canceled: it stops on its line within max_task_lin_acc, as the
+  // task-space hold does, rather than joint by joint, which bends it off the
+  // line and decelerates it at 2-3 m/s^2.
+  void end_task_in_motion()
+  {
+    constexpr double kSpeed = 0.05;       // [m/s]
+    constexpr double kLinearLimit = 1.0;  // [m/s^2], Franka's default max_task_lin_acc
+    ASSERT_NO_FATAL_FAILURE(start(5.0));
+    harness_->cycle(20);
+    const Pose at_hold = fr3_tcp(commanded());
+    std::vector<Doubles> rows;  // 10 s, far longer than the test runs
+    for (int k = 0; k < 100; ++k) {
+      rows.push_back(pose_row(add(at_hold.p, Vec3{0.0, kSpeed * 0.1 * k, 0.0}), at_hold.R));
+    }
+    publish("task", "absolute", "", "quaternion", rows, 0.1);
+    ASSERT_TRUE(answered(1, 0)) << "the task chunk was never answered";
+    ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "task chunk refused: " << telemetry_.last_reject;
+    const Result result = client_->async_get_result(goal_);
+
+    std::vector<Pose> tcp;
+    const auto step_tcp = [&] {
+        tick();
+        tcp.push_back(fr3_tcp(commanded()));
+      };
+    const auto speed = [&](const std::size_t k) {return norm(sub(tcp[k].p, tcp[k - 1].p)) / kDt;};
+    tcp.push_back(fr3_tcp(commanded()));
+    std::size_t steady_from = 0;
+    for (int i = 0; i < 2000 && steady_from == 0; ++i) {
+      step_tcp();
+      if (speed(tcp.size() - 1) > 0.95 * kSpeed) {
+        steady_from = tcp.size() - 1;
+      }
+    }
+    ASSERT_GT(steady_from, 0u) << "the TCP never reached the chunk's speed";
+    int steady = 0;
+    for (int i = 0; i < 3000 && steady < 20; ++i) {
+      step_tcp();
+      steady = std::abs(speed(tcp.size() - 1) - kSpeed) < 1e-4 * kSpeed ? steady + 1 : 0;
+    }
+    ASSERT_EQ(steady, 20) << "the TCP never settled at the chunk's speed";
+    ASSERT_FALSE(ready(result)) << "the goal ended before this test ended it";
+    const std::size_t ended_at = tcp.size() - 1;
+    const CancelAnswer cancel = client_->async_cancel_goal(goal_);
+    for (int i = 0; i < 1000 && !ready(result); ++i) {
+      step_tcp();
+    }
+    ASSERT_TRUE(ready(result)) << "the goal was never canceled";
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    const std::size_t result_at = tcp.size() - 1;
+    for (int i = 0; i < 1500; ++i) {
+      step_tcp();
+    }
+    // The period from which the TCP stands, its stop and the IK's settling to it over.
+    std::size_t rest = tcp.size() - 1;
+    while (rest > ended_at + 1 && speed(rest) == 0.0) {
+      --rest;
+    }
+    ++rest;
+    RecordProperty("periods_from_end_request_to_rest", std::to_string(rest - ended_at));
+    EXPECT_LT(result_at, rest) << "the result waited for the reference to come to rest";
+
+    double acceleration = 0.0;
+    for (std::size_t k = steady_from + 100; k < tcp.size(); ++k) {
+      const Vec3 second = sub(sub(tcp[k].p, tcp[k - 1].p), sub(tcp[k - 1].p, tcp[k - 2].p));
+      acceleration = std::max(acceleration, norm(second) / (kDt * kDt));
+    }
+    RecordProperty("largest_tcp_acceleration_m_s2", std::to_string(acceleration));
+    EXPECT_LE(acceleration, kLinearLimit * 1.05)
+      << "the TCP accelerated at " << acceleration << " m/s^2 on the way to rest";
+
+    // Off its line, through where it was when the end was asked for, and off its orientation.
+    const Pose & from = tcp[ended_at];
+    double off_line = 0.0;
+    double off_turn = 0.0;
+    for (std::size_t k = ended_at; k < tcp.size(); ++k) {
+      off_line = std::max(off_line, std::hypot(tcp[k].p[0] - from.p[0], tcp[k].p[2] - from.p[2]));
+      off_turn = std::max(off_turn, angle_between(tcp[k].R, from.R));
+    }
+    RecordProperty("largest_tcp_distance_off_its_line_m", std::to_string(off_line));
+    RecordProperty("largest_tcp_turn_rad", std::to_string(off_turn));
+    EXPECT_LT(off_line, 2e-5) << "the TCP left its line by " << off_line << " m while it stopped";
+    EXPECT_LT(off_turn, 1e-4) << "the TCP turned by " << off_turn << " rad while it stopped";
+
+    // At rest ahead of where it was, never back along its line, put.
+    EXPECT_GT(tcp.back().p[1], from.p[1]) << "the TCP stopped behind where the motion was";
+    std::size_t back_at = 0;
+    for (std::size_t k = steady_from + 1; k < tcp.size() && back_at == 0; ++k) {
+      if (tcp[k].p[1] - tcp[k - 1].p[1] < -1e-12) {
+        back_at = k;
+      }
+    }
+    EXPECT_EQ(back_at, 0u) << "the TCP went back along its line at period " << back_at;
+    EXPECT_LT(speed(tcp.size() - 1), 1e-9) << "the TCP is still moving";
+  }
+
+  std::vector<Doubles> q_;
+  std::vector<Doubles> v_;
+  std::size_t steady_from_{0};
+  double steady_rate_{kRate};
 };
 
 class VlaEndTimeout : public VlaEnd
 {
 protected:
-  // Long enough for start() and the chunk's ramp to speed, which run inside it.
-  double goal_timeout() const override {return 3.0;}
+  // Some 2.2 s go into start_turning() before the goal is ended.
+  double goal_timeout() const override {return 6.0;}
 };
 
 class VlaEndVelocity : public VlaEnd
@@ -1796,7 +2055,7 @@ protected:
 class VlaEndVelocityTimeout : public VlaEndVelocity
 {
 protected:
-  double goal_timeout() const override {return 3.0;}
+  double goal_timeout() const override {return 6.0;}
 };
 
 TEST_F(VlaEnd, S2_APositionGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
@@ -1814,6 +2073,9 @@ TEST_F(VlaEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAcce
 {
   end_in_motion(End::kGoalTimeout);
 }
+TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndIsCanceledThere) {hand_over(End::kCancel);}
+TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndSucceedsThere) {hand_over(End::kSuccess);}
+TEST_F(VlaEnd, S2_ATaskGoalCanceledInMotionStopsOnItsLineWithinTheTaskAccelerationLimit) {end_task_in_motion();}
 
 // AC10 (S15), Franka host: chunks 0.5 s apart with a 1 s horizon and a goal
 // stream_timeout of 0.2 s never put the host into hold while the horizon lasts;

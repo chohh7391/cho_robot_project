@@ -28,6 +28,14 @@
 namespace cho_controller {
 namespace franka {
 
+namespace {
+// A task-space end stop's q_ref_ step, once its pose stands, at which q_ref_ is
+// frozen [rad]: at 1 kHz, 1e-3 rad/s^2 for one cycle.
+constexpr double kEndStopSettledStep = 1e-9;
+// The longest it waits for that step after the pose stands [s].
+constexpr double kEndStopSettleSec = 1.0;
+}  // namespace
+
 controller_interface::InterfaceConfiguration
 VLAController::command_interface_configuration() const
 {
@@ -95,6 +103,8 @@ CallbackReturn VLAController::on_configure(
   if (!action_server_->configured()) {
     return CallbackReturn::FAILURE;
   }
+  // The end stop's bounds are the session limiter's (end_stop_).
+  end_stop_.set_params(action_server_->limiter_params());
   action_server_->attach_activity(&activity_);
 
   return CallbackReturn::SUCCESS;
@@ -197,11 +207,15 @@ controller_interface::return_type VLAController::update(
     current_kp_task_ = kp_task_;
     current_kd_task_ = kd_task_;
   } else {
-    // Idle: hold the activation pose (H_ee_init is latched at activation and
-    // again when a goal finishes).
-    state_.H_ee_des = state_.H_ee_init;
-    state_.q_arm_des = state_.q_arm_init;
-    state_.v_arm_des.setZero();
+    // Idle. Effort holds the activation pose (H_ee_init is latched at activation
+    // and again when a goal finishes). The open-loop modes hold q_ref_ and write
+    // *_des from it after write_open_loop(); until then *_des is still what the
+    // goal last asked for, which a stop at its end starts from (come_to_rest()).
+    if (control_mode_ == ControlMode::kEffort) {
+      state_.H_ee_des = state_.H_ee_init;
+      state_.q_arm_des = state_.q_arm_init;
+      state_.v_arm_des.setZero();
+    }
     current_kp_task_ = default_kp_task_;
     current_kd_task_ = default_kd_task_;
   }
@@ -379,34 +393,71 @@ void VLAController::come_to_rest(const double dt)
 {
   if (!end_stopping_) {
     // From where q_ref_ is and the rate it moved at last cycle, at zero
-    // acceleration. The joint velocity bound is raised to that rate where it is
-    // faster -- a task-space goal's joint rates are bounded by max_joint_vel, not
-    // max_joint_ref_vel -- since the seed's rate is clamped into it.
-    cho_vla_core::ReferenceLimiter::Params params = action_server_->limiter_params();
-    for (int i = 0; i < num_dof_; ++i) {
-      params.max_joint_velocity(i) = std::max(params.max_joint_velocity(i), std::abs(q_ref_rate_(i)));
-    }
-    end_stop_.set_params(params);
+    // acceleration, in the space the goal last ran (the session's hold stops
+    // there too). A task_ik_gain fault stops in joint space: task_step() is what
+    // the fault refuses.
     cho_vla_core::Reference from;
-    from.space = cho_vla_core::ActionSpace::kJoint;
+    from.space = (action_server_->action_space() == cho_vla_core::ActionSpace::kTask && !task_ik_gain_fault_)
+      ? cho_vla_core::ActionSpace::kTask : cho_vla_core::ActionSpace::kJoint;
     from.joints = q_ref_;
     from.joint_velocity = q_ref_rate_;
-    from.pose = state_.H_ee_ref;
+    if (from.space == cho_vla_core::ActionSpace::kTask) {
+      // Task space: the pose and twist task_step() tracked last cycle, the
+      // goal's last reference (update() leaves *_des alone until after this),
+      // not FK(q_ref_). The IK runs a steady error behind a moving target, which
+      // makes up for the part of each step the damped solve leaves unmapped (11 %
+      // at FR3's home pose); a stop from FK(q_ref_) would drop that error and the
+      // TCP's speed with it in one cycle.
+      from.pose = state_.H_ee_des;
+      from.twist = action_server_->twist_des();
+    } else {
+      from.pose = state_.H_ee_ref;
+    }
+    end_stop_space_ = from.space;
     end_stop_clock_ = 0.0;
+    end_stop_settling_ = 0.0;
     end_stop_.seed_with_rates(from, end_stop_clock_);
     end_stopping_ = true;
   }
-  // One nominal period per cycle, as q_ref_ advances; capped at the step the
-  // limiter takes for a clock jump, on which it would not advance at all.
-  end_stop_clock_ += std::min(dt, cho_vla_core::ReferenceLimiter::kClockRebaseSec);
+  // One nominal period per cycle, as q_ref_ advances, and well inside the step
+  // the limiter takes for a clock jump, on which it would not advance at all.
+  const double step = std::min(dt, 0.5 * cho_vla_core::ReferenceLimiter::kClockRebaseSec);
+  end_stop_clock_ += step;
   const cho_vla_core::Reference stop = end_stop_.come_to_rest(end_stop_clock_);
-  q_ref_ = stop.joints;
+  const Vector7d before = q_ref_;
+  // At rest come_to_rest() holds the pose and joints exactly, at a rate of
+  // exactly zero. A non-finite rate ends the stop as well: it would never come
+  // to rest, and the next goal waits for it (VLAActionServer::set_reference_settling()).
+  bool at_rest = false;
+  if (end_stop_space_ == cho_vla_core::ActionSpace::kTask) {
+    // As in the hold: the stop's pose is this cycle's target, its twist the
+    // feed-forward.
+    state_.H_ee_des = stop.pose;
+    q_ref_ += task_step(stop.twist, dt);
+    at_rest = !stop.twist.allFinite() || (stop.twist.array() == 0.0).all();
+  } else {
+    q_ref_ = stop.joints;
+    at_rest = !stop.joint_velocity.allFinite() || (stop.joint_velocity.array() == 0.0).all();
+  }
   FrankaBaseController::clamp_to_joint_limits(q_ref_);
   ref_fk_dirty_ = true;
-  // At rest come_to_rest() holds the position exactly, at a rate of exactly
-  // zero. A non-finite rate ends the stop as well: it would never come to rest,
-  // and the next goal waits for it (VLAActionServer::set_reference_settling()).
-  if (!stop.joint_velocity.allFinite() || (stop.joint_velocity.array() == 0.0).all()) {
+  if (at_rest && end_stop_space_ == cho_vla_core::ActionSpace::kTask) {
+    // The pose stands; task_step() still closes what is left of q_ref_'s error
+    // to it, and q_ref_ is frozen once that step is negligible: frozen sooner, a
+    // step s would end at s / dt^2 of acceleration in one cycle. A pose the IK
+    // cannot close (a joint at the window) is frozen after kEndStopSettleSec, so
+    // it does not keep the next goal waiting.
+    end_stop_settling_ += step;
+    const Vector7d moved = q_ref_ - before;
+    at_rest = !moved.allFinite() || moved.cwiseAbs().maxCoeff() <= kEndStopSettledStep ||
+      end_stop_settling_ >= kEndStopSettleSec;
+    if (at_rest) {
+      // Frozen where it was, without this cycle's step: q_ref_'s rate is then
+      // exactly zero, so write_open_loop() starts no other stop.
+      q_ref_ = before;
+    }
+  }
+  if (at_rest) {
     end_stopping_ = false;
   }
 }
@@ -449,7 +500,7 @@ void VLAController::write_open_loop(
     (action_server_ && q_ref_rate_.allFinite() && (q_ref_rate_.array() != 0.0).any()))
   {
     // Moving, and no goal drives it any more (idle, or a task_ik_gain fault):
-    // it comes to rest within the limiter's joint bounds (end_stop_).
+    // it comes to rest within the limiter's bounds (end_stop_).
     come_to_rest(dt);
   }
   // else: at rest -> q_ref_ stays frozen, holding where it is.

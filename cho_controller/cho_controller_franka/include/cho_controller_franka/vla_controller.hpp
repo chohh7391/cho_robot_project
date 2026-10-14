@@ -123,14 +123,23 @@ private:
     // Position and velocity: q_ref_ moving with no goal driving it -- the goal
     // ended (canceled, succeeded, timed out, aborted) or a task_ik_gain fault
     // stopped it -- comes to rest through this, the VLA reference limiter's
-    // come_to_rest() in joint space, instead of freezing: a v/dt step in the
-    // command (100 rad/s^2 at 0.1 rad/s and 1 ms) against libfranka's 10 rad/s^2,
-    // with franka_hardware's position and velocity rate limiters off. Seeded from
-    // q_ref_ and q_ref_rate_ at zero acceleration, bounded by the server's
-    // limiter_params() (max_joint_ref_acc, max_joint_ref_jerk, the joint
-    // window), on a clock of its own advanced by the nominal period.
+    // come_to_rest(), instead of freezing: a v/dt step in the command (100
+    // rad/s^2 at 0.1 rad/s and 1 ms) against libfranka's 10 rad/s^2, with
+    // franka_hardware's position and velocity rate limiters off. It stops in the
+    // space the goal last ran, as the session's hold does: joint space within
+    // max_joint_ref_acc per joint; task space within max_task_lin_acc and
+    // max_task_ang_acc, q_ref_ following through task_step(), so the TCP stops
+    // on its path. A task_ik_gain fault stops in joint space. Seeded at zero
+    // acceleration from q_ref_ and q_ref_rate_ (task space: the goal's last
+    // reference pose and twist, which task_step() was tracking), bounded by the
+    // server's limiter_params(), on a clock of its own advanced by the nominal
+    // period.
     cho_vla_core::ReferenceLimiter end_stop_;
+    cho_vla_core::ActionSpace end_stop_space_ {cho_vla_core::ActionSpace::kJoint};
     double end_stop_clock_ {0.0};
+    // Task space: how long the limiter's stop has stood at rest while task_step()
+    // closes the rest of q_ref_'s error to it [s].
+    double end_stop_settling_ {0.0};
     // q_ref_ follows end_stop_ while set; cleared on the cycle it is at rest.
     bool end_stopping_ {false};
 

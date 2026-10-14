@@ -341,8 +341,11 @@ and the `Session` both controllers use.
   `chunk_max_future_skew` (0.05 s) refuse a stamp that far before or after arrival
   (`last_reject: observation_too_old` / `observation_in_future`).
 - Franka `vla_controller`: `goal_timeout_sec` is 0 (off); above 0 it aborts a goal that runs
-  longer. The reference stays inside the model's joint limits (0.05 rad margin), and a stream that
-  stops brings it to rest within `max_joint_ref_acc` / `max_task_lin_acc` / `max_task_ang_acc`.
+  longer. The reference stays inside the model's joint limits (0.05 rad margin). A stream that
+  stops, and in position and velocity modes a goal that ends in motion (succeeded, canceled, timed
+  out), bring it to rest within `max_joint_ref_acc` / `max_task_lin_acc` / `max_task_ang_acc` in the
+  space it last ran; the result goes out first, and a goal accepted meanwhile starts once it is at
+  rest (cho_interfaces/CONTRACT.md, Outcomes).
   `task_ik_gain` [1/s] (50, > 0) is the task-space IK gain of the position and velocity laws; the
   first update with `task_ik_gain × period ≥ 1` logs an ERROR and holds. `null_space_damping`
   [N·m·s/rad] (0 = off) damps null-space joint velocity in the effort law's task branch and in

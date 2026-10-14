@@ -207,10 +207,17 @@ otherwise.
   controller's deactivation: it is aborted at once, with the reason in
   `message`.
 - **Canceled**: on request. The arm holds where it is when the cancel takes
-  effect, not where the goal started. Franka's `vla_controller` in position and
-  velocity modes first brings its reference to rest within its acceleration limit,
-  and holds there; the result goes out when the cancel takes effect. (The MoveIt bridge: see
+  effect, not where the goal started. (The MoveIt bridge: see
   [The MoveIt bridge](#the-moveit-bridge) for how it stops an execution.)
+- Franka's `vla_controller`, position and velocity modes, on every end but a
+  deactivation (succeeded, canceled, or aborted on `goal_timeout_sec` or a dead
+  stream): the result goes out first, on the cycle the end takes effect; the
+  reference then comes to rest within the reference limiter's bounds, in the
+  space the goal last ran, and holds where it stops. A goal accepted before then
+  starts once the reference is at rest: from a reference at the limiter's
+  velocity bound v, v/a + a/j after the end (0.3 s from the default
+  `max_joint_ref_vel`, 0.5 s from `max_task_lin_vel`), and in task space up to
+  1 s more while the IK settles onto the stopped pose.
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
 
