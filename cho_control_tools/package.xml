@@ -3,7 +3,7 @@
 <package format="3">
   <name>cho_control_tools</name>
   <version>0.0.0</version>
-  <description>Interactive action clients, VLA tools, and ROS bag plotters for Cho robots</description>
+  <description>Interactive action clients, action-chunk tools, and ROS bag plotters for Cho robots</description>
   <maintainer email="chohh7391@gmail.com">Hyunho Cho</maintainer>
   <license>Apache-2.0</license>
 
@@ -25,7 +25,7 @@
        workspaces that leave the registry out, which a declared dependency would
        make rosdep refuse. -->
   <exec_depend>python3-matplotlib</exec_depend>
-  <!-- vla/success_gui.py -->
+  <!-- action_chunk/success_gui.py -->
   <exec_depend>python3-tk</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>pinocchio</exec_depend>

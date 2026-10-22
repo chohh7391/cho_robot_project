@@ -45,7 +45,7 @@ set(MSG_FILES
   "msg/ObjectVisibility.msg"
   "msg/ObjectVisibilityArray.msg"
   "msg/PoseLog.msg"
-  "msg/VlaTelemetry.msg"
+  "msg/ChunkStreamTelemetry.msg"
 )
 
 # Action
@@ -53,7 +53,7 @@ set(ACTION_FILES
   action/JointSpace.action
   action/TaskSpace.action
   action/Gripper.action
-  action/VisionLanguageAction.action
+  action/ChunkStream.action
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

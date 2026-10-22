@@ -4,7 +4,7 @@ LAUNCH cho_bringup_openarm/bringup_mujoco_robot.launch.py ['controller_name:=mov
   ARG mujoco_mit_prototype default='false' choices=['true', 'false']
   ARG mujoco_mit_headless default='false' choices=['true', 'false']
   ARG return_to_zero default='false' choices=['true', 'false']
-  ARG mit_controller_name default='joint_position_mit_controller' choices=['joint_position_mit_controller', 'joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'vla_mit_controller', 'single_arm_follow_joint_trajectory_mit_controller', 'bimanual_follow_joint_trajectory_mit_controller']
+  ARG mit_controller_name default='joint_position_mit_controller' choices=['joint_position_mit_controller', 'joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'action_chunk_mit_controller', 'single_arm_follow_joint_trajectory_mit_controller', 'bimanual_follow_joint_trajectory_mit_controller']
   ARG mit_arm default='both_independent' choices=['left', 'right', 'both_independent', 'both']
   ARG controller_name default='joint_space_impedance_controller' choices=None
   ARG bimanual default='false' choices=['true', 'false']

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The two pure functions the Franka VLA host builds on (REVIEW_FIX S12, C19):
+// The two pure functions the Franka action-chunk host builds on (REVIEW_FIX S12, C19):
 //
 //   task_ik_step(J, error, advance, gain, dt, lambda, max_joint_step)
 //     move = advance + gain * dt * (error - advance)
@@ -122,7 +122,7 @@ TEST(TaskIkStep, AC3_TheStepIsTheDampedLeastSquaresSolutionOfTheMove)
   EXPECT_LT((dq - expected).norm(), 1e-10 * std::max(1.0, expected.norm()));
 }
 
-// AC3: converges at both periods the VLA host runs at (250 Hz Isaac, 1 kHz MuJoCo),
+// AC3: converges at both periods the action-chunk host runs at (250 Hz Isaac, 1 kHz MuJoCo),
 // with the same gain, 50 1/s. After 1 s the error is (1 - K dt)^n: 0.8^250 and
 // 0.95^1000, both below 1e-20 of the start.
 TEST(TaskIkStep, AC3_ConvergesAtDtOf4MsAnd1MsWithGain50)

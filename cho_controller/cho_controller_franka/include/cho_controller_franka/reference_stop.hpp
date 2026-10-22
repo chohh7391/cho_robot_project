@@ -17,7 +17,7 @@
 #include <Eigen/Core>
 
 #include "cho_controller_common/trajectory/motion_limits.hpp"
-#include "cho_vla_core/reference_limiter.hpp"
+#include "cho_action_chunk/reference_limiter.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -35,10 +35,10 @@ namespace franka {
 // on). libfranka's motion generator rejects such a command with a discontinuity
 // reflex, which ends the control session and, through ros2_control_node's
 // on_exit, the whole bringup. The torque controllers decelerate under their own
-// gains, and VLAController has its own end stop.
+// gains, and ActionChunkController has its own end stop.
 //
-// The stop is cho_vla_core's ReferenceLimiter::come_to_rest() in joint space,
-// seeded with the rate and acceleration the reference had, as VLAController's
+// The stop is cho_action_chunk's ReferenceLimiter::come_to_rest() in joint space,
+// seeded with the rate and acceleration the reference had, as ActionChunkController's
 // end stop is: each joint goes to rest within the joint motion limits its goals
 // are planned with (jerk a / 0.04 s where none is set), and stays inside the
 // joint window. From v at zero acceleration that takes v/a + a/j and covers
@@ -96,7 +96,7 @@ private:
   void seed_state(Vector7d & rate, Vector7d & acceleration) const;
   bool begin(const Vector7d & q, const Vector7d & rate, const Vector7d & acceleration);
 
-  cho_vla_core::ReferenceLimiter limiter_;
+  cho_action_chunk::ReferenceLimiter limiter_;
   Vector7d q_ {Vector7d::Zero()};
   // The rate over the last tracked step, and its change over the one before.
   Vector7d rate_ {Vector7d::Zero()};

@@ -6,7 +6,7 @@ It is in commissioning: the task-space controller has been run and tuned on hard
 measurements recorded next to the values in `cho_bringup_openarm/config/real/controllers_mit*.yaml`.
 Those runs used earlier code; the current controllers and adapter have not been run on hardware yet
 (to check: [Re-check on hardware](#re-check-on-hardware)).
-Not run on hardware: VLA joint chunks, and paired 14-axis MoveIt ownership, which the real bringup
+Not run on hardware: joint action chunks, and paired 14-axis MoveIt ownership, which the real bringup
 does not offer. Nothing here is a production safety approval.
 
 ## Prerequisites
@@ -71,9 +71,9 @@ torso, where each arm is its own hardware component on its own bus.
 
 - `controller_name`: one of the three direct MIT controllers
   (`launch_utils.REAL_MIT_DIRECT_CONTROLLERS`): `joint_impedance_mit_controller`
-  (default), `task_space_impedance_mit_controller`, `vla_mit_controller` (task
+  (default), `task_space_impedance_mit_controller`, `action_chunk_mit_controller` (task
   chunks; joint chunks only on the single arm, see
-  `cho_controller_openarm_mit/vla_controller.hpp`).
+  `cho_controller_openarm_mit/action_chunk_controller.hpp`).
 - `hand:=true`: the adapter also drives the gripper and a
   `cho_controller_gripper/GripperController` is spawned per selected arm
   ([Gripper](../cho_hardware/cho_hardware_openarm_mit_real/README.md#gripper)).
@@ -160,5 +160,5 @@ Behaviour of the current code on the real path that has not been run on hardware
   unmodelled payload is supported only up to the band.
 - Drive-side `reference_offset_weight` (single arm): the null-space joint motion under a load at the
   hand, against the weight-1 behaviour.
-- `return_to_zero` on `vla_mit_controller`: it runs with the startup gains.
+- `return_to_zero` on `action_chunk_mit_controller`: it runs with the startup gains.
 - The tuned task-space behaviour above: tracking and holding as recorded in the YAML comments.

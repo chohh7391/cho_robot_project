@@ -50,7 +50,7 @@ find_package(cho_controller_common REQUIRED)
 find_package(cho_controller_base REQUIRED)
 # cho_controller_common/trajectory/motion_limits_params.hpp, compiled here.
 find_package(joint_limits REQUIRED)
-find_package(cho_vla_core REQUIRED)
+find_package(cho_action_chunk REQUIRED)
 find_package(cho_interfaces REQUIRED)
 find_package(generate_parameter_library REQUIRED)
 
@@ -78,14 +78,14 @@ add_library(${PROJECT_NAME} SHARED
     src/operational_space_controller.cpp
     src/joint_space_qp_controller.cpp
     src/task_space_qp_controller.cpp
-    src/vla_controller.cpp
+    src/action_chunk_controller.cpp
     src/reference_stop.cpp
     src/torque_switch_fade.cpp
-    src/vla_session_clock.cpp
+    src/chunk_session_clock.cpp
     src/joint_rate_limiter.cpp
     # action servers
     src/servers/gripper_action_server.cpp
-    src/servers/vla_action_server.cpp
+    src/servers/action_chunk_server.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC
     include
@@ -105,7 +105,7 @@ ament_target_dependencies(${PROJECT_NAME}
     control_msgs
     cho_controller_common
     cho_controller_base
-    cho_vla_core
+    cho_action_chunk
     cho_interfaces
 )
 target_link_libraries(${PROJECT_NAME}
@@ -132,7 +132,7 @@ if(BUILD_TESTING)
     # The stop at a goal's end alone (ReferenceStop): no ROS, no model.
     ament_add_gtest(test_reference_stop test/test_reference_stop.cpp src/reference_stop.cpp)
     target_include_directories(test_reference_stop PRIVATE include)
-    ament_target_dependencies(test_reference_stop cho_controller_common cho_vla_core)
+    ament_target_dependencies(test_reference_stop cho_controller_common cho_action_chunk)
     # The torque controllers' fade across a goal's start and end (TorqueSwitchFade)
     # alone: Eigen only.
     ament_add_gtest(test_torque_switch_fade test/test_torque_switch_fade.cpp src/torque_switch_fade.cpp)
@@ -140,16 +140,16 @@ if(BUILD_TESTING)
     # The real FR3's last-stage rate limiter (JointRateLimiter) alone: Eigen only.
     ament_add_gtest(test_joint_rate_limiter test/test_joint_rate_limiter.cpp src/joint_rate_limiter.cpp)
     target_include_directories(test_joint_rate_limiter PRIVATE include ${EIGEN3_INCLUDE_DIRS})
-    # The VLA session's clock (VLASessionClock) alone: rclcpp's Time only.
-    ament_add_gtest(test_vla_session_clock test/test_vla_session_clock.cpp src/vla_session_clock.cpp)
-    target_include_directories(test_vla_session_clock PRIVATE include)
-    ament_target_dependencies(test_vla_session_clock rclcpp cho_vla_core)
+    # The chunk session's clock (ChunkSessionClock) alone: rclcpp's Time only.
+    ament_add_gtest(test_chunk_session_clock test/test_chunk_session_clock.cpp src/chunk_session_clock.cpp)
+    target_include_directories(test_chunk_session_clock PRIVATE include)
+    ament_target_dependencies(test_chunk_session_clock rclcpp cho_action_chunk)
     # The task-space QP (TaskSpaceQP) on the FR3 model, no ROS graph: links the
     # library; the URDF comes from cho_description_franka at run time.
     ament_add_gtest(test_task_space_qp_bounds test/test_task_space_qp_bounds.cpp TIMEOUT 120)
     target_link_libraries(test_task_space_qp_bounds ${PROJECT_NAME} pinocchio::pinocchio)
     ament_target_dependencies(test_task_space_qp_bounds
-        ament_index_cpp cho_controller_base cho_controller_common cho_interfaces cho_vla_core
+        ament_index_cpp cho_controller_base cho_controller_common cho_interfaces cho_action_chunk
         controller_interface hardware_interface rclcpp rclcpp_action rclcpp_lifecycle
         realtime_tools control_msgs)
 endif()

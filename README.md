@@ -23,7 +23,7 @@ cho_robot_config/     Robot/controller/action metadata registry
 cho_sensor/           Sensor stacks (Bota FT, RealSense D435, OAK-D Pro W, camera calibration)
 cho_perception/       AprilTag detections turned into robot-frame targets (cho_object_pose)
 cho_task_manager/     py_trees behaviors, tasks, and task-manager node
-cho_control_tools/    Manual action clients, VLA tools, and bag plotters
+cho_control_tools/    Manual action clients, action-chunk tools, and bag plotters
 cho_interfaces/       Project ROS messages and actions (what clients may rely on: CONTRACT.md)
 ```
 
@@ -69,8 +69,8 @@ OpenArm MIT `reach` probes and the debug shell are in
 Additional tools:
 
 ```bash
-ros2 run cho_control_tools vla_action_client --help
-ros2 run cho_control_tools vla_success_gui --help
+ros2 run cho_control_tools action_chunk_client --help
+ros2 run cho_control_tools chunk_stream_success_gui --help
 ros2 run cho_control_tools plot_joint_pos_log --help
 ros2 run cho_control_tools plot_pose_log --help
 ```
@@ -131,7 +131,7 @@ ros2 launch cho_bringup_fr5 bringup_mujoco_moveit.launch.py
 `home 0` is a diagnostic/singular pose and is not appropriate for task-space
 motion near the floor.
 
-## Tasks, VLA, and logs
+## Tasks, action chunks, and logs
 
 Task behavior trees remain in `cho_task_manager`:
 
@@ -145,8 +145,8 @@ See [docs/tasks.md](docs/tasks.md) for task requirements, including
 [docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup. The chemistry-bench
 application is on the `auto_chem` branch.
 
-VLA bridges send `cho_interfaces/ActionChunk` to `vla_controller` (Franka) or
-`vla_mit_controller` (OpenArm): [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#vla-chunks).
+Policy bridges send `cho_interfaces/ActionChunk` to `action_chunk_controller` (Franka) or
+`action_chunk_mit_controller` (OpenArm): [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#action-chunks).
 
 Controllers publish desired-versus-measured state on `/<controller>/controller_state`
 and `/<controller>/ee_state`; which ones do is in

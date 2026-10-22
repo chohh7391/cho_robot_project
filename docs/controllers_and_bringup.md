@@ -35,10 +35,10 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 | Argument | Applies to | Meaning |
 | --- | --- | --- |
 | `controller_name` | all robots | Which arm controller to activate. Must name an instance the backend's `controllers.yaml` declares. |
-| `control_mode` | Franka, OpenArm | `position` / `velocity` / `torque`; the Franka Gazebo bringup takes only `position` and `torque` (the vendor plugin applies no velocity command). The description exports **one** command interface per joint, so a controller from the wrong mode fails on a missing interface. Every controller is also told the mode (Franka's `vla_controller` runs the law of that mode). |
+| `control_mode` | Franka, OpenArm | `position` / `velocity` / `torque`; the Franka Gazebo bringup takes only `position` and `torque` (the vendor plugin applies no velocity command). The description exports **one** command interface per joint, so a controller from the wrong mode fails on a missing interface. Every controller is also told the mode (Franka's `action_chunk_controller` runs the law of that mode). |
 | `bimanual` | OpenArm | `true` selects the two-arm torso description and the `_bimanual` config. Controller instance names then carry a `left_` / `right_` prefix. |
 | `hand` | OpenArm MuJoCo, real | Spawns the gripper controller separately, so a hand fault cannot take an arm down. On the real bringup the adapter then also drives an eighth Damiao motor on the arm's CAN socket. |
-| `vla` | Franka | Activates the VLA controller path. |
+| `action_chunk` | Franka | Activates the action-chunk controller. |
 | `load_gripper` | Franka, UR, FR5 | Vendor gripper on/off. |
 | `load_ft_sensor` | Franka real, Gazebo | `true` when the Bota FT sensor sits between `fr3_link8` and the hand: the description carries its links and the controllers its mass (`config/payload_ft_sensor.yaml`; `payload.yaml` is the hand alone). Real defaults to `false`, Gazebo to `true`; the MuJoCo and Isaac models always carry the sensor. On the real robot, Desk's end-effector load has to match. |
 | `mujoco_mit_prototype` | OpenArm MuJoCo | `true` switches from the legacy controller path to the MIT path. Off by default. |
@@ -69,7 +69,7 @@ Gazebo omits the two velocity-interface ones and refuses `control_mode:=velocity
 | `joint_space_velocity_controller` | `JointSpaceVelocityController` | Joint trajectory on the velocity interface | ✓ | — | ✓ | ✓ |
 | `joint_space_position_controller` | `JointSpacePositionController` | Joint-space position | ✓ | ✓ | ✓ | ✓ |
 | `gravity_compensation_controller` | `GravityCompensationController` | Zero torque — the arm hangs on its own gravity compensation | ✓ | ✓ | ✓ | ✓ |
-| `vla_controller` | `VLAController` | Streams `ActionChunk` references; effort / position / velocity laws | ✓ | ✓ | ✓ | ✓ |
+| `action_chunk_controller` | `ActionChunkController` | Streams `ActionChunk` references; effort / position / velocity laws | ✓ | ✓ | ✓ | ✓ |
 | `ee_state_broadcaster` | `EEStateBroadcaster` | `/ee_state/pose`, `/ee_state/twist` | ✓ | ✓ | ✓ | ✓ |
 | `gripper_controller` | `GripperController` | Franka hand | ✓ | ✓ | ✓ | ✓ |
 
@@ -157,7 +157,7 @@ The hold controller a task switches to per `control_mode` is the registry's
 | --- | --- | --- | --- | --- |
 | `joint_impedance_mit_controller` | `JointImpedanceActionController` | ✓ | ✓ | `cho_interfaces/JointSpace` action |
 | `task_space_impedance_mit_controller` | `TaskSpaceImpedanceController` | ✓ | ✓ | `cho_interfaces/TaskSpace` action |
-| `vla_mit_controller` | `VlaController` | ✓ | ✓ | `cho_interfaces/VisionLanguageAction` + `ActionChunk` topic |
+| `action_chunk_mit_controller` | `ActionChunkController` | ✓ | ✓ | `cho_interfaces/ChunkStream` + `ActionChunk` topic |
 | `joint_position_mit_controller` | `JointPositionController` | ✓ (single arm) | — | `~/command` topic, `std_msgs/Float64MultiArray` of 28 (`q_des`, `dq_des`, `tau_ff`, compensation) |
 | `<side>_follow_joint_trajectory_mit_controller` | `SingleArmFollowJointTrajectoryController` | ✓ (bimanual only) | — | `control_msgs/FollowJointTrajectory`; selected as `mit_controller_name:=single_arm_follow_joint_trajectory_mit_controller` |
 | `bimanual_follow_joint_trajectory_mit_controller` | `BimanualFollowJointTrajectoryController` | ✓ (MoveIt only) | — | `control_msgs/FollowJointTrajectory` |
@@ -177,9 +177,9 @@ The three real-selectable controllers are enforced by
 `launch_utils.REAL_MIT_DIRECT_CONTROLLERS`; anything else is refused at launch
 rather than spawned.
 
-Which `ActionChunk` action spaces `vla_mit_controller` takes depends on the config's
+Which `ActionChunk` action spaces `action_chunk_mit_controller` takes depends on the config's
 `drive_side_impedance` (the real bimanual config: task chunks only); the class comment in
-[`vla_controller.hpp`](../cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/vla_controller.hpp) states the rule.
+[`action_chunk_controller.hpp`](../cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/action_chunk_controller.hpp) states the rule.
 
 ## OpenArm MIT: direct vs FJT
 
@@ -188,8 +188,8 @@ Two ways to own an arm, and they are mutually exclusive.
 | | **direct** | **FJT** |
 | --- | --- | --- |
 | What it consumes | its own reference, written as a full MIT tuple every control cycle | a pre-planned joint trajectory |
-| Driven by | `cho_interfaces` action goals (JointSpace / TaskSpace / VLA), the chunk topic, or `~/command` | `control_msgs/FollowJointTrajectory`, i.e. MoveIt |
-| Controllers | `joint_position`, `joint_impedance`, `task_space_impedance`, `vla` | `single_arm_…`, `bimanual_…` |
+| Driven by | `cho_interfaces` action goals (JointSpace / TaskSpace / ChunkStream), the chunk topic, or `~/command` | `control_msgs/FollowJointTrajectory`, i.e. MoveIt |
+| Controllers | `joint_position`, `joint_impedance`, `task_space_impedance`, `action_chunk` | `single_arm_…`, `bimanual_…` |
 | Ownership mode | `DIRECT_INDEPENDENT` | `MOVEIT_PAIRED` (paired) / `DIRECT_INDEPENDENT` (single-arm) |
 | Interfaces claimed | 46 command / 19 state, per arm | 93 command / 39 state for the pair; 46/19 for one arm |
 | Pair-ownership token | never claimed | claimed exclusively by the paired controller |
@@ -236,11 +236,11 @@ Franka, real, torque + QP (set the robot IP in
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque controller_name:=task_space_qp_controller
 ```
 
-Franka, real or MuJoCo, VLA (`vla_controller` runs the `control_mode` law):
+Franka, real or MuJoCo, action chunks (`action_chunk_controller` runs the `control_mode` law):
 
 ```bash
-ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque vla:=true
-ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque vla:=true
+ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=torque action_chunk:=true
+ros2 launch cho_bringup_franka bringup_mujoco_robot.launch.py control_mode:=torque action_chunk:=true
 ```
 
 Franka, Gazebo, position IK (`export IGN_IP=127.0.0.1` if the Gazebo window stays black):
@@ -290,13 +290,13 @@ OpenArm, MuJoCo, MIT bimanual, both arms independent:
 ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py mujoco_mit_prototype:=true control_mode:=torque bimanual:=true mit_arm:=both_independent mit_controller_name:=task_space_impedance_mit_controller
 ```
 
-OpenArm, MuJoCo, MIT VLA (the backend the OpenArm VLA path is verified on),
+OpenArm, MuJoCo, MIT action chunks (the backend the OpenArm action-chunk path is verified on),
 then an end-to-end check that streams chunks like a bridge would and asserts
 what the arm and the telemetry did:
 
 ```bash
-ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py mujoco_mit_prototype:=true control_mode:=torque mit_controller_name:=vla_mit_controller
-ros2 run cho_control_tools vla_mit_probe
+ros2 launch cho_bringup_openarm bringup_mujoco_robot.launch.py mujoco_mit_prototype:=true control_mode:=torque mit_controller_name:=action_chunk_mit_controller
+ros2 run cho_control_tools action_chunk_mit_probe
 ```
 
 OpenArm, MuJoCo, MoveIt on the right arm only:
@@ -311,10 +311,10 @@ OpenArm, MuJoCo, paired MoveIt (both arms as one transaction):
 ros2 launch cho_bringup_openarm bringup_mujoco_moveit.launch.py bimanual:=true arm:=both mujoco_mit_prototype:=true
 ```
 
-OpenArm, real, bimanual VLA (task chunks only under this config):
+OpenArm, real, bimanual action chunks (task chunks only under this config):
 
 ```bash
-ros2 launch cho_bringup_openarm bringup_real_robot.launch.py bimanual:=true controller_name:=vla_mit_controller mit_arm:=both_independent hand:=false left_can_interface:=can1 right_can_interface:=can0
+ros2 launch cho_bringup_openarm bringup_real_robot.launch.py bimanual:=true controller_name:=action_chunk_mit_controller mit_arm:=both_independent hand:=false left_can_interface:=can1 right_can_interface:=can0
 ```
 
 OpenArm, real, right arm only:
@@ -325,22 +325,22 @@ ros2 launch cho_bringup_openarm bringup_real_robot.launch.py bimanual:=true cont
 
 A behavior-tree task runs against any of these: [tasks.md](tasks.md#run).
 
-## VLA chunks
+## Action chunks
 
-`vla_controller` (Franka) and `vla_mit_controller` (OpenArm) take `cho_interfaces/ActionChunk`.
+`action_chunk_controller` (Franka) and `action_chunk_mit_controller` (OpenArm) take `cho_interfaces/ActionChunk`.
 [`ActionChunk.msg`](../cho_interfaces/msg/ActionChunk.msg) defines the fields (including
 `relative_frame`), the `rotation_type` conventions and the message versions; a bridge must be
 built against the current `cho_interfaces`.
-[`cho_vla_core/DESIGN.md`](../cho_controller/utils/cho_vla_core/DESIGN.md) describes the pipeline
+[`cho_action_chunk/DESIGN.md`](../cho_controller/utils/cho_action_chunk/DESIGN.md) describes the pipeline
 and the `Session` both controllers use.
 
 - `max_task_ang_acc` [rad/s²] bounds the angular acceleration of the task reference; 0 turns it
-  off. Default: 10 on Franka `vla_controller`, 0 on OpenArm `vla_mit_controller`.
+  off. Default: 10 on Franka `action_chunk_controller`, 0 on OpenArm `action_chunk_mit_controller`.
 - `ActionChunk.control_dt` must be positive: a chunk with `control_dt <= 0` is rejected
   (`last_reject: control_dt`), never timed from the goal's `inference_frequency`.
 - `ActionChunk.seq` is ordered per goal: a chunk whose `seq` is not 0 and not above the last one
   the goal accepted is rejected (`last_reject: stale_seq`); 0 is not checked (arrival order).
-- `last_chunk_stamp` and `playback_stamp` in `~/vla_telemetry` are ROS time on both controllers
+- `last_chunk_stamp` and `playback_stamp` in `~/chunk_stream_telemetry` are ROS time on both controllers
   (0 until set).
 - `stream_timeout_sec` (0.2 s) is the least quiet time after the last accepted chunk before the
   stream holds. A buffered horizon that outlasts it moves the hold to the horizon's end, at most
@@ -352,7 +352,7 @@ and the `Session` both controllers use.
   controller's joint-state stamp. Under `observation`, `chunk_max_observation_age` (1 s) and
   `chunk_max_future_skew` (0.05 s) refuse a stamp that far before or after arrival
   (`last_reject: observation_too_old` / `observation_in_future`).
-- Franka `vla_controller`: `goal_timeout_sec` is 0 (off); above 0 it aborts a goal that runs
+- Franka `action_chunk_controller`: `goal_timeout_sec` is 0 (off); above 0 it aborts a goal that runs
   longer. The reference stays inside the model's joint limits (0.05 rad margin). A stream that
   stops, and in position and velocity modes a goal that ends in motion (succeeded, canceled, timed
   out), bring it to rest within `max_joint_ref_acc` / `max_task_lin_acc` / `max_task_ang_acc` in the
@@ -363,7 +363,7 @@ and the `Session` both controllers use.
   [N·m·s/rad] (0 = off) damps null-space joint velocity in the effort law's task branch and in
   `task_space_impedance_controller`, through the dynamically consistent projector. No bringup
   config sets either; the null-space damping stays off until it is tried on the real arm.
-- `ros2 run cho_control_tools vla_action_client` sends relative chunks with `relative_frame: base`.
+- `ros2 run cho_control_tools action_chunk_client` sends relative chunks with `relative_frame: base`.
 
 ## Inspecting a running system
 
@@ -398,10 +398,10 @@ An OpenArm direct MIT controller's session, acknowledgement and status:
 ros2 service call /<mit_controller>/protocol_status std_srvs/srv/Trigger
 ```
 
-VLA telemetry, when a VLA controller is active:
+Chunk-stream telemetry, when a action-chunk controller is active:
 
 ```bash
-ros2 topic echo /<controller>/vla_telemetry
+ros2 topic echo /<controller>/chunk_stream_telemetry
 ```
 
 ## See also
@@ -413,4 +413,4 @@ ros2 topic echo /<controller>/vla_telemetry
 - [installation.md](installation.md) — build and simulator prerequisites
 - [multi_pc.md](multi_pc.md) — FastDDS discovery server setup
 - [cho_controller_openarm_mit/DESIGN.md](../cho_controller/cho_controller_openarm_mit/DESIGN.md) — ownership modes in detail
-- [cho_vla_core/DESIGN.md](../cho_controller/utils/cho_vla_core/DESIGN.md) — VLA chunk pipeline
+- [cho_action_chunk/DESIGN.md](../cho_controller/utils/cho_action_chunk/DESIGN.md) — action-chunk pipeline

@@ -89,7 +89,7 @@ What each package is, and where its own documentation is. `extern/` holds the pi
   command to the controller switched in with them (`live_held_motion()`), which brings it to rest.
   `testing/controller_manager_harness.hpp` steps a controller_manager on mock hardware (each arm's `test_reactivation`).
 - `cho_controller_franka` — FR3: 13 plugins ([cho_controller_franka.xml](cho_controller/cho_controller_franka/cho_controller_franka.xml)),
-  `VLAController` and the Franka hand's `GripperController` among them
+  `ActionChunkController` and the Franka hand's `GripperController` among them
   ([instances](docs/controllers_and_bringup.md#franka-fr3--cho_controller_franka)).
 - `cho_controller_fr5` — FAIRINO FR5: `JointSpacePositionController` and `TaskSpaceIKController` on `FR5BaseController`
   ([instances](docs/controllers_and_bringup.md#fairino-fr5--cho_controller_fr5)).
@@ -104,10 +104,10 @@ What each package is, and where its own documentation is. `extern/` holds the pi
 - `cho_controller_chain` — chained-control prototype: a robot-independent chainable joint impedance law and the
   JointSpace / TaskSpace reference generators in front of it; Franka MuJoCo torque, loaded by hand
   ([README.md](cho_controller/cho_controller_chain/README.md)).
-- `utils/cho_vla_core` — the VLA action-chunk pipeline, free of ROS, hosted by Franka's `vla_controller` (through
-  its `VLAActionServer`) and OpenArm's `VlaController` ([DESIGN.md](cho_controller/utils/cho_vla_core/DESIGN.md)).
-  Both hosts use `cho_vla_core::Session` (chunk ingest, the per-cycle reference, the goal's lifetime, the telemetry
-  values) and keep only their ROS adapter and control law ([DESIGN.md, Session](cho_controller/utils/cho_vla_core/DESIGN.md#session)).
+- `utils/cho_action_chunk` — the action-chunk pipeline, free of ROS, hosted by Franka's `action_chunk_controller` (through
+  its `ActionChunkServer`) and OpenArm's `ActionChunkController` ([DESIGN.md](cho_controller/utils/cho_action_chunk/DESIGN.md)).
+  Both hosts use `cho_action_chunk::Session` (chunk ingest, the per-cycle reference, the goal's lifetime, the telemetry
+  values) and keep only their ROS adapter and control law ([DESIGN.md, Session](cho_controller/utils/cho_action_chunk/DESIGN.md#session)).
 
 **cho_hardware/** — the OpenArm MIT `ros2_control` side ([protocol](docs/openarm_mit_contract_v1.md);
 the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))
@@ -119,8 +119,8 @@ the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))
   drive-protocol consumer the MuJoCo MIT bringup runs.
 - `cho_hardware_openarm_mit_test` — `FakeMitSystem`, a test-only fixture for the MIT contract.
 
-**cho_interfaces/** — messages `ActionChunk`, `VlaTelemetry`, `PoseLog`, `GripperState`, `ObjectVisibility`,
-`ObjectVisibilityArray`, `CameraVisibility`; actions `JointSpace`, `TaskSpace`, `Gripper`, `VisionLanguageAction`.
+**cho_interfaces/** — messages `ActionChunk`, `ChunkStreamTelemetry`, `PoseLog`, `GripperState`, `ObjectVisibility`,
+`ObjectVisibilityArray`, `CameraVisibility`; actions `JointSpace`, `TaskSpace`, `Gripper`, `ChunkStream`.
 What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 
 **cho_description/**
@@ -158,7 +158,7 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 `build_task_tree()`), recordings in `config/replay/<robot>/` ([README.md](cho_task_manager/config/replay/README.md)).
 Reference: [docs/tasks.md](docs/tasks.md). The chemistry-bench application is on the `auto_chem` branch.
 
-**cho_control_tools/** — interactive action clients, VLA tools (`vla_action_client`, `vla_mit_probe`) and bag
+**cho_control_tools/** — interactive action clients, action-chunk tools (`action_chunk_client`, `action_chunk_mit_probe`) and bag
 plotters ([docs/action_clients.md](docs/action_clients.md)).
 
 **cho_sensor/** (grouping directory)
@@ -194,8 +194,8 @@ golden test in CI) and `ci/check_copyright_headers.py`. **dds/** — the Fast DD
   control thread never calls `rclcpp_action`. They time a goal from the Ruckig trajectory's `getDuration()`, never
   from the goal's `duration_sec`
   ([trajectory_euclidian.hpp](cho_controller/cho_controller_common/include/cho_controller_common/trajectory/trajectory_euclidian.hpp)).
-- Which chunks OpenArm's `VlaController` accepts, and the parameters it requires at configure time:
-  its class comment ([vla_controller.hpp](cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/vla_controller.hpp)).
+- Which chunks OpenArm's `ActionChunkController` accepts, and the parameters it requires at configure time:
+  its class comment ([action_chunk_controller.hpp](cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/action_chunk_controller.hpp)).
 - New or reworked controller parameters are declared with `generate_parameter_library` (the pattern:
   [task_space_ik_controller_parameters.yaml](cho_controller/cho_controller_fr5/src/task_space_ik_controller_parameters.yaml)):
   per-parameter ranges in the YAML, checks that relate parameters in code. Under Humble `ros2 param describe` shows
@@ -225,13 +225,13 @@ A command write that a divide or an unbounded solve can reach has an `allFinite(
 `clip_torque()`: zero on a velocity interface, hold the previous command on a position interface.
 
 No package compiles with `-Ofast`: it folds `isfinite()` / `isnan()` to constants
-([cho_vla_core/DESIGN.md, Finite math](cho_controller/utils/cho_vla_core/DESIGN.md#finite-math)).
+([cho_action_chunk/DESIGN.md, Finite math](cho_controller/utils/cho_action_chunk/DESIGN.md#finite-math)).
 
 ## Task trees
 
 [docs/tasks.md](docs/tasks.md) is the reference. When writing a tree:
 - Robot facts come from the registry (`robot_config` roles, poses, holds): the action leaves and
-  `VLACompletionWaiterBehavior` have no default controller, an exclusive switch without `robot_config` raises, and
+  `ChunkStreamCompletionWaiterBehavior` have no default controller, an exclusive switch without `robot_config` raises, and
   `ControllerNames` is Franka's names only.
 - The standard root is `guarded_mission()` (a failure ends on the hold controller); shared fragments are in
   `cho_task_manager/subtrees/`.
@@ -261,7 +261,7 @@ Two PCs over Tailscale and a Fast DDS discovery server on PC1; every terminal so
   (`task_space_qp_controller`).
 - Namespaces: `cho_controller::franka`, `::fr5`, `::ur`, `::openarm` (OpenArm's joint-space family) and `::common`
   (`cho_controller_common`); everywhere else the package name: the MIT family in `cho_controller_openarm_mit`,
-  `cho_controller_gripper`, `cho_controller_base`, `cho_vla_core` and the `cho_hardware/` packages.
+  `cho_controller_gripper`, `cho_controller_base`, `cho_action_chunk` and the `cho_hardware/` packages.
 - ROS link/joint/topic/controller names are stable — configs and tests depend on them. Do not rename without
   updating all YAMLs and launch files.
 - Launch args and xacro properties: `snake_case`.

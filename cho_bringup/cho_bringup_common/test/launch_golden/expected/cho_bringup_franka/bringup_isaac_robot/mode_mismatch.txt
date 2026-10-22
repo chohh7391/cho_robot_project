@@ -1,7 +1,7 @@
 LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/robot/robot.usda', 'control_mode:=velocity']
   ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
   ARG controller_name default='task_space_impedance_controller' choices=None
-  ARG vla default='false' choices=None
+  ARG action_chunk default='false' choices=None
   ARG load_gripper default='true' choices=None
   ARG use_sim_time default='true' choices=None
   ARG bringup_type default='isaac' choices=None
@@ -29,7 +29,7 @@ LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py ['robot_usd:=<FAKE>/usd/
     param {robot_description: <description #1 fr3>}
     output='screen' on_exit=NoneType
   OPAQUE setup_control_environment
-    ERROR RuntimeError: controller_name:=task_space_impedance_controller is a torque controller, but control_mode:=velocity. Pass control_mode:=torque, or a velocity controller: ['joint_space_velocity_controller', 'task_space_velocity_controller'] (or vla:=true).
+    ERROR RuntimeError: controller_name:=task_space_impedance_controller is a torque controller, but control_mode:=velocity. Pass control_mode:=torque, or a velocity controller: ['joint_space_velocity_controller', 'task_space_velocity_controller'] (or action_chunk:=true).
 DESCRIPTION #1
   robot name='fr3'
   joint fr3_base_joint fixed base -> fr3_link0 [origin rpy='0 0 0' xyz='0 0 0']

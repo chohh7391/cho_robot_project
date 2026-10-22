@@ -51,7 +51,7 @@ using Joints = std::array<double, kJointsPerArm>;
 
 constexpr std::size_t kRate = 750;
 constexpr double kDt = 1.0 / kRate;
-// The drive-side TaskSpace and VLA gains of cho_bringup_openarm's
+// The drive-side TaskSpace and ActionChunk gains of cho_bringup_openarm's
 // config/real/controllers_mit.yaml.
 constexpr Joints kKp{32.0, 30.0, 50.0, 49.0, 15.0, 10.0, 5.0};
 constexpr Joints kKd{5.0, 5.0, 5.0, 5.0, 0.7, 0.6, 0.5};

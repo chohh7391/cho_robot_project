@@ -1,7 +1,7 @@
 LAUNCH cho_bringup_franka/bringup_isaac_robot.launch.py []
   ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
   ARG controller_name default='task_space_impedance_controller' choices=None
-  ARG vla default='false' choices=None
+  ARG action_chunk default='false' choices=None
   ARG load_gripper default='true' choices=None
   ARG use_sim_time default='true' choices=None
   ARG bringup_type default='isaac' choices=None

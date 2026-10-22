@@ -22,7 +22,7 @@
 // the second producer starts from a nonzero ack and must continue its
 // generations from it. The direct joint producers have done that since the fix
 // that ASecondProducerInTheSameSessionContinuesFromTheAck covers; TaskSpace (and
-// VLA, which inherits its update) ran a copied state machine that still tested
+// ActionChunk, which inherits its update) ran a copied state machine that still tested
 // `generation_ != 0`, so as a second producer it went ACTIVE on its first cycle
 // without committing a seed and FAULTed on its second. These tests are that
 // switch, end to end, through controller_manager and the fake consumer.
@@ -44,7 +44,7 @@
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <cho_interfaces/action/joint_space.hpp>
 #include <cho_interfaces/action/task_space.hpp>
-#include <cho_interfaces/action/vision_language_action.hpp>
+#include <cho_interfaces/action/chunk_stream.hpp>
 #include <cho_interfaces/msg/action_chunk.hpp>
 #include <gtest/gtest.h>
 #include <hardware_interface/resource_manager.hpp>
@@ -58,12 +58,12 @@
 
 #include "cho_controller_openarm_mit/direct_controller.hpp"
 #include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
-#include "cho_controller_openarm_mit/vla_controller.hpp"
+#include "cho_controller_openarm_mit/action_chunk_controller.hpp"
 
 namespace cho_controller_openarm_mit
 {
 // A friend of the controller (task_space_impedance_controller.hpp), so the test
-// can watch the startup gate. VlaController inherits it.
+// can watch the startup gate. ActionChunkController inherits it.
 struct TaskSpaceImpedanceControllerTestAccess
 {
   static bool ready(const TaskSpaceImpedanceController & controller)
@@ -278,7 +278,7 @@ protected:
       set("max_reference_offset", std::vector<double>(7, 0.15));
       set("release_duration", 0.3);
     }
-    if constexpr (std::is_same_v<cho_controller_openarm_mit::VlaController, Controller>) {
+    if constexpr (std::is_same_v<cho_controller_openarm_mit::ActionChunkController, Controller>) {
       set("chunk_topic", std::string("/second_producer/chunks"));
       set("stream_timeout_sec", 0.2);
       set("hold_timeout_sec", 0.6);
@@ -377,13 +377,13 @@ TEST_F(SecondProducer, TaskSpaceContinuesFromTheAckLeftByAnotherProducer)
   expect_drives_as_second_producer(*task, first_ack);
 }
 
-TEST_F(SecondProducer, VlaContinuesFromTheAckLeftByAnotherProducer)
+TEST_F(SecondProducer, ActionChunkContinuesFromTheAckLeftByAnotherProducer)
 {
   const double first_ack = run_first_producer();
-  auto vla = add<cho_controller_openarm_mit::VlaController>(
-    "vla", "cho_controller_openarm_mit/VlaController");
-  activate("vla");
-  expect_drives_as_second_producer(*vla, first_ack);
+  auto chunk_controller = add<cho_controller_openarm_mit::ActionChunkController>(
+    "action_chunk", "cho_controller_openarm_mit/ActionChunkController");
+  activate("action_chunk");
+  expect_drives_as_second_producer(*chunk_controller, first_ack);
 }
 
 TEST_F(SecondProducer, TheSeedKeepsTheFeedForwardTheSafeHoldIsApplying)
@@ -738,22 +738,22 @@ TEST_F(HardwareSafe, TheRunningJointSpaceGoalEndsAndNoGoalIsAcceptedAfter)
   switch_off_without_handshake("joint");
 }
 
-TEST_F(HardwareSafe, TheRunningVlaGoalEndsWithTheReason)
+TEST_F(HardwareSafe, TheRunningActionChunkGoalEndsWithTheReason)
 {
-  using VlaAction = cho_interfaces::action::VisionLanguageAction;
-  auto vla = add<cho_controller_openarm_mit::VlaController>(
-    "vla", "cho_controller_openarm_mit/VlaController");
-  activate("vla");
-  for (int i = 0; i < 600 && !Access::ready(*vla); ++i) {cycle();}
-  ASSERT_TRUE(Access::ready(*vla));
-  auto client = rclcpp_action::create_client<VlaAction>(
-    client_, std::string(kNamespace) + "/vla/vla");
+  using ChunkStreamAction = cho_interfaces::action::ChunkStream;
+  auto chunk_controller = add<cho_controller_openarm_mit::ActionChunkController>(
+    "action_chunk", "cho_controller_openarm_mit/ActionChunkController");
+  activate("action_chunk");
+  for (int i = 0; i < 600 && !Access::ready(*chunk_controller); ++i) {cycle();}
+  ASSERT_TRUE(Access::ready(*chunk_controller));
+  auto client = rclcpp_action::create_client<ChunkStreamAction>(
+    client_, std::string(kNamespace) + "/action_chunk/chunk_stream");
   ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(2)));
-  VlaAction::Goal goal;
+  ChunkStreamAction::Goal goal;
   goal.model_name = "test";
   goal.task = "move";
   goal.inference_frequency = 15.0f;
-  auto handle = send_to<VlaAction>(client, goal);
+  auto handle = send_to<ChunkStreamAction>(client, goal);
   ASSERT_TRUE(handle);
   auto chunks = client_->create_publisher<cho_interfaces::msg::ActionChunk>(
     "/second_producer/chunks", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
@@ -766,11 +766,11 @@ TEST_F(HardwareSafe, TheRunningVlaGoalEndsWithTheReason)
   chunk.arm_actions.assign(8 * 7, 0.1);
   for (int step = 0; step < 8; ++step) {chunk.arm_actions[static_cast<std::size_t>(step) * 7] = 0.6;}
   chunks->publish(chunk);
-  const auto result = result_of<VlaAction>(client, handle);
+  const auto result = result_of<ChunkStreamAction>(client, handle);
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
   ASSERT_TRUE(result.result);
   EXPECT_NE(result.result->message.find(kFaultReason), std::string::npos) << result.result->message;
-  switch_off_without_handshake("vla");
+  switch_off_without_handshake("action_chunk");
 }
 
 // ---------------------------------------------------------------------------

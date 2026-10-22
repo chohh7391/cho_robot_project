@@ -33,7 +33,7 @@ void ReferenceStop::configure(
   const cho_controller::common::trajectory::JointMotionLimits & limits,
   const Vector7d & lower, const Vector7d & upper)
 {
-  cho_vla_core::ReferenceLimiter::Params params;
+  cho_action_chunk::ReferenceLimiter::Params params;
   for (int i = 0; i < 7; ++i) {
     params.max_joint_velocity(i) = entry(limits.max_velocity, i);
     params.max_joint_acceleration(i) = entry(limits.max_acceleration, i);
@@ -68,11 +68,11 @@ void ReferenceStop::track(const Vector7d & q, const double dt)
 
 void ReferenceStop::seed_state(Vector7d & rate, Vector7d & acceleration) const
 {
-  // As VLAController::come_to_rest() seeds its end stop: the acceleration inside
+  // As ActionChunkController::come_to_rest() seeds its end stop: the acceleration inside
   // each joint's bound, zero where the limiter keeps none or the joint did not
   // move over the last step, and the rate carried half a step on, since rate_
   // is the rate at the middle of that step and q_ its end.
-  const cho_vla_core::ReferenceLimiter::Params & bounds = limiter_.params();
+  const cho_action_chunk::ReferenceLimiter::Params & bounds = limiter_.params();
   acceleration.setZero();
   for (int i = 0; i < 7; ++i) {
     const double bound = bounds.max_joint_acceleration(i);
@@ -90,14 +90,14 @@ bool ReferenceStop::begin(const Vector7d & q, const Vector7d & rate, const Vecto
   if ((rate.array() == 0.0).all() || !rate.allFinite() || !q.allFinite()) {
     return false;
   }
-  cho_vla_core::Reference from;
-  from.space = cho_vla_core::ActionSpace::kJoint;
+  cho_action_chunk::Reference from;
+  from.space = cho_action_chunk::ActionSpace::kJoint;
   from.joints = q;
   from.joint_velocity = rate;
   // seed_with_rates() takes each rate and acceleration into its bound, and a
   // non-finite acceleration as zero.
   clock_ = 0.0;
-  limiter_.seed_with_rates(from, acceleration, cho_vla_core::Vector6::Zero(), clock_);
+  limiter_.seed_with_rates(from, acceleration, cho_action_chunk::Vector6::Zero(), clock_);
   q_ = q;
   stopping_ = true;
   return true;
@@ -140,12 +140,12 @@ const ReferenceStop::Vector7d & ReferenceStop::step(const double dt)
 {
   // Well inside the step the limiter takes for a clock jump, on which it would
   // not advance at all.
-  const double step = std::min(dt, 0.5 * cho_vla_core::ReferenceLimiter::kClockRebaseSec);
+  const double step = std::min(dt, 0.5 * cho_action_chunk::ReferenceLimiter::kClockRebaseSec);
   if (!(step > 0.0)) {
     return q_;
   }
   clock_ += step;
-  const cho_vla_core::Reference stop = limiter_.come_to_rest(clock_);
+  const cho_action_chunk::Reference stop = limiter_.come_to_rest(clock_);
   // At rest come_to_rest() holds the joints exactly, at a rate of exactly zero.
   // A non-finite one ends the stop too: it would never come to rest, and the
   // host's next goal waits for it.

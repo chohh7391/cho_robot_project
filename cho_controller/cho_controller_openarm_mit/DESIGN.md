@@ -13,7 +13,7 @@ plugin lookup name is `cho_controller_openarm_mit/<Class>` (`controller_plugins.
 | Library | Namespace | Classes | Links `cho_controller_common` |
 | --- | --- | --- | --- |
 | `cho_controller_openarm_shared` | `cho_controller::openarm` | `EEStateBroadcaster`, `JointSpaceImpedanceController`, `JointSpacePositionController`, `JointSpaceVelocityController` (all `OpenArmBaseController`) | yes |
-| `cho_controller_openarm_mit` | `cho_controller_openarm_mit` | the MIT drive-protocol producers: `DirectControllerBase` and its `JointPosition`/`JointVelocity`/`JointImpedance`/`DirectTorque`/`DampedTorque`/`CompensatedTorque` controllers, `JointImpedanceActionController`, `TaskSpaceImpedanceController`, `VlaController`; `BimanualFollowJointTrajectoryController` and `SingleArmFollowJointTrajectoryController` | no |
+| `cho_controller_openarm_mit` | `cho_controller_openarm_mit` | the MIT drive-protocol producers: `DirectControllerBase` and its `JointPosition`/`JointVelocity`/`JointImpedance`/`DirectTorque`/`DampedTorque`/`CompensatedTorque` controllers, `JointImpedanceActionController`, `TaskSpaceImpedanceController`, `ActionChunkController`; `BimanualFollowJointTrajectoryController` and `SingleArmFollowJointTrajectoryController` | no |
 
 The `cho_controller::openarm` classes use dynamic-size Eigen and name-based Pinocchio indexing, so one
 class serves the single arm and either arm of the bimanual torso. They speak position/velocity/effort,
@@ -196,7 +196,7 @@ moves.
 
 | Producer | `hold_torque` |
 | --- | --- |
-| `TaskSpaceImpedanceController`, `VlaController` (task and joint chunks) | `gravity_scale * gravity_joint_scale[i] * g_i(q)` |
+| `TaskSpaceImpedanceController`, `ActionChunkController` (task and joint chunks) | `gravity_scale * gravity_joint_scale[i] * g_i(q)` |
 | `JointImpedanceActionController` | `g_i(q)` |
 | raw-topic producers (`JointPosition` ... `CompensatedTorque`) | NaN |
 | `BimanualFollowJointTrajectoryController`, `SingleArmFollowJointTrajectoryController` | NaN |
@@ -222,7 +222,7 @@ on the fake consumer (the FollowJointTrajectory row on the paired controller).
 ## Action contract of the direct and TaskSpace producers
 
 The JointSpace server of `JointImpedanceActionController` and the TaskSpace server of
-`TaskSpaceImpedanceController` follow `cho_interfaces/CONTRACT.md`; VLA follows it for its own
+`TaskSpaceImpedanceController` follow `cho_interfaces/CONTRACT.md`; ActionChunk follows it for its own
 action. (The FollowJointTrajectory controllers keep FollowJointTrajectory's semantics, which MoveIt
 relies on: a new goal preempts the running one through a SAFE handshake.)
 
@@ -249,7 +249,7 @@ relies on: a new goal preempts the running one through a SAFE handshake.)
   only drives where the hardware holds the arm in SAFE. There is no in-place `clear_fault`; see
   `docs/openarm_mit_contract_v1.md`, "Leaving FAULT". `~/request_safe_stop` on a faulted producer
   says how to recover.
-- **No non-RT callback reads the loaned state interfaces.** `~/protocol_status` (Direct/TaskSpace/VLA)
+- **No non-RT callback reads the loaned state interfaces.** `~/protocol_status` (Direct/TaskSpace/ActionChunk)
   and the FollowJointTrajectory goal check read snapshots that `on_activate()` and `update()` publish
   (`protocol_snapshot_`, `measured_snapshot_`): a deactivation releases the loans on the control
   thread while the executor may be mid-callback.
@@ -262,7 +262,7 @@ relies on: a new goal preempts the running one through a SAFE handshake.)
 clock (`action_control_time_`) and the start-up and hand-off timers by adding the measured `period`
 only when it is finite and in `(0, 0.1)` s; a zero, negative, non-finite or longer period advances
 none of them. The model feed-forward slew and the Cartesian idle-release blend of
-`TaskSpaceImpedanceController` and `VlaController` instead take `bounded_dt()`
+`TaskSpaceImpedanceController` and `ActionChunkController` instead take `bounded_dt()`
 (`task_space_impedance_controller.cpp`), the gripper controller's rule: the measured period capped
 at 0.1 s, and 0 for a zero, negative or non-finite one, so neither moves on a cycle in which no time
 passed.

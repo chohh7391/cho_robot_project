@@ -1,0 +1,254 @@
+// Copyright 2026 Hyunho Cho
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "cho_action_chunk/chunk_validator.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+namespace cho_action_chunk
+{
+namespace
+{
+bool all_finite(const std::vector<double> & values)
+{
+  return std::all_of(
+    values.begin(), values.end(), [](const double v) {return std::isfinite(v);});
+}
+
+bool is_permutation(const std::vector<std::size_t> & order)
+{
+  if (order.size() != kJoints) {return false;}
+  bool seen[kJoints] = {};
+  for (const std::size_t index : order) {
+    if (index >= kJoints || seen[index]) {return false;}
+    seen[index] = true;
+  }
+  return true;
+}
+
+// Column of waypoint `step` feeding canonical joint `joint`.
+std::size_t source_column(const Chunk & chunk, const std::size_t joint)
+{
+  return chunk.joint_order.empty() ? joint : chunk.joint_order[joint];
+}
+
+bool is_known(const RelativeFrame frame)
+{
+  return frame == RelativeFrame::kEe || frame == RelativeFrame::kBase;
+}
+
+// Apply one relative task delta to `origin` (the anchor for kFromAnchor, the
+// previous waypoint for kPerStep). See RelativeFrame for the two conventions.
+// validate() has already refused any other enum value.
+//
+// No re-orthonormalisation: every decoded dR is orthonormal to rounding, and a
+// chain restarts from the anchor every chunk, so the drift is chunk_size
+// products of rounding error -- the same as the kEe path has always had.
+SE3 compose(const SE3 & origin, const SE3 & delta, const RelativeFrame frame)
+{
+  if (frame == RelativeFrame::kBase) {
+    // Root-frame delta: translate along the root axes and rotate about
+    // root-aligned axes through the tool point, so the position is unaffected by
+    // the rotation. This is not delta * origin, which would swing the position
+    // about the root origin as well.
+    const Eigen::Matrix3d rotation = delta.rotation() * origin.rotation();
+    const Eigen::Vector3d translation = origin.translation() + delta.translation();
+    return SE3(rotation, translation);
+  }
+  // kEe: body-frame composition, the delta expressed in the frame it is applied
+  // to (p + R * dp, R * dR).
+  return origin * delta;
+}
+}  // namespace
+
+Reject validate(const Chunk & chunk, const ValidationLimits & limits)
+{
+  if (!std::isfinite(chunk.t_obs)) {return Reject::kNonFiniteStamp;}
+  if (std::isfinite(chunk.t_arrival)) {
+    // Written so a NaN limit compares false and checks nothing.
+    if (chunk.t_obs > chunk.t_arrival + limits.max_future_skew) {
+      return Reject::kObservationInFuture;
+    }
+    if (chunk.t_arrival - chunk.t_obs > limits.max_observation_age) {
+      return Reject::kObservationTooOld;
+    }
+  }
+  if (chunk.chunk_size <= 0) {return Reject::kChunkSize;}
+  if (!std::isfinite(chunk.control_dt) || chunk.control_dt <= 0.0 ||
+    chunk.control_dt > limits.max_control_dt)
+  {
+    return Reject::kControlDt;
+  }
+  if (limits.check_seq && chunk.seq <= limits.last_seq) {return Reject::kStaleSeq;}
+  if (!chunk.joint_order.empty() && !is_permutation(chunk.joint_order)) {
+    return Reject::kJointOrder;
+  }
+
+  const std::size_t steps = static_cast<std::size_t>(chunk.chunk_size);
+  const bool joint_space = chunk.space == ActionSpace::kJoint;
+  // Check the rotation BLOCK size, not the waypoint size. An out-of-range enum
+  // value gives rotation_dim() == 0, but task_waypoint_dim() adds the three
+  // translation components on top, so a guard on the waypoint size would never
+  // fire -- and the historical undefined-behaviour path is exactly a rotation
+  // whose dimension could not be resolved.
+  if (!joint_space && rotation_dim(chunk.rotation) == 0) {return Reject::kRotationType;}
+  // Same idea for the frame: the hosts parse it with parse_relative_frame(),
+  // which can only produce a known value, so anything else is a host bug. It is
+  // refused in every space and mode, including those that do not read it, so a
+  // bad value cannot ride along on a joint chunk unnoticed.
+  if (!is_known(chunk.relative_frame)) {return Reject::kUnparseableField;}
+  const std::size_t dim = joint_space ? kJoints : task_waypoint_dim(chunk.rotation);
+  if (chunk.arm_actions.size() != steps * dim) {return Reject::kSizeMismatch;}
+  if (!all_finite(chunk.arm_actions)) {return Reject::kNonFinite;}
+
+  if (!chunk.arm_velocities.empty()) {
+    // Joint space only -- see Chunk::arm_velocities.
+    if (chunk.space != ActionSpace::kJoint ||
+      chunk.arm_velocities.size() != steps * kJoints)
+    {
+      return Reject::kVelocitySize;
+    }
+    if (!all_finite(chunk.arm_velocities)) {return Reject::kNonFinite;}
+  }
+
+  if (!chunk.gripper_actions.empty()) {
+    if (chunk.gripper_actions.size() != steps) {return Reject::kGripperSize;}
+    if (!all_finite(chunk.gripper_actions)) {return Reject::kNonFinite;}
+  }
+
+  return Reject::kNone;
+}
+
+Reject decode(
+  const Chunk & chunk, const Anchor & anchor, const ValidationLimits & limits,
+  std::vector<Waypoint> & out)
+{
+  const std::size_t steps = static_cast<std::size_t>(chunk.chunk_size);
+  const bool joint_space = chunk.space == ActionSpace::kJoint;
+  const std::size_t dim = joint_space ? kJoints : task_waypoint_dim(chunk.rotation);
+
+  std::vector<Waypoint> decoded;
+  decoded.reserve(steps);
+
+  // kPerStep accumulators. They start at the anchor and integrate, so the chunk
+  // is a path rather than a set of independent offsets.
+  Vector7 joint_accumulator = anchor.joints;
+  SE3 pose_accumulator = anchor.pose;
+
+  for (std::size_t step = 0; step < steps; ++step) {
+    const double * row = chunk.arm_actions.data() + step * dim;
+    Waypoint waypoint;
+    waypoint.t = chunk.t_obs + static_cast<double>(step) * chunk.control_dt;
+
+    if (joint_space) {
+      Vector7 raw;
+      for (std::size_t joint = 0; joint < kJoints; ++joint) {
+        raw(static_cast<Eigen::Index>(joint)) = row[source_column(chunk, joint)];
+      }
+      switch (chunk.relative) {
+        case RelativeMode::kAbsolute:
+          waypoint.joints = raw;
+          break;
+        case RelativeMode::kFromAnchor:
+          waypoint.joints = anchor.joints + raw;
+          break;
+        case RelativeMode::kPerStep:
+          joint_accumulator += raw;
+          waypoint.joints = joint_accumulator;
+          break;
+      }
+      if (limits.check_joint_window) {
+        for (Eigen::Index joint = 0; joint < static_cast<Eigen::Index>(kJoints); ++joint) {
+          if (waypoint.joints(joint) < limits.joint_lower(joint) ||
+            waypoint.joints(joint) > limits.joint_upper(joint))
+          {
+            return Reject::kJointWindow;
+          }
+        }
+      }
+      if (!chunk.arm_velocities.empty()) {
+        const double * velocity_row = chunk.arm_velocities.data() + step * kJoints;
+        for (std::size_t joint = 0; joint < kJoints; ++joint) {
+          waypoint.joint_velocity(static_cast<Eigen::Index>(joint)) =
+            velocity_row[source_column(chunk, joint)];
+        }
+        waypoint.has_joint_velocity = true;
+      }
+      // Keep the pose field meaningful for a joint chunk: hosts that log both
+      // representations would otherwise read an identity pose.
+      waypoint.pose = anchor.pose;
+    } else {
+      Eigen::Matrix3d rotation;
+      if (!decode_rotation(row + 3, chunk.rotation, rotation)) {
+        return Reject::kDegenerateRotation;
+      }
+      const SE3 raw(rotation, Eigen::Vector3d(row[0], row[1], row[2]));
+      switch (chunk.relative) {
+        case RelativeMode::kAbsolute:
+          waypoint.pose = raw;
+          break;
+        case RelativeMode::kFromAnchor:
+          // kEe: p_a + R_a * dp, R_a * dR.  kBase: p_a + dp, dR * R_a.
+          waypoint.pose = compose(anchor.pose, raw, chunk.relative_frame);
+          break;
+        case RelativeMode::kPerStep:
+          // The same composition, applied to the previous waypoint each step.
+          pose_accumulator = compose(pose_accumulator, raw, chunk.relative_frame);
+          waypoint.pose = pose_accumulator;
+          break;
+      }
+      if (limits.check_workspace) {
+        const Eigen::Vector3d & translation = waypoint.pose.translation();
+        for (Eigen::Index axis = 0; axis < 3; ++axis) {
+          if (translation(axis) < limits.workspace_min(axis) ||
+            translation(axis) > limits.workspace_max(axis))
+          {
+            return Reject::kWorkspace;
+          }
+        }
+      }
+      waypoint.joints = anchor.joints;
+    }
+
+    if (!chunk.gripper_actions.empty()) {
+      const double raw_gripper = chunk.gripper_actions[step];
+      waypoint.gripper = (chunk.gripper_mode == GripperMode::kContinuous)
+        ? std::clamp(raw_gripper, 0.0, 1.0)
+        : raw_gripper;
+      waypoint.has_gripper = true;
+      waypoint.gripper_mode = chunk.gripper_mode;
+    }
+
+    decoded.push_back(waypoint);
+  }
+
+  out = std::move(decoded);
+  return Reject::kNone;
+}
+
+Reject ingest(
+  const Chunk & chunk, const Anchor & anchor, const ValidationLimits & limits,
+  std::vector<Waypoint> & out)
+{
+  const Reject structural = validate(chunk, limits);
+  if (structural != Reject::kNone) {return structural;}
+  std::vector<Waypoint> staged;
+  const Reject resolved = decode(chunk, anchor, limits, staged);
+  if (resolved != Reject::kNone) {return resolved;}
+  out = std::move(staged);
+  return Reject::kNone;
+}
+
+}  // namespace cho_action_chunk

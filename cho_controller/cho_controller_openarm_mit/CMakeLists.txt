@@ -32,7 +32,7 @@ find_package(Eigen3 REQUIRED)
 find_package(controller_interface REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(cho_interfaces REQUIRED)
-find_package(cho_vla_core REQUIRED)
+find_package(cho_action_chunk REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -50,12 +50,12 @@ add_library(${PROJECT_NAME} SHARED
   src/single_arm_fjt_controller.cpp
   src/direct_controller.cpp
   src/task_space_impedance_controller.cpp
-  src/vla_controller.cpp)
+  src/action_chunk_controller.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(${PROJECT_NAME}
-  cho_controller_base cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
+  cho_controller_base cho_openarm_mit_core cho_action_chunk controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
   std_srvs trajectory_msgs)
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
@@ -73,7 +73,7 @@ target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
 # since been removed.)
 #
 # Never compile with -Ofast: these carry isfinite() guards, which
-# -ffinite-math-only folds to true. See cho_vla_core/DESIGN.md, "Finite math".
+# -ffinite-math-only folds to true. See cho_action_chunk/DESIGN.md, "Finite math".
 set(OPENARM_SHARED_LIB cho_controller_openarm_shared)
 add_library(${OPENARM_SHARED_LIB} SHARED
   src/base_controller.cpp
@@ -151,12 +151,12 @@ if(BUILD_TESTING)
   target_compile_definitions(test_impedance_action_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
-  ament_add_gtest(test_vla_controller test/test_vla_controller.cpp TIMEOUT 120)
-  target_link_libraries(test_vla_controller ${PROJECT_NAME})
-  ament_target_dependencies(test_vla_controller
+  ament_add_gtest(test_action_chunk_controller test/test_action_chunk_controller.cpp TIMEOUT 120)
+  target_link_libraries(test_action_chunk_controller ${PROJECT_NAME})
+  ament_target_dependencies(test_action_chunk_controller
     cho_hardware_openarm_mit_test controller_manager controller_manager_msgs hardware_interface
     rclcpp rclcpp_action cho_interfaces std_srvs)
-  target_compile_definitions(test_vla_controller PRIVATE
+  target_compile_definitions(test_action_chunk_controller PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
   ament_add_gtest(test_producer_contract test/test_producer_contract.cpp TIMEOUT 120)
@@ -177,7 +177,7 @@ if(BUILD_TESTING)
   target_compile_definitions(test_hold_torque_producers PRIVATE
     OPENARM_SAFETY_PROFILE_SOURCE="${OPENARM_DESCRIPTION_SHARE}/config/mit_safety_profiles_v1.yaml")
 
-  # A real producer (VlaController) on the fake consumer: the hold a SAFE latch
+  # A real producer (ActionChunkController) on the fake consumer: the hold a SAFE latch
   # builds in motion (bounded by the producer's last accepted h) and at rest.
   ament_add_gtest(test_hold_torque_end_to_end test/test_hold_torque_end_to_end.cpp TIMEOUT 120)
   target_link_libraries(test_hold_torque_end_to_end ${PROJECT_NAME})
@@ -227,7 +227,7 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_dependencies(
-  cho_openarm_mit_core cho_vla_core controller_interface control_msgs cho_interfaces hardware_interface
+  cho_openarm_mit_core cho_action_chunk controller_interface control_msgs cho_interfaces hardware_interface
   pinocchio pluginlib rclcpp rclcpp_action rclcpp_lifecycle realtime_tools std_msgs
   std_srvs trajectory_msgs
   ament_index_cpp cho_controller_common geometry_msgs)

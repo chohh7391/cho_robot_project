@@ -4,7 +4,7 @@ LAUNCH cho_bringup_franka/bringup_gz_robot.launch.py ['control_mode:=position', 
   ARG robot_type default='fr3' choices=None
   ARG namespace default='' choices=None
   ARG use_sim_time default='true' choices=None
-  ARG vla default='false' choices=None
+  ARG action_chunk default='false' choices=None
   ARG robot_name default='franka_robot' choices=None
   ARG control_mode default='torque' choices=['position', 'torque']
   ARG controller_name default='task_space_impedance_controller' choices=None

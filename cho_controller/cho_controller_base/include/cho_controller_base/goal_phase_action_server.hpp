@@ -379,7 +379,7 @@ protected:
   // The finisher publishes it, at most every 100 ms, off the control thread.
   void set_progress(double percent) {progress_.store(static_cast<float>(percent));}
 
-  // Executor-side hook invoked by the finisher after the terminal call (e.g. VLA
+  // Executor-side hook invoked by the finisher after the terminal call (e.g. the action-chunk
   // notifies the behaviour tree here).
   virtual void on_goal_finished(GoalPhase /*terminal*/) {}
 

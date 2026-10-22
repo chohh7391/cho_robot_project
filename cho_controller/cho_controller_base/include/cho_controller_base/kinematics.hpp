@@ -209,7 +209,7 @@ JointVectorFor<JacobianT> null_space_velocity(
 // - causes no task acceleration: J M^-1 tau = 0 (J M^-1 N^T = 0).
 // The last two are exact only for J jbar = I, i.e. for the jbar above. A jbar
 // built from a regularized Lambda, M^-1 J^T (J M^-1 J^T + eps I)^-1 (Franka's
-// VLAController adds eps = 1e-4), has J jbar = I - E and J M^-1 N^T = E J M^-1,
+// ActionChunkController adds eps = 1e-4), has J jbar = I - E and J M^-1 N^T = E J M^-1,
 // E = eps (J M^-1 J^T + eps I)^-1: negligible where J M^-1 J^T's eigenvalues
 // are well above eps, but of order one along a direction near a singularity,
 // where the torque then damps some task motion and accelerates the task a

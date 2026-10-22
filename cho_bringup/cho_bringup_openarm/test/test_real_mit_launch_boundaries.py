@@ -248,7 +248,7 @@ def test_real_drive_side_blocks_weight_the_reference_offset_by_kp():
     for config in (REAL_CONFIG, REAL_BIMANUAL_CONFIG):
         params = yaml.safe_load(config.read_text())['/**']
         for name in params['controller_manager']['ros__parameters']:
-            if not name.endswith(('task_space_impedance_mit_controller', 'vla_mit_controller')):
+            if not name.endswith(('task_space_impedance_mit_controller', 'action_chunk_mit_controller')):
                 continue
             block = params[name]['ros__parameters']
             if not block['drive_side_impedance']:
@@ -259,7 +259,7 @@ def test_real_drive_side_blocks_weight_the_reference_offset_by_kp():
             geomean = math.exp(sum(math.log(value) for value in kp) / len(kp))
             assert block['reference_offset_weight'] == pytest.approx(
                 [value / geomean for value in kp], abs=1e-3), name
-    assert sorted(drive_side) == ['task_space_impedance_mit_controller', 'vla_mit_controller']
+    assert sorted(drive_side) == ['action_chunk_mit_controller', 'task_space_impedance_mit_controller']
 
 
 def test_real_bimanual_task_tuning_is_symmetric_between_the_arms():
@@ -573,16 +573,16 @@ def test_commissioning_profiles_are_explicit_and_derated():
     assert return_zero['gains']['kp_max'] == [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
 
 
-def test_real_vla_controller_gets_the_task_space_startup_gains_for_return_to_zero():
-    # VlaController derives from TaskSpaceImpedanceController, which reads
+def test_real_action_chunk_controller_gets_the_task_space_startup_gains_for_return_to_zero():
+    # ActionChunkController derives from TaskSpaceImpedanceController, which reads
     # startup_kp/kd; return_to_zero_kp/kd is read only by a joint-space action
-    # controller. Overriding the latter on a VLA left the YAML startup gains in
-    # force. The launch golden case vla_return_to_zero evaluates the result.
+    # controller. Overriding the latter on an action-chunk controller left the YAML startup gains in
+    # force. The launch golden case action_chunk_return_to_zero evaluates the result.
     source = REAL_LAUNCH.read_text()
     guarded = source[:source.index("'startup_kp': [70.0")]
     guard = guarded[guarded.rindex('if controller_name'):]
     assert "'task_space_impedance_mit_controller'" in guard
-    assert "'vla_mit_controller'" in guard
+    assert "'action_chunk_mit_controller'" in guard
     assert "'joint_impedance_mit_controller'" not in guard
 
 

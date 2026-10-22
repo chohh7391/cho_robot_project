@@ -35,7 +35,7 @@ from cho_task_manager.behaviors.service.base_service_behavior import BaseService
 from cho_task_manager.behaviors.service.base_service_server_behavior import (
     BaseServiceServerBehavior,
 )
-from cho_task_manager.behaviors.service.vla_completion_waiter import VLACompletionWaiterBehavior
+from cho_task_manager.behaviors.service.chunk_stream_completion_waiter import ChunkStreamCompletionWaiterBehavior
 from cho_task_manager.behaviors.topic.ee_state_sample import EeStateSampleBehavior
 from cho_task_manager.behaviors.topic.external_session import ExternalSessionBehavior
 from cho_task_manager.behaviors.topic.joint_state_check import JointStateCheckBehavior
@@ -82,8 +82,8 @@ LEAVES = {
         'Check', ['j1'], [0.0], timeout_sec=3.0), 3.0),
     'service_server': (lambda: BaseServiceServerBehavior(
         'Signal', Trigger, '/signal', timeout_sec=5.0), 5.0),
-    'vla_completion_waiter': (lambda: VLACompletionWaiterBehavior(
-        timeout_sec=5.0, controller='vla_controller'), 5.0),
+    'chunk_stream_completion_waiter': (lambda: ChunkStreamCompletionWaiterBehavior(
+        timeout_sec=5.0, controller='action_chunk_controller'), 5.0),
     'service_client': (_service_client, 5.0),
     'external_session': (lambda: ExternalSessionBehavior(
         'Session', start_timeout_sec=5.0, session_timeout_sec=50.0), 5.0),

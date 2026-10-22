@@ -20,10 +20,10 @@
       task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
-      # Same producer as above with the reference coming from VLA action chunks
+      # Same producer as above with the reference coming from action chunks
       # instead of a TaskSpace goal. Both action spaces are impedance.
-      vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
       # Spawned only with hand:=true. It claims the finger's position and
       # max_effort interfaces, which no arm controller touches, so it stays
@@ -133,7 +133,7 @@
       # the offset is shared out by joint stiffness instead of by least norm.
       # The geometric-mean normalisation keeps the solve's fixed damping term
       # from attenuating the offset as a whole. Recompute it whenever kp changes.
-      # Measured in MuJoCo (+-3 cm x steps through vla_mit_controller, this kp
+      # Measured in MuJoCo (+-3 cm x steps through action_chunk_mit_controller, this kp
       # with joint 5 at the sim profile's 10): achieved motion within 1.3% of
       # unit weights, null-direction joint 3 range 0.194 -> 0.134 rad (-31%).
       # Displacement under load on the arm is not measured.
@@ -213,7 +213,7 @@
       # at that posture and contribute exactly zero. Revisit joint 4 once the
       # idle hold is characterized on hardware.
       joint_limit_stiffness: [5.0, 5.0, 5.0, 0.0, 2.0, 2.0, 2.0]
-  # VLA reference source over the same drive-side impedance producer.
+  # action-chunk reference source over the same drive-side impedance producer.
   #
   # DERIVED from task_space_impedance_mit_controller above rather than written by
   # hand: every value in it was identified on hardware -- the per-joint friction
@@ -221,7 +221,7 @@
   # joint 7. A hand-copied block lost all of them once already. Only the keys
   # below the marker differ, and they are all tighter than the TaskSpace path,
   # not looser.
-  vla_mit_controller:
+  action_chunk_mit_controller:
     ros__parameters:
       arm: single
       safety_backend: real
@@ -295,7 +295,7 @@
       # the offset is shared out by joint stiffness instead of by least norm.
       # The geometric-mean normalisation keeps the solve's fixed damping term
       # from attenuating the offset as a whole. Recompute it whenever kp changes.
-      # Measured in MuJoCo (+-3 cm x steps through vla_mit_controller, this kp
+      # Measured in MuJoCo (+-3 cm x steps through action_chunk_mit_controller, this kp
       # with joint 5 at the sim profile's 10): achieved motion within 1.3% of
       # unit weights, null-direction joint 3 range 0.194 -> 0.134 rad (-31%).
       # Displacement under load on the arm is not measured.
@@ -371,12 +371,12 @@
       # idle hold is characterized on hardware.
       joint_limit_stiffness: [5.0, 5.0, 5.0, 0.0, 2.0, 2.0, 2.0]
 
-  # VLA reference source over the same drive-side impedance producer; see the
-  # mujoco config for the rationale behind each VLA key. Gains, friction and
-  # gravity terms mirror task_space_impedance_mit_controller so a VLA rollout and
+  # action-chunk reference source over the same drive-side impedance producer; see the
+  # mujoco config for the rationale behind each action-chunk key. Gains, friction and
+  # gravity terms mirror task_space_impedance_mit_controller so a policy rollout and
   # a TaskSpace goal are comparable on the same arm.
   #
-  # Selectable from the real bringup (controller_name:=vla_mit_controller,
+  # Selectable from the real bringup (controller_name:=action_chunk_mit_controller,
   # admitted by launch_utils.REAL_MIT_DIRECT_CONTROLLERS) for TASK chunks: that
   # path is the commissioned Cartesian law above, fed by a chunk stream. This
   # block runs drive_side_impedance: true, so the controller takes JOINT chunks
@@ -385,7 +385,7 @@
   # before sending joint chunks to this arm. The bimanual file runs the legacy
   # law, under which joint chunks are rejected at ingest (kp = 0 with q_des
   # pinned to the measurement, so no joint position loop closes).
-      # ---- VLA reference source ---------------------------------------------
+      # ---- action-chunk reference source ---------------------------------------------
       # REQUIRED here, unlike the TaskSpace controller which derives a default.
       # The drive adds kp*(q_des - q) downstream of torque_limit, so this is the
       # only bound on the impedance torque and the input driving it is untrusted
@@ -397,7 +397,7 @@
       # 6-21% of torque_limit. Deliberately tighter than the derived default
       # (0.5 * torque_limit / kp), which would allow 0.625 rad on joint 1.
       max_reference_offset: [0.078, 0.083, 0.068, 0.069, 0.075, 0.15, 0.15]
-      chunk_topic: /vla/action/ee_pose
+      chunk_topic: /action_chunk
       # 'arrival' until the bridge echoes the stamp of the joint state it built
       # its observation from; a bridge wall clock is a different time domain.
       chunk_time_source: arrival

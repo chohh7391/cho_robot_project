@@ -300,7 +300,7 @@ protected:
     double kp_null_;
     double kd_null_;
     // Toggle for the null-space posture term in the redundant-DoF controllers
-    // (task_space_qp / task_space_impedance / operational_space / vla effort).
+    // (task_space_qp / task_space_impedance / operational_space / action_chunk effort).
     // Each controller declares and reads its own "use_nullspace_posture"
     // parameter; default false preserves the pre-toggle behavior.
     bool use_nullspace_posture_{false};

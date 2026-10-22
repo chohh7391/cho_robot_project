@@ -71,10 +71,10 @@
             The task space qp controller
         </description>
     </class>
-    <class name="cho_controller_franka/VLAController"
-           type="cho_controller::franka::VLAController" base_class_type="controller_interface::ControllerInterface">
+    <class name="cho_controller_franka/ActionChunkController"
+           type="cho_controller::franka::ActionChunkController" base_class_type="controller_interface::ControllerInterface">
         <description>
-            The VLA controller
+            The action-chunk controller
         </description>
     </class>
 </library>

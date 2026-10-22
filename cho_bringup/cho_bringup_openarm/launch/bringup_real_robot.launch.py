@@ -49,9 +49,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'controller_name', default_value='joint_impedance_mit_controller',
             choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller',
-                     'vla_mit_controller'],
+                     'action_chunk_mit_controller'],
             description='Direct seven-axis MIT action controller to activate. '
-                        'vla_mit_controller is admitted for TASK chunks: its '
+                        'action_chunk_mit_controller is admitted for TASK chunks: its '
                         'Cartesian path is the commissioned '
                         'task_space_impedance_mit_controller law fed by a chunk '
                         'stream. With bimanual:=true (drive_side_impedance: false) '
@@ -330,11 +330,11 @@ def generate_launch_description():
                     'return_to_zero_duration': 2.0,
                     'return_to_zero_tolerance': 0.05,
                 })
-                # VlaController derives from TaskSpaceImpedanceController: it
+                # ActionChunkController derives from TaskSpaceImpedanceController: it
                 # reads startup_kp/kd and ignores return_to_zero_kp/kd, which
                 # only a joint-space action controller reads.
                 if controller_name in ('task_space_impedance_mit_controller',
-                                       'vla_mit_controller'):
+                                       'action_chunk_mit_controller'):
                     runtime_overrides[name].update({
                         'startup_kp': [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0],
                         'startup_kd': [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5],

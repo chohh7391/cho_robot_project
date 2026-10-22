@@ -21,7 +21,7 @@ One registry document per robot, ``config/<robot_type>.yaml``; the schema is
   and the TaskSpace goal frames (:func:`task_goal_frame`).
 - ``controllers``: the controller filling each role (``hold``,
   ``direct_joint``, ``direct_task``, ``moveit_trajectory``, ``gripper``,
-  ``vla``); ``hold_by_control_mode``, the hold per bringup control mode
+  ``action_chunk``); ``hold_by_control_mode``, the hold per bringup control mode
   (:func:`hold_controllers_for_control_mode`); ``additional_arm``, arm
   controllers with no role, which an exclusive switch must still take down.
 - ``moveit``; ``actions`` (``preferences``: per space, the action names a
@@ -52,7 +52,7 @@ import yaml
 
 _cache = {}
 _required_controller_roles = {
-    'hold', 'direct_joint', 'direct_task', 'moveit_trajectory', 'gripper', 'vla'
+    'hold', 'direct_joint', 'direct_task', 'moveit_trajectory', 'gripper', 'action_chunk'
 }
 
 # Bringup control modes. A bringup exports exactly one command interface per
@@ -65,11 +65,11 @@ CONTROL_MODES = ('position', 'velocity', 'torque')
 # the same rule under its node. The names built here are ABSOLUTE, so a robot
 # started under a ROS namespace needs its registry entry (and the bridge's node
 # name check) to say so; an arm prefix is just part of the controller name.
-ACTION_KINDS = ('joint_space', 'task_space', 'gripper', 'vla', 'follow_joint_trajectory')
+ACTION_KINDS = ('joint_space', 'task_space', 'gripper', 'chunk_stream', 'follow_joint_trajectory')
 
 # actions.preferences key -> the action kind every entry of that list must name.
 PREFERENCE_ACTION_KINDS = {
-    'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'vla': 'vla',
+    'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'action_chunk': 'chunk_stream',
 }
 
 
@@ -459,7 +459,7 @@ def validate_robot_config(config, expected_robot_type=None):
             f'{robot_type}: actions.preferences declares unknown spaces: {unknown_spaces}')
     for space, kind in PREFERENCE_ACTION_KINDS.items():
         names = actions.get(space)
-        if names is None and space == 'vla':
+        if names is None and space == 'action_chunk':
             continue
         # Every entry must follow the contract's /<node>/<kind> rule for its
         # own space: a joint list naming a task_space server would bind a
@@ -508,7 +508,7 @@ def validate_robot_config(config, expected_robot_type=None):
         task_manager = _mapping(
             compatibility.get('task_manager'),
             f'{robot_type}: compatibility.task_manager')
-        allowed = {'joint_space', 'task_space', 'gripper', 'vla'}
+        allowed = {'joint_space', 'task_space', 'gripper', 'action_chunk'}
         if set(task_manager) - allowed:
             raise ValueError(f'{robot_type}: unknown task_manager compatibility role')
         for role, controller in task_manager.items():

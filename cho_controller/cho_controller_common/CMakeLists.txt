@@ -24,7 +24,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # OPTIMAL; Ruckig's templates rely on isnan()/isinf() the same way. In MuJoCo the
 # task-space QP took the same ~10 us per cycle either way. test_point_to_point
 # (FiniteMathGuard) fails if this library is built with finite-math. The trap in
-# general: cho_vla_core/DESIGN.md, "Finite math".
+# general: cho_action_chunk/DESIGN.md, "Finite math".
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()

@@ -11,9 +11,9 @@ the robot:
   Either a `poses.home` selector (FR5 and UR5e use `'1'`, OpenArm `'0'`) or a joint
   vector of its own (Franka). No tree spells a home out.
 - **Controllers** — the action leaves (`JointSpace`, `TaskSpace`, `Gripper`) and
-  `VLACompletionWaiterBehavior` have no default controller; a tree
+  `ChunkStreamCompletionWaiterBehavior` have no default controller; a tree
   passes the robot config's role (`robot_config['joint_space']`, `['gripper']`,
-  `['vla']`, ...). `home_subtree()` opens `robot_config['gripper']`, so an OpenArm
+  `['action_chunk']`, ...). `home_subtree()` opens `robot_config['gripper']`, so an OpenArm
   arm profile opens its own `left_`/`right_` gripper.
 - **Exclusive switches** need `robot_config` (one without it raises): the controllers
   they take down are the registry entry's roles, per-mode holds,
@@ -272,15 +272,15 @@ real reading instead of being missed the moment `/clock` arrives
 
 | task | what it does | required bringup |
 | --- | --- | --- |
-| `pick_place` | home → VLA pick & place → home (joint impedance + VLA) | `control_mode:=torque vla:=true` |
-| `pick_place_position` | same flow on the position controllers | `control_mode:=position vla:=true` |
-| `peg_insert` | forge: approach, grasp peg, VLA insertion | `control_mode:=torque vla:=true` |
-| `gear_mesh` | forge: approach, grasp gear, VLA meshing (FT tare at start) | `control_mode:=torque vla:=true` |
-| `nut_thread` | forge: approach, grasp nut, VLA threading (FT tare at start) | `control_mode:=torque vla:=true` |
+| `pick_place` | home → VLA pick & place → home (joint impedance + action-chunk controller) | `control_mode:=torque action_chunk:=true` |
+| `pick_place_position` | same flow on the position controllers | `control_mode:=position action_chunk:=true` |
+| `peg_insert` | forge: approach, grasp peg, VLA insertion | `control_mode:=torque action_chunk:=true` |
+| `gear_mesh` | forge: approach, grasp gear, VLA meshing (FT tare at start) | `control_mode:=torque action_chunk:=true` |
+| `nut_thread` | forge: approach, grasp nut, VLA threading (FT tare at start) | `control_mode:=torque action_chunk:=true` |
 | `tag_reach` | home → wait for an AprilTag detection → drive to it → home | `control_mode:=torque`, plus `object_pose_config:=` and a running detector |
 | `controller_check_position` | smoke check: every position-mode controller + gripper | `control_mode:=position` |
 | `controller_check_torque` | smoke check: every torque-mode controller + gripper | `control_mode:=torque` |
-| `controller_check_velocity` | smoke check: velocity controllers (+ VLA hold if present) | `control_mode:=velocity` (`vla:=true` optional) |
+| `controller_check_velocity` | smoke check: velocity controllers (+ action-chunk hold if present) | `control_mode:=velocity` (`action_chunk:=true` optional) |
 | `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | MuJoCo: `control_mode:=position controller_name:=joint_space_position_controller load_moveit_controller:=true`. Real: no trajectory controller |
 
 `tag_reach` is the one task whose target is not in the tree. It waits for
@@ -288,9 +288,9 @@ real reading instead of being missed the moment `/clock` arrives
 `object_pose_config:=` — see [apriltag_perception.md](apriltag_perception.md).
 
 The VLA tasks wait for an external VLA policy: an ActionChunk publisher on
-`/vla/action/ee_pose` plus the VLA action goal
-(see `ros2 run cho_control_tools vla_action_client` for a reference client). A relative task
-chunk sets `relative_frame`; see [controllers_and_bringup.md](controllers_and_bringup.md#vla-chunks).
+`/action_chunk` plus the chunk-stream goal
+(see `ros2 run cho_control_tools action_chunk_client` for a reference client). A relative task
+chunk sets `relative_frame`; see [controllers_and_bringup.md](controllers_and_bringup.md#action-chunks).
 
 The `controller_check_*` smoke checks switch through every switchable controller of
 that bringup mode and drive a small motion through its action server — run one after
@@ -423,7 +423,7 @@ OpenArm real bringups have none, so `trajectory_replay` is simulation-only there
 ## Examples
 
 ```bash
-# Franka pick & place (torque + VLA bringup)
+# Franka pick & place (torque + action-chunk bringup)
 ros2 launch cho_task_manager run_task_manager.launch.py task:=pick_place robot_type:=franka use_sim_time:=true
 
 # Franka controller smoke check (position-mode bringup)

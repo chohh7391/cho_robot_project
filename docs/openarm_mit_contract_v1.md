@@ -56,7 +56,7 @@ while active. A producer continues its generations from the `ack_generation` it 
 activated: the consumer keeps its ack across controller switches within a session, so only the first
 producer of a session (ack 0) starts at one, and a second producer that restarted at one would be
 rejected as stale. All producers share one state machine for this
-(`DirectControllerBase::protocol_step()`; TaskSpace and VLA run it too). It writes all 35 joint
+(`DirectControllerBase::protocol_step()`; TaskSpace and ActionChunk run it too). It writes all 35 joint
 fields, the 7 hold torques, session echo and `lease_cycles`, then writes `commit_generation` last. The consumer
 snapshots only after observing a new generation, validates the entire snapshot, then updates
 `ack_generation`. Each generation value is evaluated once, accepted or not: a rejected commit puts
@@ -106,7 +106,7 @@ fake with its mirrored state. `mit_command_v1.yaml`'s `safe_seed` is this tuple
 On activation the consumer itself enters SAFE from the state measured by the seed read: the
 measured pose, and the measured torque as `tau_ff` -- about zero on motors enabled just now, the
 gravity torque on an arm the hardware was holding (an INACTIVE hold). A direct, TaskSpace or
-VLA producer's first commit is a seed at `q_des=q_measured,dq_des=0` whose `tau_ff` is what the
+action-chunk producer's first commit is a seed at `q_des=q_measured,dq_des=0` whose `tau_ff` is what the
 effort command interfaces hold. Every backend keeps those equal to the feed-forward its hold applies
 whenever the arm is not ACTIVE: the new session's hold torque when a session starts, the hold's
 torque after a rejected commit or a SAFE, and restored at `perform_command_mode_switch()` when the
@@ -232,7 +232,7 @@ loader parses. The real profiles' threshold is `0.1 rad/s`; it must stay above t
   into the next producer's commit. The consumer's retained `h` is not reset by it: the switch's own
   SAFE hold, and any hold before the incoming producer's first accepted commit, is bounded by the
   outgoing producer's `h`.
-- Writers: `TaskSpaceImpedanceController` and `VlaController` write
+- Writers: `TaskSpaceImpedanceController` and `ActionChunkController` write
   `gravity_scale * gravity_joint_scale[i] * g_i(q)`; `JointImpedanceActionController` writes `g_i(q)`
   (`g` from Pinocchio on the controller's model at the measured `q`, clamped to `tau_ff_magnitude`,
   no Coriolis, friction, spring or slew); the raw-topic producers and the `FollowJointTrajectory`

@@ -268,7 +268,7 @@ def test_openarm_reach_targets_are_fixed_absolute_world_poses():
     (lambda c: c['actions']['preferences'].__setitem__('gripper', ['/gripper']),
      r'/<node>/gripper'),
     (lambda c: c['actions']['preferences'].__setitem__(
-        'vla', ['/vla_controller/joint_space']), r'/<node>/vla'),
+        'action_chunk', ['/action_chunk_controller/joint_space']), r'/<node>/chunk_stream'),
     (lambda c: c['actions']['preferences'].__setitem__('scoop', []), 'unknown spaces'),
     (lambda c: c['actions']['preferences'].__setitem__(
         'task', ['/fr5_moveit_action_bridge/task_space']),
@@ -311,8 +311,8 @@ def test_moveit_action_namespace_and_backend_are_consistent():
 def test_controller_action_names_follow_the_contract():
     assert controller_action_name('joint_space_qp_controller', 'joint_space') == (
         '/joint_space_qp_controller/joint_space')
-    assert controller_action_name('left_vla_mit_controller', 'vla') == (
-        '/left_vla_mit_controller/vla')
+    assert controller_action_name('left_action_chunk_mit_controller', 'chunk_stream') == (
+        '/left_action_chunk_mit_controller/chunk_stream')
     assert controller_action_name('/gripper_controller/', 'gripper') == (
         '/gripper_controller/gripper')
     assert controller_action_name('joint_trajectory_controller', 'follow_joint_trajectory') == (
@@ -325,7 +325,7 @@ def test_controller_action_names_follow_the_contract():
 
 @pytest.mark.parametrize('robot_type', ['fr5', 'franka', 'openarm', 'ur5e'])
 def test_every_profile_preference_is_a_node_and_kind_pair(robot_type):
-    kinds = {'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'vla': 'vla'}
+    kinds = {'joint': 'joint_space', 'task': 'task_space', 'gripper': 'gripper', 'action_chunk': 'chunk_stream'}
     for profile in available_profiles(robot_type):
         config = load_robot_config(robot_type, profile)
         bridge = moveit_bridge_node(robot_type, profile)
@@ -511,7 +511,7 @@ def test_ac7_every_non_null_name_of_a_bimanual_profile_has_an_arm_prefix(profile
 def test_ac7_the_both_profile_declares_the_single_arm_roles_absent():
     config = load_robot_config('openarm', 'both')
     controllers = config['controllers']
-    for role in ('direct_joint', 'direct_task', 'gripper', 'vla'):
+    for role in ('direct_joint', 'direct_task', 'gripper', 'action_chunk'):
         assert role in controllers, f'{role} must be stated as null, not dropped'
         assert controllers[role] is None, f'openarm/both {role} = {controllers[role]!r}'
     assert config['compatibility']['task_manager']['joint_space'] is None
@@ -529,13 +529,13 @@ def test_ac7_the_both_profile_keeps_a_hold_and_a_moveit_trajectory_controller():
 def test_ac7_left_and_right_keep_all_their_roles():
     for profile in ('left', 'right'):
         controllers = load_robot_config('openarm', profile)['controllers']
-        for role in ('direct_joint', 'direct_task', 'gripper', 'vla', 'hold', 'moveit_trajectory'):
+        for role in ('direct_joint', 'direct_task', 'gripper', 'action_chunk', 'hold', 'moveit_trajectory'):
             assert controllers[role].startswith(f'{profile}_'), (profile, role)
 
 
 def test_ac7_the_single_profile_keeps_its_unprefixed_names_and_loads():
     config = load_robot_config('openarm', 'single')
-    assert config['controllers']['vla'] == 'vla_mit_controller'
+    assert config['controllers']['action_chunk'] == 'action_chunk_mit_controller'
     assert config['controllers']['gripper'] == 'gripper_controller'
     assert config['compatibility']['task_manager']['joint_space'] == 'joint_space_impedance_controller'
 
@@ -588,14 +588,14 @@ def _set_compatibility(profile_document):
     ('direct_joint', _set_role('direct_joint')),
     ('direct_task', _set_role('direct_task')),
     ('gripper', _set_role('gripper')),
-    ('vla', _set_role('vla')),
+    ('action_chunk', _set_role('action_chunk')),
     ('hold', _set_role('hold')),
     ('moveit_trajectory', _set_role('moveit_trajectory')),
     ('hold_by_control_mode', _set_hold_mode),
     ('additional_arm', _set_additional_arm),
     ('joint_space', _set_compatibility),
 ],
-    ids=['direct_joint', 'direct_task', 'gripper', 'vla', 'hold', 'moveit_trajectory',
+    ids=['direct_joint', 'direct_task', 'gripper', 'action_chunk', 'hold', 'moveit_trajectory',
          'hold_by_control_mode', 'additional_arm', 'compat_joint_space'])
 def test_ac7_an_unprefixed_name_in_a_bimanual_profile_is_a_load_error(
         tmp_path, monkeypatch, profile, key, edit):

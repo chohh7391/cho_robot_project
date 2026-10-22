@@ -37,7 +37,7 @@ namespace cho_controller_openarm_mit
 // remains a direct-controller vertical: MoveIt/FJT owns only paired 14-axis
 // planning.  The base class supplies the one-arm 46-interface MIT protocol.
 //
-// Not `final`: VlaController derives from it to reuse this exact producer --
+// Not `final`: ActionChunkController derives from it to reuse this exact producer --
 // the 46-interface claim, the session/ACK/lease/SAFE protocol, the return-to-zero phase,
 // the drive-side impedance law, the null-space posture, the joint-limit spring
 // and the reference-offset bound -- and replaces only where q_des/dq_des come
@@ -263,7 +263,7 @@ protected:
   // between every point. wrench_limit_ deliberately stays configure-time: it is
   // the last bound on how hard the arm can push and must not be raisable
   // mid-session. on_configure requires six finite positive max_task_wrench
-  // values in both modes, so every config of this class or VlaController
+  // values in both modes, so every config of this class or ActionChunkController
   // carries it.
   std::array<std::atomic<double>, 6> kp_task_, kd_task_;
   std::array<double, 6> wrench_limit_{};
@@ -407,13 +407,13 @@ protected:
   // (the gain handoff) -- and its own Cartesian control leaves it there: a
   // TaskSpace goal neither reads nor updates it.
   //
-  // A derived controller may widen that, and VlaController does:
+  // A derived controller may widen that, and ActionChunkController does:
   // note_commanded_joints() records the q_des of every target it writes, on its
   // Cartesian paths too (the measurement under the legacy law, which pins q_des
   // there), and reads it back as "the q_des being commanded now" -- its anchor
   // ring's joint field and its limiter seeds. Changing what this holds, or when,
   // changes those. task_q_reference_observed_ mirrors it for the diagnostics
-  // service's q_ref, which under VlaController is therefore that q_des.
+  // service's q_ref, which under ActionChunkController is therefore that q_des.
   std::array<double, 7> task_q_ref_{};
   std::array<double, 7> task_last_model_feedforward_{};
   std::array<std::atomic<double>, 6> task_last_error_{};

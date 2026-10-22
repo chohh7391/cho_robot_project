@@ -46,7 +46,7 @@ HISTORICAL_FRANKA_SET = [
     'operational_space_controller',
     'task_space_impedance_controller',
     'task_space_qp_controller',
-    'vla_controller',
+    'action_chunk_controller',
     'gravity_compensation_controller',
 ]
 
@@ -107,7 +107,7 @@ def test_both_profile_takes_down_the_controllers_of_both_arms():
                            'joint_trajectory_controller',
                            'joint_impedance_mit_controller',
                            'task_space_impedance_mit_controller',
-                           'vla_mit_controller'):
+                           'action_chunk_mit_controller'):
             assert f'{arm}_{controller}' in both
     # Exactly the two arms' sets: nothing the arms do not already name, and no
     # unprefixed single-arm name.

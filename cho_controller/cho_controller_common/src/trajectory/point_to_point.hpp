@@ -35,7 +35,7 @@ namespace trajectory {
 // allow takes the fastest motion instead, so the duration is a minimum.
 //
 // Bounds are per coordinate, and 0 means not set. A jerk left unset is the
-// acceleration bound / 0.04 s, as in cho_vla_core's ReferenceLimiter. With any
+// acceleration bound / 0.04 s, as in cho_action_chunk's ReferenceLimiter. With any
 // acceleration bound unset there is nothing to bound the duration with: the
 // motion takes exactly the requested time, shaped by a jerk-only plan (no
 // constant-acceleration phase, so the acceleration is continuous and starts and

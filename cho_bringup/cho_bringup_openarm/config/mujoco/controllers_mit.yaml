@@ -18,10 +18,10 @@
       task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
-      # Same producer as above with the reference coming from VLA action chunks
+      # Same producer as above with the reference coming from action chunks
       # instead of a TaskSpace goal. Both action spaces are impedance.
-      vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so
@@ -116,12 +116,12 @@
       joint_limit_margin: 0.05
       joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
 
-  # VLA reference source over the same drive-side impedance producer. The gains,
+  # action-chunk reference source over the same drive-side impedance producer. The gains,
   # startup ramp and null-space terms mirror task_space_impedance_mit_controller
   # deliberately: this controller changes only where the reference comes from, so
-  # a difference in the law would confound comparing a VLA rollout against a
+  # a difference in the law would confound comparing a policy rollout against a
   # TaskSpace goal on the same arm.
-  vla_mit_controller:
+  action_chunk_mit_controller:
     ros__parameters:
       arm: single
       safety_profile_name: mujoco_sim_safe
@@ -166,7 +166,7 @@
       # built its observation from -- a bridge wall clock is a different time
       # domain and would put every waypoint in the wrong epoch.
       chunk_time_source: arrival
-      chunk_topic: /vla/action/ee_pose
+      chunk_topic: /action_chunk
       # 3x a 15 Hz inference period. A dead policy is caught in 200 ms; a normal
       # gap is not.
       stream_timeout_sec: 0.2

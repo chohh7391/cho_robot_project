@@ -30,11 +30,11 @@ from cho_control_tools.plotting.pose_log import decode_pose_log
 
 
 @pytest.mark.parametrize('space,kind', [
-    ('joint', 'joint_space'), ('task', 'task_space'), ('gripper', 'gripper'), ('vla', 'vla')])
+    ('joint', 'joint_space'), ('task', 'task_space'), ('gripper', 'gripper'), ('action_chunk', 'chunk_stream')])
 def test_a_controller_serves_each_space_under_its_own_node(space, kind):
-    expected = f'/left_vla_mit_controller/{kind}'
-    assert action_names.controller_action_name('left_vla_mit_controller', space) == expected
-    assert action_names.controller_action_name('left_vla_mit_controller', kind) == expected
+    expected = f'/left_action_chunk_mit_controller/{kind}'
+    assert action_names.controller_action_name('left_action_chunk_mit_controller', space) == expected
+    assert action_names.controller_action_name('left_action_chunk_mit_controller', kind) == expected
 
 
 def test_an_unknown_kind_is_refused():

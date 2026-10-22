@@ -122,10 +122,10 @@ protected:
   enum class State : std::uint8_t {INACTIVE, SEEDING, ACTIVE, STOPPING, SAFE_STOPPED, FAULT};
 
   // The MIT session/ACK/SAFE state machine. Every producer derived from this
-  // class -- the direct joint producers, TaskSpace and so VLA -- runs it once
+  // class -- the direct joint producers, TaskSpace and so ActionChunk -- runs it once
   // per update() before computing anything, and commits through commit(). It
   // used to be copied into TaskSpace, and the copy missed the fix that made a
-  // second producer continue from the consumer's ack: TaskSpace/VLA went
+  // second producer continue from the consumer's ack: TaskSpace/ActionChunk went
   // ACTIVE without a seed when activated after another producer, then FAULTed.
   enum class ProtocolStep : std::uint8_t
   {
@@ -321,7 +321,7 @@ protected:
   //
   // action_control_time_ IS NOT A CLOCK. It is seconds accumulated since
   // on_activate, and it is the only time the action timeline is ever sampled
-  // at. Every timestamp that enters from outside -- a VLA chunk's arrival
+  // at. Every timestamp that enters from outside -- an action chunk's arrival
   // instant, or the observation stamp the chunk carries -- is read from
   // get_node()->now(), which is the node clock. The two domains coincide only
   // while /clock starts near zero as the controller activates, so a plant

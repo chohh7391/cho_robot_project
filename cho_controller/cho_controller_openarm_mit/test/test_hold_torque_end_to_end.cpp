@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// A real producer (VlaController) over FakeMitSystem through a controller_manager:
+// A real producer (ActionChunkController) over FakeMitSystem through a controller_manager:
 // the SAFE hold the consumer builds when the lease expires while the arm moves,
 // or while it rests (docs/openarm_mit_contract_v1.md, Hold torque).
 //
@@ -45,7 +45,7 @@
 #include <thread>
 #include <vector>
 
-#include <cho_interfaces/action/vision_language_action.hpp>
+#include <cho_interfaces/action/chunk_stream.hpp>
 #include <cho_interfaces/msg/action_chunk.hpp>
 #include <controller_manager/controller_manager.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
@@ -55,22 +55,22 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
-#include "cho_controller_openarm_mit/vla_controller.hpp"
+#include "cho_controller_openarm_mit/action_chunk_controller.hpp"
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 
 namespace cho_controller_openarm_mit
 {
-struct VlaControllerTestAccess
+struct ActionChunkControllerTestAccess
 {
-  static bool ready(const VlaController & controller)
+  static bool ready(const ActionChunkController & controller)
   {
     return controller.task_ready_.load(std::memory_order_acquire);
   }
-  static double command(const VlaController & controller, const std::size_t index)
+  static double command(const ActionChunkController & controller, const std::size_t index)
   {
     return controller.command_interfaces_[index].get_value();
   }
-  static bool loaned(const VlaController & controller)
+  static bool loaned(const ActionChunkController & controller)
   {
     return controller.command_interfaces_.size() >= cho_openarm_mit_core::kArmCommandCount;
   }
@@ -81,12 +81,12 @@ namespace
 {
 using controller_interface::return_type;
 using controller_manager_msgs::srv::SwitchController;
-using VlaAction = cho_interfaces::action::VisionLanguageAction;
-using Access = cho_controller_openarm_mit::VlaControllerTestAccess;
+using ChunkStreamAction = cho_interfaces::action::ChunkStream;
+using Access = cho_controller_openarm_mit::ActionChunkControllerTestAccess;
 using Joints = std::array<double, 7>;
 
 constexpr const char * kNamespace = "/mit_hold_e2e";
-constexpr const char * kControllerName = "vla_mit_controller";
+constexpr const char * kControllerName = "action_chunk_mit_controller";
 
 using cho_openarm_mit_core::kArmCommandCount;
 using cho_openarm_mit_core::kFieldsPerJoint;
@@ -215,7 +215,7 @@ protected:
   }
 
   // Builds the Fake with the given band / threshold (absent: its +inf default),
-  // configures and activates the VLA producer, and waits for its startup ramp.
+  // configures and activates the action-chunk producer, and waits for its startup ramp.
   void start(const std::optional<double> band, const std::optional<double> threshold)
   {
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
@@ -224,9 +224,9 @@ protected:
     resources_ = resources.get();
     manager_ = std::make_shared<controller_manager::ControllerManager>(
       std::move(resources), executor_, "controller_manager", kNamespace);
-    controller_ = std::make_shared<cho_controller_openarm_mit::VlaController>();
+    controller_ = std::make_shared<cho_controller_openarm_mit::ActionChunkController>();
     ASSERT_TRUE(manager_->add_controller(
-        controller_, kControllerName, "cho_controller_openarm_mit/VlaController"));
+        controller_, kControllerName, "cho_controller_openarm_mit/ActionChunkController"));
     set("arm", "single");
     set("kp", std::vector<double>(7, 5.0));
     set("kd", std::vector<double>(7, 0.4));
@@ -367,10 +367,10 @@ protected:
   // A goal, so the producer follows chunks. The client outlives the goal.
   void send_goal()
   {
-    goal_client_ = rclcpp_action::create_client<VlaAction>(
-      client_node_, std::string(kNamespace) + "/" + kControllerName + "/vla");
+    goal_client_ = rclcpp_action::create_client<ChunkStreamAction>(
+      client_node_, std::string(kNamespace) + "/" + kControllerName + "/chunk_stream");
     ASSERT_TRUE(goal_client_->wait_for_action_server(std::chrono::seconds(2)));
-    VlaAction::Goal goal;
+    ChunkStreamAction::Goal goal;
     goal.model_name = "test";
     goal.task = "hold";
     goal.inference_frequency = 15.0f;
@@ -518,11 +518,11 @@ protected:
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
   hardware_interface::ResourceManager * resources_ {nullptr};
   std::shared_ptr<controller_manager::ControllerManager> manager_;
-  std::shared_ptr<cho_controller_openarm_mit::VlaController> controller_;
+  std::shared_ptr<cho_controller_openarm_mit::ActionChunkController> controller_;
   rclcpp::Node::SharedPtr client_node_;
   rclcpp::Publisher<cho_interfaces::msg::ActionChunk>::SharedPtr chunk_pub_;
-  rclcpp_action::Client<VlaAction>::SharedPtr goal_client_;
-  rclcpp_action::ClientGoalHandle<VlaAction>::SharedPtr goal_handle_;
+  rclcpp_action::Client<ChunkStreamAction>::SharedPtr goal_client_;
+  rclcpp_action::ClientGoalHandle<ChunkStreamAction>::SharedPtr goal_handle_;
   std::size_t commit_index_ {0};
   std::atomic<bool> running_ {false};
   std::atomic<bool> recording_ {false};

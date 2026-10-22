@@ -30,7 +30,7 @@ ACTION_KINDS = {
     'joint': 'joint_space',
     'task': 'task_space',
     'gripper': 'gripper',
-    'vla': 'vla',
+    'action_chunk': 'chunk_stream',
 }
 
 MOVEIT_BRIDGE_SUFFIX = 'moveit_action_bridge'

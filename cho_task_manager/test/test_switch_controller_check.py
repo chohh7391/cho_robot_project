@@ -16,7 +16,7 @@
 
 The exclusive switch is BEST_EFFORT: switching to a controller the bringup never
 loaded returns ok after deactivating the one that held the arm. In the Franka
-MuJoCo velocity check that left the arm with no controller for the 3 s VLA hold
+MuJoCo velocity check that left the arm with no controller for the 3 s action-chunk hold
 while the switch reported SUCCESS. The behaviour now lists the controllers first
 and refuses such a switch with nothing deactivated, and lists them again after an
 ok switch to catch an activation that failed anyway.
@@ -144,7 +144,7 @@ def test_the_controllers_are_listed_before_anything_is_switched():
 
 
 def test_a_controller_that_is_not_loaded_is_refused_with_nothing_deactivated():
-    """The MuJoCo velocity check: vla_controller was not loaded."""
+    """The MuJoCo velocity check: action_chunk_controller was not loaded."""
     rig = Rig()
     rig.start(lists=[_listed(b='active', c='inactive')], switch=_switched())
 

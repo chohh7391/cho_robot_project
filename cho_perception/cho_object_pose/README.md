@@ -442,5 +442,5 @@ camera stale while it is publishing poses. The node says so out loud when it hap
 | `memory.py` | How a remembered detection ages (hold, fade, floor). No ROS |
 | `marker_memory.py` | The ROS adapter for it: `object_marker_memory` republishes the markers with no lifetime and draws the lines of sight |
 
-The split is the same one `cho_vla_core` uses, for the same reason: the part worth testing
+The split is the same one `cho_action_chunk` uses, for the same reason: the part worth testing
 does not need a robot.

@@ -58,7 +58,7 @@ _CONFIG = {
         'task': [controller_action_name(node, 'task') for node in (
             moveit_bridge_node('openarm'), 'task_space_impedance_mit_controller')],
         'gripper': [controller_action_name('gripper_controller', 'gripper')],
-        'vla': [controller_action_name('vla_mit_controller', 'vla')],
+        'action_chunk': [controller_action_name('action_chunk_mit_controller', 'chunk_stream')],
     }},
     'poses': {'home': _HOME, 'reach': _REACH},
     'motions': {'reach': {
@@ -120,7 +120,7 @@ def _side_config(profile):
         'task': [controller_action_name(node, 'task') for node in (
             bridge, f'{profile}_task_space_impedance_mit_controller')],
         'gripper': [controller_action_name(f'{profile}_gripper_controller', 'gripper')],
-        'vla': [controller_action_name(f'{profile}_vla_mit_controller', 'vla')],
+        'action_chunk': [controller_action_name(f'{profile}_action_chunk_mit_controller', 'chunk_stream')],
     }
     config['motions']['reach'] = {
         selector: {'relative': False, 'position': position,

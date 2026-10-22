@@ -65,7 +65,7 @@ def generate_launch_description():
             description='Must stay empty: the controller_manager inside the Gazebo plugin '
                         'is not namespaced, so a non-empty value is refused.'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('vla', default_value='false'),
+        DeclareLaunchArgument('action_chunk', default_value='false'),
         DeclareLaunchArgument('robot_name', default_value='franka_robot'),
         DeclareLaunchArgument(
             'control_mode',
@@ -153,7 +153,7 @@ def generate_launch_description():
                 "controller_manager inside the Gazebo plugin is not namespaced, so a "
                 "namespaced robot_state_publisher only moves /tf away from it. Leave "
                 "namespace empty.")
-        use_vla = LaunchConfiguration('vla').perform(context)
+        use_action_chunk = LaunchConfiguration('action_chunk').perform(context)
         requested_mode = LaunchConfiguration('control_mode').perform(context)
 
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
@@ -166,7 +166,7 @@ def generate_launch_description():
                 "bringup_gz_moveit.launch.py instead.")
         mode = requested_mode
         requested_controller = ctrl_name
-        launch_utils.check_controller_matches_mode(requested_controller, mode, use_vla)
+        launch_utils.check_controller_matches_mode(requested_controller, mode, use_action_chunk)
         load_moveit_controller = as_bool(
             LaunchConfiguration('load_moveit_controller').perform(context))
         load_ft_sensor = as_bool(
@@ -178,10 +178,10 @@ def generate_launch_description():
         # Loaded as a node parameter the same way as real/mujoco, so no spawner -p
         # handoff is needed.
         initial_active_controller = launch_utils.get_initial_active_controller(
-            requested_controller, use_vla)
+            requested_controller, use_action_chunk)
         switchable_controllers = launch_utils.get_switchable_controllers(
             control_mode=mode,
-            use_vla=use_vla,
+            use_action_chunk=use_action_chunk,
             requested_controller=requested_controller,
             extra_torque_controllers=(
                 ['moveit_joint_trajectory_controller'] if load_moveit_controller else []

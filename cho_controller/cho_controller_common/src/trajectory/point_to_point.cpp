@@ -27,7 +27,7 @@ namespace trajectory {
 
 namespace {
 
-// Unset jerk = acceleration / this, as in cho_vla_core's ReferenceLimiter.
+// Unset jerk = acceleration / this, as in cho_action_chunk's ReferenceLimiter.
 constexpr double kJerkRampSec = 0.04;
 
 constexpr double kInfinity = std::numeric_limits<double>::infinity();

@@ -32,7 +32,7 @@ setup(
     zip_safe=True,
     maintainer='home',
     maintainer_email='chohh7391@gmail.com',
-    description='Interactive action clients, VLA tools, and ROS bag plotters for Cho robots',
+    description='Interactive action clients, action-chunk tools, and ROS bag plotters for Cho robots',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -48,10 +48,10 @@ setup(
             'franka_action_client = cho_control_tools.clients.franka.action_client:main',
             'ur5e_action_client = cho_control_tools.clients.ur5e.action_client:main',
             'ur_action_client = cho_control_tools.clients.ur5e.action_client:main',
-            'vla_action_client = cho_control_tools.vla.action_client:main',
-            'vla_success_gui = cho_control_tools.vla.success_gui:main',
-            'vla_mit_probe = cho_control_tools.vla.mit_probe:main',
-            'vla_task_probe = cho_control_tools.vla.task_probe:main',
+            'action_chunk_client = cho_control_tools.action_chunk.action_client:main',
+            'chunk_stream_success_gui = cho_control_tools.action_chunk.success_gui:main',
+            'action_chunk_mit_probe = cho_control_tools.action_chunk.mit_probe:main',
+            'action_chunk_task_probe = cho_control_tools.action_chunk.task_probe:main',
             'gravity_compensation_sweep = cho_control_tools.diagnostics.gravity_compensation_sweep:main',
             'trajectory_tracking_log = cho_control_tools.diagnostics.trajectory_tracking_log:main',
             'task_space_probe = cho_control_tools.diagnostics.task_space_probe:main',

@@ -20,7 +20,7 @@
 // on that period; this one proves each adapter honours it, through the real
 // controller_manager lifecycle on mock hardware.
 //
-// The VLA host is covered here too: ActionChunk.relative_frame (AC3) and a
+// The action-chunk host is covered here too: ActionChunk.relative_frame (AC3) and a
 // change of action space within one goal (AC8, AC11, AC18 C3). The 4th-stage
 // VLA review fixes (S11, S17, S12, S3, S8, C16, C17, C19, S15) are the
 // tests named AC1..AC10 further down, a goal that ends in motion (review S2)
@@ -60,9 +60,9 @@
 #include "cho_interfaces/action/gripper.hpp"
 #include "cho_interfaces/action/joint_space.hpp"
 #include "cho_interfaces/action/task_space.hpp"
-#include "cho_interfaces/action/vision_language_action.hpp"
+#include "cho_interfaces/action/chunk_stream.hpp"
 #include "cho_interfaces/msg/action_chunk.hpp"
-#include "cho_interfaces/msg/vla_telemetry.hpp"
+#include "cho_interfaces/msg/chunk_stream_telemetry.hpp"
 
 // The relay generation test needs stand-in franka_gripper servers, so
 // franka_msgs among this test's dependencies; without it the test is skipped.
@@ -80,7 +80,7 @@ using cho_controller_base::testing::ControllerManagerHarness;
 using cho_controller_base::testing::max_abs_difference;
 using JointSpace = cho_interfaces::action::JointSpace;
 using TaskSpace = cho_interfaces::action::TaskSpace;
-using Vla = cho_interfaces::action::VisionLanguageAction;
+using ChunkStream = cho_interfaces::action::ChunkStream;
 using GripperAction = cho_interfaces::action::Gripper;
 using Doubles = std::vector<double>;
 
@@ -135,7 +135,7 @@ std::string fr3_description(const bool dynamics = false)
 // cho_description_franka/urdf/fr3/fr3_franka_hand.urdf: each arm joint is a
 // translation, a roll about x and a turn about its own z axis, then fr3_joint8,
 // fr3_hand_joint and fr3_hand_tcp_joint. Computed here, not by the controller's
-// model, so the VLA tests can derive targets and judge the commanded joints
+// model, so the action-chunk tests can derive targets and judge the commanded joints
 // without it. The TCP lies on fr3_joint7's axis, so joint 7 alone turns it about
 // its own z axis and leaves it where it is.
 using Vec3 = std::array<double, 3>;
@@ -287,7 +287,7 @@ TEST(Fr3Kinematics, KHomeIsTheReadyPose)
 }
 
 // Every log record at WARN or above, whatever logger wrote it, so a test can
-// ask whether the VLA host warned about a field. INFO too while record_info()
+// ask whether the action-chunk host warned about a field. INFO too while record_info()
 // is set (the gripper relay tests ask what its callbacks logged).
 class LogCapture
 {
@@ -1333,15 +1333,15 @@ TEST(HeldCommand, AStaleCommandIsNotTakenUpAfterTheArmMoved)
     << "the position controller took up the command it left before the arm moved";
 }
 
-// A VLA controller in position mode, switched out and back in mid-goal: the
+// A action-chunk controller in position mode, switched out and back in mid-goal: the
 // goal ends, with the reason of the path that ended it.
-class VlaGoal : public ::testing::Test
+class ActionChunkGoal : public ::testing::Test
 {
 protected:
   void SetUp() override
   {
-    harness_ = std::make_unique<ControllerManagerHarness>(description(), "/franka_vla");
-    // config/mujoco/controllers.yaml's VLA block, position mode, with every
+    harness_ = std::make_unique<ControllerManagerHarness>(description(), "/franka_action_chunk");
+    // config/mujoco/controllers.yaml's action-chunk block, position mode, with every
     // global name moved under this test's namespace.
     std::vector<rclcpp::Parameter> parameters = {
       rclcpp::Parameter("robot_description", description()),
@@ -1354,24 +1354,24 @@ protected:
       rclcpp::Parameter("default_dof_pos", kHome),
       rclcpp::Parameter("default_kp_task", Doubles{1500, 1500, 1500, 40, 40, 40}),
       rclcpp::Parameter("default_kd_task", Doubles{60, 60, 60, 5, 5, 5}),
-      rclcpp::Parameter("chunk_topic", "/franka_vla/chunks"),
-      rclcpp::Parameter("success_service", "/franka_vla/success"),
-      rclcpp::Parameter("gripper_action", "/franka_vla/gripper"),
+      rclcpp::Parameter("chunk_topic", "/franka_action_chunk/chunks"),
+      rclcpp::Parameter("success_service", "/franka_action_chunk/success"),
+      rclcpp::Parameter("gripper_action", "/franka_action_chunk/gripper"),
       rclcpp::Parameter("telemetry_period_sec", 0.02)};
     if (chunk_time_source_is_set()) {
       parameters.emplace_back("chunk_time_source", "observation");
     }
     const auto extra = extra_parameters();
     parameters.insert(parameters.end(), extra.begin(), extra.end());
-    controller_ = harness_->load(kName, "cho_controller_franka/VLAController", parameters);
+    controller_ = harness_->load(kName, "cho_controller_franka/ActionChunkController", parameters);
     ASSERT_NE(controller_, nullptr);
     ASSERT_TRUE(harness_->configure(kName));
     ASSERT_TRUE(harness_->switch_controllers({kName}, {}));
-    client_ = rclcpp_action::create_client<Vla>(harness_->client_node(), std::string("/franka_vla/") + kName + "/vla");
+    client_ = rclcpp_action::create_client<ChunkStream>(harness_->client_node(), std::string("/franka_action_chunk/") + kName + "/chunk_stream");
     ASSERT_TRUE(client_->wait_for_action_server(std::chrono::seconds(5)));
   }
 
-  // Parameters a derived fixture adds to the VLA block.
+  // Parameters a derived fixture adds to the action-chunk block.
   virtual std::vector<rclcpp::Parameter> extra_parameters() const {return {};}
 
   virtual std::string description() const {return fr3_description();}
@@ -1380,9 +1380,9 @@ protected:
   virtual bool chunk_time_source_is_set() const {return true;}
 
   // `stream_timeout` <= 0 leaves the controller's default.
-  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr send(const double stream_timeout = 0.0)
+  rclcpp_action::ClientGoalHandle<ChunkStream>::SharedPtr send(const double stream_timeout = 0.0)
   {
-    Vla::Goal goal;
+    ChunkStream::Goal goal;
     goal.model_name = "test";
     goal.inference_frequency = 10.0f;
     goal.stream_timeout = stream_timeout;
@@ -1412,26 +1412,26 @@ protected:
     ASSERT_NE(send(), nullptr) << "the next goal was rejected";
   }
 
-  static constexpr const char * kName = "vla_controller";
+  static constexpr const char * kName = "action_chunk_controller";
   std::unique_ptr<ControllerManagerHarness> harness_;
   controller_interface::ControllerInterfaceBaseSharedPtr controller_;
-  rclcpp_action::Client<Vla>::SharedPtr client_;
+  rclcpp_action::Client<ChunkStream>::SharedPtr client_;
 };
 
-TEST_F(VlaGoal, TheOldGoalNeverResumes) {reactivate(false);}
-TEST_F(VlaGoal, AGoalEndedWhileInactiveSaysSo) {reactivate(true);}
+TEST_F(ActionChunkGoal, TheOldGoalNeverResumes) {reactivate(false);}
+TEST_F(ActionChunkGoal, AGoalEndedWhileInactiveSaysSo) {reactivate(true);}
 
 // A relative chunk is anchored to the reference at its observation time. The
 // controller must record that reference on every cycle, goal or not: a chunk
 // observed before its goal started -- the bridge's first inference runs while
 // the goal is being sent -- otherwise finds nothing at its time and is anchored
-// to the oldest entry instead, inexactly (re-audit 3, vla_action_server.cpp).
+// to the oldest entry instead, inexactly (re-audit 3, action_chunk_server.cpp).
 //
 // The harness clock starts about 1 s behind the node clock the controller times
 // arrivals on, so a chunk stamped on it arrives about 0.9 s old. The window
 // admits that age and the chunk's horizon outlasts it: a chunk whose waypoints
 // have all passed on arrival admits nothing and is not counted as accepted.
-class VlaGoalAnchor : public VlaGoal
+class ActionChunkGoalAnchor : public ActionChunkGoal
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -1440,7 +1440,7 @@ protected:
   }
 };
 
-TEST_F(VlaGoalAnchor, AChunkObservedBeforeTheGoalHasAnExactAnchor)
+TEST_F(ActionChunkGoalAnchor, AChunkObservedBeforeTheGoalHasAnExactAnchor)
 {
   harness_->cycle(200);
   const rclcpp::Time observed = harness_->now();
@@ -1448,12 +1448,12 @@ TEST_F(VlaGoalAnchor, AChunkObservedBeforeTheGoalHasAnExactAnchor)
   ASSERT_NE(send(), nullptr) << "goal rejected";
   harness_->cycle(10);
 
-  std::vector<cho_interfaces::msg::VlaTelemetry> telemetry;
-  auto subscription = harness_->client_node()->create_subscription<cho_interfaces::msg::VlaTelemetry>(
-    std::string("/franka_vla/") + kName + "/vla_telemetry", 10,
-    [&telemetry](const cho_interfaces::msg::VlaTelemetry & message) {telemetry.push_back(message);});
+  std::vector<cho_interfaces::msg::ChunkStreamTelemetry> telemetry;
+  auto subscription = harness_->client_node()->create_subscription<cho_interfaces::msg::ChunkStreamTelemetry>(
+    std::string("/franka_action_chunk/") + kName + "/chunk_stream_telemetry", 10,
+    [&telemetry](const cho_interfaces::msg::ChunkStreamTelemetry & message) {telemetry.push_back(message);});
   auto publisher = harness_->client_node()->create_publisher<cho_interfaces::msg::ActionChunk>(
-    "/franka_vla/chunks", 10);
+    "/franka_action_chunk/chunks", 10);
   for (int i = 0; i < 300 && (publisher->get_subscription_count() == 0 || subscription->get_publisher_count() == 0);
     ++i)
   {
@@ -1503,11 +1503,11 @@ TEST_F(VlaGoalAnchor, AChunkObservedBeforeTheGoalHasAnExactAnchor)
 // the periods do, so a chunk stamped on it can arrive with every waypoint
 // already in the past. align_clocks() before a publish and tick() while a chunk
 // is in flight keep the two within a period of each other.
-class VlaStream : public VlaGoal
+class ActionChunkStream : public ActionChunkGoal
 {
 protected:
   using Chunk = cho_interfaces::msg::ActionChunk;
-  using Telemetry = cho_interfaces::msg::VlaTelemetry;
+  using Telemetry = cho_interfaces::msg::ChunkStreamTelemetry;
   static constexpr double kPeriod = ControllerManagerHarness::kPeriod;
 
   void start(const double stream_timeout = 5.0)
@@ -1517,9 +1517,9 @@ protected:
     goal_ = send(stream_timeout);
     ASSERT_NE(goal_, nullptr) << "goal rejected";
     telemetry_subscription_ = harness_->client_node()->create_subscription<Telemetry>(
-      std::string("/franka_vla/") + kName + "/vla_telemetry", 10,
+      std::string("/franka_action_chunk/") + kName + "/chunk_stream_telemetry", 10,
       [this](const Telemetry & message) {telemetry_ = message; has_telemetry_ = true;});
-    chunks_ = harness_->client_node()->create_publisher<Chunk>("/franka_vla/chunks", 10);
+    chunks_ = harness_->client_node()->create_publisher<Chunk>("/franka_action_chunk/chunks", 10);
     ASSERT_TRUE(cycle_until([this] {
         return chunks_->get_subscription_count() > 0 && telemetry_subscription_->get_publisher_count() > 0 &&
                has_telemetry_;
@@ -1613,7 +1613,7 @@ protected:
   bool has_telemetry_{false};
   rclcpp::Subscription<Telemetry>::SharedPtr telemetry_subscription_;
   rclcpp::Publisher<Chunk>::SharedPtr chunks_;
-  rclcpp_action::ClientGoalHandle<Vla>::SharedPtr goal_;
+  rclcpp_action::ClientGoalHandle<ChunkStream>::SharedPtr goal_;
   std::uint64_t seq_{0};
 };
 
@@ -1624,7 +1624,7 @@ protected:
 //   "base" p = p_a + dp     = p_a + (0, +0.01, +0.02),  R = Rz(0.1)*R_a
 // R_a*Rz(0.1) = Rz(-0.1)*R_a, so the two frames also turn the TCP opposite ways
 // about the base z axis. Empty is "ee", with a warning.
-class VlaFrame : public VlaStream
+class ActionChunkFrame : public ActionChunkStream
 {
 protected:
   // Where the commanded TCP is 2.5 s after the chunk was taken; the chunk spans 3 s.
@@ -1661,7 +1661,7 @@ protected:
   static inline const Doubles kDelta = {0.0, 0.01, 0.02, 0.0, 0.0, 0.1};
 };
 
-TEST_F(VlaFrame, AC3_AnEmptyRelativeFrameIsTakenAsEeWithAWarning)
+TEST_F(ActionChunkFrame, AC3_AnEmptyRelativeFrameIsTakenAsEeWithAWarning)
 {
   Pose anchor{}, reached{};
   ASSERT_NO_FATAL_FAILURE(follow("", anchor, reached));
@@ -1670,7 +1670,7 @@ TEST_F(VlaFrame, AC3_AnEmptyRelativeFrameIsTakenAsEeWithAWarning)
     << "a relative task chunk without relative_frame was taken without a warning";
 }
 
-TEST_F(VlaFrame, AC3_AnEeDeltaComposesInTheAnchorBodyFrame)
+TEST_F(ActionChunkFrame, AC3_AnEeDeltaComposesInTheAnchorBodyFrame)
 {
   Pose anchor{}, reached{};
   ASSERT_NO_FATAL_FAILURE(follow("ee", anchor, reached));
@@ -1681,7 +1681,7 @@ TEST_F(VlaFrame, AC3_AnEeDeltaComposesInTheAnchorBodyFrame)
 
 // The regression that matters most: a host that never parses the field takes
 // "base" as the default "ee", and the arm goes the mirror way without an error.
-TEST_F(VlaFrame, AC3_ABaseDeltaComposesInTheRootFrame)
+TEST_F(ActionChunkFrame, AC3_ABaseDeltaComposesInTheRootFrame)
 {
   Pose anchor{}, reached{};
   ASSERT_NO_FATAL_FAILURE(follow("base", anchor, reached));
@@ -1693,7 +1693,7 @@ TEST_F(VlaFrame, AC3_ABaseDeltaComposesInTheRootFrame)
 // AC3: an unknown relative_frame is refused in every action space, as a bad
 // field, and moves nothing. Each chunk is one the arm would follow, and the same
 // chunks with a valid frame are then taken, so each refusal was the frame's.
-TEST_F(VlaStream, AC3_AnUnknownRelativeFrameIsRefusedInEverySpaceAndMovesNothing)
+TEST_F(ActionChunkStream, AC3_AnUnknownRelativeFrameIsRefusedInEverySpaceAndMovesNothing)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -1740,12 +1740,12 @@ TEST_F(VlaStream, AC3_AnUnknownRelativeFrameIsRefusedInEverySpaceAndMovesNothing
   }
 }
 
-// AC3 (S7): the VLA host in velocity mode, released while a chunk is playing. The
+// AC3 (S7): the action-chunk host in velocity mode, released while a chunk is playing. The
 // command it leaves on the velocity interfaces is zero, not the last rate. The
 // mock joints do not move under a velocity command here, so the reference runs
 // away from the measurement and the commanded rate stands at max_joint_vel while
 // the chunk plays; the states read back what was commanded.
-class VlaVelocity : public VlaStream
+class ActionChunkVelocity : public ActionChunkStream
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -1758,7 +1758,7 @@ protected:
   Doubles rates() {return harness_->states(kJoints, "velocity");}
 };
 
-TEST_F(VlaVelocity, AC3_S7_AVelocityModeVlaReleasedInMotionLeavesZeroVelocity)
+TEST_F(ActionChunkVelocity, AC3_S7_AVelocityModeActionChunkReleasedInMotionLeavesZeroVelocity)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -1775,14 +1775,14 @@ TEST_F(VlaVelocity, AC3_S7_AVelocityModeVlaReleasedInMotionLeavesZeroVelocity)
   ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
   harness_->cycle(1, /*spin=*/false);
   EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
-    << "released in motion, the VLA host left a velocity command behind";
+    << "released in motion, the action-chunk host left a velocity command behind";
   harness_->cycle(100);
   EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
     << "the velocity command came back after the release";
 }
 
 // The same release with a task-space chunk playing.
-TEST_F(VlaVelocity, AC3_S7_ATaskChunkInMotionIsReleasedToZeroVelocityToo)
+TEST_F(ActionChunkVelocity, AC3_S7_ATaskChunkInMotionIsReleasedToZeroVelocityToo)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -1797,7 +1797,7 @@ TEST_F(VlaVelocity, AC3_S7_ATaskChunkInMotionIsReleasedToZeroVelocityToo)
   ASSERT_TRUE(harness_->switch_controllers({}, {kName}));
   harness_->cycle(1, /*spin=*/false);
   EXPECT_LT(max_abs_difference(rates(), Doubles(7, 0.0)), 1e-12)
-    << "released in motion, the VLA host left a velocity command behind";
+    << "released in motion, the action-chunk host left a velocity command behind";
 }
 
 // AC8, AC11, AC18 (C3, C4, C6): within one goal, joint chunks give way to task
@@ -1815,7 +1815,7 @@ TEST_F(VlaVelocity, AC3_S7_ATaskChunkInMotionIsReleasedToZeroVelocityToo)
 // rate shows up as a rate near zero right after the switch. Only the row-space
 // part of the joint motion carries over (the task law spreads it across joints
 // 1, 3, 5 and 7), so the joint-space check is a bound, not an equality.
-class VlaSwitch : public VlaStream
+class ActionChunkSwitch : public ActionChunkStream
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -1827,7 +1827,7 @@ protected:
   static constexpr double kAngularAcceleration = 2.0;  // [rad/s^2]
 };
 
-TEST_F(VlaSwitch, AC18_C3_AJointToTaskSwitchInMotionCarriesOnFromTheCommand)
+TEST_F(ActionChunkSwitch, AC18_C3_AJointToTaskSwitchInMotionCarriesOnFromTheCommand)
 {
   constexpr double kRate = 0.2;  // joint 7 [rad/s]
   constexpr double kDt = ControllerManagerHarness::kPeriod;
@@ -1941,7 +1941,7 @@ TEST_F(VlaSwitch, AC18_C3_AJointToTaskSwitchInMotionCarriesOnFromTheCommand)
 // The switch re-seeds the joint limiter from those commanded joints, not from
 // joints left over from before the task chunk (kHome, where the goal started),
 // so nothing moves.
-TEST_F(VlaStream, AC8_ATaskToJointSwitchStartsFromTheCommandedJoints)
+TEST_F(ActionChunkStream, AC8_ATaskToJointSwitchStartsFromTheCommandedJoints)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -2007,11 +2007,11 @@ bool all_finite(const Doubles & q)
   return std::all_of(q.begin(), q.end(), [](double v) {return std::isfinite(v);});
 }
 
-// A parameter of the VLA controller node, read over its parameter services.
+// A parameter of the action-chunk controller node, read over its parameter services.
 rclcpp::Parameter read_parameter(ControllerManagerHarness & harness, const std::string & name)
 {
   auto client = std::make_shared<rclcpp::AsyncParametersClient>(
-    harness.client_node(), "/franka_vla/vla_controller");
+    harness.client_node(), "/franka_action_chunk/action_chunk_controller");
   for (int i = 0; i < 3000 && !client->service_is_ready(); ++i) {
     harness.cycle(1);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -2026,7 +2026,7 @@ rclcpp::Parameter read_parameter(ControllerManagerHarness & harness, const std::
 // AC1 (S11): the reference stays inside the model's joint limits, 0.05 rad in.
 // Limits and margin are the URDF's and the spec's; a chunk that asks for more
 // gets the window edge, not the limit and not past it.
-TEST_F(VlaStream, AC1_S11_AnAbsoluteJointChunkBeyondTheLimitsStopsAtTheWindow)
+TEST_F(ActionChunkStream, AC1_S11_AnAbsoluteJointChunkBeyondTheLimitsStopsAtTheWindow)
 {
   ASSERT_NO_FATAL_FAILURE(start(60.0));
   harness_->cycle(20);
@@ -2061,7 +2061,7 @@ TEST_F(VlaStream, AC1_S11_AnAbsoluteJointChunkBeyondTheLimitsStopsAtTheWindow)
 // (the arm stretches to about 0.92 m and stops), and two above the shoulder's
 // reach, 1.2 m and 1.5 m up, which drive fr3_joint6 below its limit on a
 // controller that does not clamp.
-class VlaUnreachable : public VlaStream
+class ActionChunkUnreachable : public ActionChunkStream
 {
 protected:
   void drive_to(const Vec3 & target)
@@ -2094,17 +2094,17 @@ protected:
   }
 };
 
-TEST_F(VlaUnreachable, AC1_S11_ATargetFarBeyondTheReachNeverTakesAJointOutOfTheWindow)
+TEST_F(ActionChunkUnreachable, AC1_S11_ATargetFarBeyondTheReachNeverTakesAJointOutOfTheWindow)
 {
   drive_to(Vec3{1.1, 0.0, 0.487});
 }
 
-TEST_F(VlaUnreachable, AC1_S11_ATargetAboveTheReachNeverTakesAJointOutOfTheWindow)
+TEST_F(ActionChunkUnreachable, AC1_S11_ATargetAboveTheReachNeverTakesAJointOutOfTheWindow)
 {
   drive_to(Vec3{0.6, 0.0, 1.2});
 }
 
-TEST_F(VlaUnreachable, AC1_S11_ATargetStraightOverheadNeverTakesAJointOutOfTheWindow)
+TEST_F(ActionChunkUnreachable, AC1_S11_ATargetStraightOverheadNeverTakesAJointOutOfTheWindow)
 {
   drive_to(Vec3{0.3, 0.0, 1.5});
 }
@@ -2113,13 +2113,13 @@ TEST_F(VlaUnreachable, AC1_S11_ATargetStraightOverheadNeverTakesAJointOutOfTheWi
 // velocity command chases, and with dynamics on the mock the joint follows it.
 // An unclamped reference would carry joint 4 to its chunk target, 0.2 rad past
 // the limit.
-class VlaVelocityDynamics : public VlaVelocity
+class ActionChunkVelocityDynamics : public ActionChunkVelocity
 {
 protected:
   std::string description() const override {return fr3_description(true);}
 };
 
-TEST_F(VlaVelocityDynamics, AC1_S11_AVelocityModeReferenceStaysInsideTheWindow)
+TEST_F(ActionChunkVelocityDynamics, AC1_S11_AVelocityModeReferenceStaysInsideTheWindow)
 {
   ASSERT_NO_FATAL_FAILURE(start(60.0));
   harness_->cycle(20);
@@ -2148,7 +2148,7 @@ TEST_F(VlaVelocityDynamics, AC1_S11_AVelocityModeReferenceStaysInsideTheWindow)
 // limiter's acceleration bound (max_joint_ref_acc, default 4 rad/s^2), not stop
 // in one period (v / dt = 100 rad/s^2 at 0.1 rad/s and 1 ms). The hold target is
 // where it stopped: the position never goes back, and it stays put afterwards.
-TEST_F(VlaStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLimit)
+TEST_F(ActionChunkStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLimit)
 {
   constexpr double kRate = 0.1;               // joint 7 [rad/s]
   constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
@@ -2224,13 +2224,13 @@ TEST_F(VlaStream, AC2_S17_AHoldEnteredInMotionDeceleratesWithinTheAccelerationLi
 // end takes effect, before the reference is at rest. A goal sent while it is
 // still stopping starts once it is at rest, so the stop runs its whole course
 // and that goal's own end takes effect only then
-// (VLAActionServer::set_reference_settling()).
-class VlaEnd : public VlaStream
+// (ActionChunkServer::set_reference_settling()).
+class ActionChunkEnd : public ActionChunkStream
 {
 protected:
   enum class End {kCancel, kSuccess, kGoalTimeout};
-  using Result = std::shared_future<rclcpp_action::ClientGoalHandle<Vla>::WrappedResult>;
-  using CancelAnswer = std::shared_future<rclcpp_action::Client<Vla>::CancelResponse::SharedPtr>;
+  using Result = std::shared_future<rclcpp_action::ClientGoalHandle<ChunkStream>::WrappedResult>;
+  using CancelAnswer = std::shared_future<rclcpp_action::Client<ChunkStream>::CancelResponse::SharedPtr>;
 
   static constexpr double kRate = 0.1;               // joint 7 [rad/s]
   static constexpr double kAccelerationLimit = 4.0;  // [rad/s^2], Franka's default max_joint_ref_acc
@@ -2269,7 +2269,7 @@ protected:
       [&service](const rclcpp::CallbackGroup::SharedPtr & group) {
         if (!service) {
           service = group->find_service_ptrs_if([](const rclcpp::ServiceBase::SharedPtr & candidate) {
-                return std::string(candidate->get_service_name()) == "/franka_vla/success";
+                return std::string(candidate->get_service_name()) == "/franka_action_chunk/success";
               });
         }
       });
@@ -2477,7 +2477,7 @@ protected:
         cancel = client_->async_cancel_goal(goal_);
         break;
       case End::kSuccess:
-        ASSERT_TRUE(request_success()) << "the controller has no /franka_vla/success service";
+        ASSERT_TRUE(request_success()) << "the controller has no /franka_action_chunk/success service";
         break;
       case End::kGoalTimeout:
         break;
@@ -2572,7 +2572,7 @@ protected:
     if (next == End::kCancel) {
       next_cancel = client_->async_cancel_goal(next_goal);
     } else {
-      ASSERT_TRUE(request_success()) << "the controller has no /franka_vla/success service";
+      ASSERT_TRUE(request_success()) << "the controller has no /franka_action_chunk/success service";
     }
     const std::size_t asked_at = q_.size() - 1;
     for (int i = 0; i < 2000 && !ready(second); ++i) {
@@ -2928,48 +2928,48 @@ protected:
   double steady_rate_{kRate};
 };
 
-class VlaEndTimeout : public VlaEnd
+class ActionChunkEndTimeout : public ActionChunkEnd
 {
 protected:
   // Some 2.2 s go into start_turning() before the goal is ended.
   double goal_timeout() const override {return 6.0;}
 };
 
-class VlaEndVelocity : public VlaEnd
+class ActionChunkEndVelocity : public ActionChunkEnd
 {
 protected:
   bool velocity_mode() const override {return true;}
 };
 
-class VlaEndVelocityTimeout : public VlaEndVelocity
+class ActionChunkEndVelocityTimeout : public ActionChunkEndVelocity
 {
 protected:
   double goal_timeout() const override {return 6.0;}
 };
 
-TEST_F(VlaEnd, S2_APositionGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
-TEST_F(VlaEnd, S2_APositionGoalSucceededInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kSuccess);}
-TEST_F(VlaEndTimeout, S2_APositionGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
+TEST_F(ActionChunkEnd, S2_APositionGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
+TEST_F(ActionChunkEnd, S2_APositionGoalSucceededInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kSuccess);}
+TEST_F(ActionChunkEndTimeout, S2_APositionGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
 {
   end_in_motion(End::kGoalTimeout);
 }
-TEST_F(VlaEndVelocity, S2_AVelocityGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
-TEST_F(VlaEndVelocity, S2_AVelocityGoalSucceededInMotionStopsWithinTheAccelerationLimit)
+TEST_F(ActionChunkEndVelocity, S2_AVelocityGoalCanceledInMotionStopsWithinTheAccelerationLimit) {end_in_motion(End::kCancel);}
+TEST_F(ActionChunkEndVelocity, S2_AVelocityGoalSucceededInMotionStopsWithinTheAccelerationLimit)
 {
   end_in_motion(End::kSuccess);
 }
-TEST_F(VlaEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
+TEST_F(ActionChunkEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAccelerationLimit)
 {
   end_in_motion(End::kGoalTimeout);
 }
-// A VLA reference switched out while it moves, to the position hold: the switch
-// pick_place_position makes right after its VLA goal ends, while the end stop
+// A action-chunk reference switched out while it moves, to the position hold: the switch
+// pick_place_position makes right after its chunk-stream goal ends, while the end stop
 // may still run, or the guarded mission's after a failure. The hold takes the
 // motion over (FrankaBaseController::held_command_motion()) and brings it to
-// rest within its own joint limits, here the VLA limiter's 4 rad/s^2. Held where
-// VLA left it, joint 7 stopped from kRate in one period, 100 rad/s^2. Every
+// rest within its own joint limits, here the action-chunk limiter's 4 rad/s^2. Held where
+// The action-chunk controller left it, joint 7 stopped from kRate in one period, 100 rad/s^2. Every
 // period is sampled, the load's and the switch's too.
-TEST_F(VlaEnd, AReferenceSwitchedOutInMotionIsBroughtToRestByTheHold)
+TEST_F(ActionChunkEnd, AReferenceSwitchedOutInMotionIsBroughtToRestByTheHold)
 {
   ASSERT_NO_FATAL_FAILURE(start_turning(5.0));
   constexpr const char * kHold = "joint_space_position_controller";
@@ -3008,13 +3008,13 @@ TEST_F(VlaEnd, AReferenceSwitchedOutInMotionIsBroughtToRestByTheHold)
   EXPECT_GT(q_.back()[6] - q_[before + 2][6], kRate * kDt);
 }
 
-TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndIsCanceledThere) {hand_over(End::kCancel);}
-TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndSucceedsThere) {hand_over(End::kSuccess);}
-TEST_F(VlaEnd, S2_ATaskGoalCanceledInMotionStopsOnItsLineWithinTheTaskAccelerationLimit) {end_task_in_motion();}
-TEST_F(VlaEnd, C1_APositionGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
-TEST_F(VlaEndVelocity, C1_AVelocityGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
-TEST_F(VlaEnd, C1_AGoalCanceledWhileItsHoldDeceleratesStopsWithinTheJerkLimit) {cancel_while_the_hold_decelerates();}
-TEST_F(VlaEnd, C1_ATaskGoalCanceledWhileItsTurnAcceleratesStopsWithinTheJerkLimit)
+TEST_F(ActionChunkEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndIsCanceledThere) {hand_over(End::kCancel);}
+TEST_F(ActionChunkEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndSucceedsThere) {hand_over(End::kSuccess);}
+TEST_F(ActionChunkEnd, S2_ATaskGoalCanceledInMotionStopsOnItsLineWithinTheTaskAccelerationLimit) {end_task_in_motion();}
+TEST_F(ActionChunkEnd, C1_APositionGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
+TEST_F(ActionChunkEndVelocity, C1_AVelocityGoalCanceledWhileAcceleratingStopsWithinTheJerkLimit) {end_while_accelerating();}
+TEST_F(ActionChunkEnd, C1_AGoalCanceledWhileItsHoldDeceleratesStopsWithinTheJerkLimit) {cancel_while_the_hold_decelerates();}
+TEST_F(ActionChunkEnd, C1_ATaskGoalCanceledWhileItsTurnAcceleratesStopsWithinTheJerkLimit)
 {
   end_task_turn_while_accelerating();
 }
@@ -3022,7 +3022,7 @@ TEST_F(VlaEnd, C1_ATaskGoalCanceledWhileItsTurnAcceleratesStopsWithinTheJerkLimi
 // AC10 (S15), Franka host: chunks 0.5 s apart with a 1 s horizon and a goal
 // stream_timeout of 0.2 s never put the host into hold while the horizon lasts;
 // once they stop it holds after the horizon has run out, not after 0.2 s.
-TEST_F(VlaStream, AC10_S15_ChunksSpacedWithinTheirHorizonNeverHoldTheStream)
+TEST_F(ActionChunkStream, AC10_S15_ChunksSpacedWithinTheirHorizonNeverHoldTheStream)
 {
   constexpr double kDt = 0.1;
   ASSERT_NO_FATAL_FAILURE(start(0.2));
@@ -3057,7 +3057,7 @@ TEST_F(VlaStream, AC10_S15_ChunksSpacedWithinTheirHorizonNeverHoldTheStream)
 
 // AC6 (C16): control_dt <= 0 is refused, not invented from the goal's
 // inference_frequency; nothing moves; a valid control_dt is then taken.
-TEST_F(VlaStream, AC6_C16_AChunkWithoutAControlDtIsRefusedAndMovesNothing)
+TEST_F(ActionChunkStream, AC6_C16_AChunkWithoutAControlDtIsRefusedAndMovesNothing)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -3090,7 +3090,7 @@ TEST_F(VlaStream, AC6_C16_AChunkWithoutAControlDtIsRefusedAndMovesNothing)
 // AC5 (S8): the observation time window, with the controller's default limits
 // (max age 1.0 s, max future skew 0.05 s). Nothing refused moves the arm; a
 // chunk inside the window is taken.
-TEST_F(VlaStream, AC5_S8_AnObservationTooOldOrInTheFutureIsRefused)
+TEST_F(ActionChunkStream, AC5_S8_AnObservationTooOldOrInTheFutureIsRefused)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -3131,7 +3131,7 @@ TEST_F(VlaStream, AC5_S8_AnObservationTooOldOrInTheFutureIsRefused)
 // 0.25 s of horizon) is inside the window but has nothing to play. It is not
 // counted as accepted and it does not keep the watchdog alive: with only such
 // chunks arriving after one real one, the stream is held.
-TEST_F(VlaStream, AC5_S8_AChunkWithNoAdmittedWaypointDoesNotKeepTheStreamAlive)
+TEST_F(ActionChunkStream, AC5_S8_AChunkWithNoAdmittedWaypointDoesNotKeepTheStreamAlive)
 {
   ASSERT_NO_FATAL_FAILURE(start(0.2));
   harness_->cycle(20);
@@ -3170,7 +3170,7 @@ TEST_F(VlaStream, AC5_S8_AChunkWithNoAdmittedWaypointDoesNotKeepTheStreamAlive)
 // reactivation: the ring starts again, and the chunk is older than its oldest
 // entry, so the anchor is the inexact fallback. Without the reset the ring
 // still holds that moment and the anchor is exact.
-class VlaHistory : public VlaStream
+class ActionChunkHistory : public ActionChunkStream
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -3180,7 +3180,7 @@ protected:
   }
 };
 
-TEST_F(VlaHistory, AC4_S3_AChunkObservedBeforeAReactivationIsAnchoredInexactly)
+TEST_F(ActionChunkHistory, AC4_S3_AChunkObservedBeforeAReactivationIsAnchoredInexactly)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(100);
@@ -3216,10 +3216,10 @@ TEST_F(VlaHistory, AC4_S3_AChunkObservedBeforeAReactivationIsAnchoredInexactly)
 // and the controller holds that goal. The mock runs at 1 ms, so 2000 1/s is
 // K * dt = 2. The log capture is installed before the controller is activated,
 // because the check runs on the first update.
-class VlaIkGain : public VlaStream
+class ActionChunkIkGain : public ActionChunkStream
 {
 protected:
-  VlaIkGain()
+  ActionChunkIkGain()
   {
     LogCapture::install();
     LogCapture::clear();
@@ -3233,19 +3233,19 @@ protected:
   }
 };
 
-class VlaIkGainTooHigh : public VlaIkGain
+class ActionChunkIkGainTooHigh : public ActionChunkIkGain
 {
 protected:
   double gain() const override {return 2000.0;}
 };
 
-class VlaIkGainSafe : public VlaIkGain
+class ActionChunkIkGainSafe : public ActionChunkIkGain
 {
 protected:
   double gain() const override {return 500.0;}  // K * dt = 0.5
 };
 
-TEST_F(VlaIkGainTooHigh, AC3_S12_AGainThatCannotConvergeIsAnErrorAndHoldsTheGoal)
+TEST_F(ActionChunkIkGainTooHigh, AC3_S12_AGainThatCannotConvergeIsAnErrorAndHoldsTheGoal)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -3261,7 +3261,7 @@ TEST_F(VlaIkGainTooHigh, AC3_S12_AGainThatCannotConvergeIsAnErrorAndHoldsTheGoal
     << "the controller followed a task chunk with a gain that cannot converge";
 }
 
-TEST_F(VlaIkGainSafe, AC3_S12_AnIkGainOtherThanKpTaskConvergesAtTheMockPeriod)
+TEST_F(ActionChunkIkGainSafe, AC3_S12_AnIkGainOtherThanKpTaskConvergesAtTheMockPeriod)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -3278,16 +3278,16 @@ TEST_F(VlaIkGainSafe, AC3_S12_AnIkGainOtherThanKpTaskConvergesAtTheMockPeriod)
 
 // AC7 (C17), AC9 (C23), AC10 and the defaults of the other new parameters, read
 // off the controller: goal_timeout_sec is 0 (off, as in the OpenArm host),
-// chunk_time_source stays "arrival" (decided after S8, see cho_vla_core's
+// chunk_time_source stays "arrival" (decided after S8, see cho_action_chunk's
 // DESIGN.md), stream_horizon_credit_sec 1.0, the observation window 1.0 s and
 // 0.05 s, task_ik_gain 50 1/s and null_space_damping 0 (today's behaviour).
-class VlaDefaults : public VlaStream
+class ActionChunkDefaults : public ActionChunkStream
 {
 protected:
   bool chunk_time_source_is_set() const override {return false;}
 };
 
-TEST_F(VlaDefaults, AC7_AC9_AC10_TheNewParametersHaveTheirDocumentedDefaults)
+TEST_F(ActionChunkDefaults, AC7_AC9_AC10_TheNewParametersHaveTheirDocumentedDefaults)
 {
   const std::vector<std::pair<std::string, double>> expected = {
     {"goal_timeout_sec", 0.0}, {"stream_horizon_credit_sec", 1.0}, {"chunk_max_observation_age", 1.0},
@@ -3296,7 +3296,7 @@ TEST_F(VlaDefaults, AC7_AC9_AC10_TheNewParametersHaveTheirDocumentedDefaults)
     const auto parameter = read_parameter(*harness_, entry.first);
     const auto type = parameter.get_type();
     if (type != rclcpp::ParameterType::PARAMETER_DOUBLE && type != rclcpp::ParameterType::PARAMETER_INTEGER) {
-      ADD_FAILURE() << entry.first << " is not a numeric parameter of the VLA controller";
+      ADD_FAILURE() << entry.first << " is not a numeric parameter of the action-chunk controller";
       continue;
     }
     EXPECT_DOUBLE_EQ(parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE ?
@@ -3309,7 +3309,7 @@ TEST_F(VlaDefaults, AC7_AC9_AC10_TheNewParametersHaveTheirDocumentedDefaults)
 
 // AC7 (C17): with goal_timeout_sec = 0.3 a goal is aborted once it has run that
 // long, with the parameter in the reason.
-class VlaGoalTimeout : public VlaStream
+class ActionChunkGoalTimeout : public ActionChunkStream
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -3318,7 +3318,7 @@ protected:
   }
 };
 
-TEST_F(VlaGoalTimeout, AC7_C17_AGoalPastGoalTimeoutSecIsAborted)
+TEST_F(ActionChunkGoalTimeout, AC7_C17_AGoalPastGoalTimeoutSecIsAborted)
 {
   harness_->cycle(50);
   auto handle = send(30.0);
@@ -3343,12 +3343,12 @@ TEST_F(VlaGoalTimeout, AC7_C17_AGoalPastGoalTimeoutSecIsAborted)
 // session sampled at it is ahead of the tick the command is executed on, while
 // q_ref_ advances one nominal period, and the task IK put task_ik_gain * dt of
 // the difference into one command: 4.5 urad, a 4520 rad/s^3 jerk, and libfranka
-// stopped the arm. The session runs on VLASessionClock instead. The real
+// stopped the arm. The session runs on ChunkSessionClock instead. The real
 // bringup's update_rate, so the nominal period is the harness's 1 ms, and its
-// chunk_time_source, arrival; vla_action_client's circle, 5 cm at 1 rad/s,
+// chunk_time_source, arrival; action_chunk_client's circle, 5 cm at 1 rad/s,
 // 48 waypoints 1/240 s apart every 1/15 s, each relative to its own start along
 // the base axes.
-class VlaLateCycle : public VlaStream
+class ActionChunkLateCycle : public ActionChunkStream
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -3386,7 +3386,7 @@ protected:
   }
 };
 
-TEST_F(VlaLateCycle, ALateCycleDoesNotStepTheCommand)
+TEST_F(ActionChunkLateCycle, ALateCycleDoesNotStepTheCommand)
 {
   ASSERT_NO_FATAL_FAILURE(start());
   harness_->cycle(20);
@@ -3430,9 +3430,9 @@ TEST_F(VlaLateCycle, ALateCycleDoesNotStepTheCommand)
 // command is for the tick after. On the real FR3 the clocks here step by
 // franka_hardware's robot_time (nominal_period()), so the reference moves on by
 // both ticks; by one period it fell a tick behind the robot and the command
-// stepped back by v * 1 ms. VlaLateCycle's circle under bringup_type "real",
+// stepped back by v * 1 ms. ActionChunkLateCycle's circle under bringup_type "real",
 // the harness driving fr3/robot_time; the rate limiter runs too.
-class VlaSkippedCycle : public VlaLateCycle
+class ActionChunkSkippedCycle : public ActionChunkLateCycle
 {
 protected:
   std::vector<rclcpp::Parameter> extra_parameters() const override
@@ -3441,7 +3441,7 @@ protected:
   }
 };
 
-TEST_F(VlaSkippedCycle, ASkippedStateDoesNotStepTheCommand)
+TEST_F(ActionChunkSkippedCycle, ASkippedStateDoesNotStepTheCommand)
 {
   harness_->drive_clock(kRobotTime);
   ASSERT_NO_FATAL_FAILURE(start());

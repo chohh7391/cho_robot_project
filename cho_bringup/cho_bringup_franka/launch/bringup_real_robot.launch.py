@@ -58,7 +58,7 @@ def generate_robot_nodes(context):
     mode = LaunchConfiguration('control_mode').perform(context)
     ctrl_name = LaunchConfiguration('controller_name').perform(context)
     load_gripper_arg = LaunchConfiguration('load_gripper').perform(context)
-    use_vla = LaunchConfiguration('vla').perform(context)
+    use_action_chunk = LaunchConfiguration('action_chunk').perform(context)
     b_type = LaunchConfiguration('bringup_type').perform(context)
     ee_name = LaunchConfiguration('ee_name').perform(context)
     load_ft_sensor = as_bool(LaunchConfiguration('load_ft_sensor').perform(context))
@@ -66,11 +66,11 @@ def generate_robot_nodes(context):
     # ------------------------------------------------------------------
     # 2. Controller preparation policy
     # ------------------------------------------------------------------
-    launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
-    initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_vla)
+    launch_utils.check_controller_matches_mode(ctrl_name, mode, use_action_chunk)
+    initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_action_chunk)
     switchable_controllers = launch_utils.get_switchable_controllers(
         control_mode=mode,
-        use_vla=use_vla,
+        use_action_chunk=use_action_chunk,
         requested_controller=ctrl_name,
     )
     # One runtime parameter file serves every arm, so a hand frame needs every
@@ -256,7 +256,7 @@ def generate_launch_description():
             # 'velocity' is accepted: franka_hardware already declares the velocity
             # command_interface unconditionally (franka_arm.ros2_control.xacro) and libfranka's
             # startJointVelocityControl() runs through the onboard joint-impedance controller
-            # (auto gravity compensation), so vla_controller's velocity control_mode should work
+            # (auto gravity compensation), so action_chunk_controller's velocity control_mode should work
             # here in principle -- verified in MuJoCo, but NOT yet exercised on real hardware.
             # Start slow/low-gain and be ready on the e-stop the first time.
             description=('Choose control mode: position, velocity, torque '
@@ -284,9 +284,9 @@ def generate_launch_description():
             choices=['true', 'false'],
         ),
         DeclareLaunchArgument(
-            'vla',
+            'action_chunk',
             default_value='false',
-            description='If true, forces vla_controller to be the active controller',
+            description='If true, forces action_chunk_controller to be the active controller',
         ),
         DeclareLaunchArgument(
             'bringup_type',

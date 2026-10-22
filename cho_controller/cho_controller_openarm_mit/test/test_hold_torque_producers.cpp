@@ -16,7 +16,7 @@
 // interface (claim indices 39-45 of the arm, after the 35 joint fields and the 4
 // protocol GPIO):
 //
-//  - TaskSpaceImpedance and VLA: h = gravity_scale * gravity_joint_scale * g(q),
+//  - TaskSpaceImpedance and ActionChunk: h = gravity_scale * gravity_joint_scale * g(q),
 //    g from the producer's own model at the measured q, clamped to the profile's
 //    tau_ff_max (not to the controller's torque_limit); no slew.
 //  - JointImpedanceAction: h = g(q), clamped to tau_ff_max.
@@ -53,7 +53,7 @@
 #include "cho_controller_openarm_mit/bimanual_fjt_controller.hpp"
 #include "cho_controller_openarm_mit/direct_controller.hpp"
 #include "cho_controller_openarm_mit/task_space_impedance_controller.hpp"
-#include "cho_controller_openarm_mit/vla_controller.hpp"
+#include "cho_controller_openarm_mit/action_chunk_controller.hpp"
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 
 namespace cho_controller_openarm_mit
@@ -300,7 +300,7 @@ protected:
       set("max_reference_offset", std::vector<double>(7, 0.15));
       set("release_duration", 0.3);
     }
-    if constexpr (std::is_same_v<cho_controller_openarm_mit::VlaController, Controller>) {
+    if constexpr (std::is_same_v<cho_controller_openarm_mit::ActionChunkController, Controller>) {
       set("chunk_topic", std::string("/hold_torque/chunks"));
       set("stream_timeout_sec", 0.2);
       set("hold_timeout_sec", 0.6);
@@ -469,29 +469,29 @@ TEST_F(HoldTorqueFixture, AC4_TaskSpaceZeroGravityScaleWritesZeroNotNaN)
   }
 }
 
-// -- VLA ---------------------------------------------------------------------
+// -- ActionChunk -------------------------------------------------------------
 
-TEST_F(HoldTorqueFixture, AC4_VlaWritesTheClampedGravityTorqueAtIndices39To45)
+TEST_F(HoldTorqueFixture, AC4_ActionChunkWritesTheClampedGravityTorqueAtIndices39To45)
 {
-  auto vla = add<cho_controller_openarm_mit::VlaController>(
-    "vla", "cho_controller_openarm_mit/VlaController");
-  expect_single_arm_layout(vla->command_interface_configuration().names);
-  activate("vla");
+  auto chunk_controller = add<cho_controller_openarm_mit::ActionChunkController>(
+    "action_chunk", "cho_controller_openarm_mit/ActionChunkController");
+  expect_single_arm_layout(chunk_controller->command_interface_configuration().names);
+  activate("action_chunk");
   using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
-  wait_until([&] {return Access::ready(*vla);});
-  ASSERT_TRUE(Access::ready(*vla));
-  expect_hold_equals([&](std::size_t j) {return Access::hold_torque(*vla, j);}, 1.0, kOnes);
+  wait_until([&] {return Access::ready(*chunk_controller);});
+  ASSERT_TRUE(Access::ready(*chunk_controller));
+  expect_hold_equals([&](std::size_t j) {return Access::hold_torque(*chunk_controller, j);}, 1.0, kOnes);
 }
 
-TEST_F(HoldTorqueFixture, AC4_VlaGravityScaleChangesTheHoldTorque)
+TEST_F(HoldTorqueFixture, AC4_ActionChunkGravityScaleChangesTheHoldTorque)
 {
-  auto vla = add<cho_controller_openarm_mit::VlaController>(
-    "vla", "cho_controller_openarm_mit/VlaController", {rclcpp::Parameter("gravity_scale", 0.5)});
-  activate("vla");
+  auto chunk_controller = add<cho_controller_openarm_mit::ActionChunkController>(
+    "action_chunk", "cho_controller_openarm_mit/ActionChunkController", {rclcpp::Parameter("gravity_scale", 0.5)});
+  activate("action_chunk");
   using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
-  wait_until([&] {return Access::ready(*vla);});
-  ASSERT_TRUE(Access::ready(*vla));
-  expect_hold_equals([&](std::size_t j) {return Access::hold_torque(*vla, j);}, 0.5, kOnes);
+  wait_until([&] {return Access::ready(*chunk_controller);});
+  ASSERT_TRUE(Access::ready(*chunk_controller));
+  expect_hold_equals([&](std::size_t j) {return Access::hold_torque(*chunk_controller, j);}, 0.5, kOnes);
 }
 
 // -- JointImpedanceAction ------------------------------------------------------

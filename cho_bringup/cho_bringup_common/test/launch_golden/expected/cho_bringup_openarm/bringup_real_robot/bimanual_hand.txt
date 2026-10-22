@@ -1,6 +1,6 @@
 LAUNCH cho_bringup_openarm/bringup_real_robot.launch.py ['bimanual:=true', 'hand:=true']
   ARG bimanual default='false' choices=['true', 'false']
-  ARG controller_name default='joint_impedance_mit_controller' choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'vla_mit_controller']
+  ARG controller_name default='joint_impedance_mit_controller' choices=['joint_impedance_mit_controller', 'task_space_impedance_mit_controller', 'action_chunk_mit_controller']
   ARG mit_arm default='both_independent' choices=['left', 'right', 'both_independent']
   ARG can_interface default='can0' choices=None
   ARG left_can_interface default='can1' choices=None

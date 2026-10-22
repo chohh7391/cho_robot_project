@@ -34,16 +34,16 @@ from cho_task_manager.utils.controller_names import (
     exclusive_arm_controllers,
     load_robot_config,
     moveit_joint_action_name,
-    vla_completion_service_name,
+    chunk_stream_completion_service_name,
 )
 from cho_task_manager.utils.msg_utils import make_joint_state, make_pose
 
 
 @pytest.mark.parametrize('kind', [
-    'joint_space', 'task_space', 'gripper', 'vla', 'follow_joint_trajectory'])
+    'joint_space', 'task_space', 'gripper', 'chunk_stream', 'follow_joint_trajectory'])
 def test_a_controller_serves_each_kind_under_its_own_node(kind):
-    assert controller_action_name('left_vla_mit_controller', kind) == (
-        f'/left_vla_mit_controller/{kind}')
+    assert controller_action_name('left_action_chunk_mit_controller', kind) == (
+        f'/left_action_chunk_mit_controller/{kind}')
     assert controller_action_name(ControllerNames.JOINT_QP, kind) == (
         f'/joint_space_qp_controller/{kind}')
 
@@ -69,19 +69,20 @@ def test_the_action_leaves_address_their_controllers_actions():
     assert replay.action_name == '/joint_trajectory_controller/follow_joint_trajectory'
 
 
-def test_the_vla_completion_service_hangs_off_the_vla_action():
-    # The controller creates its client as ~/vla/notify_completion.
-    assert vla_completion_service_name('vla_controller') == '/vla_controller/vla/notify_completion'
-    assert vla_completion_service_name('vla_mit_controller') == (
-        '/vla_mit_controller/vla/notify_completion')
+def test_the_chunk_stream_completion_service_hangs_off_the_action_chunk_action():
+    # The controller creates its client as ~/chunk_stream/notify_completion.
+    assert chunk_stream_completion_service_name('action_chunk_controller') == (
+        '/action_chunk_controller/chunk_stream/notify_completion')
+    assert chunk_stream_completion_service_name('action_chunk_mit_controller') == (
+        '/action_chunk_mit_controller/chunk_stream/notify_completion')
 
 
 @pytest.mark.parametrize('controller', [None, ''])
-def test_the_vla_completion_service_has_no_default_robot(controller):
+def test_the_chunk_stream_completion_service_has_no_default_robot(controller):
     # The default used to be Franka's: an OpenArm tree that forgot to pass its
     # controller waited forever on a service its controller never calls.
-    with pytest.raises(ValueError, match='VLA controller'):
-        vla_completion_service_name(controller)
+    with pytest.raises(ValueError, match='action-chunk controller'):
+        chunk_stream_completion_service_name(controller)
 
 
 def test_the_gripper_leaf_has_no_default_controller():

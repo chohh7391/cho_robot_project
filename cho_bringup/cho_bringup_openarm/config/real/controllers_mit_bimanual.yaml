@@ -26,13 +26,13 @@
       right_task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
-      # One VLA producer per arm: cho_vla_core is 7-DoF and each claims its own
+      # One action-chunk producer per arm: cho_action_chunk is 7-DoF and each claims its own
       # arm's 46 MIT interfaces.
-      left_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      left_action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
-      right_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      right_action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
       # Spawned only with hand:=true. It claims the finger's position and
       # max_effort interfaces, which no arm controller touches, so it stays
@@ -400,10 +400,10 @@
       joint_limit_margin: 0.05
       joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
 
-  # VLA reference source, DERIVED from the commissioned TaskSpace block
+  # action-chunk reference source, DERIVED from the commissioned TaskSpace block
   # above rather than written by hand: every value in that block was
   # identified on hardware, and a hand-copied block lost all of them once.
-  left_vla_mit_controller:
+  left_action_chunk_mit_controller:
     ros__parameters:
       arm: left
       safety_backend: real
@@ -554,7 +554,7 @@
       kd_null: 0.5
       joint_limit_margin: 0.05
       joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
-      # ---- VLA reference source ---------------------------------------------
+      # ---- action-chunk reference source ---------------------------------------------
       # Everything above is the commissioned left TaskSpace block verbatim,
       # including drive_side_impedance and the gains: what runs on hardware here
       # is that law, fed by a chunk stream instead of a TaskSpace goal.
@@ -564,7 +564,7 @@
       # law with zero joint stiffness and q_des carrying measured position, so
       # the offset would bound nothing. The bounds that do apply there are
       # max_task_wrench and torque_limit, both inherited above.
-      chunk_topic: /vla/action/left
+      chunk_topic: /action_chunk/left
       # 'arrival' until the bridge echoes the stamp of the joint state it built
       # its observation from; a bridge wall clock is a different time domain.
       chunk_time_source: arrival
@@ -587,10 +587,10 @@
       # gripper_controller (hand:=true), so gripper_actions are ignored.
       enable_gripper: false
 
-  # VLA reference source, DERIVED from the commissioned TaskSpace block
+  # action-chunk reference source, DERIVED from the commissioned TaskSpace block
   # above rather than written by hand: every value in that block was
   # identified on hardware, and a hand-copied block lost all of them once.
-  right_vla_mit_controller:
+  right_action_chunk_mit_controller:
     ros__parameters:
       arm: right
       safety_backend: real
@@ -742,7 +742,7 @@
       kd_null: 0.5
       joint_limit_margin: 0.05
       joint_limit_stiffness: [5.0, 5.0, 5.0, 5.0, 2.0, 2.0, 2.0]
-      # ---- VLA reference source ---------------------------------------------
+      # ---- action-chunk reference source ---------------------------------------------
       # Everything above is the commissioned right TaskSpace block verbatim,
       # including drive_side_impedance and the gains: what runs on hardware here
       # is that law, fed by a chunk stream instead of a TaskSpace goal.
@@ -752,7 +752,7 @@
       # law with zero joint stiffness and q_des carrying measured position, so
       # the offset would bound nothing. The bounds that do apply there are
       # max_task_wrench and torque_limit, both inherited above.
-      chunk_topic: /vla/action/right
+      chunk_topic: /action_chunk/right
       # 'arrival' until the bridge echoes the stamp of the joint state it built
       # its observation from; a bridge wall clock is a different time domain.
       chunk_time_source: arrival

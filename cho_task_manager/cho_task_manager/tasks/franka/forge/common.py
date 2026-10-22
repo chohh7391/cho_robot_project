@@ -21,7 +21,7 @@ from cho_task_manager.behaviors.action import (
 )
 from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
-    VLACompletionWaiterBehavior,
+    ChunkStreamCompletionWaiterBehavior,
 )
 from cho_task_manager.subtrees import guarded_mission, home_subtree, tare_ft_children
 from cho_task_manager.utils.msg_utils import make_pose, make_joint_state
@@ -101,7 +101,7 @@ def build_forge_tree(
     """
     robot_config = robot_config or load_robot_config('franka')
     gripper = robot_config['gripper']
-    vla = robot_config['vla']
+    chunk_controller = robot_config['action_chunk']
 
     x_offset, y_offset = random_xy_offset(xy_range)
     approach_orientation = random_yaw_orientation(base_orientation, yaw_range)
@@ -141,21 +141,21 @@ def build_forge_tree(
             name="Close_Gripper", grasp=True, controller_name=gripper, **grasp_params),
     ])
 
-    # 3. Start VLA Controller
-    vla_seq = py_trees.composites.Sequence(name="3_Start_VLA", memory=True)
-    vla_seq.add_children([
+    # 3. Start Action Chunk Controller
+    action_chunk_seq = py_trees.composites.Sequence(name="3_Start_Chunk_Stream", memory=True)
+    action_chunk_seq.add_children([
         SwitchControllerServiceBehavior(
-            name="Switch_To_VLA",
-            activate=[vla],
+            name="Switch_To_Action_Chunk",
+            activate=[chunk_controller],
             robot_config=robot_config,
         ),
-        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion", controller=vla),
+        ChunkStreamCompletionWaiterBehavior(name="Wait_For_Chunk_Stream_Completion", controller=chunk_controller),
         WaitBehavior(name="Wait_1_Seconds", duration_sec=1.0),
         GripperActionBehavior(name="Open_Gripper", grasp=False, controller_name=gripper),
     ])
 
     # 4. finish — built but intentionally NOT wired into mission_sequence below.
-    # Owner decision: forge tasks do not auto-return home after VLA completion (unlike
+    # Owner decision: forge tasks do not auto-return home after chunk-stream completion (unlike
     # pick_place.py). Kept here, one line away from re-enabling, for when that changes.
     finish_seq = home_subtree(  # noqa: F841
         robot_config,
@@ -166,7 +166,7 @@ def build_forge_tree(
         suffix="_Final",
     )
 
-    mission_sequence.add_children([init_seq, approach_seq, vla_seq])
-    # mission_sequence.add_children([init_seq, approach_seq, vla_seq, finish_seq])
+    mission_sequence.add_children([init_seq, approach_seq, action_chunk_seq])
+    # mission_sequence.add_children([init_seq, approach_seq, action_chunk_seq, finish_seq])
 
     return guarded_mission(mission_sequence, robot_config, CONTROL_MODE)

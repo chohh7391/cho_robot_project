@@ -61,11 +61,11 @@ MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_position_mit_controller',
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
-    'vla_mit_controller',
+    'action_chunk_mit_controller',
 })
 MIT_SINGLE_FJT_CONTROLLER = 'single_arm_follow_joint_trajectory_mit_controller'
 MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
-# vla_mit_controller is offered here for TASK chunks. Its Cartesian path is
+# action_chunk_mit_controller is offered here for TASK chunks. Its Cartesian path is
 # TaskSpaceImpedanceController's own write_cartesian_torque_target() unchanged --
 # the controller derives from it and overrides only where x_des/v_des come from
 # -- so what runs on hardware is the commissioned law fed by a chunk stream.
@@ -79,7 +79,7 @@ MIT_PAIRED_FJT_CONTROLLER = 'bimanual_follow_joint_trajectory_mit_controller'
 REAL_MIT_DIRECT_CONTROLLERS = frozenset({
     'joint_impedance_mit_controller',
     'task_space_impedance_mit_controller',
-    'vla_mit_controller',
+    'action_chunk_mit_controller',
 })
 # Only the action-producing MIT controllers implement the acknowledged,
 # bounded return-to-zero phase.  Topic producers and paired trajectory

@@ -39,15 +39,15 @@ controllers:
   # owns the finger as an eighth motor on the arm's CAN socket
   # (cho_hardware_openarm_mit_real/README.md, Gripper).
   gripper: gripper_controller
-  # cho_controller_openarm_mit/VlaController. Selected on the MuJoCo MIT
-  # prototype path (mit_controller_name:=vla_mit_controller) and on the real
-  # bringup (controller_name:=vla_mit_controller, admitted by
+  # cho_controller_openarm_mit/ActionChunkController. Selected on the MuJoCo MIT
+  # prototype path (mit_controller_name:=action_chunk_mit_controller) and on the real
+  # bringup (controller_name:=action_chunk_mit_controller, admitted by
   # launch_utils.REAL_MIT_DIRECT_CONTROLLERS). Under drive_side_impedance: false
   # (the real bimanual config) it takes TASK chunks only and rejects joint chunks
   # at ingest: that law sends kp = 0 with q_des pinned to the measurement, so no
   # joint position loop closes. Its joint path has only run in MuJoCo. The
-  # non-MIT bringups have no VLA controller at all.
-  vla: vla_mit_controller
+  # non-MIT bringups have no action-chunk controller at all.
+  action_chunk: action_chunk_mit_controller
 compatibility:
   # The behavior-tree task manager still selects the legacy effort controller.
   task_manager:
@@ -69,7 +69,7 @@ actions:
     joint: [/openarm_moveit_action_bridge/joint_space, /joint_space_position_controller/joint_space, /joint_impedance_mit_controller/joint_space]
     task: [/openarm_moveit_action_bridge/task_space, /task_space_impedance_mit_controller/task_space]
     gripper: [/gripper_controller/gripper]
-    vla: [/vla_mit_controller/vla]
+    action_chunk: [/action_chunk_mit_controller/chunk_stream]
 poses:
   home:
     '0': [0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0]
@@ -136,7 +136,7 @@ profiles:
       direct_task: left_task_space_impedance_mit_controller
       # per_arm() prefixes every controller on a bimanual build, so the
       # unprefixed top-level name would not exist here.
-      vla: left_vla_mit_controller
+      action_chunk: left_action_chunk_mit_controller
       gripper: left_gripper_controller
       moveit_trajectory: left_joint_trajectory_controller
     # Per-arm instance of the legacy effort controller. Without this the profile
@@ -156,7 +156,7 @@ profiles:
         joint: [/openarm_left_moveit_action_bridge/joint_space, /left_joint_impedance_mit_controller/joint_space]
         task: [/openarm_left_moveit_action_bridge/task_space, /left_task_space_impedance_mit_controller/task_space]
         gripper: [/left_gripper_controller/gripper]
-        vla: [/left_vla_mit_controller/vla]
+        action_chunk: [/left_action_chunk_mit_controller/chunk_stream]
     # World-frame, idempotent task targets resolved from this arm's MIT
     # startup posture. They deliberately differ from the single-arm targets:
     # both arms hang from the bimanual torso at different world transforms.
@@ -185,7 +185,7 @@ profiles:
       direct_task: right_task_space_impedance_mit_controller
       # per_arm() prefixes every controller on a bimanual build, so the
       # unprefixed top-level name would not exist here.
-      vla: right_vla_mit_controller
+      action_chunk: right_action_chunk_mit_controller
       gripper: right_gripper_controller
       moveit_trajectory: right_joint_trajectory_controller
     # Per-arm instance of the legacy effort controller; see the left profile.
@@ -201,7 +201,7 @@ profiles:
         joint: [/openarm_right_moveit_action_bridge/joint_space, /right_joint_impedance_mit_controller/joint_space]
         task: [/openarm_right_moveit_action_bridge/task_space, /right_task_space_impedance_mit_controller/task_space]
         gripper: [/right_gripper_controller/gripper]
-        vla: [/right_vla_mit_controller/vla]
+        action_chunk: [/right_action_chunk_mit_controller/chunk_stream]
     motions:
       reach:
         '0': {relative: false, position: [0.353214573, -0.028147131, 0.380270917], orientation: [0.812511913, 0.061920006, 0.536067776, -0.220503161]}
@@ -236,7 +236,7 @@ profiles:
       direct_joint: null
       direct_task: null
       gripper: null
-      vla: null
+      action_chunk: null
     # Replaced, not merged; without it the single arm's name was inherited.
     # The torso as a whole has no task-manager joint controller.
     compatibility:

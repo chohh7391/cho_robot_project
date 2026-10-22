@@ -89,7 +89,7 @@ def _build_test_forge_tree():
 def test_build_forge_tree_does_not_wire_in_finish_seq():
     mission_sequence = _mission(_build_test_forge_tree())
     child_names = [child.name for child in mission_sequence.children]
-    assert child_names == ["1_Initialize", "2_Approach_Fixed_Object", "3_Start_VLA"]
+    assert child_names == ["1_Initialize", "2_Approach_Fixed_Object", "3_Start_Chunk_Stream"]
     assert "4_Finish" not in child_names
 
 

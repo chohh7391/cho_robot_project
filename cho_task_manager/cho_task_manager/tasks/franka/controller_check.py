@@ -29,9 +29,9 @@ Trees (match the switchable-controller sets in cho_bringup_franka launch_utils.p
                               task_space_impedance, operational_space,
                               gravity_compensation (+ gripper)
   controller_check_velocity : joint_space_velocity, task_space_velocity (motion),
-                              vla_controller (activation + stable hold only -- driving
-                              VLA needs an ActionChunk publisher, see
-                              ros2 run cho_control_tools vla_action_client)
+                              action_chunk_controller (activation + stable hold only -- driving
+                              the action-chunk controller needs an ActionChunk publisher, see
+                              ros2 run cho_control_tools action_chunk_client)
 """
 
 import py_trees
@@ -140,8 +140,8 @@ def _gripper_check(robot_config):
 
 
 def _hold_check(robot_config, controller, hold_sec=3.0):
-    """For controllers without an action server (gravity compensation, VLA
-    without chunks): switch to it, hold, then verify it is still active --
+    """For controllers without an action server (gravity compensation, the action-chunk
+    controller without chunks): switch to it, hold, then verify it is still active --
     catches activation failures and mid-hold controller crashes.
     """
     seq = py_trees.composites.Sequence(name=f"Check_{controller}", memory=True)
@@ -205,16 +205,16 @@ def create_franka_controller_check_torque_tree(robot_config=None):
 
 def create_franka_controller_check_velocity_tree(robot_config=None):
     robot_config = robot_config or load_robot_config('franka')
-    # The VLA hold check is optional: a velocity bringup without vla:=true has no
-    # vla_controller loaded, and that must not fail the whole smoke check. When VLA
+    # The action-chunk hold check is optional: a velocity bringup without action_chunk:=true has no
+    # action_chunk_controller loaded, and that must not fail the whole smoke check. When the action-chunk controller
     # is present but broken, the inner failure is still visible in the tree/log.
-    vla_optional = py_trees.decorators.FailureIsSuccess(
-        child=_hold_check(robot_config, robot_config['vla']),
-        name="Optional_VLA_Hold",
+    action_chunk_optional = py_trees.decorators.FailureIsSuccess(
+        child=_hold_check(robot_config, robot_config['action_chunk']),
+        name="Optional_Action_Chunk_Hold",
     )
     return _wrap("Franka_Controller_Check_Velocity", [
         _joint_check(robot_config, ControllerNames.JOINT_VELOCITY),
         _task_check(robot_config, ControllerNames.TASK_VELOCITY),
-        vla_optional,
+        action_chunk_optional,
         _finalize(robot_config, ControllerNames.JOINT_VELOCITY),
     ], robot_config, 'velocity')

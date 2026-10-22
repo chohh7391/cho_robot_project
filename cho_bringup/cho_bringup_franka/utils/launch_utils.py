@@ -70,7 +70,7 @@ CONTROLLERS_BY_MODE = {
     'torque': TORQUE_CONTROLLERS,
 }
 
-VLA_CONTROLLER = 'vla_controller'
+ACTION_CHUNK_CONTROLLER = 'action_chunk_controller'
 
 # The standard JointTrajectoryController behind MoveIt execution and the task
 # manager's trajectory replay (the registry's controllers.moveit_trajectory).
@@ -112,13 +112,13 @@ def always_active_controllers(load_gripper):
     ]
 
 
-def get_initial_active_controller(controller_name, use_vla):
-    if as_bool(use_vla):
-        return VLA_CONTROLLER
+def get_initial_active_controller(controller_name, use_action_chunk):
+    if as_bool(use_action_chunk):
+        return ACTION_CHUNK_CONTROLLER
     return controller_name
 
 
-def check_controller_matches_mode(controller_name, control_mode, use_vla):
+def check_controller_matches_mode(controller_name, control_mode, use_action_chunk):
     """
     Refuse a controller_name that cannot run in control_mode.
 
@@ -127,10 +127,10 @@ def check_controller_matches_mode(controller_name, control_mode, use_vla):
     mode. A controller from another mode's list would therefore be told a mode
     it does not implement - control_mode:=position alone used to inject
     position mode into the default torque controller - or claim an interface
-    the description does not export. vla_controller implements all three modes,
-    and vla:=true replaces controller_name altogether.
+    the description does not export. action_chunk_controller implements all three modes,
+    and action_chunk:=true replaces controller_name altogether.
     """
-    if as_bool(use_vla) or controller_name == VLA_CONTROLLER:
+    if as_bool(use_action_chunk) or controller_name == ACTION_CHUNK_CONTROLLER:
         return
     allowed = CONTROLLERS_BY_MODE.get(control_mode)
     if allowed is None:
@@ -144,10 +144,10 @@ def check_controller_matches_mode(controller_name, control_mode, use_vla):
         raise RuntimeError(
             f"controller_name:={controller_name} is a {owner} controller, but "
             f"control_mode:={control_mode}. Pass control_mode:={owner}, or a {control_mode} "
-            f"controller: {allowed} (or vla:=true).")
+            f"controller: {allowed} (or action_chunk:=true).")
     raise RuntimeError(
         f"Unknown controller_name '{controller_name}' for control_mode:={control_mode}. "
-        f"Valid options: {allowed + [VLA_CONTROLLER]} (or vla:=true).")
+        f"Valid options: {allowed + [ACTION_CHUNK_CONTROLLER]} (or action_chunk:=true).")
 
 
 def check_moveit_controller_matches_mode(load_moveit_controller, control_mode):
@@ -169,7 +169,7 @@ def check_moveit_controller_matches_mode(load_moveit_controller, control_mode):
 
 def get_switchable_controllers(
     control_mode,
-    use_vla,
+    use_action_chunk,
     requested_controller=None,
     extra_torque_controllers=None,
 ):
@@ -185,8 +185,8 @@ def get_switchable_controllers(
     if extra_torque_controllers and control_mode not in ('position', 'velocity'):
         controllers.extend(extra_torque_controllers)
 
-    if as_bool(use_vla):
-        controllers.append(VLA_CONTROLLER)
+    if as_bool(use_action_chunk):
+        controllers.append(ACTION_CHUNK_CONTROLLER)
     elif requested_controller:
         controllers.append(requested_controller)
 

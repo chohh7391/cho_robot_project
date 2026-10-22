@@ -57,8 +57,8 @@ class ControllerNames(str, Enum):
     TASK_IMPEDANCE = 'task_space_impedance_controller'
     TASK_QP = 'task_space_qp_controller'
 
-    # VLA
-    VLA = 'vla_controller'
+    # Action chunks
+    ACTION_CHUNK = 'action_chunk_controller'
 
     # Others
     GRAVITY_COMPENSATION = 'gravity_compensation_controller'
@@ -89,7 +89,7 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
     Returns a flat dict, e.g.::
 
         {'robot_type': 'ur5e', 'joint_space': 'joint_space_position_controller',
-         'task_space': 'task_space_ik_controller', 'gripper': None, 'vla': None,
+         'task_space': 'task_space_ik_controller', 'gripper': None, 'action_chunk': None,
          'arm_base_link': 'base_link', 'joints': [...], ...}
 
     ``arm_base_link`` is the registry's ``model.arm_base_link``: the frame the
@@ -121,7 +121,7 @@ def load_robot_config(robot_type: str, profile: str = 'single') -> dict:
         'joint_space': compatibility.get('joint_space', controllers.get('direct_joint')),
         'task_space': compatibility.get('task_space', controllers.get('direct_task')),
         'gripper': compatibility.get('gripper', controllers.get('gripper')),
-        'vla': compatibility.get('vla', controllers.get('vla')),
+        'action_chunk': compatibility.get('action_chunk', controllers.get('action_chunk')),
     }
 
 
@@ -159,7 +159,7 @@ def controller_name_value(controller):
 # interfaces. 'gripper' is deliberately absent: it claims the finger interfaces,
 # so it must stay active across an arm-controller switch.
 _EXCLUSIVE_CONTROLLER_ROLES = ('hold', 'direct_joint', 'direct_task',
-                               'moveit_trajectory', 'vla')
+                               'moveit_trajectory', 'action_chunk')
 
 
 def _serving_node(action_name):
@@ -270,7 +270,7 @@ def exclusive_arm_controllers(robot_config) -> List[str]:
         if value and value not in names:
             names.append(value)
 
-    for role in ('joint_space', 'task_space', 'vla'):
+    for role in ('joint_space', 'task_space', 'action_chunk'):
         add(robot_config.get(role))
     for name in _arm_controllers_of(_registry_entry(robot_config)):
         add(name)
@@ -346,7 +346,7 @@ def controller_action_name(controller, kind):
     (cho_interfaces/CONTRACT.md), so this is ``/<controller>/<kind>``:
     ``controller_action_name('joint_space_qp_controller', 'joint_space')`` is
     ``/joint_space_qp_controller/joint_space``. *kind* is one of
-    ``joint_space``, ``task_space``, ``gripper``, ``vla`` or
+    ``joint_space``, ``task_space``, ``gripper``, ``action_chunk`` or
     ``follow_joint_trajectory``.
 
     *controller* may be a :class:`ControllerNames` member, a registry role's
@@ -385,10 +385,10 @@ def _command_controller_names() -> List[str]:
 
     for registry in _registry_entries():
         view = load_robot_config(registry['robot_type'], registry.get('profile', 'single'))
-        for role in ('joint_space', 'task_space', 'gripper', 'vla'):
+        for role in ('joint_space', 'task_space', 'gripper', 'action_chunk'):
             add(view.get(role))
         controllers = registry.get('controllers') or {}
-        for role in ('hold', 'direct_joint', 'direct_task', 'gripper', 'vla'):
+        for role in ('hold', 'direct_joint', 'direct_task', 'gripper', 'action_chunk'):
             add(controllers.get(role))
         for hold in (controllers.get('hold_by_control_mode') or {}).values():
             for name in (hold if isinstance(hold, list) else [hold]):
@@ -432,7 +432,7 @@ def _preference_action_names() -> List[str]:
     names: List[str] = []
     for registry in _registry_entries():
         preferences = (registry.get('actions') or {}).get('preferences') or {}
-        for space in ('joint', 'task', 'gripper', 'vla'):
+        for space in ('joint', 'task', 'gripper', 'action_chunk'):
             for name in preferences.get(space) or []:
                 if name not in names:
                     names.append(name)
@@ -444,7 +444,7 @@ def _trajectory_controller_names() -> List[str]:
 
     Read from the registry rather than from the compatibility view, which does
     not carry this role: the view exposes the roles a task tree commands
-    directly (joint_space, task_space, gripper, vla), and the trajectory
+    directly (joint_space, task_space, gripper, action_chunk), and the trajectory
     controller is normally driven by MoveIt or by an external executor instead.
     """
     names: List[str] = []
@@ -481,18 +481,18 @@ def valid_controller_action_names() -> List[str]:
     return names
 
 
-def vla_completion_service_name(controller):
-    """Completion service a VLA controller calls when its goal ends.
+def chunk_stream_completion_service_name(controller):
+    """Completion service a action-chunk controller calls when its goal ends.
 
     The controller derives this from its OWN action name (it creates the client
-    as ``~/vla/notify_completion``), so the two must agree:
-    ``/<vla controller>/vla/notify_completion``. They differ per robot --
-    Franka's is `vla_controller` and OpenArm MIT's is `vla_mit_controller` --
-    so *controller* is required: pass ``load_robot_config(...)['vla']``.
+    as ``~/chunk_stream/notify_completion``), so the two must agree:
+    ``/<action-chunk controller>/chunk_stream/notify_completion``. They differ per robot --
+    Franka's is `action_chunk_controller` and OpenArm MIT's is `action_chunk_mit_controller` --
+    so *controller* is required: pass ``load_robot_config(...)['action_chunk']``.
     """
     if not controller:
         raise ValueError(
-            'vla_completion_service_name() needs the VLA controller of the robot '
-            "the tree is built for (load_robot_config(...)['vla']); this robot "
+            'chunk_stream_completion_service_name() needs the action-chunk controller of the robot '
+            "the tree is built for (load_robot_config(...)['action_chunk']); this robot "
             'may declare none')
-    return f"{controller_action_name(controller, 'vla')}/notify_completion"
+    return f"{controller_action_name(controller, 'chunk_stream')}/notify_completion"

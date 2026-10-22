@@ -1349,7 +1349,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   const double slew_dt = bounded_dt(dt);
   // The shared MIT state machine (DirectControllerBase::protocol_step). It
   // continues generations from the consumer's ack, which is what lets this
-  // controller -- and VLA through it -- be the second producer of a session.
+  // controller -- and ActionChunk through it -- be the second producer of a session.
   const auto step = protocol_step();
   if (step == ProtocolStep::FAULTED) return controller_interface::return_type::ERROR;
   if (step == ProtocolStep::HOLD) return controller_interface::return_type::OK;
@@ -1518,7 +1518,7 @@ controller_interface::return_type TaskSpaceImpedanceController::update(const rcl
   // The hold torque: the model term's gravity part at the measured q, scaled
   // like the feed-forward (gravity_scales()), on every commit: the seed, the
   // return-to-zero ramp, the pre-latch hold and Cartesian control
-  // (VlaController's joint and task chunks) alike. Not the slewed tau_ff: it is
+  // (ActionChunkController's joint and task chunks) alike. Not the slewed tau_ff: it is
   // what holds the arm still, which a hold latched in motion is bounded around
   // (docs/openarm_mit_contract_v1.md#hold-torque).
   command.hold_torque = model_hold_torque(q, gravity_scales());

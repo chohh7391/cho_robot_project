@@ -26,14 +26,14 @@
       right_task_space_impedance_mit_controller:
         type: cho_controller_openarm_mit/TaskSpaceImpedanceController
 
-      # Same producers as above with the reference coming from VLA action
-      # chunks. One per arm: cho_vla_core is 7-DoF, and each controller claims
+      # Same producers as above with the reference coming from action
+      # chunks. One per arm: cho_action_chunk is 7-DoF, and each controller claims
       # its own arm's 46 MIT interfaces, so the two are fully independent.
-      left_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      left_action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
-      right_vla_mit_controller:
-        type: cho_controller_openarm_mit/VlaController
+      right_action_chunk_mit_controller:
+        type: cho_controller_openarm_mit/ActionChunkController
 
       # One robot-independent gripper controller per hand. It claims only the
       # finger's position command interface, which no arm controller touches, so
@@ -125,7 +125,7 @@
       # measurement over the open-loop algebra here.
       #
       # The left arm mirrors the right geometrically and carries the same value,
-      # but was not measured. Task-space and VLA blocks carry it identically so
+      # but was not measured. Task-space and action-chunk blocks carry it identically so
       # the launch-boundary mirror test stays satisfied.
       reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
@@ -190,7 +190,7 @@
       # measurement over the open-loop algebra here.
       #
       # The left arm mirrors the right geometrically and carries the same value,
-      # but was not measured. Task-space and VLA blocks carry it identically so
+      # but was not measured. Task-space and action-chunk blocks carry it identically so
       # the launch-boundary mirror test stays satisfied.
       reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
@@ -229,7 +229,7 @@
       joint_limit_margin: 0.05
       joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
 
-  left_vla_mit_controller:
+  left_action_chunk_mit_controller:
     ros__parameters:
       arm: left
       safety_profile_name: mujoco_sim_safe
@@ -255,7 +255,7 @@
       # measurement over the open-loop algebra here.
       #
       # The left arm mirrors the right geometrically and carries the same value,
-      # but was not measured. Task-space and VLA blocks carry it identically so
+      # but was not measured. Task-space and action-chunk blocks carry it identically so
       # the launch-boundary mirror test stays satisfied.
       reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
@@ -294,7 +294,7 @@
       joint_limit_margin: 0.05
       joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
 
-      # ---- VLA reference source ----------------------------------------------
+      # ---- action-chunk reference source ----------------------------------------------
       # REQUIRED here, unlike the TaskSpace controller which derives a default.
       # It is the only bound on the impedance torque, because the drive adds
       # kp*(q_des - q) downstream of torque_limit, and the input driving it is
@@ -302,7 +302,7 @@
       max_reference_offset: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
       # Each arm listens on its OWN topic. A shared topic would make both arms
       # follow the same chunk, which is only ever right by accident.
-      chunk_topic: /vla/action/left
+      chunk_topic: /action_chunk/left
       # 'arrival' until the bridge echoes the stamp of the joint state it built
       # its observation from; a bridge wall clock is a different time domain.
       chunk_time_source: arrival
@@ -325,7 +325,7 @@
       # cho_controller_gripper, which stays active alongside it.
       enable_gripper: false
 
-  right_vla_mit_controller:
+  right_action_chunk_mit_controller:
     ros__parameters:
       arm: right
       safety_profile_name: mujoco_sim_safe
@@ -351,7 +351,7 @@
       # measurement over the open-loop algebra here.
       #
       # The left arm mirrors the right geometrically and carries the same value,
-      # but was not measured. Task-space and VLA blocks carry it identically so
+      # but was not measured. Task-space and action-chunk blocks carry it identically so
       # the launch-boundary mirror test stays satisfied.
       reference_offset_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0]
       # Drive-side Cartesian impedance, sized for the SIM model: MuJoCo v1
@@ -390,7 +390,7 @@
       joint_limit_margin: 0.05
       joint_limit_stiffness: [10.0, 10.0, 10.0, 10.0, 3.0, 3.0, 3.0]
 
-      # ---- VLA reference source ----------------------------------------------
+      # ---- action-chunk reference source ----------------------------------------------
       # REQUIRED here, unlike the TaskSpace controller which derives a default.
       # It is the only bound on the impedance torque, because the drive adds
       # kp*(q_des - q) downstream of torque_limit, and the input driving it is
@@ -398,7 +398,7 @@
       max_reference_offset: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
       # Each arm listens on its OWN topic. A shared topic would make both arms
       # follow the same chunk, which is only ever right by accident.
-      chunk_topic: /vla/action/right
+      chunk_topic: /action_chunk/right
       # 'arrival' until the bridge echoes the stamp of the joint state it built
       # its observation from; a bridge wall clock is a different time domain.
       chunk_time_source: arrival

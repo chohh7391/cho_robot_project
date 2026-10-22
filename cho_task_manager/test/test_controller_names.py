@@ -125,11 +125,11 @@ def test_every_gripper_leaf_in_the_franka_trees_addresses_the_registry_gripper()
         assert {leaf.action_name for leaf in leaves} == {'/gripper_controller/gripper'}, task
 
 
-def test_the_franka_vla_wait_listens_to_the_registry_vla_controller():
-    from cho_task_manager.behaviors.service import VLACompletionWaiterBehavior
+def test_the_franka_action_chunk_wait_listens_to_the_registry_action_chunk_controller():
+    from cho_task_manager.behaviors.service import ChunkStreamCompletionWaiterBehavior
     config = load_robot_config('franka')
     for task in ('pick_place', 'pick_place_position', 'peg_insert'):
         waits = [node for node in build_task_tree(task, config).iterate()
-                 if isinstance(node, VLACompletionWaiterBehavior)]
+                 if isinstance(node, ChunkStreamCompletionWaiterBehavior)]
         assert [wait.service_name for wait in waits] == [
-            '/vla_controller/vla/notify_completion'], task
+            '/action_chunk_controller/chunk_stream/notify_completion'], task

@@ -50,9 +50,9 @@ def generate_launch_description():
             description='Which controller to activate initially'
         ),
         DeclareLaunchArgument(
-            'vla',
+            'action_chunk',
             default_value='false',
-            description='If true, forces vla_controller to be the active controller'
+            description='If true, forces action_chunk_controller to be the active controller'
         ),
         DeclareLaunchArgument(
             'load_gripper',
@@ -135,21 +135,21 @@ def generate_launch_description():
         mode = LaunchConfiguration('control_mode').perform(context)
         ctrl_name = LaunchConfiguration('controller_name').perform(context)
         load_gripper = LaunchConfiguration('load_gripper').perform(context)
-        use_vla = LaunchConfiguration('vla').perform(context)
+        use_action_chunk = LaunchConfiguration('action_chunk').perform(context)
         b_type = LaunchConfiguration('bringup_type').perform(context)
         # The MuJoCo/Isaac descriptions carry the hand even without a gripper.
         ee_name = launch_utils.resolve_ee_name(
             LaunchConfiguration('ee_name').perform(context), True)
-        launch_utils.check_controller_matches_mode(ctrl_name, mode, use_vla)
+        launch_utils.check_controller_matches_mode(ctrl_name, mode, use_action_chunk)
         load_moveit_controller = as_bool(
             LaunchConfiguration('load_moveit_controller').perform(context))
         launch_utils.check_moveit_controller_matches_mode(load_moveit_controller, mode)
         always_active_controllers = launch_utils.always_active_controllers(load_gripper)
 
-        initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_vla)
+        initial_active_controller = launch_utils.get_initial_active_controller(ctrl_name, use_action_chunk)
         switchable_controllers = launch_utils.get_switchable_controllers(
             control_mode=mode,
-            use_vla=use_vla,
+            use_action_chunk=use_action_chunk,
             requested_controller=ctrl_name,
         )
         # Loaded inactive, like Gazebo's, and kept out of the runtime parameter file:

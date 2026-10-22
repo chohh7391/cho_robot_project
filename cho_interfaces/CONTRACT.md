@@ -13,12 +13,12 @@ A controller serves its actions under its own node, by relative name:
 | `JointSpace` | `~/joint_space` |
 | `TaskSpace` | `~/task_space` |
 | `Gripper` | `~/gripper` |
-| `VisionLanguageAction` | `~/vla` |
+| `ChunkStream` | `~/chunk_stream` |
 | `control_msgs/FollowJointTrajectory` | `~/follow_joint_trajectory` |
 
 so `joint_space_impedance_controller` serves
 `/joint_space_impedance_controller/joint_space`, and a bimanual build's
-`left_vla_mit_controller` serves `/left_vla_mit_controller/vla`. The MoveIt
+`left_action_chunk_mit_controller` serves `/left_action_chunk_mit_controller/chunk_stream`. The MoveIt
 bridge, which is not a controller, follows the same rule under its own node,
 `<robot>[_<profile>]_moveit_action_bridge` (`cho_robot_config.moveit_bridge_node()`),
 and refuses to start under any other name.
@@ -27,6 +27,21 @@ and refuses to start under any other name.
 action name from the controller name and this table
 (`cho_robot_config.controller_action_name()`, or the operator tools' bundled
 copy in `cho_control_tools/action_names.py`), never from a string of their own.
+
+The action-chunk names replaced the VLA ones on 2026-10-23. A bridge written
+against the old names moves to these:
+
+| Before | Now |
+|---|---|
+| `vla_controller`, `vla_mit_controller` (and `left_`, `right_`) | `action_chunk_controller`, `action_chunk_mit_controller` |
+| action `VisionLanguageAction` on `~/vla` | `ChunkStream` on `~/chunk_stream` |
+| `VlaTelemetry` on `~/vla_telemetry` | `ChunkStreamTelemetry` on `~/chunk_stream_telemetry` |
+| default chunk topic `/vla/action/ee_pose` (`/vla/action/<side>`) | `/action_chunk` (`/action_chunk/<side>`) |
+| `/vla/trigger_success` | `/chunk_stream/trigger_success` |
+| registry role `controllers.vla`, `actions.preferences.vla` | `controllers.action_chunk`, `actions.preferences.action_chunk` |
+| launch argument `vla:=true` | `action_chunk:=true` |
+
+`ActionChunk` itself and its fields are unchanged.
 
 An arm prefix is part of the controller name, so a bimanual build needs a
 registry profile and no code. A ROS **namespace** is not transparent: the names
@@ -81,7 +96,7 @@ one-goal rules above; what differs is how they derive the minimum.
   along the path. It reports success as soon as the motion ends with the TCP
   error under 0.02 m / 0.10 rad, without the extra second, and aborts 2 s
   after the motion.
-- **VLA** (`vla_mit_controller`) goals have no duration.
+- **Chunk stream** (`action_chunk_mit_controller`) goals have no duration.
 - The MIT `follow_joint_trajectory` controllers keep FollowJointTrajectory
   semantics instead: a new goal preempts the running one, through a SAFE
   handshake, as MoveIt expects.
@@ -220,14 +235,14 @@ otherwise.
   a, v/a + a/j after the end (0.34 s from 0.6 rad/s at 2 rad/s^2, j = a / 0.04 s
   when no jerk limit is set). A joint without both a velocity and an
   acceleration limit stops at once.
-- A switch between those controllers (or from `vla_controller` in position or
+- A switch between those controllers (or from `action_chunk_controller` in position or
   velocity mode to one of them) while the reference moves hands the motion over:
   the controller activated in the same switch brings it to rest within its own
   joint motion limits and holds there, and its goals start once it is at rest.
   The goal of the controller switched out is aborted, as for any deactivation.
   A controller deactivated with none activated in its place still stops its
   command at once, and franka_hardware then ends the control session.
-- Franka's `vla_controller`, position and velocity modes, on every end but a
+- Franka's `action_chunk_controller`, position and velocity modes, on every end but a
   deactivation (succeeded, canceled, or aborted on `goal_timeout_sec` or a dead
   stream): the result goes out first, on the cycle the end takes effect; the
   reference then comes to rest within the reference limiter's bounds, in the
@@ -278,7 +293,7 @@ The chained prototype (`cho_controller_chain`,
 (reference = what it tracks, feedback = measured, `output.effort` = its torque).
 
 The OpenArm MIT controllers (`cho_controller_openarm_mit`: `joint_*_mit_controller`,
-`task_space_impedance_mit_controller`, `vla_mit_controller` and the
+`task_space_impedance_mit_controller`, `action_chunk_mit_controller` and the
 FollowJointTrajectory pair) publish neither. They offer instead:
 
 | Name | Kind | Served by |
@@ -286,7 +301,7 @@ FollowJointTrajectory pair) publish neither. They offer instead:
 | `~/request_safe_stop` | `std_srvs/Trigger` service | every MIT controller |
 | `~/protocol_status` | `std_srvs/Trigger` service | the direct ones (all but the FollowJointTrajectory pair) |
 | `~/task_diagnostics` | `std_srvs/Trigger` service | `task_space_impedance_mit_controller` |
-| `~/vla_telemetry` | `cho_interfaces/VlaTelemetry` topic | `vla_mit_controller` (Franka's `vla_controller` too) |
+| `~/chunk_stream_telemetry` | `cho_interfaces/ChunkStreamTelemetry` topic | `action_chunk_mit_controller` (Franka's `action_chunk_controller` too) |
 
 The FollowJointTrajectory pair offers only `~/request_safe_stop` and its
 `~/follow_joint_trajectory` action.

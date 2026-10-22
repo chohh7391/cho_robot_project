@@ -15,7 +15,7 @@
 import py_trees
 from cho_task_manager.behaviors.service import (
     SwitchControllerServiceBehavior,
-    VLACompletionWaiterBehavior,
+    ChunkStreamCompletionWaiterBehavior,
 )
 from cho_task_manager.subtrees import guarded_mission, home_joint_state, home_subtree
 from cho_task_manager.utils.controller_names import ControllerNames, load_robot_config
@@ -32,7 +32,7 @@ def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behavi
     robot_config = robot_config or load_robot_config('franka')
     # Same pose as pick_place.py: the registry's poses.task_home.
     home = home_joint_state(robot_config)
-    vla = robot_config['vla']
+    chunk_controller = robot_config['action_chunk']
 
     mission_sequence = py_trees.composites.Sequence(
         name="Franka_Pick_And_Place_Position_Sequence", memory=True
@@ -45,14 +45,14 @@ def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behavi
         duration=3.0,
     )
 
-    vla_seq = py_trees.composites.Sequence(name="2_Start_VLA", memory=True)
-    vla_seq.add_children([
+    action_chunk_seq = py_trees.composites.Sequence(name="2_Start_Chunk_Stream", memory=True)
+    action_chunk_seq.add_children([
         SwitchControllerServiceBehavior(
-            name="Switch_To_VLA",
-            activate=[vla],
+            name="Switch_To_Action_Chunk",
+            activate=[chunk_controller],
             robot_config=robot_config,
         ),
-        VLACompletionWaiterBehavior(name="Wait_For_VLA_Completion", controller=vla),
+        ChunkStreamCompletionWaiterBehavior(name="Wait_For_Chunk_Stream_Completion", controller=chunk_controller),
     ])
 
     finish_seq = home_subtree(
@@ -64,6 +64,6 @@ def create_franka_pick_place_position_tree(robot_config=None) -> py_trees.behavi
         suffix="_Final",
     )
 
-    mission_sequence.add_children([init_seq, vla_seq, finish_seq])
+    mission_sequence.add_children([init_seq, action_chunk_seq, finish_seq])
 
     return guarded_mission(mission_sequence, robot_config, CONTROL_MODE)
