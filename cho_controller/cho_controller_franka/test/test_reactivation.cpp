@@ -750,7 +750,7 @@ INSTANTIATE_TEST_SUITE_P(
 // goal started from the measured joints; and every one dropped its reference
 // velocity on a cancel. The mock joints do not move under effort at all, so here
 // a goal's whole move is left over and the push is the law's answer to all of it.
-// Each switch's change now fades out over 0.1 s (TorqueSwitchFade).
+// Each switch's change now fades out over 30 ms (TorqueSwitchFade).
 class EffortGoalEnd : public Reactivation
 {
 protected:
@@ -839,8 +839,9 @@ protected:
     const double push = max_abs_difference(pushed, before);
     ASSERT_GT(push, 0.5) << "the goal left no push, so nothing below would be tested";
 
-    // A raised cosine over 0.1 s changes by at most pi / 200 of the push in a period.
-    const double smooth = 0.03 * push;
+    // A raised cosine over 30 ms changes by at most pi / 60 (5.2 %) of the push
+    // in a period.
+    const double smooth = 0.07 * push;
     const double end_step = largest_step(settled + 1, samples_.size());
     EXPECT_LT(end_step, smooth)
       << "the goal's end changed the torque by " << end_step << " Nm in one period, of a " << push << " Nm push";

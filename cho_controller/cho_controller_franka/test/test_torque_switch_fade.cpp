@@ -15,8 +15,8 @@
 // TorqueSwitchFade, what the Franka torque controllers run when the reference
 // their law tracks changes at once (a goal's start, end or cancel), at 1 kHz. A
 // law that jumps from one torque to another goes out as the old torque on the
-// period of the switch and reaches the new one 0.1 s later, never changing by more
-// than the raised cosine's steepest rate in a period.
+// period of the switch and reaches the new one kSeconds (30 ms) later, never
+// changing by more than the raised cosine's steepest rate in a period.
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -110,8 +110,10 @@ TEST(TorqueSwitchFade, ASwitchDuringAFadeGoesOnFromWhereItHadGot)
   for (int k = 0; k < 10; ++k) {
     period(fade, torque(2.0), false);
   }
+  // Halfway through the first fade.
+  const int half = static_cast<int>(TorqueSwitchFade::kSeconds / kDt / 2);
   Vector7d last;
-  for (int k = 0; k < 30; ++k) {
+  for (int k = 0; k < half; ++k) {
     last = period(fade, torque(-1.0), k == 0);
   }
   ASSERT_TRUE(fade.fading());

@@ -32,17 +32,18 @@ namespace franka {
 // made, or by kd * v: ~1 Nm at a goal's end on the arm, at libfranka's 1000 Nm/s
 // torque rate limit. apply() puts that change back on the period of the switch
 // and fades it out over kSeconds with a raised cosine, whose steepest rate,
-// pi / (2 * kSeconds) = 15.7 /s times the change, stays under that limit for a
-// change of up to 64 Nm (joints 1-4 are rated 87 Nm; libfranka's own limiter
-// spreads a larger one further). The law decides where the arm ends up;
-// the fade only spreads the change over 0.1 s, so for that long a canceled motion
-// is braked more gently than its law alone would.
+// pi / (2 * kSeconds) = 52 /s times the change, stays under that limit for a
+// change of up to 19 Nm (libfranka's own limiter spreads a larger one further).
+// The law decides where the arm ends up; for kSeconds a canceled motion is
+// braked more gently than its law alone would, which is why the fade is short:
+// over 0.1 s a joint impedance cancel at 0.83 rad/s in MuJoCo went on 36 mrad
+// where its law alone stopped it in 23.
 class TorqueSwitchFade
 {
 public:
   using Vector7d = Eigen::Matrix<double, 7, 1>;
 
-  static constexpr double kSeconds = 0.1;
+  static constexpr double kSeconds = 0.03;
 
   // Forgets the last command: on activation there is no torque of this
   // controller's own to go on from, so a switch before the first commit() fades

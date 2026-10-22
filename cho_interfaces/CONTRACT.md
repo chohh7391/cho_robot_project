@@ -238,7 +238,7 @@ otherwise.
   1 s more while the IK settles onto the stopped pose.
 - Franka's torque controllers, when a goal starts, ends or is canceled: what the
   law tracks changes at once, and the change of torque that makes fades out over
-  0.1 s instead of going out in one period. It is large when a goal ends short of
+  30 ms instead of going out in one period. It is large when a goal ends short of
   its target with the controller still pushing toward it (on the FR3, joint
   friction stops a small move a few mm early) and on a cancel mid-motion, where
   the reference velocity drops to 0. After an end, `joint_space_impedance_controller`
@@ -246,7 +246,7 @@ otherwise.
   then fades out when the next goal starts from the measured joints;
   `task_space_impedance_controller` and `operational_space_controller` hold the
   pose measured at the end and `task_space_qp_controller` the joints measured
-  then, so the push fades out at the end. For those 0.1 s a canceled motion is
+  then, so the push fades out at the end. For those 30 ms a canceled motion is
   braked more gently than its law alone would brake it.
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
