@@ -357,7 +357,9 @@ and the `Session` both controllers use.
   stops, and in position and velocity modes a goal that ends in motion (succeeded, canceled, timed
   out), bring it to rest within `max_joint_ref_acc` / `max_task_lin_acc` / `max_task_ang_acc` in the
   space it last ran; the result goes out first, and a goal accepted meanwhile starts once it is at
-  rest (cho_interfaces/CONTRACT.md, Outcomes).
+  rest (cho_interfaces/CONTRACT.md, Outcomes). In effort mode the task-space law, idle or in a goal,
+  leaves the null space free (no bringup config sets `use_nullspace_posture`), so the elbow goes
+  where the arm is pushed; a joint-space goal or chunk then starts from where the arm stands.
   `task_ik_gain` [1/s] (50, > 0) is the task-space IK gain of the position and velocity laws; the
   first update with `task_ik_gain × period ≥ 1` logs an ERROR and holds. `null_space_damping`
   [N·m·s/rad] (0 = off) damps null-space joint velocity in the effort law's task branch and in

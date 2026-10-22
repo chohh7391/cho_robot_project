@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -235,6 +236,22 @@ public:
       resources_->claim_command_interface(name));
   }
 
+  // Writes `value` to the command interface `name`, e.g. "fr3_joint4/position",
+  // which the test claims on its first call and holds until the harness goes (a
+  // controller that claims it then cannot be activated). GenericSystem copies it
+  // into the state of the same name on every read(), so a controller that
+  // claims another interface of the joint measures the joint there: an arm
+  // moved by hand, or drifting under a torque law.
+  void set_command(const std::string & name, const double value)
+  {
+    auto & interface = commands_[name];
+    if (!interface) {
+      interface = std::make_unique<hardware_interface::LoanedCommandInterface>(
+        resources_->claim_command_interface(name));
+    }
+    interface->set_value(value);
+  }
+
   // Callbacks only, no control period; true once `future` is ready.
   template<typename FutureT>
   bool spin_until(FutureT & future, const int budget_ms = 3000)
@@ -382,6 +399,8 @@ private:
   bool skip_{false};
   std::int64_t ticks_{0};
   std::unique_ptr<hardware_interface::LoanedCommandInterface> clock_interface_;
+  // set_command()'s claims, by interface name.
+  std::map<std::string, std::unique_ptr<hardware_interface::LoanedCommandInterface>> commands_;
   // update() has run: a load or configure now waits for it (list_request()).
   bool stepped_{false};
   std::function<void()> observer_;

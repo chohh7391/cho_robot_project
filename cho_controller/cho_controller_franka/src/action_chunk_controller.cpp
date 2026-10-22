@@ -243,13 +243,13 @@ controller_interface::return_type ActionChunkController::update(
     current_kp_task_ = kp_task_;
     current_kd_task_ = kd_task_;
   } else {
-    // Idle. Effort holds the activation pose (H_ee_init is latched at activation
-    // and again when a goal finishes). The open-loop modes hold q_ref_ and write
-    // *_des from it after write_open_loop(); until then *_des is still what the
-    // goal last asked for, which a stop at its end starts from (come_to_rest()).
+    // Idle. Effort holds the activation pose in task space (H_ee_init is latched
+    // at activation and again when a goal finishes), with the joints set below.
+    // The open-loop modes hold q_ref_ and write *_des from it after
+    // write_open_loop(); until then *_des is still what the goal last asked for,
+    // which a stop at its end starts from (come_to_rest()).
     if (control_mode_ == ControlMode::kEffort) {
       state_.H_ee_des = state_.H_ee_init;
-      state_.q_arm_des = state_.q_arm_init;
       state_.v_arm_des.setZero();
     }
     current_kp_task_ = default_kp_task_;
@@ -257,6 +257,19 @@ controller_interface::return_type ActionChunkController::update(
   }
 
   if (control_mode_ == ControlMode::kEffort) {
+    if (space == cho_action_chunk::ActionSpace::kTask) {
+      // The task law leaves the null space free (no posture torque unless
+      // use_nullspace_posture), so idle or in a task-space goal the elbow goes
+      // wherever the arm is pushed. The joints it holds are therefore the ones
+      // H_ee_des asks for from where the arm stands now. A joint-space goal
+      // starts from them: the hold its wait latches and its first chunk's seed
+      // are *_des (ActionChunkServer::compute()). Joints latched with the pose
+      // instead sprang the arm back along its null space at that start, by
+      // kp_joint times however far the elbow had gone: 43 Nm in one period after
+      // 0.07 rad in test_reactivation, and in MuJoCo, after a push had turned
+      // joint 1 by 0.27 rad, 86 Nm in one sample and a 0.22 rad swing.
+      state_.q_arm_des = effort_task_joints(state_, state_.H_ee_des);
+    }
     write_effort(space, twist_des);
   } else {
     // The task IK's error decays by (1 - task_ik_gain * dt) per cycle, so

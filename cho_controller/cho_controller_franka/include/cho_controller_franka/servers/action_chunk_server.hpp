@@ -48,6 +48,14 @@ using TaskTrajectory = cho_controller::common::trajectory::TrajectorySE3Ruckig;
 // metre of error.
 inline constexpr double kChunkDlsLambda = 0.1;
 
+// The joints that ask ActionChunkController's effort task law for `pose`: the
+// measurement plus one damped least-squares step, through the measured
+// J_arm_world, on the world-aligned error that law springs on. A joint law
+// springing to them keeps the task law's stretch, up to the difference in
+// their gains, and holds the null space where the arm is. The measured joints
+// when the step is not finite.
+Vector7d effort_task_joints(const State & state, const pinocchio::SE3 & pose);
+
 // Franka's adapter over cho_action_chunk::Session.
 //
 // The session holds the chunk stream: ingest, the anchor history, the timeline,

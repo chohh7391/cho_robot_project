@@ -65,6 +65,16 @@ const char * end_reason_text(const cho_action_chunk::EndReason reason)
 }
 }  // namespace
 
+Vector7d effort_task_joints(const State & state, const pinocchio::SE3 & pose)
+{
+    // ActionChunkController::write_effort()'s pose error.
+    Vector6d error;
+    error.head<3>() = pose.translation() - state.H_ee.translation();
+    error.tail<3>() = pinocchio::log3(Eigen::Matrix3d(pose.rotation() * state.H_ee.rotation().transpose()));
+    const Vector7d joints = state.q_arm + cho_controller_base::dls_step(state.J_arm_world, error, kChunkDlsLambda);
+    return joints.allFinite() ? joints : state.q_arm;
+}
+
 // What the controller commands now, for the session's limiter seeds: on the
 // control thread, inside step(), so nothing here allocates.
 class ActionChunkServer::Seeds final : public cho_action_chunk::HostCommand
@@ -746,25 +756,19 @@ void ActionChunkServer::commanded_now(const State & state, cho_action_chunk::Ref
             seed.pose = state.H_ee;
         }
     } else {
-        // The joints H_ee_des asks for: one damped least-squares step from the
-        // measurement, on the error the effort task law springs on (world-aligned,
-        // as in ActionChunkController::write_effort).
-        Vector6d error;
-        error.head<3>() = state.H_ee_des.translation() - state.H_ee.translation();
-        error.tail<3>() = pinocchio::log3(
-            Eigen::Matrix3d(state.H_ee_des.rotation() * state.H_ee.rotation().transpose()));
+        // The joints H_ee_des asks for (effort_task_joints()).
         seed.pose = state.H_ee_des;
-        seed.joints = state.q_arm + cho_controller_base::dls_step(jacobian, error, kChunkDlsLambda);
+        seed.joints = effort_task_joints(state, state.H_ee_des);
     }
 }
 
 void ActionChunkServer::finish_goal_rt(GoalPhase terminal, State & state, const char * reason)
 {
-    // Latch the idle-hold anchors at the terminal pose. The effort law's idle
-    // branch springs to *_init once is_running() turns false; the position and
-    // velocity modes hold their own reference instead (ActionChunkController::update()).
+    // Latch the idle hold at the terminal pose: the effort law's idle branch
+    // springs to H_ee_init once is_running() turns false, with the joints that
+    // pose asks for from wherever the arm stands (ActionChunkController::update());
+    // the position and velocity modes hold their own reference instead.
     state.H_ee_init = state.H_ee;
-    state.q_arm_init = state.q_arm;
     finish_from_rt(terminal, reason);
 }
 

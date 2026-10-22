@@ -1980,6 +1980,204 @@ TEST_F(ActionChunkStream, AC8_ATaskToJointSwitchStartsFromTheCommandedJoints)
   EXPECT_LT(largest, 1e-6) << "the joint command left the commanded joints by " << largest << " rad across the switch";
 }
 
+// The 6x6 determinant, by elimination with partial pivoting.
+double determinant(std::array<std::array<double, 6>, 6> a)
+{
+  double det = 1.0;
+  for (std::size_t c = 0; c < 6; ++c) {
+    std::size_t pivot = c;
+    for (std::size_t r = c + 1; r < 6; ++r) {
+      if (std::abs(a[r][c]) > std::abs(a[pivot][c])) {pivot = r;}
+    }
+    if (a[pivot][c] == 0.0) {return 0.0;}
+    if (pivot != c) {
+      std::swap(a[pivot], a[c]);
+      det = -det;
+    }
+    det *= a[c][c];
+    for (std::size_t r = c + 1; r < 6; ++r) {
+      const double factor = a[r][c] / a[c][c];
+      for (std::size_t k = c; k < 6; ++k) {a[r][k] -= factor * a[c][k];}
+    }
+  }
+  return det;
+}
+
+// The FR3's self-motion at `q`: the unit joint direction that leaves the TCP
+// where it is, to first order, signed to agree with `along` when that is given.
+// It spans the null space of fr3_tcp()'s 6x7 Jacobian (central differences, the
+// angular rows world-aligned), which is the Jacobian's generalized cross
+// product: component i is (-1)^i times the determinant without column i.
+Doubles self_motion(const Doubles & q, const Doubles & along = {})
+{
+  constexpr double kH = 1e-6;
+  std::array<std::array<double, 7>, 6> jacobian{};
+  for (std::size_t i = 0; i < 7; ++i) {
+    Doubles plus = q;
+    Doubles minus = q;
+    plus[i] += kH;
+    minus[i] -= kH;
+    const Pose a = fr3_tcp(plus);
+    const Pose b = fr3_tcp(minus);
+    const Vec3 linear = sub(a.p, b.p);
+    const Vec3 angular = log_so3(mul(a.R, transpose(b.R)));
+    for (std::size_t r = 0; r < 3; ++r) {
+      jacobian[r][i] = linear[r] / (2.0 * kH);
+      jacobian[r + 3][i] = angular[r] / (2.0 * kH);
+    }
+  }
+  Doubles direction(7, 0.0);
+  double length = 0.0;
+  for (std::size_t i = 0; i < 7; ++i) {
+    std::array<std::array<double, 6>, 6> minor{};
+    for (std::size_t r = 0; r < 6; ++r) {
+      for (std::size_t c = 0, k = 0; c < 7; ++c) {
+        if (c != i) {minor[r][k++] = jacobian[r][c];}
+      }
+    }
+    direction[i] = (i % 2 == 0 ? 1.0 : -1.0) * determinant(minor);
+    length += direction[i] * direction[i];
+  }
+  double agreement = 0.0;
+  for (std::size_t i = 0; i < along.size(); ++i) {agreement += direction[i] * along[i];}
+  const double scale = (agreement < 0.0 ? -1.0 : 1.0) / std::sqrt(length);
+  for (double & value : direction) {value *= scale;}
+  return direction;
+}
+
+// F1: between goals the effort law springs in task space alone, toward the pose
+// the last goal ended at or the controller was activated at, its null space
+// free (no posture torque, the real bringup's choice), so the elbow can move
+// while the TCP stands. A joint-space goal starts from the joints that hold
+// names; were those the joints latched with the pose, its law would spring the
+// arm back along its null space, by kp_joint times however far the elbow had
+// moved, in one period. Effort mode with the real bringup's gains. The mock
+// joints do not move under torque, so the test moves them, along the FR3's
+// self-motion with the TCP held, through the position command interfaces the
+// effort controller leaves alone (ControllerManagerHarness::set_command()).
+class ActionChunkEffort : public ActionChunkStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("control_mode", "effort"),
+      rclcpp::Parameter("kp_task", Doubles{565, 565, 565, 28, 28, 28}),
+      rclcpp::Parameter("kd_task", Doubles{47.54, 47.54, 47.54, 10.58, 10.58, 10.58}),
+      rclcpp::Parameter("default_kp_task", Doubles{300, 300, 300, 20, 20, 20}),
+      rclcpp::Parameter("default_kd_task",
+        Doubles{34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719}),
+      rclcpp::Parameter("use_nullspace_posture", false)};
+  }
+
+  // The measured joints along the self-motion, kElbowPath rad of joint-space
+  // path over 100 paced periods with the controller idle, and a check that the
+  // TCP stood while they moved. Then every period's effort command is recorded.
+  void move_the_elbow()
+  {
+    Doubles q = harness_->states(kJoints, "position");
+    const Pose before = fr3_tcp(q);
+    constexpr int kPeriods = 100;
+    constexpr int kSubsteps = 20;
+    Doubles direction;
+    for (int k = 0; k < kPeriods; ++k) {
+      for (int s = 0; s < kSubsteps; ++s) {
+        direction = self_motion(q, direction);
+        for (std::size_t i = 0; i < 7; ++i) {q[i] += kElbowPath / (kPeriods * kSubsteps) * direction[i];}
+      }
+      for (std::size_t i = 0; i < 7; ++i) {harness_->set_command(kJoints[i] + "/position", q[i]);}
+      tick();
+    }
+    harness_->cycle(20);
+    const Doubles moved = harness_->states(kJoints, "position");
+    ASSERT_LT(max_abs_difference(moved, q), 1e-12) << "the measured joints are not where the test put them";
+    const Pose after = fr3_tcp(moved);
+    ASSERT_LT(norm(sub(after.p, before.p)), 1e-5) << "the TCP moved with the elbow";
+    ASSERT_LT(angle_between(after.R, before.R), 1e-5) << "the TCP turned with the elbow";
+    elbow_moved_ = max_abs_difference(moved, kHome);
+    ASSERT_GT(elbow_moved_, 0.03) << "the joints hardly moved, so nothing below would be tested";
+    harness_->on_period([this] {torques_.push_back(harness_->states(kJoints, "effort"));});
+  }
+
+  // The largest change of the effort command in one period since
+  // move_the_elbow(), and the largest change in all.
+  void expect_no_torque_step(const std::string & when)
+  {
+    ASSERT_GT(torques_.size(), 100u);
+    double step = 0.0;
+    std::size_t at = 0;
+    for (std::size_t k = 1; k < torques_.size(); ++k) {
+      const double change = max_abs_difference(torques_[k], torques_[k - 1]);
+      if (change > step) {
+        step = change;
+        at = k;
+      }
+    }
+    RecordProperty("largest_torque_step_nm", std::to_string(step));
+    // The arm stands throughout: the command is the gravity torque at the
+    // moved joints, and the laws on either side of a switch spring on a stretch
+    // of 1e-5 m and the joints that ask for it.
+    EXPECT_LT(step, 0.5) << when << " changed the torque by " << step << " Nm in one period, " << at
+                         << " periods in, after the elbow moved " << elbow_moved_ << " rad";
+    EXPECT_LT(max_abs_difference(torques_.back(), torques_.front()), 0.5)
+      << when << " left the arm pushed off where it stands";
+  }
+
+  // The recorder writes into this fixture, which goes before the harness does.
+  void TearDown() override
+  {
+    if (harness_) {
+      harness_->on_period({});
+    }
+  }
+
+  static constexpr double kElbowPath = 0.1;  // [rad]
+  double elbow_moved_{0.0};
+  std::vector<Doubles> torques_;
+};
+
+TEST_F(ActionChunkEffort, F1_AFirstJointChunkStartsWhereTheElbowMovedTo)
+{
+  harness_->cycle(50);
+  ASSERT_NO_FATAL_FAILURE(move_the_elbow());
+  ASSERT_NO_FATAL_FAILURE(start());
+  // Zero offsets from the anchor: hold where the arm is.
+  publish("joint", "from_anchor", "", "", std::vector<Doubles>(30, Doubles(7, 0.0)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+  for (int i = 0; i < 300; ++i) {
+    tick();
+  }
+  EXPECT_EQ(telemetry_.action_space, "joint");
+  expect_no_torque_step("the goal's first joint chunk");
+}
+
+TEST_F(ActionChunkEffort, F1_TheNextGoalAfterAJointGoalStartsWhereTheElbowMovedTo)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  publish("joint", "from_anchor", "", "", std::vector<Doubles>(30, Doubles(7, 0.0)), 0.1);
+  ASSERT_TRUE(answered(1, 0)) << "the joint chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "joint chunk refused: " << telemetry_.last_reject;
+  for (int i = 0; i < 100; ++i) {
+    tick();
+  }
+  // The next goal holds in the space this one ran, joint space, until its first chunk.
+  ASSERT_EQ(telemetry_.action_space, "joint");
+  auto result = client_->async_get_result(goal_);
+  auto canceled = client_->async_cancel_goal(goal_);
+  ASSERT_TRUE(harness_->spin_until(canceled));
+  ASSERT_TRUE(cycle_until([&result] {return result.wait_for(std::chrono::seconds(0)) == std::future_status::ready;}))
+    << "the goal never ended";
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+  harness_->cycle(50);
+
+  ASSERT_NO_FATAL_FAILURE(move_the_elbow());
+  ASSERT_NE(send(5.0), nullptr) << "the next goal was rejected";
+  for (int i = 0; i < 300; ++i) {
+    tick();
+  }
+  expect_no_torque_step("the next goal's start");
+}
+
 // ---------------------------------------------------------------------------
 // REVIEW_FIX 4th stage (6th run). Position mode unless a fixture says otherwise,
 // observation time source, the mock's 1 ms period.
