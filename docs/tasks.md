@@ -66,8 +66,11 @@ Running a task against the wrong bringup fails at the first controller switch wi
 Every task root is `OneShot -> Selector(mission, safe abort)`. A leaf that fails
 takes the mission branch down, and the selector then runs the abort branch, which
 switches the arm onto its hold controller and verifies with `list_controllers`
-that the switch actually took: the exclusive switch is BEST_EFFORT, so activating a
-controller the bringup never loaded still returns ok. The root still reports
+that the switch actually took. The exclusive switch is BEST_EFFORT, so activating a
+controller the bringup never loaded still returns ok. Every
+`SwitchControllerServiceBehavior` therefore lists the controllers after an ok switch
+and fails unless all it activated are active; the abort checks once more as a step
+of its own. The root still reports
 FAILURE afterwards (`Inverter(FailureIsSuccess(...))`) — the abort is not a
 success.
 

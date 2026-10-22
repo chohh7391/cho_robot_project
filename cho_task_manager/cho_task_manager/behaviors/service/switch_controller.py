@@ -16,9 +16,10 @@ import math
 
 import py_trees
 from cho_task_manager.behaviors.service.base_service_behavior import BaseServiceBehavior
-from controller_manager_msgs.srv import SwitchController
+from controller_manager_msgs.srv import ListControllers, SwitchController
 from builtin_interfaces.msg import Duration
 from cho_task_manager.utils.controller_names import (
+    LIST_CONTROLLERS_SERVICE,
     SWITCH_CONTROLLER_SERVICE,
     controller_name_value,
     exclusive_arm_controllers,
@@ -65,6 +66,9 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         switch (the request's ``timeout``). It is deliberately not called
         ``timeout_sec``: that is the base class's service-discovery wait, and
         the two used to share one attribute.
+
+        SUCCESS means every controller in ``activate`` is active: after an ok
+        switch the behaviour lists the controllers and checks (handle_response()).
         """
         super().__init__(name, SwitchController, SWITCH_CONTROLLER_SERVICE)
         if (isinstance(switch_timeout_sec, bool)
@@ -97,7 +101,9 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
                 if controller_name_value(c) not in keep
             ]
             # BEST_EFFORT so deactivating a controller that is not currently
-            # running is tolerated (STRICT would fail the whole switch).
+            # running is tolerated (STRICT would fail the whole switch). It also
+            # skips an activation it cannot do and still reports ok, which is
+            # why handle_response() checks the result.
             self.strict = False if strict is None else strict
         else:
             self.deactivate = deactivate or []
@@ -105,6 +111,22 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
 
         self.activate_asap = activate_asap
         self.switch_timeout_sec = float(switch_timeout_sec)
+
+        self.list_client = None
+        self._checking = False
+
+    def setup(self, **kwargs):
+        super().setup(**kwargs)
+        self.list_client = self.node.create_client(
+            ListControllers,
+            LIST_CONTROLLERS_SERVICE,
+            callback_group=self.cb_group,
+        )
+        return True
+
+    def initialise(self):
+        self._checking = False
+        super().initialise()
 
     def make_request(self):
         req = SwitchController.Request()
@@ -124,13 +146,46 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         return req
 
     def handle_response(self, result):
-        """Judge the SwitchController result (result.ok)."""
-        if result.ok:
-            self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
-            return py_trees.common.Status.SUCCESS
-        else:
+        """Judge the SwitchController result, then the controllers it left active.
+
+        ``result.ok`` does not mean the ``activate`` set is running. BEST_EFFORT
+        skips a controller it cannot activate (not loaded, say) and still
+        carries out the deactivations, so an exclusive switch can take the arm's
+        controller down and leave nothing holding it. An ok switch is therefore
+        followed by a ListControllers call on the same tick, and this method
+        judges that response too.
+        """
+        if self._checking:
+            return self._judge_states(result)
+        if not result.ok:
             self.node.get_logger().error(
                 f"[{self.name}] Failed to switch controllers. "
                 f"activate={self.activate}, deactivate={self.deactivate}"
             )
             return py_trees.common.Status.FAILURE
+        if not self.activate:
+            self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
+            return py_trees.common.Status.SUCCESS
+
+        self._checking = True
+        self.send_service_request(
+            ListControllers.Request(), self.list_client, LIST_CONTROLLERS_SERVICE)
+        if self.future is None:
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+    def _judge_states(self, result):
+        states = {c.name: c.state for c in result.controller}
+        not_active = {
+            name: states.get(name, 'not loaded')
+            for name in (controller_name_value(c) for c in self.activate)
+            if states.get(name) != 'active'
+        }
+        if not_active:
+            self.node.get_logger().error(
+                f"[{self.name}] The switch returned ok but left these controllers not "
+                f"active: {not_active}; deactivate={self.deactivate}"
+            )
+            return py_trees.common.Status.FAILURE
+        self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
+        return py_trees.common.Status.SUCCESS

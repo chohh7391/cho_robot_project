@@ -179,7 +179,8 @@ def test_abort_switches_to_the_modes_hold_and_verifies_it_took():
     # Exclusive: whatever was driving the arm comes down, whichever it was.
     assert 'task_space_qp_controller' in request.deactivate_controllers
     assert 'joint_space_impedance_controller' not in request.deactivate_controllers
-    # BEST_EFFORT, so result.ok alone proves nothing -- hence the verify step.
+    # BEST_EFFORT, so result.ok alone proves nothing: the switch checks, and
+    # the verify step checks again where the tree shows it.
     assert request.strictness == request.BEST_EFFORT
     assert isinstance(verify, ListControllersServiceBehavior)
     assert verify.require_active == ['joint_space_impedance_controller']

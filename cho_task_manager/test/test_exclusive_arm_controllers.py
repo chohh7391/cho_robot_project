@@ -16,8 +16,10 @@
 
 The set exists so an exclusive switch is idempotent: it deactivates whatever
 holds the arm's command interfaces, whichever controller that happens to be.
-A Franka-only list cannot do that for OpenArm or UR, and because the exclusive
-path is deliberately BEST_EFFORT the omission fails silently.
+A Franka-only list cannot do that for OpenArm or UR. The exclusive path is
+deliberately BEST_EFFORT, so the omission is not refused by the
+controller_manager; the switch fails only at run time, when the controller it
+activates is found not active.
 """
 
 import pytest

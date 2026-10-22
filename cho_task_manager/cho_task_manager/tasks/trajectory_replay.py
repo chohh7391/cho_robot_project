@@ -297,11 +297,11 @@ def create_trajectory_replay_tree(robot_config, defaults: ReplayDefaults,
             activate=[controller],
             robot_config=robot_config,
         ))
-    # Verified either way, and not for symmetry: the exclusive switch path is
-    # BEST_EFFORT, so activating a controller the bringup never loaded still
-    # reports ok, and sending a trajectory at an inactive controller is a silent
-    # no-op. On the MoveIt path this is also what proves the bridge and the
-    # replay are talking to the same controller.
+    # Verified either way, and not for symmetry: the MoveIt path has no switch
+    # here, and its own check (the switch fails unless the controller is active)
+    # ran before the MoveIt home. Sending a trajectory at an inactive controller
+    # is a silent no-op. On the MoveIt path this is also what proves the bridge
+    # and the replay are talking to the same controller.
     handover_seq.add_child(ListControllersServiceBehavior(
         name='Verify_Replay_Controller_Active',
         require_active=[controller],

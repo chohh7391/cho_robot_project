@@ -40,6 +40,12 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
         self.cb_group = None
         self.server_available = False
         self._deadline = None
+        # The client and service the request in flight went out on. A subclass
+        # may follow its own call with one on another client
+        # (SwitchControllerServiceBehavior's check), and an abandoned request
+        # has to be untracked on the client that holds it.
+        self._future_client = None
+        self._future_service = None
 
     def setup(self, **kwargs):
         self.node = kwargs['node']
@@ -65,10 +71,17 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
         req = self.make_request()
         self.send_service_request(req)
 
-    def send_service_request(self, req):
-        if not self.client.wait_for_service(timeout_sec=0.1):
+    def send_service_request(self, req, client=None, service_name=None):
+        """Send ``req``; update() then waits for and judges its response.
+
+        ``client`` and ``service_name`` default to this behaviour's own; a
+        subclass making a second call passes the client it made for it.
+        """
+        client = client or self.client
+        service_name = service_name or self.service_name
+        if not client.wait_for_service(timeout_sec=0.1):
             self.node.get_logger().error(
-                f"[{self.name}] Service server not available: {self.service_name}"
+                f"[{self.name}] Service server not available: {service_name}"
             )
             self.server_available = False
             self.future = None
@@ -77,7 +90,9 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
 
         self.server_available = True
         self.node.get_logger().info(f"[{self.name}] Sending Service Request...")
-        self.future = self.client.call_async(req)
+        self.future = client.call_async(req)
+        self._future_client = client
+        self._future_service = service_name
         # None while the node clock reads 0 (utils/clock.py); _timed_out() takes it then.
         self._deadline = deadline_after(self.node.get_clock(), self.response_timeout_sec)
 
@@ -99,11 +114,11 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
             if self._timed_out():
                 self.node.get_logger().error(
                     f"[{self.name}] Timed out after {self.response_timeout_sec}s waiting for "
-                    f"{self.service_name} response"
+                    f"{self._future_service or self.service_name} response"
                 )
                 # Untrack the abandoned request in the rclpy Client -- otherwise each
                 # timed-out attempt leaks an entry in its pending-request map forever.
-                self.client.remove_pending_request(self.future)
+                (self._future_client or self.client).remove_pending_request(self.future)
                 self.future = None
                 self._deadline = None
                 return py_trees.common.Status.FAILURE
@@ -128,6 +143,6 @@ class BaseServiceBehavior(py_trees.behaviour.Behaviour):
     def terminate(self, new_status):
         if self.future is not None and not self.future.done():
             # Preempted with the request still in flight: untrack it (see update()).
-            self.client.remove_pending_request(self.future)
+            (self._future_client or self.client).remove_pending_request(self.future)
         self.future = None
         self._deadline = None

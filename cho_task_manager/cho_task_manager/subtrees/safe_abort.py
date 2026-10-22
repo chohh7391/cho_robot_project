@@ -23,9 +23,11 @@ to put the arm somewhere safe.
 the mission runs, and only if it fails does the abort branch run. The abort
 deliberately does **not** move the arm. A motion commanded under exactly the
 conditions that just produced a failure is not a recovery. It switches to the
-control mode's hold controller and then verifies the switch actually took,
-because the exclusive switch path is BEST_EFFORT: activating a controller the
-bringup never loaded leaves ``result.ok`` true and nothing holding the arm.
+control mode's hold controller. The exclusive switch path is BEST_EFFORT:
+activating a controller the bringup never loaded leaves ``result.ok`` true and
+nothing holding the arm. SwitchControllerServiceBehavior therefore checks that
+the hold is active before it succeeds, and the abort lists the controllers once
+more as a step of its own, so the tree shows the check.
 """
 
 import py_trees
@@ -58,7 +60,7 @@ def safe_abort_subtree(robot_config, control_mode=None, name='Safe_Abort'):
             activate=holds,
             robot_config=robot_config,
         ),
-        # The switch alone does not prove anything: see the module docstring.
+        # A second, visible check: see the module docstring.
         ListControllersServiceBehavior(
             name='Abort_Verify_Hold_Active',
             require_active=holds,

@@ -112,10 +112,10 @@ def create_fr5_fjt_handover_tree(robot_config=None) -> py_trees.behaviour.Behavi
             activate=[handover],
             robot_config=robot_config,
         ),
-        # The switch result alone proves nothing: the exclusive switch path is
-        # BEST_EFFORT, so activating a controller the bringup never loaded
-        # still reports ok. Streaming a trajectory at a controller that is not
-        # active is a silent no-op, which is the worst way to find out.
+        # The switch already fails unless the handover controller is active
+        # (the exclusive path is BEST_EFFORT and reports ok without it). This
+        # second check stays because streaming a trajectory at a controller
+        # that is not active is a silent no-op, the worst way to find out.
         ListControllersServiceBehavior(
             name='Verify_Handover_Controller_Active',
             require_active=[handover],
