@@ -210,6 +210,18 @@ private:
 
   std::unique_ptr<TaskSpaceQP> qp_;
   std::shared_ptr<TrajectoryEuclidianRuckig> traj_posture_;
+  // A switch between ACTION and the hold changes the task set at once, and with
+  // the arm off the new reference (on the FR3, joint friction stops a 1 cm move a
+  // few mm short) the torque would change by the old mode's push in one period:
+  // ~1 Nm on the arm at a goal's end, at libfranka's 1000 Nm/s torque rate limit.
+  // update() puts that change back at the switch and fades it out over
+  // kSwitchFadeSec with a raised cosine, whose steepest rate, pi / (2 * 0.1 s)
+  // times the change, stays under that limit for any torque the FR3 can command.
+  static constexpr double kSwitchFadeSec = 0.1;
+  Vector7d last_torque_{Vector7d::Zero()};
+  Vector7d switch_fade_{Vector7d::Zero()};
+  double switch_fade_left_{0.0};
+  bool mode_switched_{false};
 
   enum class QPControlMode {
     UNINITIALIZED,

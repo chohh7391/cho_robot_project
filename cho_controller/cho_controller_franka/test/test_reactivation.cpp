@@ -740,6 +740,120 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("max_joint_vel", 2.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
 
+// The task-space QP's switches between a goal and its hold, on an arm that stays
+// put. On the real FR3, joint friction stopped a 1 cm move a few mm early; the
+// goal still succeeded, inside the effort threshold, and the hold, anchored at
+// the measured joints, dropped the push the goal had built up in one period
+// (~1 Nm, at libfranka's 1000 Nm/s torque rate limit). A hold that kept the push
+// would drop it instead when the next goal starts from the measured pose. The
+// mock joints do not move under effort at all, so here the whole move is left
+// over and the push is the controller's answer to all of it. The controller
+// fades each switch's change out over 0.1 s: the end and the next start are both
+// smooth, and the push is gone once the fade is.
+class EffortGoalEnd : public Reactivation
+{
+protected:
+  static constexpr float kDuration = 0.5f;
+
+  // 1 cm in 0.5 s, inside the effort success threshold (2 cm): with the mock
+  // joints standing still the goal succeeds with all of it left over.
+  rclcpp_action::ClientGoalHandle<TaskSpace>::SharedPtr send(
+    rclcpp_action::Client<TaskSpace>::SharedPtr client)
+  {
+    TaskSpace::Goal goal;
+    goal.duration_sec = kDuration;
+    goal.relative = true;
+    goal.target_pose.pose.position.z = -0.01;
+    goal.target_pose.pose.orientation.w = 1.0;
+    auto sent = client->async_send_goal(goal);
+    if (!harness_->spin_until(sent)) {
+      return nullptr;
+    }
+    return sent.get();
+  }
+
+  // Cycles until `result` arrives and `after` periods more, recording the effort
+  // command; returns the sample on which the result had arrived (0: it never did).
+  template<typename Future>
+  std::size_t record_until(Future & result, const std::size_t after)
+  {
+    std::size_t arrived = 0;
+    for (int k = 0; k < 4000 && (arrived == 0 || samples_.size() < arrived + after); ++k) {
+      harness_->cycle(1);
+      samples_.push_back(harness_->states(kJoints, "effort"));
+      if (arrived == 0 && result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+        arrived = samples_.size();
+      }
+    }
+    return arrived;
+  }
+
+  // The largest change of the command in one period, over samples [from, to).
+  double largest_step(const std::size_t from, const std::size_t to) const
+  {
+    double step = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 1); k < std::min(to, samples_.size()); ++k) {
+      step = std::max(step, max_abs_difference(samples_[k], samples_[k - 1]));
+    }
+    return step;
+  }
+
+  std::vector<Doubles> samples_;
+};
+
+TEST_P(EffortGoalEnd, AGoalLeftShortEndsAndTheNextStartsWithoutATorqueStep)
+{
+  auto client = rclcpp_action::create_client<TaskSpace>(
+    harness_->client_node(), "/franka_reactivation/" + std::string(GetParam().name) + "/task_space");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+  harness_->cycle(50);
+  const Doubles before = harness_->states(kJoints, "effort");
+
+  auto first = send(client);
+  ASSERT_NE(first, nullptr) << "goal rejected";
+  auto first_result = client->async_get_result(first);
+  // The result arrives some periods after the end took effect (the finisher
+  // delivers it, ~30 here); the motion's last periods come before both.
+  const std::size_t arrived = record_until(first_result, 300);
+  ASSERT_NE(arrived, 0u) << "the goal never ended";
+  EXPECT_EQ(first_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+  const auto settled = static_cast<std::size_t>(kDuration / ControllerManagerHarness::kPeriod) - 5;
+  ASSERT_GT(arrived, settled) << "the goal ended before its motion did";
+  const double push = max_abs_difference(samples_[settled], before);
+  ASSERT_GT(push, 0.5) << "the goal left no push, so nothing below would be tested";
+
+  // A raised cosine over 0.1 s changes by at most pi / 200 of the push in a period.
+  const double smooth = 0.03 * push;
+  const double end_step = largest_step(settled + 1, samples_.size());
+  EXPECT_LT(end_step, smooth)
+    << "the goal's end changed the torque by " << end_step << " Nm in one period, of a " << push << " Nm push";
+  EXPECT_LT(max_abs_difference(samples_.back(), before), smooth) << "the push outlasted the fade";
+
+  // The next goal starts from the measured pose: what a hold kept, its start
+  // would drop.
+  const std::size_t second = samples_.size();
+  auto next = send(client);
+  ASSERT_NE(next, nullptr) << "the next goal was rejected";
+  auto next_result = client->async_get_result(next);
+  ASSERT_NE(record_until(next_result, 10), 0u) << "the next goal never ended";
+  EXPECT_EQ(next_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+  const double start_step = largest_step(second, second + 20);
+  EXPECT_LT(start_step, smooth) << "the next goal's start changed the torque by " << start_step << " Nm in one period";
+}
+
+// The real bringup's gains (config/real/controllers.yaml), where the drop was
+// measured.
+INSTANTIATE_TEST_SUITE_P(
+  Franka, EffortGoalEnd, ::testing::Values(
+    Case{"task_space_qp_controller", Mode::kEffort, true, {
+        rclcpp::Parameter("kp_task", Doubles{100, 100, 100, 800, 800, 800}),
+        rclcpp::Parameter("kd_task", Doubles{20, 20, 20, 56.57, 56.57, 56.57}),
+        rclcpp::Parameter("kp_joint", Doubles(7, 400.0)),
+        rclcpp::Parameter("kd_joint", Doubles(7, 40.0)),
+        rclcpp::Parameter("use_nullspace_posture", false),
+        rclcpp::Parameter("nullspace_posture_weight", 1.0e-3)}}),
+  [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
+
 // AC2, AC3 (S7): what a controller leaves on its command interfaces when it is
 // switched out in the middle of a goal. Every Franka arm base releases the same
 // way (cho_controller_base::release_on_deactivate): a velocity command is 0, a
