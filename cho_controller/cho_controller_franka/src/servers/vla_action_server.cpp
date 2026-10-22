@@ -637,8 +637,9 @@ void VLAActionServer::non_rt_tick_impl()
     }
     last_telemetry_ = now;
 
-    // Stamps are ROS time already: the controller_manager's update() time and
-    // node_->now() for arrivals.
+    // Stamps are ROS time already: the session clock, which stays on the
+    // controller_manager's update() time (VLASessionClock), and node_->now() for
+    // arrivals.
     const cho_vla_core::TelemetrySnapshot telemetry = session_.telemetry();
     cho_interfaces::msg::VlaTelemetry msg;
     msg.header.stamp = now;
@@ -778,6 +779,8 @@ void VLAActionServer::on_goal_finished(GoalPhase terminal)
 
 bool VLAActionServer::compute(const rclcpp::Time & current_time, State & state)
 {
+    // VLAController's session clock: one nominal period per cycle, the tick this
+    // cycle's command is executed on, not the time the cycle ran (VLASessionClock).
     const double now = current_time.seconds();
 
     // Feed the anchor history every cycle, goal or no goal: a chunk arriving in

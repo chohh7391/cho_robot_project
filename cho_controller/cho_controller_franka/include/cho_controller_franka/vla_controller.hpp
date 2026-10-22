@@ -24,6 +24,7 @@
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_interfaces/action/vision_language_action.hpp"
 #include "cho_controller_franka/servers/vla_action_server.hpp"
+#include "cho_controller_franka/vla_session_clock.hpp"
 #include "cho_vla_core/reference_limiter.hpp"
 
 namespace cho_controller {
@@ -83,6 +84,9 @@ private:
     double max_joint_step(double dt) const;
 
     std::shared_ptr<VLAActionServer> action_server_;
+    // The time the session is stepped on: one nominal period per cycle, not the
+    // time the cycle ran (VLASessionClock). Restarted on activation.
+    VLASessionClock session_clock_;
     // The command interface name ("effort", "position", "velocity"), and the mode
     // it selects.
     std::string control_interface_ {"effort"};

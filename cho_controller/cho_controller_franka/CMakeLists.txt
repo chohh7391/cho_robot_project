@@ -81,6 +81,7 @@ add_library(${PROJECT_NAME} SHARED
     src/vla_controller.cpp
     src/reference_stop.cpp
     src/torque_switch_fade.cpp
+    src/vla_session_clock.cpp
     # action servers
     src/servers/gripper_action_server.cpp
     src/servers/vla_action_server.cpp
@@ -135,6 +136,10 @@ if(BUILD_TESTING)
     # alone: Eigen only.
     ament_add_gtest(test_torque_switch_fade test/test_torque_switch_fade.cpp src/torque_switch_fade.cpp)
     target_include_directories(test_torque_switch_fade PRIVATE include ${EIGEN3_INCLUDE_DIRS})
+    # The VLA session's clock (VLASessionClock) alone: rclcpp's Time only.
+    ament_add_gtest(test_vla_session_clock test/test_vla_session_clock.cpp src/vla_session_clock.cpp)
+    target_include_directories(test_vla_session_clock PRIVATE include)
+    ament_target_dependencies(test_vla_session_clock rclcpp cho_vla_core)
     # The task-space QP (TaskSpaceQP) on the FR3 model, no ROS graph: links the
     # library; the URDF comes from cho_description_franka at run time.
     ament_add_gtest(test_task_space_qp_bounds test/test_task_space_qp_bounds.cpp TIMEOUT 120)

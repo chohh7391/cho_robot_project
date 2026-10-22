@@ -120,6 +120,8 @@ CallbackReturn VLAController::on_activate(
   if (action_server_) {
     action_server_->reset_for_activation();
   }
+  // Its clock starts again at the first update()'s time.
+  session_clock_.reset();
   if (FrankaBaseController::on_activate(previous_state) != CallbackReturn::SUCCESS) {
     return CallbackReturn::FAILURE;
   }
@@ -199,6 +201,21 @@ controller_interface::return_type VLAController::update(
     latch_activation_state();
   }
 
+  // Per-cycle step size for the session's clock, the open-loop integrator, its
+  // step clamps, and the velocity-mode feedforward. It MUST be the nominal
+  // period, not the raw measured one, for two independent reasons:
+  //  - the repo-wide rule for controllers that advance their own reference clock
+  //    (see FrankaBaseController::nominal_period()): the measured period jitters by
+  //    up to 2x, so parameterizing the reference rate by it makes each cycle's step
+  //    -- and the velocity the actuator infers from it -- jitter in proportion;
+  //  - the measured period is exactly 0 on any cycle that saw no new state, which
+  //    the Isaac bringup's own config documents as happening whenever update_rate
+  //    and the /clock rate disagree (config/isaac/controllers.yaml: four cycles fire
+  //    per clock message and three of them report measured_period == 0). With the
+  //    raw period that collapsed both step clamps to zero and, worse, turned the
+  //    (q_ref_ - q_ref_prev) / period feedforward into 0/0 = NaN.
+  const double dt = nominal_period(period);
+
   // The action space and the desired twist come from the running VLA goal.
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
   // one that outlived a deactivation, and in the position and velocity modes
@@ -211,10 +228,13 @@ controller_interface::return_type VLAController::update(
   // on is_running(), as it was, the history stopped between goals, and a chunk
   // observed before its goal started was anchored to the end of the PREVIOUS
   // goal -- reported as exact, since an entry at or before its time existed.
+  //
+  // On session_clock_, not `time`: sampled at the time a late cycle ran, the
+  // chunks are ahead of the tick its command is executed on (VLASessionClock).
   if (action_server_) {
     action_server_->set_reference_settling(end_stopping_);
   }
-  const bool vla_running = action_server_ && action_server_->compute(time, state_);
+  const bool vla_running = action_server_ && action_server_->compute(session_clock_.advance(time, dt), state_);
   cho_vla_core::ActionSpace space = cho_vla_core::ActionSpace::kTask;
   Vector6d twist_des = Vector6d::Zero();
   if (vla_running) {
@@ -239,20 +259,6 @@ controller_interface::return_type VLAController::update(
   if (control_mode_ == ControlMode::kEffort) {
     write_effort(space, twist_des);
   } else {
-    // Per-cycle step size for the open-loop integrator, its step clamps, and the
-    // velocity-mode feedforward. It MUST be the nominal period, not the raw
-    // measured one, for two independent reasons:
-    //  - the repo-wide rule for controllers that advance their own reference clock
-    //    (see FrankaBaseController::nominal_period()): the measured period jitters by
-    //    up to 2x, so parameterizing the reference rate by it makes each cycle's step
-    //    -- and the velocity the actuator infers from it -- jitter in proportion;
-    //  - the measured period is exactly 0 on any cycle that saw no new state, which
-    //    the Isaac bringup's own config documents as happening whenever update_rate
-    //    and the /clock rate disagree (config/isaac/controllers.yaml: four cycles fire
-    //    per clock message and three of them report measured_period == 0). With the
-    //    raw period that collapsed both step clamps to zero and, worse, turned the
-    //    (q_ref_ - q_ref_prev) / period feedforward into 0/0 = NaN.
-    const double dt = nominal_period(period);
     // The task IK's error decays by (1 - task_ik_gain * dt) per cycle, so
     // K dt >= 1 overshoots and K dt >= 2 diverges. The rate is only known here
     // (get_update_rate() is 0, see nominal_period()), so this is checked from

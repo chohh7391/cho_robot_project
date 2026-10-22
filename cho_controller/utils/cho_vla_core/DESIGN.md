@@ -108,6 +108,14 @@ session reads none), `refuse(reason)` for a chunk it could not build, and a
 the sampled action space changes (with the rates, dated at the previous
 cycle; see Seeding).
 
+A host whose command is executed on a fixed tick steps `now` by that tick, not
+by the time each cycle ran: a cycle that runs late samples the timeline ahead of
+its tick, and a host that integrates its own reference by the nominal period
+(Franka's task IK) carries part of the difference into one command — on the
+FR3, 4.5 µrad from a cycle 1 ms late, a 4520 rad/s³ jerk and a libfranka
+reflex. Franka's `VLASessionClock` advances by the nominal period and is pulled
+toward ROS time, the clock arrivals and observation stamps are on.
+
 `step()` returns a mode. `kIdle`: no goal. `kWaiting`: a goal and nothing to
 follow. `kFollow`: the limited reference. `kStopping`: a hold after the
 limiter has run, with `come_to_rest()`'s stop; Franka commands it, OpenArm
@@ -142,7 +150,9 @@ moves the order, and every goal and activation restarts it.
 stamps and states. Stamps are on the clock the host passed in. OpenArm's
 control clock is not ROS time (seconds since activation), so that host
 converts `last_chunk_stamp` and `playback_stamp` before publishing: a bridge
-compares them with ROS time. `anchor_inexact` is the last accepted chunk's.
+compares them with ROS time. Franka's stays on ROS time (`VLASessionClock`), so
+that host publishes them as they are. `anchor_inexact` is the last accepted
+chunk's.
 
 ## Time alignment
 

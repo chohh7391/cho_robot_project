@@ -196,6 +196,16 @@ public:
     }
   }
 
+  // One period stamped `late` seconds after its place on the schedule, as a
+  // cycle a busy PC ran late is: the manager hands update() the time it ran, and
+  // the measured periods on either side of it stretch and shrink by as much.
+  // The period after it is on time again.
+  void late_cycle(const double late, const bool spin = true)
+  {
+    late_ns_ = static_cast<std::int64_t>(std::llround(late * 1e9));
+    cycle(1, spin);
+  }
+
   // Callbacks only, no control period; true once `future` is ready.
   template<typename FutureT>
   bool spin_until(FutureT & future, const int budget_ms = 3000)
@@ -303,9 +313,14 @@ private:
   void step()
   {
     stepped_ = true;
-    const auto period = rclcpp::Duration::from_seconds(kPeriod);
-    clock_ns_ += period.nanoseconds();
-    const rclcpp::Time now(clock_ns_, RCL_ROS_TIME);
+    const auto scheduled = rclcpp::Duration::from_seconds(kPeriod);
+    clock_ns_ += scheduled.nanoseconds();
+    // late_cycle(): this period runs late_ns_ behind its place, the one before
+    // ran previous_late_ns_ behind.
+    const rclcpp::Time now(clock_ns_ + late_ns_, RCL_ROS_TIME);
+    const rclcpp::Duration period(std::chrono::nanoseconds(scheduled.nanoseconds() + late_ns_ - previous_late_ns_));
+    previous_late_ns_ = late_ns_;
+    late_ns_ = 0;
     manager_->read(now, period);
     manager_->update(now, period);
     manager_->write(now, period);
@@ -319,6 +334,9 @@ private:
   std::shared_ptr<controller_manager::ControllerManager> manager_;
   rclcpp::Node::SharedPtr client_node_;
   std::int64_t clock_ns_{0};
+  // late_cycle(): how late the next period runs, and how late the last one ran.
+  std::int64_t late_ns_{0};
+  std::int64_t previous_late_ns_{0};
   // update() has run: a load or configure now waits for it (list_request()).
   bool stepped_{false};
   std::function<void()> observer_;

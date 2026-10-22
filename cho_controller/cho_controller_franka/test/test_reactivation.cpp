@@ -3334,6 +3334,93 @@ TEST_F(VlaGoalTimeout, AC7_C17_AGoalPastGoalTimeoutSecIsAborted)
   EXPECT_NE(wrapped.result->message.find("goal_timeout_sec"), std::string::npos) << wrapped.result->message;
 }
 
+// A control cycle that runs late (2026-10-22, the FR3: one about 1 ms late with
+// joint 2 at 0.095 rad/s). The manager hands update() the time the cycle ran; a
+// session sampled at it is ahead of the tick the command is executed on, while
+// q_ref_ advances one nominal period, and the task IK put task_ik_gain * dt of
+// the difference into one command: 4.5 urad, a 4520 rad/s^3 jerk, and libfranka
+// stopped the arm. The session runs on VLASessionClock instead. The real
+// bringup's update_rate, so the nominal period is the harness's 1 ms, and its
+// chunk_time_source, arrival; vla_action_client's circle, 5 cm at 1 rad/s,
+// 48 waypoints 1/240 s apart every 1/15 s, each relative to its own start along
+// the base axes.
+class VlaLateCycle : public VlaStream
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("update_rate", 1000)};
+  }
+
+  bool chunk_time_source_is_set() const override {return false;}
+
+  static std::vector<Doubles> circle_chunk(const int k)
+  {
+    std::vector<Doubles> rows;
+    const double start = k / 15.0;
+    for (int i = 0; i < 48; ++i) {
+      const double t = start + i / 240.0;
+      rows.push_back(
+        {0.05 * (std::cos(start) - std::cos(t)), 0.05 * (std::sin(t) - std::sin(start)), 0.0, 0.0, 0.0, 0.0, 1.0});
+    }
+    return rows;
+  }
+
+  // The largest third difference of any joint's command over [from, to), over
+  // the period cubed [rad/s^3].
+  static double jerk(const std::vector<Doubles> & commands, const std::size_t from, const std::size_t to)
+  {
+    double worst = 0.0;
+    for (std::size_t n = std::max<std::size_t>(from, 3); n < std::min(to, commands.size()); ++n) {
+      for (std::size_t j = 0; j < commands[n].size(); ++j) {
+        const double third =
+          commands[n][j] - 3.0 * commands[n - 1][j] + 3.0 * commands[n - 2][j] - commands[n - 3][j];
+        worst = std::max(worst, std::abs(third) / (kPeriod * kPeriod * kPeriod));
+      }
+    }
+    return worst;
+  }
+};
+
+TEST_F(VlaLateCycle, ALateCycleDoesNotStepTheCommand)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  // Every period's command, read back from the position states a period late.
+  std::vector<Doubles> commands;
+  harness_->on_period([this, &commands] {commands.push_back(commanded());});
+  std::size_t late = 0;
+  for (int k = 0; k < 15; ++k) {
+    publish("task", "from_anchor", "base", "quaternion", circle_chunk(k), 1.0 / 240);
+    for (int i = 0; i < 67; ++i) {
+      if (k == 12 && i == 33) {
+        // Half-way between two chunks, with the TCP at speed.
+        late = commands.size();
+        harness_->late_cycle(0.95e-3);
+      } else {
+        tick();
+      }
+    }
+  }
+  harness_->on_period({});
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << telemetry_.last_reject;
+  ASSERT_GE(telemetry_.chunks_accepted, 14u) << "the circle's chunks were not taken";
+  ASSERT_GT(late, 400u);
+  ASSERT_GT(commands.size(), late + 10);
+
+  double speed = 0.0;
+  for (std::size_t j = 0; j < kJoints.size(); ++j) {
+    speed = std::max(speed, std::abs(commands[late][j] - commands[late - 1][j]) / kPeriod);
+  }
+  ASSERT_GT(speed, 0.03) << "the arm was not moving at the late cycle";
+  const double before = jerk(commands, late - 300, late - 5);
+  const double around = jerk(commands, late - 2, late + 10);
+  // Sampled at the late time, one command moved by 5 % of 0.95 ms of the
+  // motion: at 0.05 rad/s 2.4 urad, about 5000 rad/s^3.
+  EXPECT_LT(around, 1000.0) << "the late cycle stepped the command: " << around << " rad/s^3 around it, "
+                            << before << " before it, the fastest joint at " << speed << " rad/s";
+}
+
 // The Franka gripper relay with no franka_gripper servers up, which fails every
 // command it dispatches: each goal must end with the outcome of ITS command,
 // and a reactivation ends the goal in flight.
