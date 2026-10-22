@@ -280,7 +280,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'bringup_type',
             default_value='real',
+            # Only 'real': the controllers take it for which backend compensates
+            # gravity, and a simulation value adds gravity on top of libfranka's.
             description='Global bringup type injected to all controllers',
+            choices=['real'],
         ),
         DeclareLaunchArgument(
             'ee_name',

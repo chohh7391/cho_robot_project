@@ -632,6 +632,29 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("max_joint_vel", 1.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
 
+// bringup_type says which backend compensates gravity, so which torque terms
+// the base adds. A value it did not know took the simulation branch, full
+// gravity: on the real robot that is gravity on top of libfranka's own. Every
+// Franka bringup's value configures; anything else does not.
+TEST(BringupType, OnlyAKnownBackendConfigures)
+{
+  ControllerManagerHarness harness(fr3_description(), "/franka_bringup_type");
+  const std::vector<std::pair<std::string, bool>> cases = {
+    {"real", true}, {"gazebo", true}, {"mujoco", true}, {"isaac", true},
+    {"", false}, {"sim", false}, {"Real", false}, {"mujoco_ros2", false}};
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    const auto & [type, configures] = cases[i];
+    const std::string name = "joint_space_position_controller_" + std::to_string(i);
+    ASSERT_NE(harness.load(name, "cho_controller_franka/JointSpacePositionController", {
+        rclcpp::Parameter("robot_description", fr3_description()),
+        rclcpp::Parameter("robot_type", "fr3"),
+        rclcpp::Parameter("bringup_type", type),
+        rclcpp::Parameter("control_mode", "position"),
+        rclcpp::Parameter("ee_name", "fr3_hand_tcp")}), nullptr) << "'" << type << "'";
+    EXPECT_EQ(harness.configure(name), configures) << "bringup_type '" << type << "'";
+  }
+}
+
 // A position command left behind by a position controller, then a velocity
 // controller moves the arm by less than held_command()'s 0.05 rad band: the
 // next position controller must start from where the arm IS, not step back to

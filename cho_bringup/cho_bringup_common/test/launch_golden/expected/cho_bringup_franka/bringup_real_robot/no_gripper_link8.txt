@@ -4,7 +4,7 @@ LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['load_gripper:=false', '
   ARG controller_name default='operational_space_controller' choices=None
   ARG load_gripper default='config' choices=['true', 'false', 'config']
   ARG vla default='false' choices=None
-  ARG bringup_type default='real' choices=None
+  ARG bringup_type default='real' choices=['real']
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   OPAQUE generate_robot_nodes
     XACRO '<share:cho_description_franka>/robots/fr3/fr3.urdf.xacro' mappings={arm_prefix: '', fake_sensor_commands: 'false', hand: 'false', robot_ip: '172.16.0.2', robot_type: 'fr3', ros2_control: 'true', special_connection: 'ft_sensor', use_fake_hardware: 'false', xyz_ee: '0 0 0'}

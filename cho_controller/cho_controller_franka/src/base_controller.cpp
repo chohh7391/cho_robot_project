@@ -166,6 +166,16 @@ CallbackReturn FrankaBaseController::on_configure(const rclcpp_lifecycle::State&
         RCLCPP_ERROR(get_node()->get_logger(), "Failed to get bringup_type: %s", e.what());
         return CallbackReturn::FAILURE;
     }
+    // It says which backend compensates gravity, and so which torque terms update()
+    // adds. Any other value took the simulation branch, which adds full gravity: on
+    // the real robot that is gravity on top of libfranka's own compensation, an
+    // upward push the size of the arm's weight.
+    if (bringup_type_ != "real" && bringup_type_ != "gazebo" && bringup_type_ != "mujoco" &&
+        bringup_type_ != "isaac") {
+        RCLCPP_ERROR(get_node()->get_logger(),
+            "bringup_type '%s' is none of real, gazebo, mujoco, isaac", bringup_type_.c_str());
+        return CallbackReturn::FAILURE;
+    }
 
     robot_type_ = cho_controller::franka::getRobotNameFromDescription(robot_description_, get_node()->get_logger());
     arm_joints_ = arm_joint_names();
