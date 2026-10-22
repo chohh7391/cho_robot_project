@@ -356,10 +356,20 @@ CallbackReturn FrankaBaseController::on_deactivate(
   // command goes to 0, a position command stays as the hold and is recorded with
   // where the arm is now, so the next position controller can tell a live hold
   // from a stale one (live_held_command); an effort command is left as it is.
-  // Without a readable state the velocities are still zeroed, nothing recorded.
+  // A controller whose reference may be moving records its rate and
+  // acceleration with it, so the controller activated in the same switch brings
+  // the motion to rest (held_command_motion()) instead of stopping it in one
+  // period. Without a readable state the velocities are still zeroed, nothing
+  // recorded.
+  Vector7d rate, acceleration;
   if (state_interfaces_in_order()) {
     update_joint_states();
-    cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, state_.q_arm);
+    if (reference_motion(rate, acceleration)) {
+      cho_controller_base::release_on_deactivate(
+        command_interfaces_, arm_joints_, state_.q_arm, rate, acceleration, get_node()->get_name());
+    } else {
+      cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, state_.q_arm);
+    }
   } else {
     cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, Eigen::VectorXd());
   }
@@ -522,6 +532,22 @@ Vector7d FrankaBaseController::held_command_position() const
     // (effort/velocity <-> position). A value left by a controller from
     // elsewhere is judged by the band alone.
     return cho_controller_base::live_held_command(command_interfaces_, arm_joints_, state_.q_arm_init);
+}
+
+bool FrankaBaseController::held_command_motion(Vector7d & rate, Vector7d & acceleration) const
+{
+    Eigen::VectorXd held_rate, held_acceleration;
+    rate.setZero();
+    acceleration.setZero();
+    if (!cho_controller_base::live_held_motion(
+          command_interfaces_, arm_joints_, state_.q_arm_init, get_node()->get_name(),
+          held_rate, held_acceleration) ||
+        held_rate.size() != num_dof_ || (held_rate.array() == 0.0).all()) {
+        return false;
+    }
+    rate = held_rate;
+    acceleration = held_acceleration;
+    return true;
 }
 
 double FrankaBaseController::nominal_period(const rclcpp::Duration & period)

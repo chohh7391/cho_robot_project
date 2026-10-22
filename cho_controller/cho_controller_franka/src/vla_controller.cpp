@@ -150,6 +150,19 @@ CallbackReturn VLAController::on_deactivate(const rclcpp_lifecycle::State & prev
   return result;
 }
 
+bool VLAController::reference_motion(Vector7d & rate, Vector7d & acceleration)
+{
+  if (control_mode_ == ControlMode::kEffort || !activation_state_latched_) {
+    return false;
+  }
+  // As come_to_rest() seeds its own stop: q_ref_rate_ is the rate over the
+  // last step, at its middle, and at q_ref_ the reference moves half a step
+  // of acceleration faster. The controller taking over bounds both.
+  acceleration = q_ref_acceleration_.allFinite() ? q_ref_acceleration_ : Vector7d::Zero();
+  rate = q_ref_rate_ + 0.5 * nominal_period(rclcpp::Duration(0, 0)) * acceleration;
+  return rate.allFinite();
+}
+
 void VLAController::latch_activation_state()
 {
   state_.q_arm_init = state_.q_arm;

@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <sstream>
@@ -227,6 +228,11 @@ public:
 
   rclcpp::Node::SharedPtr client_node() const {return client_node_;}
 
+  // Called after every period, the ones a request runs while it waits
+  // (run_with_periods()) included, so a test that samples the command
+  // interfaces through it sees every period, a switch's too. Empty: none.
+  void on_period(std::function<void()> observer) {observer_ = std::move(observer);}
+
   // The time the next period will be stamped with, minus one period: the time
   // the controllers saw on the last one. What a bridge echoing the controller's
   // clock would stamp an observation with.
@@ -303,6 +309,9 @@ private:
     manager_->read(now, period);
     manager_->update(now, period);
     manager_->write(now, period);
+    if (observer_) {
+      observer_();
+    }
   }
 
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
@@ -312,6 +321,7 @@ private:
   std::int64_t clock_ns_{0};
   // update() has run: a load or configure now waits for it (list_request()).
   bool stepped_{false};
+  std::function<void()> observer_;
 };
 
 inline double max_abs_difference(const std::vector<double> & a, const std::vector<double> & b)

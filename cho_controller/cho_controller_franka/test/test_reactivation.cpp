@@ -827,6 +827,188 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("max_joint_vel", 1.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
 
+// A switch from one position or velocity controller to another while the first
+// one's command moves (the guarded mission's switch to the hold after a goal
+// failed mid-motion, say). franka_hardware keeps the control session across a
+// switch whose controllers claim the same interfaces, so the FCI expects the
+// command to go on where it was: held where the outgoing controller left it, it
+// stopped in one period. The outgoing controller records its motion with the
+// release, and the incoming one brings it to rest within the joint motion limits
+// (FrankaBaseController::held_command_motion()), then holds; its own goal starts
+// once the reference is at rest. Every period is sampled, the switch's too
+// (ControllerManagerHarness::on_period()).
+struct SwitchCase
+{
+  const char * from;
+  const char * to;
+  Mode mode;
+  bool from_task_space;
+  bool to_task_space;
+  std::vector<rclcpp::Parameter> gains;
+};
+
+class SwitchInMotion : public ::testing::TestWithParam<SwitchCase>
+{
+protected:
+  static constexpr double kAcceleration = 2.0;  // [rad/s^2], every joint's limit
+  static constexpr double kDt = ControllerManagerHarness::kPeriod;
+
+  // Reactivation's plugin table, for a fixture of another parameter type.
+  struct Types : Reactivation
+  {
+    using Reactivation::type_of;
+  };
+
+  void SetUp() override
+  {
+    const auto & c = GetParam();
+    harness_ = std::make_unique<ControllerManagerHarness>(
+      fr3_description(c.mode == Mode::kVelocity), "/franka_switch_motion");
+    std::vector<rclcpp::Parameter> parameters = {
+      rclcpp::Parameter("robot_description", fr3_description()),
+      rclcpp::Parameter("robot_type", "fr3"),
+      rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("control_mode", interface_of(c.mode)),
+      rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
+    for (const auto & joint : kJoints) {
+      parameters.emplace_back("joint_limits." + joint + ".has_velocity_limits", true);
+      parameters.emplace_back("joint_limits." + joint + ".max_velocity", 2.62);
+      parameters.emplace_back("joint_limits." + joint + ".has_acceleration_limits", true);
+      parameters.emplace_back("joint_limits." + joint + ".max_acceleration", kAcceleration);
+    }
+    parameters.insert(parameters.end(), c.gains.begin(), c.gains.end());
+    for (const char * name : {c.from, c.to}) {
+      ASSERT_NE(harness_->load(name, Types::type_of(name), parameters), nullptr) << name;
+      ASSERT_TRUE(harness_->configure(name)) << name;
+    }
+    ASSERT_TRUE(harness_->switch_controllers({c.from}, {}));
+    harness_->on_period([this]() {samples_.push_back(command());});
+  }
+
+  void TearDown() override
+  {
+    if (harness_) {
+      harness_->on_period(nullptr);
+    }
+  }
+
+  Doubles command()
+  {
+    return harness_->states(kJoints, interface_of(GetParam().mode));
+  }
+
+  // As GoalEndInMotion::max_acceleration(), over every period from `from` on.
+  double max_acceleration(const std::size_t from) const
+  {
+    const bool velocity = GetParam().mode == Mode::kVelocity;
+    double worst = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 2); k < samples_.size(); ++k) {
+      for (std::size_t j = 0; j < kJoints.size(); ++j) {
+        const double a = velocity ?
+          (samples_[k][j] - samples_[k - 1][j]) / kDt :
+          (samples_[k][j] - 2.0 * samples_[k - 1][j] + samples_[k - 2][j]) / (kDt * kDt);
+        worst = std::max(worst, std::abs(a));
+      }
+    }
+    return worst;
+  }
+
+  // The commanded rate now [rad/s].
+  double rate() const
+  {
+    if (GetParam().mode == Mode::kVelocity) {
+      return max_abs_difference(samples_.back(), Doubles(kJoints.size(), 0.0));
+    }
+    return max_abs_difference(samples_.back(), samples_[samples_.size() - 2]) / kDt;
+  }
+
+  // A 1.5 s goal on `controller`: joint 1 by 0.6 rad, or the TCP 10 cm down.
+  template<typename Action>
+  std::shared_future<typename rclcpp_action::ClientGoalHandle<Action>::WrappedResult> send(
+    const std::string & controller, const bool task_space, const double sign)
+  {
+    auto client = rclcpp_action::create_client<Action>(
+      harness_->client_node(),
+      "/franka_switch_motion/" + controller + (task_space ? "/task_space" : "/joint_space"));
+    clients_.push_back(client);
+    EXPECT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+    typename Action::Goal goal;
+    goal.duration_sec = 1.5f;
+    if constexpr (std::is_same_v<Action, JointSpace>) {
+      goal.target_joints.name = kJoints;
+      goal.target_joints.position = harness_->states(kJoints, "position");
+      goal.target_joints.position[0] += sign * 0.6;
+    } else {
+      goal.relative = true;
+      goal.target_pose.pose.position.z = -sign * 0.10;
+      goal.target_pose.pose.orientation.w = 1.0;
+    }
+    auto sent = client->async_send_goal(goal);
+    EXPECT_TRUE(harness_->spin_until(sent));
+    auto handle = sent.get();
+    EXPECT_NE(handle, nullptr) << "goal to " << controller << " rejected";
+    return client->async_get_result(handle);
+  }
+
+  template<typename From, typename To>
+  void run()
+  {
+    const auto & c = GetParam();
+    harness_->cycle(50);
+    auto outgoing = send<From>(c.from, c.from_task_space, 1.0);
+    harness_->cycle(700);
+    ASSERT_GT(rate(), 0.05) << "the command is not moving at the switch, so nothing below would be tested";
+
+    const std::size_t before = samples_.size() - 3;
+    ASSERT_TRUE(harness_->switch_controllers({c.to}, {c.from}));
+    harness_->cycle(800);
+    EXPECT_LE(max_acceleration(before), kAcceleration * 1.02)
+      << "the switch stopped the command faster than the joint acceleration limit";
+    EXPECT_LT(max_abs_difference(samples_[samples_.size() - 100], samples_.back()), 1e-9)
+      << "the command is not at rest after the switch";
+    ASSERT_TRUE(harness_->spin_until(outgoing));
+    EXPECT_EQ(outgoing.get().code, rclcpp_action::ResultCode::ABORTED);
+
+    // The incoming controller's own goal, from where the motion came to rest.
+    const std::size_t next = samples_.size();
+    auto incoming = send<To>(c.to, c.to_task_space, -1.0);
+    harness_->cycle(3500);
+    ASSERT_TRUE(harness_->spin_until(incoming));
+    EXPECT_EQ(incoming.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+    EXPECT_LE(max_acceleration(next), kAcceleration * 1.02);
+  }
+
+  std::unique_ptr<ControllerManagerHarness> harness_;
+  std::vector<Doubles> samples_;
+  std::vector<rclcpp_action::ClientBase::SharedPtr> clients_;
+};
+
+TEST_P(SwitchInMotion, TheIncomingControllerBringsTheMotionToRest)
+{
+  const auto & c = GetParam();
+  if (c.from_task_space) {
+    if (c.to_task_space) {run<TaskSpace, TaskSpace>();} else {run<TaskSpace, JointSpace>();}
+  } else {
+    if (c.to_task_space) {run<JointSpace, TaskSpace>();} else {run<JointSpace, JointSpace>();}
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Franka, SwitchInMotion, ::testing::Values(
+    SwitchCase{"joint_space_position_controller", "task_space_ik_controller", Mode::kPosition, false, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025)}},
+    SwitchCase{"task_space_ik_controller", "joint_space_position_controller", Mode::kPosition, true, false, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025)}},
+    SwitchCase{"joint_space_velocity_controller", "task_space_velocity_controller", Mode::kVelocity, false, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
+        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)), rclcpp::Parameter("max_joint_vel", 2.0)}},
+    SwitchCase{"task_space_velocity_controller", "joint_space_velocity_controller", Mode::kVelocity, true, false, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
+        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)), rclcpp::Parameter("max_joint_vel", 2.0)}}),
+  [](const ::testing::TestParamInfo<SwitchCase> & info) {
+    return std::string(info.param.from) + "_to_" + info.param.to;
+  });
+
 // bringup_type says which backend compensates gravity, so which torque terms
 // the base adds. A value it did not know took the simulation branch, full
 // gravity: on the real robot that is gravity on top of libfranka's own. Every
@@ -2549,6 +2731,52 @@ TEST_F(VlaEndVelocityTimeout, S2_AVelocityGoalTimedOutInMotionStopsWithinTheAcce
 {
   end_in_motion(End::kGoalTimeout);
 }
+// A VLA reference switched out while it moves, to the position hold: the switch
+// pick_place_position makes right after its VLA goal ends, while the end stop
+// may still run, or the guarded mission's after a failure. The hold takes the
+// motion over (FrankaBaseController::held_command_motion()) and brings it to
+// rest within its own joint limits, here the VLA limiter's 4 rad/s^2. Held where
+// VLA left it, joint 7 stopped from kRate in one period, 100 rad/s^2. Every
+// period is sampled, the load's and the switch's too.
+TEST_F(VlaEnd, AReferenceSwitchedOutInMotionIsBroughtToRestByTheHold)
+{
+  ASSERT_NO_FATAL_FAILURE(start_turning(5.0));
+  constexpr const char * kHold = "joint_space_position_controller";
+  std::vector<rclcpp::Parameter> parameters = {
+    rclcpp::Parameter("robot_description", description()),
+    rclcpp::Parameter("robot_type", "fr3"),
+    rclcpp::Parameter("bringup_type", "mujoco"),
+    rclcpp::Parameter("control_mode", "position"),
+    rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
+  for (const auto & joint : kJoints) {
+    parameters.emplace_back("joint_limits." + joint + ".has_velocity_limits", true);
+    parameters.emplace_back("joint_limits." + joint + ".max_velocity", 2.62);
+    parameters.emplace_back("joint_limits." + joint + ".has_acceleration_limits", true);
+    parameters.emplace_back("joint_limits." + joint + ".max_acceleration", kAccelerationLimit);
+  }
+  harness_->on_period([this]() {q_.push_back(harness_->states(kJoints, "position"));});
+  ASSERT_NE(harness_->load(kHold, "cho_controller_franka/JointSpacePositionController", parameters), nullptr);
+  ASSERT_TRUE(harness_->configure(kHold));
+  ASSERT_GT(rate(q_.size() - 1), 0.9 * kRate) << "joint 7 is not turning at the switch";
+
+  const std::size_t before = q_.size() - 3;
+  ASSERT_TRUE(harness_->switch_controllers({kHold}, {kName}));
+  harness_->cycle(300);
+  harness_->on_period(nullptr);
+
+  double worst = 0.0;
+  for (std::size_t k = before; k < q_.size(); ++k) {
+    for (std::size_t j = 0; j < kJoints.size(); ++j) {
+      worst = std::max(worst, std::abs(q_[k][j] - 2.0 * q_[k - 1][j] + q_[k - 2][j]) / (kDt * kDt));
+    }
+  }
+  EXPECT_LE(worst, kAccelerationLimit * 1.02)
+    << "the switch stopped joint 7 faster than the hold's acceleration limit";
+  EXPECT_LT(max_abs_difference(q_[q_.size() - 100], q_.back()), 1e-9) << "joint 7 is not at rest";
+  // Not frozen at the switch: it went on, slowing down, before it stood.
+  EXPECT_GT(q_.back()[6] - q_[before + 2][6], kRate * kDt);
+}
+
 TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndIsCanceledThere) {hand_over(End::kCancel);}
 TEST_F(VlaEnd, S2_AGoalSentWhileTheReferenceStopsStartsAtRestAndSucceedsThere) {hand_over(End::kSuccess);}
 TEST_F(VlaEnd, S2_ATaskGoalCanceledInMotionStopsOnItsLineWithinTheTaskAccelerationLimit) {end_task_in_motion();}

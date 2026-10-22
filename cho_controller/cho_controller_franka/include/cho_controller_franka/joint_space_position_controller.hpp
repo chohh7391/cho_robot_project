@@ -28,6 +28,9 @@ public:
   CallbackReturn on_init() override;
   CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
   CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
+  // stop_'s commanded rate and acceleration, for the controller switched in
+  // after this one (FrankaBaseController::held_command_motion()).
+  bool reference_motion(Vector7d & rate, Vector7d & acceleration) override;
   controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:

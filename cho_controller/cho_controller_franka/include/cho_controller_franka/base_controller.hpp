@@ -166,6 +166,21 @@ public:
     // the hardware's next read(). See base_controller.cpp for why.
     Vector7d held_command_position() const;
 
+    // The motion the controller deactivated in this same switch left on the arm's
+    // command interfaces, for a position or velocity controller that takes it
+    // over: true, with each joint's commanded rate and acceleration, when one is
+    // there and moving (cho_controller_base::live_held_motion()). A controller
+    // that gets one brings it to rest before it holds; holding the command where
+    // it was left stops it in one control period, which the FCI rejects. Call it
+    // from on_activate, as held_command_position().
+    bool held_command_motion(Vector7d & rate, Vector7d & acceleration) const;
+
+    // The commanded reference's rate and acceleration at its last command, which
+    // on_deactivate() records for the controller activated in the same switch
+    // (held_command_motion()). False, the default, for a controller that has none
+    // to hand over: its release records no motion.
+    virtual bool reference_motion(Vector7d & /*rate*/, Vector7d & /*acceleration*/) {return false;}
+
     void publish_ee_state();
     void publish_controller_state();
 

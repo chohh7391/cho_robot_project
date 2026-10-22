@@ -85,7 +85,8 @@ What each package is, and where its own documentation is. `extern/` holds the pi
   DLS IK, and the held-command ledger `libcho_controller_base_ledger.so`
   ([held_command.hpp](cho_controller/cho_controller_base/include/cho_controller_base/held_command.hpp)). Every arm
   base lets go through `release_on_deactivate()` (velocity commands to 0, position commands recorded) and seeds a
-  position controller with `live_held_command()`.
+  position controller with `live_held_command()`; Franka's position and velocity controllers also hand a moving
+  command to the controller switched in with them (`live_held_motion()`), which brings it to rest.
   `testing/controller_manager_harness.hpp` steps a controller_manager on mock hardware (each arm's `test_reactivation`).
 - `cho_controller_franka` — FR3: 13 plugins ([cho_controller_franka.xml](cho_controller/cho_controller_franka/cho_controller_franka.xml)),
   `VLAController` and the Franka hand's `GripperController` among them

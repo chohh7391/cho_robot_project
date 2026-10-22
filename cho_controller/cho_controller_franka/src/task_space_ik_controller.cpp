@@ -94,8 +94,21 @@ CallbackReturn TaskSpaceIKController::on_activate(
   prev_running_ = false;
   traj_clock_ = 0.0;
   stop_.reset(q_ref_);
+  // A switch that let go of a moving command hands the motion over: it comes
+  // to rest from where it was going (stop_) instead of stopping in this
+  // controller's first period, and a goal starts once it is at rest.
+  Vector7d rate, acceleration;
+  if (held_command_motion(rate, acceleration)) {
+    stop_.start_from(q_ref_, rate, acceleration);
+  }
 
   return CallbackReturn::SUCCESS;
+}
+
+bool TaskSpaceIKController::reference_motion(Vector7d & rate, Vector7d & acceleration)
+{
+  stop_.motion(rate, acceleration);
+  return true;
 }
 
 controller_interface::return_type TaskSpaceIKController::update(

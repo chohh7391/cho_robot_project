@@ -38,6 +38,9 @@ public:
     CallbackReturn on_configure(const rclcpp_lifecycle::State & previous_state) override;
     CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
     CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
+    // q_ref_'s rate and acceleration in the position and velocity modes, for the
+    // controller switched in after this one (held_command_motion()); none in effort.
+    bool reference_motion(Vector7d & rate, Vector7d & acceleration) override;
     controller_interface::return_type update(const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:

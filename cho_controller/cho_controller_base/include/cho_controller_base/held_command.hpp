@@ -14,8 +14,10 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -80,9 +82,18 @@ public:
   {
     double command;   // the value left on the interface
     double measured;  // the joint position when it was left there
+    // The motion the command was in, for a controller that takes it over in the
+    // same switch (live_held_motion()): the commanded rate and acceleration of
+    // the joint [rad/s, rad/s^2], who released it, and when (steady clock).
+    // A release that does not say leaves no releaser, which nothing takes over.
+    double rate {0.0};
+    double acceleration {0.0};
+    std::string releaser {};
+    std::int64_t released_at_ns {0};
   };
 
   static void record(const std::string & interface_name, double command, double measured);
+  static void record(const std::string & interface_name, const Release & release);
   static bool find(const std::string & interface_name, Release & out);
   // Forgets every record. For tests, which run several controller_managers in
   // one process with the same joint names.
@@ -253,6 +264,134 @@ Eigen::VectorXd live_held_command(
     }
   }
   return held;
+}
+
+// How long [s] after a release a controller activated in the same switch may
+// take its motion over (live_held_motion()). The controller_manager deactivates
+// and activates the controllers of one switch in one call, microseconds apart;
+// a controller activated by a later switch request is at least a request and a
+// control period behind. The measured-position rule (kHeldCommandDrift) is what
+// tells the two apart on hardware, where every read moves the joints; this
+// window covers a simulator or mock whose joints stand exactly still.
+inline constexpr double kMotionHandoverWindow = 0.01;
+
+inline std::int64_t steady_now_ns()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// release_on_deactivate() for a controller whose command may be moving when it
+// lets go, so that a controller activated in the same switch can bring that
+// motion to rest instead of holding the command where it was left, which stops
+// it in one control period. Per joint in `joints`, `rate` and `acceleration`
+// [rad/s, rad/s^2] are the commanded reference's at its last command, and
+// `releaser` names the controller letting go. Then, besides what the plain
+// release does:
+//   - "position": the record carries rate, acceleration, releaser and the time;
+//   - "velocity": recorded too, before it is set to 0 -- its value, the velocity
+//     last commanded, is the record's command and its rate, the one a
+//     controller taking over has to continue from.
+// The hardware keeps its control session across such a switch only when the
+// incoming controller claims the same interfaces in the same switch
+// (franka_hardware's prepare/perform_command_mode_switch); a controller let go
+// with none in its place still stops at once.
+template<typename CommandInterfaces, typename MeasuredT, typename RateT, typename AccelerationT>
+void release_on_deactivate(
+  CommandInterfaces && command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured, const Eigen::MatrixBase<RateT> & rate,
+  const Eigen::MatrixBase<AccelerationT> & acceleration, const std::string & releaser)
+{
+  const auto known = std::min(
+    {static_cast<std::size_t>(measured.size()), static_cast<std::size_t>(rate.size()),
+      static_cast<std::size_t>(acceleration.size())});
+  const std::int64_t now = steady_now_ns();
+  for (auto & interface : command_interfaces) {
+    const std::size_t j = detail::joint_index(interface, joints);
+    if (j >= joints.size()) {
+      continue;
+    }
+    const auto & kind = interface.get_interface_name();
+    const auto i = static_cast<Eigen::Index>(j);
+    if (kind == "velocity") {
+      if (j < known) {
+        const double value = interface.get_value();
+        HeldCommandLedger::record(
+          interface.get_name(),
+          HeldCommandLedger::Release{value, measured(i), value, acceleration(i), releaser, now});
+      }
+      interface.set_value(0.0);
+    } else if (kind == "position" && j < known) {
+      HeldCommandLedger::record(
+        interface.get_name(),
+        HeldCommandLedger::Release{
+          interface.get_value(), measured(i), rate(i), acceleration(i), releaser, now});
+    }
+  }
+}
+
+// The motion a controller let go of in this same switch, for the controller now
+// activating in its place (`self`): true, with each joint's commanded rate and
+// acceleration [rad/s, rad/s^2] in joint order, when every joint in `joints` has
+// a position or velocity command interface here whose release by
+// release_on_deactivate() above is still live:
+//   - released by another controller (a controller is never deactivated and
+//     activated in one switch, so its own record is from an earlier one);
+//   - within kMotionHandoverWindow of now;
+//   - nothing has written the interface since (a position still holds the
+//     released command, a velocity the 0 the release left);
+//   - the joint has not moved since (kHeldCommandDrift): no hardware read has
+//     run in between, as none does inside one switch.
+// Otherwise false, with both zero: the controller starts at rest, as before.
+// A rate and acceleration that are zero are a live release at rest.
+//
+// The interfaces need get_name(), get_prefix_name(), get_interface_name() and
+// get_value(). Call it in on_activate, before the first update, with the
+// measurement taken there.
+template<typename CommandInterfaces, typename MeasuredT>
+bool live_held_motion(
+  const CommandInterfaces & command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured, const std::string & self,
+  Eigen::VectorXd & rate, Eigen::VectorXd & acceleration)
+{
+  const auto n = static_cast<Eigen::Index>(joints.size());
+  rate = Eigen::VectorXd::Zero(n);
+  acceleration = Eigen::VectorXd::Zero(n);
+  if (measured.size() != n) {
+    return false;
+  }
+  const std::int64_t now = steady_now_ns();
+  const auto window_ns = static_cast<std::int64_t>(kMotionHandoverWindow * 1e9);
+  for (Eigen::Index j = 0; j < n; ++j) {
+    bool live = false;
+    for (const auto & interface : command_interfaces) {
+      const auto & kind = interface.get_interface_name();
+      if ((kind != "position" && kind != "velocity") ||
+        interface.get_prefix_name() != joints[static_cast<std::size_t>(j)])
+      {
+        continue;
+      }
+      HeldCommandLedger::Release release{};
+      const double value = interface.get_value();
+      live = HeldCommandLedger::find(interface.get_name(), release) &&
+        !release.releaser.empty() && release.releaser != self &&
+        now >= release.released_at_ns && now - release.released_at_ns <= window_ns &&
+        value == (kind == "position" ? release.command : 0.0) &&
+        std::abs(measured(j) - release.measured) <= kHeldCommandDrift &&
+        std::isfinite(release.rate) && std::isfinite(release.acceleration);
+      if (live) {
+        rate(j) = release.rate;
+        acceleration(j) = release.acceleration;
+      }
+      break;
+    }
+    if (!live) {
+      rate.setZero();
+      acceleration.setZero();
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace cho_controller_base

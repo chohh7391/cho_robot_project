@@ -442,4 +442,100 @@ TEST(Kinematics, DlsStepRefusesAJacobianPastItsBounds) {
   EXPECT_FALSE(dls_fits(kMaxTaskDim + 1, 6));
 }
 
+// --- release_on_deactivate with a motion / live_held_motion ------------------
+//
+// A controller switched out while its command moves leaves the motion for the
+// one switched in at the same time, which brings it to rest instead of stopping
+// it in one period. Only a release of this same switch is taken over.
+
+class HeldMotion : public ::testing::Test
+{
+protected:
+  void SetUp() override {HeldCommandLedger::clear();}
+  void TearDown() override {HeldCommandLedger::clear();}
+
+  const std::vector<std::string> joints_{"j1", "j2"};
+  const Eigen::Vector2d measured_{0.50, -1.00};
+  const Eigen::Vector2d rate_{0.3, -0.2};
+  const Eigen::Vector2d acceleration_{-1.0, 0.5};
+  Eigen::VectorXd rate_out_, acceleration_out_;
+};
+
+TEST_F(HeldMotion, APositionReleaseOfThisSwitchIsTakenOverByAnotherController) {
+  std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  release_on_deactivate(commands, joints_, measured_, rate_, acceleration_, "outgoing");
+  // The hold stays on the interface, as for the plain release.
+  EXPECT_DOUBLE_EQ(commands[0].value, 0.51);
+  ASSERT_TRUE(live_held_motion(commands, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+  EXPECT_TRUE(rate_out_.isApprox(rate_));
+  EXPECT_TRUE(acceleration_out_.isApprox(acceleration_));
+  // live_held_command() takes the hold too.
+  EXPECT_TRUE(live_held_command(commands, joints_, measured_).isApprox(Eigen::Vector2d(0.51, -1.02)));
+}
+
+TEST_F(HeldMotion, AVelocityReleaseHandsOverTheVelocityLastCommanded) {
+  std::vector<NamedInterface> commands{{"j1", "velocity", 0.35}, {"j2", "velocity", -0.25}};
+  release_on_deactivate(commands, joints_, measured_, rate_, acceleration_, "outgoing");
+  EXPECT_DOUBLE_EQ(commands[0].value, 0.0);
+  EXPECT_DOUBLE_EQ(commands[1].value, 0.0);
+  ASSERT_TRUE(live_held_motion(commands, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+  // The command, P term and all: what the next period has to continue from.
+  EXPECT_DOUBLE_EQ(rate_out_(0), 0.35);
+  EXPECT_DOUBLE_EQ(rate_out_(1), -0.25);
+  EXPECT_TRUE(acceleration_out_.isApprox(acceleration_));
+}
+
+TEST_F(HeldMotion, AControllerNeverTakesOverItsOwnRelease) {
+  // It cannot be deactivated and activated in one switch.
+  std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  release_on_deactivate(commands, joints_, measured_, rate_, acceleration_, "outgoing");
+  EXPECT_FALSE(live_held_motion(commands, joints_, measured_, "outgoing", rate_out_, acceleration_out_));
+  EXPECT_TRUE(rate_out_.isZero());
+  EXPECT_TRUE(acceleration_out_.isZero());
+}
+
+TEST_F(HeldMotion, AReleaseFromAnEarlierSwitchIsNotTakenOver) {
+  std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  const auto earlier =
+    steady_now_ns() - static_cast<std::int64_t>(2.0 * kMotionHandoverWindow * 1e9);
+  for (std::size_t j = 0; j < 2; ++j) {
+    const auto i = static_cast<Eigen::Index>(j);
+    HeldCommandLedger::record(
+      commands[j].get_name(),
+      HeldCommandLedger::Release{commands[j].value, measured_(i), rate_(i), acceleration_(i), "outgoing", earlier});
+  }
+  EXPECT_FALSE(live_held_motion(commands, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+}
+
+TEST_F(HeldMotion, ACommandWrittenOrAJointMovedSinceIsNotTakenOver) {
+  std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  release_on_deactivate(commands, joints_, measured_, rate_, acceleration_, "outgoing");
+  // A hardware read in between moved the arm.
+  EXPECT_FALSE(live_held_motion(
+      commands, joints_, Eigen::Vector2d(0.5001, -1.00), "incoming", rate_out_, acceleration_out_));
+  // Something wrote the interface after the release.
+  commands[1].value = -1.03;
+  EXPECT_FALSE(live_held_motion(commands, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+
+  std::vector<NamedInterface> velocities{{"j1", "velocity", 0.35}, {"j2", "velocity", -0.25}};
+  release_on_deactivate(velocities, joints_, measured_, rate_, acceleration_, "outgoing");
+  velocities[0].value = 0.1;
+  EXPECT_FALSE(live_held_motion(velocities, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+}
+
+TEST_F(HeldMotion, APlainReleaseOrAMissingJointHandsNothingOver) {
+  std::vector<NamedInterface> commands{{"j1", "position", 0.51}, {"j2", "position", -1.02}};
+  release_on_deactivate(commands, joints_, measured_);
+  EXPECT_FALSE(live_held_motion(commands, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+
+  HeldCommandLedger::clear();
+  std::vector<NamedInterface> one{{"j1", "position", 0.51}};
+  release_on_deactivate(one, joints_, measured_, rate_, acceleration_, "outgoing");
+  EXPECT_FALSE(live_held_motion(one, joints_, measured_, "incoming", rate_out_, acceleration_out_));
+  // And a measurement of the wrong size.
+  release_on_deactivate(commands, joints_, measured_, rate_, acceleration_, "outgoing");
+  EXPECT_FALSE(live_held_motion(
+      commands, joints_, Eigen::VectorXd::Zero(3), "incoming", rate_out_, acceleration_out_));
+}
+
 }  // namespace

@@ -41,9 +41,14 @@ Records & records()
 
 void HeldCommandLedger::record(const std::string & interface_name, double command, double measured)
 {
+  record(interface_name, Release{command, measured});
+}
+
+void HeldCommandLedger::record(const std::string & interface_name, const Release & release)
+{
   auto & all = records();
   std::lock_guard<std::mutex> lock(all.mutex);
-  all.by_interface[interface_name] = Release{command, measured};
+  all.by_interface[interface_name] = release;
 }
 
 bool HeldCommandLedger::find(const std::string & interface_name, Release & out)

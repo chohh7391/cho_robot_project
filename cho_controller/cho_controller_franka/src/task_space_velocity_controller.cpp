@@ -104,8 +104,26 @@ CallbackReturn TaskSpaceVelocityController::on_activate(
   traj_clock_ = 0.0;
   prev_cmd_speed_ = 0.0;
   stop_.reset(q_ref_);
+  // A switch that let go of a moving command hands the motion over: it comes
+  // to rest from where it was going (stop_) instead of stopping in this
+  // controller's first period, and a goal starts once it is at rest. The
+  // release left 0 on the velocity interfaces, which this period's write would
+  // send; the velocity last commanded goes there instead.
+  Vector7d rate, acceleration;
+  if (held_command_motion(rate, acceleration) && stop_.start_from(q_ref_, rate, acceleration)) {
+    for (int i = 0; i < num_dof_; ++i) {
+      command_interfaces_[i].set_value(rate(i));
+    }
+    prev_cmd_speed_ = rate.cwiseAbs().maxCoeff();
+  }
 
   return CallbackReturn::SUCCESS;
+}
+
+bool TaskSpaceVelocityController::reference_motion(Vector7d & rate, Vector7d & acceleration)
+{
+  stop_.motion(rate, acceleration);
+  return true;
 }
 
 controller_interface::return_type TaskSpaceVelocityController::update(

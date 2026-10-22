@@ -220,6 +220,13 @@ otherwise.
   a, v/a + a/j after the end (0.34 s from 0.6 rad/s at 2 rad/s^2, j = a / 0.04 s
   when no jerk limit is set). A joint without both a velocity and an
   acceleration limit stops at once.
+- A switch between those controllers (or from `vla_controller` in position or
+  velocity mode to one of them) while the reference moves hands the motion over:
+  the controller activated in the same switch brings it to rest within its own
+  joint motion limits and holds there, and its goals start once it is at rest.
+  The goal of the controller switched out is aborted, as for any deactivation.
+  A controller deactivated with none activated in its place still stops its
+  command at once, and franka_hardware then ends the control session.
 - Franka's `vla_controller`, position and velocity modes, on every end but a
   deactivation (succeeded, canceled, or aborted on `goal_timeout_sec` or a dead
   stream): the result goes out first, on the cycle the end takes effect; the

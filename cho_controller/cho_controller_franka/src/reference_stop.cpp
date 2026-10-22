@@ -66,17 +66,14 @@ void ReferenceStop::track(const Vector7d & q, const double dt)
   dt_ = dt;
 }
 
-bool ReferenceStop::start()
+void ReferenceStop::seed_state(Vector7d & rate, Vector7d & acceleration) const
 {
-  if ((rate_.array() == 0.0).all() || !rate_.allFinite()) {
-    return false;
-  }
   // As VLAController::come_to_rest() seeds its end stop: the acceleration inside
   // each joint's bound, zero where the limiter keeps none or the joint did not
   // move over the last step, and the rate carried half a step on, since rate_
   // is the rate at the middle of that step and q_ its end.
   const cho_vla_core::ReferenceLimiter::Params & bounds = limiter_.params();
-  Vector7d acceleration = Vector7d::Zero();
+  acceleration.setZero();
   for (int i = 0; i < 7; ++i) {
     const double bound = bounds.max_joint_acceleration(i);
     if (rate_(i) != 0.0 && bounds.max_joint_velocity(i) > 0.0 && bound > 0.0 &&
@@ -85,14 +82,58 @@ bool ReferenceStop::start()
       acceleration(i) = std::clamp(acceleration_(i), -bound, bound);
     }
   }
+  rate = rate_ + 0.5 * dt_ * acceleration;
+}
+
+bool ReferenceStop::begin(const Vector7d & q, const Vector7d & rate, const Vector7d & acceleration)
+{
+  if ((rate.array() == 0.0).all() || !rate.allFinite() || !q.allFinite()) {
+    return false;
+  }
   cho_vla_core::Reference from;
   from.space = cho_vla_core::ActionSpace::kJoint;
-  from.joints = q_;
-  from.joint_velocity = rate_ + 0.5 * dt_ * acceleration;
+  from.joints = q;
+  from.joint_velocity = rate;
+  // seed_with_rates() takes each rate and acceleration into its bound, and a
+  // non-finite acceleration as zero.
   clock_ = 0.0;
   limiter_.seed_with_rates(from, acceleration, cho_vla_core::Vector6::Zero(), clock_);
+  q_ = q;
   stopping_ = true;
   return true;
+}
+
+bool ReferenceStop::start()
+{
+  if ((rate_.array() == 0.0).all() || !rate_.allFinite()) {
+    return false;
+  }
+  Vector7d rate, acceleration;
+  seed_state(rate, acceleration);
+  return begin(q_, rate, acceleration);
+}
+
+bool ReferenceStop::start_from(
+  const Vector7d & q, const Vector7d & rate, const Vector7d & acceleration)
+{
+  if (!begin(q, rate, acceleration)) {
+    return false;
+  }
+  // What the stop starts from, for motion() before its first step.
+  rate_ = rate;
+  acceleration_ = acceleration;
+  dt_ = 0.0;
+  return true;
+}
+
+void ReferenceStop::motion(Vector7d & rate, Vector7d & acceleration) const
+{
+  if (!rate_.allFinite()) {
+    rate.setZero();
+    acceleration.setZero();
+    return;
+  }
+  seed_state(rate, acceleration);
 }
 
 const ReferenceStop::Vector7d & ReferenceStop::step(const double dt)
@@ -111,6 +152,12 @@ const ReferenceStop::Vector7d & ReferenceStop::step(const double dt)
   const bool at_rest =
     !stop.joint_velocity.allFinite() || (stop.joint_velocity.array() == 0.0).all();
   if (stop.joints.allFinite()) {
+    // The stop's own rate and acceleration, for motion(): what a controller
+    // switched in mid-stop continues from.
+    const Vector7d rate = (stop.joints - q_) / step;
+    acceleration_ = dt_ > 0.0 ? Vector7d((rate - rate_) / step) : Vector7d::Zero();
+    rate_ = rate;
+    dt_ = step;
     q_ = stop.joints;
   }
   if (at_rest) {
