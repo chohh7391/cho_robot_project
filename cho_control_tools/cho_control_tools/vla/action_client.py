@@ -51,6 +51,17 @@ DEFAULT_CHUNK_TOPIC = '/vla/action/ee_pose'
 # and < 0 closes (ActionChunk.msg); this client sent -1.0 as "open", which closed
 # a Franka hand on the first chunk with the gripper controller's 100 N default grasp.
 GRIPPER_OPEN = 1.0
+# The stream: a chunk every INFERENCE_DT, waypoints WAYPOINT_DT apart, each chunk
+# CHUNK_SIZE of them, 200 ms: it plans past the next chunk's arrival, as a
+# receding-horizon policy plans past its next inference, so the controller's
+# 0.1 s blend into the next chunk (chunk_blend_duration) blends from a moving
+# trajectory. Chunks that ended as the next one arrived (16 waypoints) left the
+# controller holding the last waypoint at rest in between, and the blend mixed
+# that hold into every chunk: the circle ran stop-and-go at about 5 Hz and 60 %
+# of its speed, which ground the FR3's joints (2026-10-22).
+INFERENCE_DT = 1.0 / 15
+WAYPOINT_DT = INFERENCE_DT / 16
+CHUNK_SIZE = 48
 
 
 def _registry_loader():
@@ -137,9 +148,9 @@ class VLAActionTester(Node):
             self, VisionLanguageAction, controller_action_name(controller, 'vla'))
 
         self.count = 0
-        self.chunk_size = 16
-        self.inference_dt = 1/15
-        self.dt = self.inference_dt / self.chunk_size
+        self.chunk_size = CHUNK_SIZE
+        self.inference_dt = INFERENCE_DT
+        self.dt = WAYPOINT_DT
         self.goal_accepted = False
         self.timer = None
 
@@ -207,7 +218,7 @@ class VLAActionTester(Node):
         # relative to the robot state at that chunk's observation (the controller
         # re-anchors per chunk), NOT cumulative from goal start. So emit each
         # waypoint as (trajectory at t_i) - (trajectory at this chunk's start).
-        t_chunk_start = self.count * self.chunk_size * self.dt
+        t_chunk_start = self.count * self.inference_dt
 
         for i in range(self.chunk_size):
             t = t_chunk_start + i * self.dt

@@ -234,10 +234,8 @@ class _Publisher:
         self.sent.append(msg)
 
 
-@pytest.mark.parametrize('relative', [True, False])
-def test_the_circle_keeps_the_gripper_open(relative):
-    # In binary mode > 0 opens and < 0 closes (ActionChunk.msg). The client sent
-    # -1.0 as "open", which closed a Franka hand on the first chunk.
+def _circle_tester(relative):
+    """A VLAActionTester with the stream's own shape and no ROS, publishing into a list."""
     from builtin_interfaces.msg import Time
 
     class _Clock:
@@ -249,15 +247,52 @@ def test_the_circle_keeps_the_gripper_open(relative):
     tester.test_rotation_type = 'quaternion'
     tester.is_relative = relative
     tester.count = 0
-    tester.chunk_size = 16
-    tester.dt = 1.0 / 15 / 16
+    tester.chunk_size = MODULE.CHUNK_SIZE
+    tester.inference_dt = MODULE.INFERENCE_DT
+    tester.dt = MODULE.WAYPOINT_DT
     tester.publisher_ = _Publisher()
     tester.get_clock = _Clock
     tester.get_logger = lambda: type('Logger', (), {'info': staticmethod(lambda _m: None)})()
+    return tester
 
+
+@pytest.mark.parametrize('relative', [True, False])
+def test_the_circle_keeps_the_gripper_open(relative):
+    # In binary mode > 0 opens and < 0 closes (ActionChunk.msg). The client sent
+    # -1.0 as "open", which closed a Franka hand on the first chunk.
+    tester = _circle_tester(relative)
     tester.publish_action_chunk()
 
     (msg,) = tester.publisher_.sent
     assert msg.gripper_mode == 'binary'
     assert len(msg.gripper_actions) == msg.chunk_size
     assert all(value > 0.0 for value in msg.gripper_actions)
+
+
+@pytest.mark.parametrize('relative', [True, False])
+def test_each_chunk_plans_past_the_next_one_and_the_blend_into_it(relative):
+    # A chunk that ended as the next one arrived left the controller holding its
+    # last waypoint at rest in between, and the controller's 0.1 s blend
+    # (chunk_blend_duration) mixed that hold into every chunk: the circle ran
+    # stop-and-go at about 5 Hz (2026-10-22, FR3).
+    blend = 0.1
+    tester = _circle_tester(relative)
+    tester.publish_action_chunk()
+    tester.publish_action_chunk()
+    first, second = tester.publisher_.sent
+    assert first.control_dt == pytest.approx(MODULE.WAYPOINT_DT)
+    assert (first.chunk_size - 1) * first.control_dt >= MODULE.INFERENCE_DT + blend
+
+    # The second chunk goes on along the same circle: its waypoint i is the
+    # first's waypoint i + one inference period, relative chunks each from their
+    # own start.
+    step = round(MODULE.INFERENCE_DT / MODULE.WAYPOINT_DT)
+
+    def positions(msg):
+        values = list(msg.arm_actions)
+        return [values[7 * i:7 * i + 3] for i in range(msg.chunk_size)]
+
+    a, b = positions(first), positions(second)
+    for i in range(first.chunk_size - step):
+        expected = [a[i + step][k] - (a[step][k] if relative else 0.0) for k in range(3)]
+        assert b[i] == pytest.approx(expected, abs=1e-12)
