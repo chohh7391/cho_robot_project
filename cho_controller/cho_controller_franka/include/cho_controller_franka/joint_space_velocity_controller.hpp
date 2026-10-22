@@ -16,6 +16,7 @@
 
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_controller_franka/servers/joint_space_action_server.hpp"
+#include "cho_controller_franka/reference_stop.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -65,6 +66,9 @@ private:
   // Max-abs joint speed commanded last cycle; gates the at-rest goal-start
   // re-anchor in update().
   double prev_cmd_speed_{0.0};
+
+  // Brings q_ref_ to rest when a goal ends with it moving (ReferenceStop).
+  ReferenceStop stop_;
 };
 
 } // namespace franka

@@ -545,6 +545,201 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("max_joint_vel", 1.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
 
+// A goal canceled while its reference moves, on the position and velocity
+// controllers. The FCI differentiates their commands at 1 kHz and franka_hardware
+// rate-limits neither interface, so the command held where the cancel found it
+// stopped in one period, v / dt of acceleration (hundreds of rad/s^2), and
+// libfranka ended the session with a discontinuity reflex. It comes to rest
+// within the joint motion limits instead (ReferenceStop) and holds where it
+// stops; the cancel's result goes out first, and a goal sent while it stops
+// starts once it is at rest. The velocity controllers run with kp_joint 0, so the
+// commanded rate is the reference's own. Each joint's acceleration limit is
+// kAcceleration, the bound the stop keeps to; the expectations come from it.
+class GoalEndInMotion : public Reactivation
+{
+protected:
+  static constexpr double kAcceleration = 2.0;  // [rad/s^2], every joint's limit
+  static constexpr double kDt = ControllerManagerHarness::kPeriod;
+
+  void SetUp() override
+  {
+    const auto & c = GetParam();
+    harness_ = std::make_unique<ControllerManagerHarness>(
+      fr3_description(c.mode == Mode::kVelocity), "/franka_goal_end");
+    std::vector<rclcpp::Parameter> parameters = {
+      rclcpp::Parameter("robot_description", fr3_description()),
+      rclcpp::Parameter("robot_type", "fr3"),
+      rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("control_mode", interface_of(c.mode)),
+      rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
+    // As the bringups merge cho_moveit_franka's joint_limits.yaml in, with one
+    // acceleration limit for every joint.
+    for (const auto & joint : kJoints) {
+      parameters.emplace_back("joint_limits." + joint + ".has_velocity_limits", true);
+      parameters.emplace_back("joint_limits." + joint + ".max_velocity", 2.62);
+      parameters.emplace_back("joint_limits." + joint + ".has_acceleration_limits", true);
+      parameters.emplace_back("joint_limits." + joint + ".max_acceleration", kAcceleration);
+    }
+    parameters.insert(parameters.end(), c.gains.begin(), c.gains.end());
+    ASSERT_NE(harness_->load(c.name, type_of(c.name), parameters), nullptr);
+    ASSERT_TRUE(harness_->configure(c.name));
+    ASSERT_TRUE(harness_->switch_controllers({c.name}, {}));
+  }
+
+  // The command each period: the joints (position) or the rates (velocity).
+  Doubles command()
+  {
+    return harness_->states(kJoints, interface_of(GetParam().mode));
+  }
+
+  // The largest commanded joint acceleration from sample `from` on, as the FCI
+  // differences the command.
+  double max_acceleration(const std::size_t from) const
+  {
+    const bool velocity = GetParam().mode == Mode::kVelocity;
+    double worst = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 2); k < samples_.size(); ++k) {
+      for (std::size_t j = 0; j < kJoints.size(); ++j) {
+        const double a = velocity ?
+          (samples_[k][j] - samples_[k - 1][j]) / kDt :
+          (samples_[k][j] - 2.0 * samples_[k - 1][j] + samples_[k - 2][j]) / (kDt * kDt);
+        worst = std::max(worst, std::abs(a));
+      }
+    }
+    return worst;
+  }
+
+  // Joint 1 by 0.6 rad, or the TCP 10 cm down, in 1.5 s: ~0.6 rad/s on joint 1
+  // at the middle of the joint goal.
+  template<typename Action>
+  typename rclcpp_action::ClientGoalHandle<Action>::SharedPtr send(
+    typename rclcpp_action::Client<Action>::SharedPtr client, const double sign)
+  {
+    typename Action::Goal goal;
+    goal.duration_sec = 1.5f;
+    if constexpr (std::is_same_v<Action, JointSpace>) {
+      goal.target_joints.name = kJoints;
+      goal.target_joints.position = harness_->states(kJoints, "position");
+      goal.target_joints.position[0] += sign * 0.6;
+    } else {
+      goal.relative = true;
+      goal.target_pose.pose.position.z = -sign * 0.10;
+      goal.target_pose.pose.orientation.w = 1.0;
+    }
+    auto future = client->async_send_goal(goal);
+    if (!harness_->spin_until(future)) {
+      return nullptr;
+    }
+    return future.get();
+  }
+
+  template<typename Action>
+  void run()
+  {
+    const auto & c = GetParam();
+    auto client = rclcpp_action::create_client<Action>(
+      harness_->client_node(),
+      "/franka_goal_end/" + std::string(c.name) + (c.task_space ? "/task_space" : "/joint_space"));
+    ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+    harness_->cycle(50);
+
+    auto handle = send<Action>(client, 1.0);
+    ASSERT_NE(handle, nullptr) << "goal rejected";
+    auto result = client->async_get_result(handle);
+    for (int k = 0; k < 700; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(command());
+    }
+    // The commanded rate at the cancel [rad/s]: the velocity command, or the
+    // last step of the position command over a period.
+    const double moving = c.mode == Mode::kVelocity ?
+      max_abs_difference(samples_.back(), Doubles(kJoints.size(), 0.0)) :
+      max_abs_difference(samples_.back(), samples_[samples_.size() - 2]) / kDt;
+    ASSERT_GT(moving, 0.05)
+      << "the command is not moving at the cancel, so nothing below would be tested";
+
+    // The cancel takes effect on the next period; three before it are the
+    // goal's own motion.
+    const std::size_t before = samples_.size() - 3;
+    auto cancel = client->async_cancel_goal(handle);
+    ASSERT_TRUE(harness_->spin_until(cancel));
+    for (int k = 0; k < 600; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(command());
+    }
+    ASSERT_TRUE(harness_->spin_until(result));
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    EXPECT_LE(max_acceleration(before), kAcceleration * 1.02)
+      << "the command stopped faster than the joint acceleration limit";
+    // At rest, and standing there.
+    const Doubles & last = samples_.back();
+    EXPECT_LT(max_abs_difference(samples_[samples_.size() - 100], last), 1e-9);
+    if (c.mode == Mode::kVelocity) {
+      EXPECT_LT(max_abs_difference(last, Doubles(last.size(), 0.0)), 1e-9);
+    }
+
+    // A goal sent while the reference stops starts once it is at rest: send it
+    // right after the next cancel, and the command stays inside the limit
+    // through the stop, the wait and the new goal's start, and that goal succeeds.
+    const std::size_t second = samples_.size();
+    auto next = send<Action>(client, -1.0);
+    ASSERT_NE(next, nullptr) << "the next goal was rejected";
+    for (int k = 0; k < 600; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(command());
+    }
+    auto again = send<Action>(client, 1.0);
+    ASSERT_EQ(again, nullptr) << "a second goal was accepted while one runs";
+    auto stopped = client->async_cancel_goal(next);
+    ASSERT_TRUE(harness_->spin_until(stopped));
+    // The cancel ends that goal on the next period and its result frees the
+    // server; the stop, ~0.3 s from 0.6 rad/s, is still running then.
+    auto next_result = client->async_get_result(next);
+    for (int k = 0; k < 20; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(command());
+    }
+    ASSERT_TRUE(harness_->spin_until(next_result));
+    EXPECT_EQ(next_result.get().code, rclcpp_action::ResultCode::CANCELED);
+    auto last_goal = send<Action>(client, 1.0);
+    ASSERT_NE(last_goal, nullptr) << "the goal sent while the reference stops was rejected";
+    auto last_result = client->async_get_result(last_goal);
+    for (int k = 0; k < 4000; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(command());
+    }
+    ASSERT_TRUE(harness_->spin_until(last_result));
+    EXPECT_EQ(last_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+    EXPECT_LE(max_acceleration(second), kAcceleration * 1.02)
+      << "the stop, the wait or the next goal's start broke the joint acceleration limit";
+  }
+
+  std::vector<Doubles> samples_;
+};
+
+TEST_P(GoalEndInMotion, ACanceledGoalComesToRestWithinTheJointLimits)
+{
+  if (GetParam().task_space) {
+    run<TaskSpace>();
+  } else {
+    run<JointSpace>();
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Franka, GoalEndInMotion, ::testing::Values(
+    Case{"joint_space_position_controller", Mode::kPosition, false, {}},
+    Case{"joint_space_velocity_controller", Mode::kVelocity, false, {
+        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)),
+        rclcpp::Parameter("max_joint_vel", 2.0)}},
+    Case{"task_space_ik_controller", Mode::kPosition, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025)}},
+    Case{"task_space_velocity_controller", Mode::kVelocity, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
+        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)),
+        rclcpp::Parameter("max_joint_vel", 2.0)}}),
+  [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
+
 // AC2, AC3 (S7): what a controller leaves on its command interfaces when it is
 // switched out in the middle of a goal. Every Franka arm base releases the same
 // way (cho_controller_base::release_on_deactivate): a velocity command is 0, a

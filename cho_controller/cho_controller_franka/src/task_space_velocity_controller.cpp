@@ -79,6 +79,8 @@ CallbackReturn TaskSpaceVelocityController::on_configure(
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
   action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
   action_server_->attach_activity(&activity_);
+  // q_ref_ is a joint reference: it stops within the joint motion limits.
+  stop_.configure(joint_motion_limits(), q_lower_limits_, q_upper_limits_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -101,6 +103,7 @@ CallbackReturn TaskSpaceVelocityController::on_activate(
   prev_running_ = false;
   traj_clock_ = 0.0;
   prev_cmd_speed_ = 0.0;
+  stop_.reset(q_ref_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -117,6 +120,7 @@ controller_interface::return_type TaskSpaceVelocityController::update(
     q_ref_ = state_.q_arm;
     q_cmd_int_ = q_ref_;
     ref_init_ = true;
+    stop_.reset(q_ref_);
   }
 
   // Nominal control period. Both the trajectory clock and the output-stage
@@ -155,11 +159,15 @@ controller_interface::return_type TaskSpaceVelocityController::update(
   // Re-anchoring q_ref_ also moves the FK below, so the Cartesian trajectory is
   // seeded at the pose the arm is actually at -- which is what the action server
   // scores the goal against.
-  bool running = action_server_ && action_server_->is_running();
+  // A goal accepted while q_ref_ still comes to rest from the last one (stop_)
+  // starts once it is at rest.
+  bool running = !stop_.stopping() && action_server_ && action_server_->is_running();
   if (bringup_type_ == "real" && running && !prev_running_ &&
       prev_cmd_speed_ < kRestSpeedEps) {
     q_ref_ = state_.q_arm;
     q_cmd_int_ = state_.q_arm;
+    // A move of the reference, not a rate it has.
+    stop_.reset(q_ref_);
   }
 
   const Vector7d q_ref_prev = q_ref_;
@@ -169,7 +177,8 @@ controller_interface::return_type TaskSpaceVelocityController::update(
   if (running) {
     traj_clock_ += dt;
     const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
-    // False when the goal ended this cycle (see TaskSpaceIKController): hold q_ref_.
+    // False when the goal ended this cycle (see TaskSpaceIKController): q_ref_
+    // comes to rest from where the goal left it (stop_), then holds.
     running = action_server_->compute(traj_time, state_);
   }
   if (running) {
@@ -201,8 +210,14 @@ controller_interface::return_type TaskSpaceVelocityController::update(
     // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
     // stop at the model's position limits instead of integrating through them.
     FrankaBaseController::clamp_to_joint_limits(q_ref_);
+  } else if (prev_running_) {
+    stop_.start();
   }
   prev_running_ = running;
+  if (stop_.stopping()) {
+    q_ref_ = stop_.step(dt);
+  }
+  stop_.track(q_ref_, dt);
 
   // Output stage: feedforward reference rate + P term on the COMMAND state.
   //

@@ -70,8 +70,10 @@ CallbackReturn JointSpaceVelocityController::on_configure(
 
   action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "~/joint_space");
   action_server_->init();
-  action_server_->trajectory_->setLimits(joint_motion_limits());
+  const auto limits = joint_motion_limits();
+  action_server_->trajectory_->setLimits(limits);
   action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+  stop_.configure(limits, q_lower_limits_, q_upper_limits_);
   action_server_->set_joint_names(arm_joint_names());
   action_server_->attach_activity(&activity_);
 
@@ -97,6 +99,7 @@ CallbackReturn JointSpaceVelocityController::on_activate(
   traj_clock_ = 0.0;
   prev_running_ = false;
   prev_cmd_speed_ = 0.0;
+  stop_.reset(q_ref_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -113,6 +116,7 @@ controller_interface::return_type JointSpaceVelocityController::update(
     q_ref_ = state_.q_arm;
     q_cmd_int_ = q_ref_;
     ref_init_ = true;
+    stop_.reset(q_ref_);
   }
 
   // Jitter-free trajectory clock (see JointSpacePositionController).
@@ -148,18 +152,23 @@ controller_interface::return_type JointSpaceVelocityController::update(
   // Real hardware only: in simulation the P term already closes on the measured
   // state, so no gap can accumulate, and the idle command is the nonzero
   // gravity-hold velocity rather than zero.
-  bool running = action_server_ && action_server_->is_running();
+  // A goal accepted while q_ref_ still comes to rest from the last one (stop_)
+  // starts once it is at rest.
+  bool running = !stop_.stopping() && action_server_ && action_server_->is_running();
   if (bringup_type_ == "real" && running && !prev_running_ &&
       prev_cmd_speed_ < kRestSpeedEps) {
     q_ref_ = state_.q_arm;
     q_cmd_int_ = state_.q_arm;
+    // A move of the reference, not a rate it has.
+    stop_.reset(q_ref_);
   }
 
   const Vector7d q_ref_prev = q_ref_;
 
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
   // one that outlived a deactivation: then its trajectory is not sampled and
-  // q_ref_ holds, as when idle.
+  // q_ref_ comes to rest from where the goal left it (stop_), then holds, as
+  // when idle. Held at once, the feedforward below dropped to 0 in one cycle.
   running = running && action_server_->compute(traj_time, state_);
   if (running) {
     if (!prev_running_) {
@@ -174,8 +183,14 @@ controller_interface::return_type JointSpaceVelocityController::update(
     state_.q_arm_des = trajectory_sample.pos.head(num_dof_);
     q_ref_ = state_.q_arm_des;
     FrankaBaseController::clip_position(q_ref_);
+  } else if (prev_running_) {
+    stop_.start();
   }
   prev_running_ = running;
+  if (stop_.stopping()) {
+    q_ref_ = stop_.step(dt);
+  }
+  stop_.track(q_ref_, dt);
 
   // Output stage: feedforward reference rate + P term on the COMMAND state.
   //

@@ -73,6 +73,8 @@ CallbackReturn TaskSpaceIKController::on_configure(
   action_server_->trajectory_->setLimits(cartesian_motion_limits());
   action_server_->set_frames(cho_controller_base::root_frames(model_), ee_name_);
   action_server_->attach_activity(&activity_);
+  // q_ref_ is a joint reference: it stops within the joint motion limits.
+  stop_.configure(joint_motion_limits(), q_lower_limits_, q_upper_limits_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -91,6 +93,7 @@ CallbackReturn TaskSpaceIKController::on_activate(
   ik_init_ = true;
   prev_running_ = false;
   traj_clock_ = 0.0;
+  stop_.reset(q_ref_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -107,6 +110,7 @@ controller_interface::return_type TaskSpaceIKController::update(
   if (!ik_init_) {
     q_ref_ = state_.q_arm;
     ik_init_ = true;
+    stop_.reset(q_ref_);
   }
 
   // Nominal seconds per update() call, for the trajectory clock below. This was a
@@ -125,8 +129,10 @@ controller_interface::return_type TaskSpaceIKController::update(
   // (hold the last reference). Re-solving toward a measured-derived hold pose would
   // (a) feed encoder noise into the command and (b) jump at the goal start/end
   // transitions (the action server sets H_ee_init to the measured pose at a goal's
-  // start and at every ending but a deactivation).
-  bool running = action_server_ && action_server_->is_running();
+  // start and at every ending but a deactivation). A goal that ends with q_ref_
+  // moving first brings it to rest (stop_), and a goal accepted meanwhile starts
+  // once it is at rest.
+  bool running = !stop_.stopping() && action_server_ && action_server_->is_running();
   if (running) {
     // Sample the trajectory on the jitter-free clock (fixed nominal cadence -- 1 ms
     // on the FCI), not the measured ROS time which jitters 0.9-2.2 ms.
@@ -169,9 +175,15 @@ controller_interface::return_type TaskSpaceIKController::update(
     // Absolute joint-limit clamp: chasing an unreachable Cartesian target must
     // stop at the model's position limits instead of integrating through them.
     FrankaBaseController::clamp_to_joint_limits(q_ref_);
+  } else if (prev_running_) {
+    stop_.start();
   }
   // else: q_ref_ frozen -> the robot holds smoothly, no measured coupling.
   prev_running_ = running;
+  if (stop_.stopping()) {
+    q_ref_ = stop_.step(dt);
+  }
+  stop_.track(q_ref_, dt);
 
   // Command the open-loop reference directly. q_ref_ is already smooth (a deadbeat
   // IK of a smooth, jitter-free trajectory, lagged one cycle), and its per-cycle

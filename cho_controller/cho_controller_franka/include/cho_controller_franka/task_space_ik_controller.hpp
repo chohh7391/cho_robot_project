@@ -23,6 +23,7 @@
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_interfaces/action/task_space.hpp"
 #include "cho_controller_franka/servers/task_space_action_server.hpp"
+#include "cho_controller_franka/reference_stop.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -61,6 +62,9 @@ private:
   // Monotonic, jitter-free clock (fixed nominal period) for sampling the trajectory.
   // Sampling on the measured ROS time would jitter H_des and vibrate the motion.
   double traj_clock_{0.0};
+
+  // Brings q_ref_ to rest when a goal ends with it moving (ReferenceStop).
+  ReferenceStop stop_;
 
   std::shared_ptr<TaskSpaceActionServer> action_server_;
 };

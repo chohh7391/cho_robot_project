@@ -79,6 +79,7 @@ add_library(${PROJECT_NAME} SHARED
     src/joint_space_qp_controller.cpp
     src/task_space_qp_controller.cpp
     src/vla_controller.cpp
+    src/reference_stop.cpp
     # action servers
     src/servers/gripper_action_server.cpp
     src/servers/vla_action_server.cpp
@@ -125,6 +126,10 @@ if(BUILD_TESTING)
     # The gripper's result handoff alone: header-only, no ROS.
     ament_add_gtest(test_gripper_outcome test/test_gripper_outcome.cpp)
     target_include_directories(test_gripper_outcome PRIVATE include)
+    # The stop at a goal's end alone (ReferenceStop): no ROS, no model.
+    ament_add_gtest(test_reference_stop test/test_reference_stop.cpp src/reference_stop.cpp)
+    target_include_directories(test_reference_stop PRIVATE include)
+    ament_target_dependencies(test_reference_stop cho_controller_common cho_vla_core)
     # The task-space QP (TaskSpaceQP) on the FR3 model, no ROS graph: links the
     # library; the URDF comes from cho_description_franka at run time.
     ament_add_gtest(test_task_space_qp_bounds test/test_task_space_qp_bounds.cpp TIMEOUT 120)

@@ -43,8 +43,10 @@ CallbackReturn JointSpacePositionController::on_configure(
 
   action_server_ = std::make_shared<JointSpaceActionServer>(get_node(), "~/joint_space");
   action_server_->init();
-  action_server_->trajectory_->setLimits(joint_motion_limits());
+  const auto limits = joint_motion_limits();
+  action_server_->trajectory_->setLimits(limits);
   action_server_->set_joint_limits(q_lower_limits_, q_upper_limits_);
+  stop_.configure(limits, q_lower_limits_, q_upper_limits_);
   action_server_->set_joint_names(arm_joint_names());
   action_server_->attach_activity(&activity_);
 
@@ -67,6 +69,7 @@ CallbackReturn JointSpacePositionController::on_activate(
   traj_clock_ = 0.0;
   last_cmd_ = q_held;
   prev_running_ = false;
+  stop_.reset(q_held);
 
   return CallbackReturn::SUCCESS;
 }
@@ -90,10 +93,12 @@ controller_interface::return_type JointSpacePositionController::update(
   const rclcpp::Time traj_time(static_cast<int64_t>(traj_clock_ * 1e9), time.get_clock_type());
 
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
-  // one that outlived a deactivation. Its trajectory is then not sampled, and
-  // q_arm_des holds as when idle: sampling it walked the arm toward the old
-  // goal through clip_position.
-  const bool running = action_server_ && action_server_->is_running() &&
+  // one that outlived a deactivation. Its trajectory is then not sampled:
+  // sampling it walked the arm toward the old goal through clip_position.
+  // q_arm_des comes to rest from where the goal left it (stop_; holding it
+  // there stopped a moving command in one cycle) and then holds as when idle.
+  // A goal accepted meanwhile starts once it is at rest.
+  const bool running = !stop_.stopping() && action_server_ && action_server_->is_running() &&
     action_server_->compute(traj_time, state_);
   if (running) {
     if (!prev_running_) {
@@ -110,8 +115,13 @@ controller_interface::return_type JointSpacePositionController::update(
 
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos.head(num_dof_);
+  } else if (prev_running_) {
+    stop_.start();
   }
   prev_running_ = running;
+  if (stop_.stopping()) {
+    state_.q_arm_des = stop_.step(dt);
+  }
 
   Vector7d q_cmd = state_.q_arm_des;
   FrankaBaseController::clip_position(q_cmd);
@@ -120,6 +130,7 @@ controller_interface::return_type JointSpacePositionController::update(
     command_interfaces_[i].set_value(q_cmd(i));
   }
   last_cmd_ = q_cmd;
+  stop_.track(q_cmd, dt);
 
   return controller_interface::return_type::OK;
 }

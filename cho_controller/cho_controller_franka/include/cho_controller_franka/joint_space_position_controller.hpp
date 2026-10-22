@@ -16,6 +16,7 @@
 
 #include "cho_controller_franka/base_controller.hpp"
 #include "cho_controller_franka/servers/joint_space_action_server.hpp"
+#include "cho_controller_franka/reference_stop.hpp"
 
 namespace cho_controller {
 namespace franka {
@@ -43,6 +44,8 @@ private:
   // last_cmd_ (not the measured position) to avoid a one-cycle command step.
   Vector7d last_cmd_{Vector7d::Zero()};
   bool prev_running_{false};
+  // Brings the command to rest when a goal ends with it moving (ReferenceStop).
+  ReferenceStop stop_;
 };
 
 } // namespace franka

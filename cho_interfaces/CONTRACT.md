@@ -207,8 +207,19 @@ otherwise.
   controller's deactivation: it is aborted at once, with the reason in
   `message`.
 - **Canceled**: on request. The arm holds where it is when the cancel takes
-  effect, not where the goal started. (The MoveIt bridge: see
+  effect, not where the goal started; on Franka's position and velocity
+  controllers, where it comes to rest (below). (The MoveIt bridge: see
   [The MoveIt bridge](#the-moveit-bridge) for how it stops an execution.)
+- Franka's `joint_space_position_controller`, `task_space_ik_controller`,
+  `joint_space_velocity_controller` and `task_space_velocity_controller`, on an
+  end that leaves the reference moving (a cancel, or an abort mid-motion): the
+  result goes out first, on the cycle the end takes effect; the reference then
+  comes to rest in joint space within the joint motion limits (`joint_limits`,
+  as merged in for the goals' planning), and holds where it stops. A goal
+  accepted before then starts once it is at rest: from v at acceleration limit
+  a, v/a + a/j after the end (0.34 s from 0.6 rad/s at 2 rad/s^2, j = a / 0.04 s
+  when no jerk limit is set). A joint without both a velocity and an
+  acceleration limit stops at once.
 - Franka's `vla_controller`, position and velocity modes, on every end but a
   deactivation (succeeded, canceled, or aborted on `goal_timeout_sec` or a dead
   stream): the result goes out first, on the cycle the end takes effect; the
