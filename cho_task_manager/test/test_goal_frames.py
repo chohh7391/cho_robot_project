@@ -67,13 +67,17 @@ from cho_task_manager.behaviors.action import (
     JointSpaceActionBehavior,
     TaskSpaceActionBehavior,
 )
-from cho_task_manager.tasks import available_tasks, build_task_tree
+from cho_task_manager.tasks import available_tasks, build_task_tree, package_tasks
 from cho_task_manager.tasks.franka.tag_reach import create_franka_tag_reach_tree
+from cho_task_manager.testing import goal_leaves, goal_problems
 from cho_task_manager.utils.controller_names import (
-    arm_joint_names,
     goal_frame,
     load_robot_config,
 )
+
+#: This package's own tasks: an overlay that also installs a project's
+#: checks those in the project's own tests (cho_task_manager.testing).
+CORE_TASKS = set(package_tasks('cho_task_manager'))
 
 #: Set to 1 to SKIP, instead of fail, where a prerequisite is missing.
 ALLOW_MISSING_ENV = 'CHO_GOAL_FRAMES_ALLOW_MISSING'
@@ -455,7 +459,7 @@ def _task_controllers(robot_type, profile):
     for (robot, tree_profile, _task), tree in _TREES.items():
         if (robot, tree_profile) != (robot_type, profile):
             continue
-        for leaf in _goal_leaves(tree):
+        for leaf in goal_leaves(tree):
             if isinstance(leaf, TaskSpaceActionBehavior) and leaf.relative and leaf.frame_id == '':
                 names.add(leaf.action_name.strip('/').split('/')[0])
     return sorted(names)
@@ -616,7 +620,7 @@ def _registry_only_tasks():
     cases = []
     for robot_type in ('franka', 'fr5', 'ur5e', 'openarm'):
         for profile in available_profiles(robot_type):
-            for task in available_tasks(robot_type):
+            for task in sorted(set(available_tasks(robot_type)) & CORE_TASKS):
                 key = (robot_type, profile, task)
                 try:
                     tree = build_task_tree(task, load_robot_config(robot_type, profile))
@@ -651,26 +655,13 @@ def test_a_tree_refuses_a_profile_it_cannot_drive_and_says_why(key):
     assert REFUSED[key] in _BUILD_ERRORS.get(key, '<it built>')
 
 
-def _goal_leaves(root):
-    return [node for node in root.iterate()
-            if isinstance(node, (TaskSpaceActionBehavior, JointSpaceActionBehavior))]
-
-
 @pytest.mark.parametrize('robot_type,profile,task', REGISTRY_ONLY_TASKS)
 def test_every_goal_a_tree_sends_carries_the_registry_frame_and_names(
         robot_type, profile, task):
+    # The check a project's tests run on its own tasks (cho_task_manager.testing).
+    # tag_reach's latched pose carries its own frame; the next test checks it.
     config = load_robot_config(robot_type, profile)
-    tree = _TREES[(robot_type, profile, task)]
-    joints = arm_joint_names(config)
-    for leaf in _goal_leaves(tree):
-        if isinstance(leaf, TaskSpaceActionBehavior):
-            if leaf.target_key is not None and task == 'tag_reach':
-                continue      # the latched pose's own frame; see the next test
-            assert leaf.frame_id == goal_frame(config, leaf.relative), (task, leaf.name)
-        else:
-            assert leaf.joint_names == joints, (task, leaf.name)
-            if leaf.target_joints is not None:
-                assert list(leaf.target_joints.name) == joints, (task, leaf.name)
+    assert goal_problems(_TREES[(robot_type, profile, task)], config) == []
 
 
 def test_tag_reach_stamps_the_frame_its_pose_was_checked_in():

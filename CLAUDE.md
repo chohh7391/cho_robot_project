@@ -76,6 +76,10 @@ ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=<robot> task
 What each package is, and where its own documentation is. `extern/` holds the pinned vendor sources
 ([extern/README.md](extern/README.md)); they are never edited.
 
+main is the core platform. A research project's code lives in its own repository, an overlay workspace on a pinned
+core tag ([templates/overlay_project/README.md](templates/overlay_project/README.md)), not in these packages: what a
+project needs from the core goes in as a general extension point, and code a second project needs moves into the core.
+
 **cho_controller/**
 - `cho_controller_common` — Pinocchio robot model, FK/IK/dynamics, Eigen math, TSID-derived tasks and QP solvers,
   Ruckig point-to-point trajectories. Built Release `-O3`
@@ -154,9 +158,11 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 [registry.py](cho_robot_config/cho_robot_config/registry.py). Also `controller_action_name()`,
 `task_goal_frame()`, `motion_limit_parameters()`.
 
-**cho_task_manager/** — the py_trees task manager: `behaviors/`, `subtrees/`, `tasks/<robot>/` (dispatched by
-`build_task_tree()`), recordings in `config/replay/<robot>/` ([README.md](cho_task_manager/config/replay/README.md)).
-Reference: [docs/tasks.md](docs/tasks.md). The chemistry-bench application is on the `auto_chem` branch.
+**cho_task_manager/** — the py_trees task manager: `behaviors/`, `subtrees/`, `tasks/<robot>/` (registered in
+`tasks/core.py`), `testing.py` (a task's goal checks), recordings in `config/replay/<robot>/`
+([README.md](cho_task_manager/config/replay/README.md)). How a package registers a task and hands it `task_params:=`:
+[README.md](cho_task_manager/README.md). Reference: [docs/tasks.md](docs/tasks.md). The chemistry-bench application
+is on the `auto_chem` branch.
 
 **cho_control_tools/** — interactive action clients, action-chunk tools (`action_chunk_client`, `action_chunk_mit_probe`) and bag
 plotters ([docs/action_clients.md](docs/action_clients.md)).
@@ -175,7 +181,9 @@ robot's base frame, multi-camera fusion, `/perception/object_visibility`
 
 **tools/** — not a package: `build_openarm_vendor.sh`; `ci/stub_ament_packages.sh` (the Franka stand-ins for the
 golden test in CI) and `ci/check_copyright_headers.py`. **dds/** — the Fast DDS modes of
-[docs/multi_pc.md](docs/multi_pc.md).
+[docs/multi_pc.md](docs/multi_pc.md). **templates/overlay_project/** — not built (`COLCON_IGNORE`): a project
+repository's starting point, one package registering one task and the `.repos` pin of the core
+([README.md](templates/overlay_project/README.md)).
 
 ## Controllers
 
@@ -238,6 +246,11 @@ No package compiles with `-Ofast`: it folds `isfinite()` / `isnan()` to constant
 - Waits use `behaviors/wait.WaitBehavior` (node clock), never `py_trees.timers.Timer`; node-clock deadlines go
   through `utils/clock.py`.
 - A blackboard key that may be unwritten is read with `utils/blackboard.read_if_set()`.
+- A task is registered, never listed: an entry point in the `cho_task_manager.tasks` group names its
+  `{robot_type: builder}` mapping (this package's are in `tasks/core.py`). Names are global and a collision refuses
+  to start. A new task takes its own parameters from `task_params:=` (`robot_config['task_params']`), not from a new
+  node parameter, and its tests use `cho_task_manager.testing`
+  ([README.md](cho_task_manager/README.md)).
 
 ## Frames
 

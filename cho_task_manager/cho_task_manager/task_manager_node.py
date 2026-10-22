@@ -25,6 +25,7 @@ from rclpy.signals import SignalHandlerOptions
 from cho_task_manager.behaviors.action.base_action_behavior import BaseActionBehavior
 from cho_task_manager.tasks import build_task_tree
 from cho_task_manager.utils.controller_names import load_robot_config
+from cho_task_manager.utils.task_params import load_task_params
 
 # The longest shutdown keeps spinning so the cancels the action leaves still
 # owe -- issued by a preemption, or armed to go out when a pending goal is
@@ -252,6 +253,11 @@ def main():
     # robot's default (ReplayDefaults.home_via: moveit on the FR5, direct
     # elsewhere); an FR5 bringup without MoveIt passes "direct".
     node.declare_parameter("home_via", "")
+    # A task's own parameters, one YAML file (utils/task_params.py): the tree
+    # builder reads them as robot_config['task_params']. The parameters above
+    # are this package's tasks' own, from before the file existed; a task a
+    # project registers takes its parameters from the file instead.
+    node.declare_parameter("task_params", "")
 
     use_sim_time = node.get_parameter("use_sim_time").get_parameter_value().bool_value
     task = node.get_parameter("task").get_parameter_value().string_value
@@ -298,7 +304,9 @@ def main():
     if replay_speed_scale > 0.0:
         robot_config["replay_speed_scale"] = replay_speed_scale
 
+    task_params = node.get_parameter("task_params").get_parameter_value().string_value
     try:
+        robot_config['task_params'] = load_task_params(task_params)
         root = build_task_tree(task, robot_config)
     except ValueError as e:
         node.get_logger().error(str(e))

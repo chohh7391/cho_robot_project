@@ -1,8 +1,10 @@
 # Tasks (Behavior Tree / Task Manager)
 
-The task manager builds a py_trees behavior tree and dispatches it by `robot_type`
-(`build_task_tree()`), so each robot's trees are separate, under
-`cho_task_manager/tasks/{franka,fr5,ur,openarm}/`.
+The task manager builds the py_trees behavior tree of one task for one `robot_type`
+(`build_task_tree()`). A task comes from any installed package that registers it, this
+one included; how a package registers one, hands it parameters and tests it:
+[cho_task_manager README](../cho_task_manager/README.md). This package's trees are
+separate per robot, under `cho_task_manager/tasks/{franka,fr5,ur,openarm}/`.
 Controller roles per robot are read from `cho_robot_config/config/<robot>.yaml`
 (single source of truth), and so is everything else a tree needs to know about
 the robot:
@@ -46,7 +48,8 @@ ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:
 
 | arg | default | description |
 | --- | --- | --- |
-| `task` | `pick_place` | task name (must exist for the given `robot_type`) |
+| `task` | `pick_place` | task name, registered for the given `robot_type` by this package or another installed one |
+| `task_params` | *(empty)* | YAML file of the task's own parameters, handed to its tree builder ([A task's parameters](../cho_task_manager/README.md#a-tasks-parameters)); empty hands it none |
 | `robot_type` | `franka` | `franka`, `fr5`, `ur5e` or `openarm` |
 | `arm` | `single` | arm profile; `left` / `right` select the per-arm controller names of a bimanual build |
 | `control_mode` | *(empty)* | `position`, `velocity` or `torque`. Empty keeps the mode the task itself is written for; set it only when the bringup was started in a different one. See below. |

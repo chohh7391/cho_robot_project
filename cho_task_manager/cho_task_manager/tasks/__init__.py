@@ -12,103 +12,98 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cho_task_manager.tasks.franka import (
-    # forge
-    create_franka_peg_insert_tree,
-    create_franka_gear_mesh_tree,
-    create_franka_nut_thread_tree,
-    # pick place
-    create_franka_pick_place_tree,
-    create_franka_pick_place_position_tree,
-    # perception-driven
-    create_franka_tag_reach_tree,
-    # controller smoke checks
-    create_franka_controller_check_position_tree,
-    create_franka_controller_check_torque_tree,
-    create_franka_controller_check_velocity_tree,
-    # recorded-trajectory replay
-    create_franka_trajectory_replay_tree,
-)
-from cho_task_manager.tasks.fr5 import (
-    create_fr5_fjt_handover_tree,
-    create_fr5_trajectory_replay_tree,
-)
-from cho_task_manager.tasks.openarm import (
-    create_openarm_controller_check_torque_tree,
-    create_openarm_mit_task_tuning_tree,
-    create_openarm_trajectory_replay_tree,
-)
-from cho_task_manager.tasks.ur import (
-    create_ur_pick_place_tree,
-    create_ur_multi_move_tree,
-    create_ur_trajectory_replay_tree,
-)
+"""The tasks the node can build, from every package that registers one.
+
+A package registers a task in its setup.py under the ``cho_task_manager.tasks``
+entry point group: the entry point's name is the task's, its object a mapping
+``{robot_type: builder}``, a builder taking the robot's registry config and
+returning the tree's root. This package registers its own the same way
+(tasks/core.py). A task name is global: two packages registering one refuse to
+start, as does a registration that does not load or is not such a mapping.
+"""
+
+from collections.abc import Mapping
+import functools
+from importlib.metadata import entry_points
+
+ENTRY_POINT_GROUP = 'cho_task_manager.tasks'
 
 
-# robot_type -> {task_name -> tree builder}
-_TASK_REGISTRY = {
-    'franka': {
-        # forge
-        'peg_insert': create_franka_peg_insert_tree,
-        'gear_mesh': create_franka_gear_mesh_tree,
-        'nut_thread': create_franka_nut_thread_tree,
-        # pick place
-        'pick_place': create_franka_pick_place_tree,
-        'pick_place_position': create_franka_pick_place_position_tree,
-        # perception-driven: target comes from an AprilTag at run time
-        'tag_reach': create_franka_tag_reach_tree,
-        # controller smoke checks (one per bringup control_mode)
-        'controller_check_position': create_franka_controller_check_position_tree,
-        'controller_check_torque': create_franka_controller_check_torque_tree,
-        'controller_check_velocity': create_franka_controller_check_velocity_tree,
-        # Replays a recording through the trajectory controller; see
-        # tasks/trajectory_replay.py (every robot builds the same tree).
-        'trajectory_replay': create_franka_trajectory_replay_tree,
-    },
-    'fr5': {
-        # The plan is produced and executed by another workspace; this
-        # tree owns the arm's controller state around it. See
-        # tasks/fr5/fjt_handover.py.
-        'fjt_handover': create_fr5_fjt_handover_tree,
-        # Replays a trajectory recorded in a simulator: no planning, no
-        # perception, and a layout gate when the recording assumes a cell
-        # layout. See tasks/trajectory_replay.py.
-        'trajectory_replay': create_fr5_trajectory_replay_tree,
-    },
-    'ur5e': {
-        'pick_place': create_ur_pick_place_tree,
-        'multi_move': create_ur_multi_move_tree,
-        'trajectory_replay': create_ur_trajectory_replay_tree,
-    },
-    'openarm': {
-        'controller_check_torque': create_openarm_controller_check_torque_tree,
-        'mit_task_tuning': create_openarm_mit_task_tuning_tree,
-        'trajectory_replay': create_openarm_trajectory_replay_tree,
-    },
-}
+class TaskRegistryError(ValueError):
+    """A task registration the node refuses to start with."""
+
+
+def load_registry(entries):
+    """Map each task name to {robot_type: builder}, from entry points *entries*.
+
+    Each entry needs ``name``, ``value``, ``load()`` and ``dist`` (an
+    importlib.metadata EntryPoint has them). Raises TaskRegistryError on a name
+    registered twice, one that does not load, or one whose object is not a
+    mapping of robot types to callables.
+    """
+    registry, origin = {}, {}
+    for entry in entries:
+        package = entry.dist.name if getattr(entry, 'dist', None) is not None else '<unknown package>'
+        if entry.name in registry:
+            raise TaskRegistryError(
+                f"Task '{entry.name}' is registered by both {origin[entry.name]} and {package}: "
+                'task names are global, rename one of them.')
+        try:
+            builders = entry.load()
+        except Exception as error:  # any import failure of a package's tasks
+            raise TaskRegistryError(
+                f"Task '{entry.name}' of {package} does not load ({entry.value}): {error}") from error
+        if (not isinstance(builders, Mapping) or not builders
+                or not all(isinstance(robot, str) and robot for robot in builders)
+                or not all(callable(builder) for builder in builders.values())):
+            raise TaskRegistryError(
+                f"Task '{entry.name}' of {package} ({entry.value}) is not a non-empty mapping of "
+                'robot_type to tree builder.')
+        registry[entry.name] = dict(builders)
+        origin[entry.name] = package
+    return registry
+
+
+@functools.lru_cache(maxsize=None)
+def registered_tasks():
+    """Every installed package's tasks: task name -> {robot_type: builder}."""
+    return load_registry(entry_points(group=ENTRY_POINT_GROUP))
+
+
+def package_tasks(package):
+    """The task names *package* registers (a distribution name, - and _ alike)."""
+    wanted = package.replace('-', '_')
+    return sorted(entry.name for entry in entry_points(group=ENTRY_POINT_GROUP)
+                  if entry.dist is not None and entry.dist.name.replace('-', '_') == wanted)
 
 
 def available_tasks(robot_type: str):
     """Task names registered for *robot_type*."""
-    return sorted(_TASK_REGISTRY.get(robot_type, {}).keys())
+    return sorted(name for name, builders in registered_tasks().items() if robot_type in builders)
 
 
 def build_task_tree(task: str, robot_config: dict):
     """
     Build the behaviour tree for *task* on the robot described by *robot_config*.
 
-    Routes by robot_type so Franka and UR implementations stay fully separate.
-    Raises ValueError for an unknown robot_type / task combination.
+    Routes by robot_type so each robot's implementation stays separate. The
+    builder always finds ``robot_config['task_params']``, a mapping ({} unless
+    the caller set one; the node sets the ``task_params:=`` file's). Raises
+    ValueError for an unknown robot_type / task combination, and
+    TaskRegistryError (a ValueError) when the registrations themselves are
+    refused.
     """
+    robot_config.setdefault('task_params', {})
     robot_type = robot_config.get('robot_type')
-    builders = _TASK_REGISTRY.get(robot_type)
-    if builders is None:
+    tasks = registered_tasks()
+    robot_types = sorted({robot for builders in tasks.values() for robot in builders})
+    if robot_type not in robot_types:
         raise ValueError(
             f"No tasks registered for robot_type '{robot_type}'. "
-            f"Valid robot types: {sorted(_TASK_REGISTRY.keys())}"
+            f"Valid robot types: {robot_types}"
         )
 
-    builder = builders.get(task.lower())
+    builder = tasks.get(task.lower(), {}).get(robot_type)
     if builder is None:
         raise ValueError(
             f"Task '{task}' is not available for robot_type '{robot_type}'. "

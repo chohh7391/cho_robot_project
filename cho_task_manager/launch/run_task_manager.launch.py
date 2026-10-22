@@ -83,6 +83,13 @@ def generate_launch_description():
                         'and the MoveIt bridge). Empty keeps the task default, moveit '
                         'on fr5 and direct elsewhere; an fr5 bringup without MoveIt '
                         'needs home_via:=direct.'),
+        # A task's own parameters, for any task -- one a project package
+        # registers included: the tree builder reads the file's mapping as
+        # robot_config['task_params'].
+        DeclareLaunchArgument(
+            'task_params', default_value='',
+            description="YAML file of the task's own parameters, handed to its tree builder "
+                        "as robot_config['task_params']. Empty: none."),
         DeclareLaunchArgument(
             'replay_speed_scale', default_value='0.0',
             description='Fraction of the recorded clock to replay at, in (0, 1]; 0 keeps '
@@ -178,6 +185,7 @@ def generate_launch_description():
                 'replay_speed_scale': ParameterValue(
                     LaunchConfiguration('replay_speed_scale'), value_type=float),
                 'home_via': LaunchConfiguration('home_via'),
+                'task_params': LaunchConfiguration('task_params'),
             }]
         )
     ])

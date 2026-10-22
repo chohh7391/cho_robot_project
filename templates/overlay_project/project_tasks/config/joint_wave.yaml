@@ -1,0 +1,6 @@
+# task_params of example_joint_wave (project_tasks/joint_wave.py, DEFAULTS):
+#   ros2 launch cho_task_manager run_task_manager.launch.py ... task_params:=<this file>
+joint: 7          # 1-based arm joint
+amplitude: 0.15   # [rad], out and back
+duration: 2.0     # [s] per leg, a minimum
+repeats: 2
