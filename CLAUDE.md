@@ -6,8 +6,6 @@ comment beside that code, the client contract in [cho_interfaces/CONTRACT.md](ch
 a package's internals in its README.md or DESIGN.md, operating procedures in [docs/](docs/). Change a fact
 there, not here.
 
-How the main agent splits work among subagents and has it reviewed: [AGENTS.md](AGENTS.md).
-
 ## Build & Test
 
 Run from workspace root (`~/ros2_ws`):
