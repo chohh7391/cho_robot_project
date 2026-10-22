@@ -82,6 +82,15 @@ live in this repository). Simulation needs no vendor SDK. Real MIT bringup uses
 the pinned `extern/openarm_can` and `extern/openarm_ros2` submodules instead of
 modifying vendor code.
 
+`extern/openarm_can` needs CLI11 at configure time. Without it `openarm_can` fails
+to configure, so `cho_hardware_openarm_mit_real` and `cho_bringup_openarm` are not
+built and the OpenArm launch golden cases are skipped. `install_dependencies.bash`
+installs it through rosdep (above); without the script:
+
+```bash
+sudo apt install libcli11-dev
+```
+
 Isaac Sim additionally needs the USD asset built once per variant — see
 [cho_description_openarm/usd/README.md](../cho_description/cho_description_openarm/usd/README.md).
 The assets are generated and gitignored.
