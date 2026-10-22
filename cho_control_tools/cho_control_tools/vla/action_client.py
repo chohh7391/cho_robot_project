@@ -47,6 +47,10 @@ from scipy.spatial.transform import Rotation as R
 DEFAULT_CONTROLLER = 'vla_controller'
 # What both VLA controllers read when their chunk_topic is left unset.
 DEFAULT_CHUNK_TOPIC = '/vla/action/ee_pose'
+# The circle keeps the hand open. In ActionChunk's binary gripper mode > 0 opens
+# and < 0 closes (ActionChunk.msg); this client sent -1.0 as "open", which closed
+# a Franka hand on the first chunk with the gripper controller's 100 N default grasp.
+GRIPPER_OPEN = 1.0
 
 
 def _registry_loader():
@@ -190,6 +194,7 @@ class VLAActionTester(Node):
             msg.relative_frame = "base"
         msg.chunk_size = self.chunk_size
         msg.control_dt = self.dt  # explicit waypoint spacing (a chunk with control_dt <= 0 is rejected)
+        msg.gripper_mode = "binary"
 
         arm_actions = []
         gripper_actions = []
@@ -238,7 +243,7 @@ class VLAActionTester(Node):
                 v2 = rot_mat[:, 1]  # 두 번째 컬럼
                 arm_actions.extend(v1.tolist() + v2.tolist())
 
-            gripper_actions.append(-1.0)  # Open
+            gripper_actions.append(GRIPPER_OPEN)
 
         msg.arm_actions = arm_actions
         msg.gripper_actions = gripper_actions

@@ -224,3 +224,40 @@ def test_an_unanswered_chunk_topic_query_gives_none(monkeypatch, available):
     monkeypatch.setattr(MODULE.rclpy, 'spin_until_future_complete', lambda *_a, **_k: None)
     node = _Node(_ParamClient([ParameterValue()], available))
     assert MODULE.controller_chunk_topic(node, 'vla_controller') is None
+
+
+class _Publisher:
+    def __init__(self):
+        self.sent = []
+
+    def publish(self, msg):
+        self.sent.append(msg)
+
+
+@pytest.mark.parametrize('relative', [True, False])
+def test_the_circle_keeps_the_gripper_open(relative):
+    # In binary mode > 0 opens and < 0 closes (ActionChunk.msg). The client sent
+    # -1.0 as "open", which closed a Franka hand on the first chunk.
+    from builtin_interfaces.msg import Time
+
+    class _Clock:
+        def now(self):
+            return type('Now', (), {'to_msg': staticmethod(Time)})()
+
+    tester = MODULE.VLAActionTester.__new__(MODULE.VLAActionTester)
+    tester.goal_accepted = True
+    tester.test_rotation_type = 'quaternion'
+    tester.is_relative = relative
+    tester.count = 0
+    tester.chunk_size = 16
+    tester.dt = 1.0 / 15 / 16
+    tester.publisher_ = _Publisher()
+    tester.get_clock = _Clock
+    tester.get_logger = lambda: type('Logger', (), {'info': staticmethod(lambda _m: None)})()
+
+    tester.publish_action_chunk()
+
+    (msg,) = tester.publisher_.sent
+    assert msg.gripper_mode == 'binary'
+    assert len(msg.gripper_actions) == msg.chunk_size
+    assert all(value > 0.0 for value in msg.gripper_actions)
