@@ -25,9 +25,10 @@ deliberately does **not** move the arm. A motion commanded under exactly the
 conditions that just produced a failure is not a recovery. It switches to the
 control mode's hold controller. The exclusive switch path is BEST_EFFORT:
 activating a controller the bringup never loaded leaves ``result.ok`` true and
-nothing holding the arm. SwitchControllerServiceBehavior therefore checks that
-the hold is active before it succeeds, and the abort lists the controllers once
-more as a step of its own, so the tree shows the check.
+nothing holding the arm. SwitchControllerServiceBehavior therefore refuses to
+switch to a hold that is not loaded, and checks that the hold is active before
+it succeeds; the abort lists the controllers once more as a step of its own, so
+the tree shows the check.
 """
 
 import py_trees

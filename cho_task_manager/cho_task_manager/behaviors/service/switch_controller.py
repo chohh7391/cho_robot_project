@@ -40,6 +40,18 @@ def _duration(seconds):
     return Duration(sec=whole, nanosec=nanos)
 
 
+# The calls one run makes, in order; initialise() starts again at the first.
+_LIST_BEFORE, _SWITCH, _LIST_AFTER = 'list_before', 'switch', 'list_after'
+
+# The ListControllers states a controller can be activated from: an active one
+# is left running by the switch, since it is never in its own deactivate list.
+_ACTIVATABLE = ('inactive', 'active')
+
+
+def _states(result):
+    return {c.name: c.state for c in result.controller}
+
+
 class SwitchControllerServiceBehavior(BaseServiceBehavior):
     def __init__(
         self,
@@ -67,8 +79,9 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         ``timeout_sec``: that is the base class's service-discovery wait, and
         the two used to share one attribute.
 
-        SUCCESS means every controller in ``activate`` is active: after an ok
-        switch the behaviour lists the controllers and checks (handle_response()).
+        SUCCESS means every controller in ``activate`` is active. The behaviour
+        lists the controllers before the switch, and refuses it when one of them
+        cannot be activated, and again after it (handle_response()).
         """
         super().__init__(name, SwitchController, SWITCH_CONTROLLER_SERVICE)
         if (isinstance(switch_timeout_sec, bool)
@@ -103,7 +116,7 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
             # BEST_EFFORT so deactivating a controller that is not currently
             # running is tolerated (STRICT would fail the whole switch). It also
             # skips an activation it cannot do and still reports ok, which is
-            # why handle_response() checks the result.
+            # why the behaviour checks before and after (handle_response()).
             self.strict = False if strict is None else strict
         else:
             self.deactivate = deactivate or []
@@ -113,7 +126,7 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         self.switch_timeout_sec = float(switch_timeout_sec)
 
         self.list_client = None
-        self._checking = False
+        self._call = _LIST_BEFORE
 
     def setup(self, **kwargs):
         super().setup(**kwargs)
@@ -125,8 +138,26 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         return True
 
     def initialise(self):
-        self._checking = False
-        super().initialise()
+        if not self.activate:
+            # A deactivate-only switch has nothing to check.
+            self._call = _SWITCH
+            super().initialise()
+            return
+        self._call = _LIST_BEFORE
+        self._list_controllers()
+
+    def _list_controllers(self):
+        self.send_service_request(
+            ListControllers.Request(), self.list_client, LIST_CONTROLLERS_SERVICE)
+
+    def _waiting(self):
+        # send_service_request() leaves no future when the server is gone.
+        if self.future is None:
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.RUNNING
+
+    def _activate_names(self):
+        return [controller_name_value(c) for c in self.activate]
 
     def make_request(self):
         req = SwitchController.Request()
@@ -146,16 +177,21 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
         return req
 
     def handle_response(self, result):
-        """Judge the SwitchController result, then the controllers it left active.
+        """Judge the response to whichever of the run's three calls is in flight.
 
-        ``result.ok`` does not mean the ``activate`` set is running. BEST_EFFORT
-        skips a controller it cannot activate (not loaded, say) and still
-        carries out the deactivations, so an exclusive switch can take the arm's
-        controller down and leave nothing holding it. An ok switch is therefore
-        followed by a ListControllers call on the same tick, and this method
-        judges that response too.
+        The run lists the controllers, switches, and lists them again; each call
+        goes out on the tick that judges the one before it. ``result.ok`` does
+        not mean the ``activate`` set is running: BEST_EFFORT skips a controller
+        it cannot activate (not loaded, say) and still carries out the
+        deactivations, so an exclusive switch could take the arm's controller
+        down and leave nothing holding it. The first list refuses a switch to a
+        controller that is not loaded or not in a state it can be activated
+        from, before anything is deactivated. The second catches an activation
+        that failed anyway (on_activate returning an error, say).
         """
-        if self._checking:
+        if self._call == _LIST_BEFORE:
+            return self._switch_if_activatable(result)
+        if self._call == _LIST_AFTER:
             return self._judge_states(result)
         if not result.ok:
             self.node.get_logger().error(
@@ -167,18 +203,32 @@ class SwitchControllerServiceBehavior(BaseServiceBehavior):
             self.node.get_logger().info(f"[{self.name}] Controllers Switched Successfully!")
             return py_trees.common.Status.SUCCESS
 
-        self._checking = True
-        self.send_service_request(
-            ListControllers.Request(), self.list_client, LIST_CONTROLLERS_SERVICE)
-        if self.future is None:
+        self._call = _LIST_AFTER
+        self._list_controllers()
+        return self._waiting()
+
+    def _switch_if_activatable(self, result):
+        states = _states(result)
+        cannot = {
+            name: states.get(name, 'not loaded')
+            for name in self._activate_names()
+            if states.get(name) not in _ACTIVATABLE
+        }
+        if cannot:
+            self.node.get_logger().error(
+                f"[{self.name}] Not switching, so nothing was deactivated: these "
+                f"controllers cannot be activated: {cannot}"
+            )
             return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.RUNNING
+        self._call = _SWITCH
+        self.send_service_request(self.make_request())
+        return self._waiting()
 
     def _judge_states(self, result):
-        states = {c.name: c.state for c in result.controller}
+        states = _states(result)
         not_active = {
             name: states.get(name, 'not loaded')
-            for name in (controller_name_value(c) for c in self.activate)
+            for name in self._activate_names()
             if states.get(name) != 'active'
         }
         if not_active:
