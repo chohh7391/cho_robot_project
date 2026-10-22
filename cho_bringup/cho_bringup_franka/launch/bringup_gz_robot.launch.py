@@ -197,7 +197,8 @@ def generate_launch_description():
             controller for controller in always_active_controllers + switchable_controllers
             if controller != 'moveit_joint_trajectory_controller'
         ]
-        payload_config_path = os.path.join(pkg_bringup, 'config', 'payload.yaml')
+        payload_config_path = os.path.join(
+            pkg_bringup, 'config', 'payload_ft_sensor.yaml' if load_ft_sensor else 'payload.yaml')
         runtime_param_file = launch_utils.create_runtime_param_file(
             payload_config_path=payload_config_path,
             controller_names=all_runtime_param_controllers,

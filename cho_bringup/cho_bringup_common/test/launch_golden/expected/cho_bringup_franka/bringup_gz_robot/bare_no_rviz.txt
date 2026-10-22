@@ -324,9 +324,9 @@ RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
     operational_space_controller:
       ros__parameters: {}
     ros__parameters:
-      center_of_mass: [-0.00753, 0.0, 0.05325]
-      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
-      mass: 0.97
+      center_of_mass: [-0.01, 0.0, 0.03]
+      load_inertia: [0.001, 0.0, 0.0, 0.0, 0.0025, 0.0, 0.0, 0.0, 0.0017]
+      mass: 0.73
     task_space_impedance_controller:
       ros__parameters: {}
     task_space_qp_controller:

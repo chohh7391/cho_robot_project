@@ -3,6 +3,7 @@ LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['load_gripper:=false', '
   ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
   ARG controller_name default='operational_space_controller' choices=None
   ARG load_gripper default='config' choices=['true', 'false', 'config']
+  ARG load_ft_sensor default='false' choices=['true', 'false']
   ARG vla default='false' choices=None
   ARG bringup_type default='real' choices=['real']
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']

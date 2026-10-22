@@ -107,7 +107,9 @@ def generate_launch_description():
         )
     }
 
-    payload_config_file = os.path.join(bringup_path, 'config', 'payload.yaml')
+    # The MuJoCo model carries the Bota FT sensor (fr3_with_ft_sensor), so the
+    # controllers' payload does too.
+    payload_config_file = os.path.join(bringup_path, 'config', 'payload_ft_sensor.yaml')
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     mock_gripper = Node(

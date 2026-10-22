@@ -412,9 +412,9 @@ EE_PARAMETERS = ('ee_name', 'ee_frame')
 #: argument can give the task controllers (FREE_FORM: any string; None: their
 #: frame is not ee_name, so no launch argument reaches it). Under any of them a
 #: relative goal stamped '' is a different motion on the controller than on the
-#: bridge -- on every Franka description fr3_link8 is 0.138 m short of
-#: fr3_hand_tcp and turned 45 degrees about z. docs/tasks.md says so; this pins
-#: it so it cannot grow quietly.
+#: bridge -- on every Franka description fr3_link8 is 0.1034 m short of
+#: fr3_hand_tcp (0.138 m with the FT sensor) and turned 45 degrees about z.
+#: cho_interfaces/CONTRACT.md says so; this pins it so it cannot grow quietly.
 FREE_FORM = 'any string'
 EE_NAME_ALTERNATIVES = {
     'franka': {'fr3_link7', 'fr3_link8', 'fr3_hand'},

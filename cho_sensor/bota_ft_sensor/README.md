@@ -10,9 +10,11 @@ have to be checked out ([installation](../../docs/installation.md#ros-dependenci
 ros2 launch bota_ft_sensor bota_ft_sensor_mounted.launch.py
 ```
 
-Only the driver starts. The arm's robot description already carries the sensor's
-links (`cho_description_franka`'s `franka_robot.xacro`), so a second
-`robot_state_publisher` and RViz would conflict with the bringup. For Bota's own
+Only the driver starts. The arm's robot description carries the sensor's links
+(`cho_description_franka`'s `franka_robot.xacro`): the Franka real and Gazebo
+bringups with `load_ft_sensor:=true` (the real one defaults to false), MuJoCo and
+Isaac always. So a second `robot_state_publisher` and RViz would conflict with the
+bringup. For Bota's own
 standalone views use their launches directly, e.g.
 `ros2 launch bota_driver_example plotjuggler.launch.py`.
 

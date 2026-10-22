@@ -40,6 +40,7 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 | `hand` | OpenArm MuJoCo, real | Spawns the gripper controller separately, so a hand fault cannot take an arm down. On the real bringup the adapter then also drives an eighth Damiao motor on the arm's CAN socket. |
 | `vla` | Franka | Activates the VLA controller path. |
 | `load_gripper` | Franka, UR, FR5 | Vendor gripper on/off. |
+| `load_ft_sensor` | Franka real, Gazebo | `true` when the Bota FT sensor sits between `fr3_link8` and the hand: the description carries its links and the controllers its mass (`config/payload_ft_sensor.yaml`; `payload.yaml` is the hand alone). Real defaults to `false`, Gazebo to `true`; the MuJoCo and Isaac models always carry the sensor. On the real robot, Desk's end-effector load has to match. |
 | `mujoco_mit_prototype` | OpenArm MuJoCo | `true` switches from the legacy controller path to the MIT path. Off by default. |
 | `mit_controller_name` | OpenArm MuJoCo | Which MIT controller, when the MIT path is on. |
 | `mit_arm` | OpenArm bimanual | Arm ownership. See [`mit_arm`](#mit_arm-values) below. |

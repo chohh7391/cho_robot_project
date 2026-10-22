@@ -73,6 +73,7 @@ cases:
       no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       vla: [vla:=true]
       mode_mismatch: [control_mode:=position]
+      ft_sensor: [load_ft_sensor:=true]
     bringup_isaac_robot.launch.py:
       default_usd: []
       default: [robot_usd:=$FAKE/usd/robot/robot.usda]

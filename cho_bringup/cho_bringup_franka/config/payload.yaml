@@ -1,17 +1,10 @@
-# fr3_hand
-# /**:
-#   ros__parameters:
-#     mass: 0.73
-#     center_of_mass: [-0.01, 0.0, 0.03]
-#     load_inertia: [0.001, 0.0, 0.0,
-#                    0.0, 0.0025, 0.0,
-#                    0.0, 0.0, 0.0017]
-
-# ft_sensor + fr3_hand
+# The Franka Hand alone: the end-effector payload of a description without the
+# FT sensor, the real bringup's default. payload_ft_sensor.yaml is the hand with
+# the Bota FT sensor.
 /**:
   ros__parameters:
-    mass: 0.97
-    center_of_mass: [-0.00753, 0.0, 0.05325]
-    load_inertia: [0.001506, 0.0, 0.0,
-                   0.0, 0.003023, 0.0,
-                   0.0, 0.0, 0.001865]
+    mass: 0.73
+    center_of_mass: [-0.01, 0.0, 0.03]
+    load_inertia: [0.001, 0.0, 0.0,
+                   0.0, 0.0025, 0.0,
+                   0.0, 0.0, 0.0017]

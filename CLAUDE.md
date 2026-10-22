@@ -140,7 +140,8 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
   `FILES_MATCHING` (under `--symlink-install` that copies them, and the copy goes stale).
 - `cho_bringup_franka`, `cho_bringup_ur`, `cho_bringup_fr5`, `cho_bringup_openarm` — `launch/bringup_<backend>_robot`
   (and `_moveit`) files, `config/<backend>/controllers*.yaml`, `config/isaac/robot_profile*.json` (the robot's Isaac
-  physics); Franka also `config/payload.yaml` and `config/real/franka.config.yaml` (robot IP, gripper).
+  physics); Franka also `config/payload.yaml` (the hand; `payload_ft_sensor.yaml` with the FT sensor,
+  `load_ft_sensor`) and `config/real/franka.config.yaml` (robot IP, gripper).
   Which backends each has: [launch matrix](docs/controllers_and_bringup.md#bringup-launch-matrix).
 
 **cho_simulation/cho_simulation_isaac/** — the Isaac runner and URDF-to-USD converter (`isaac/`, run under

@@ -188,7 +188,9 @@ def generate_launch_description():
         )
     }
 
-    payload_config_file = os.path.join(bringup_path, 'config', 'payload.yaml')
+    # The Isaac asset is built from fr3_with_ft_sensor, so the controllers'
+    # payload carries the Bota FT sensor too.
+    payload_config_file = os.path.join(bringup_path, 'config', 'payload_ft_sensor.yaml')
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     mock_gripper = Node(

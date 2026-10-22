@@ -3,11 +3,12 @@ LAUNCH cho_bringup_franka/bringup_real_robot.launch.py ['load_gripper:=false']
   ARG control_mode default='torque' choices=['position', 'velocity', 'torque']
   ARG controller_name default='operational_space_controller' choices=None
   ARG load_gripper default='config' choices=['true', 'false', 'config']
+  ARG load_ft_sensor default='false' choices=['true', 'false']
   ARG vla default='false' choices=None
   ARG bringup_type default='real' choices=['real']
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   OPAQUE generate_robot_nodes
-    XACRO '<share:cho_description_franka>/robots/fr3/fr3.urdf.xacro' mappings={arm_prefix: '', fake_sensor_commands: 'false', hand: 'false', robot_ip: '172.16.0.2', robot_type: 'fr3', ros2_control: 'true', special_connection: 'ft_sensor', use_fake_hardware: 'false', xyz_ee: '0 0 0'}
+    XACRO '<share:cho_description_franka>/robots/fr3/fr3.urdf.xacro' mappings={arm_prefix: '', fake_sensor_commands: 'false', hand: 'false', robot_ip: '172.16.0.2', robot_type: 'fr3', ros2_control: 'true', special_connection: '', use_fake_hardware: 'false', xyz_ee: '0 0 0'}
     NODE robot_state_publisher/robot_state_publisher
       name=None namespace=''
       args=[]
@@ -70,11 +71,6 @@ DESCRIPTION #1
   joint fr3_joint6 revolute fr3_link5 -> fr3_link6 [origin rpy='1.570796326794897 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='12.0' lower='0.4398' upper='4.6216' velocity='4.18', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='0.4398' soft_upper_limit='4.6216', position_based_velocity_limits deceleration_limit='5.5' velocity_offset='0.4885', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
   joint fr3_joint7 revolute fr3_link6 -> fr3_link7 [origin rpy='1.570796326794897 0 0' xyz='0.088 0 0', axis xyz='0 0 1', limit effort='12.0' lower='-3.0508' upper='3.0508' velocity='5.26', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-3.0508' soft_upper_limit='3.0508', position_based_velocity_limits deceleration_limit='17.0' velocity_offset='0.4592', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
   joint fr3_joint8 fixed fr3_link7 -> fr3_link8 [origin rpy='0 0 0' xyz='0 0 0.107']
-  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting [origin rpy='0 0 0' xyz='0 0 0']
-  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench [origin rpy='0 0 0' xyz='0 0 0.035']
-  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1 [origin rpy='1.5625 0 -1.5708' xyz='-0.032879 0 0.0105']
-  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2 [origin rpy='1.5708 0 0' xyz='0 -0.032879 0.0105']
-  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3 [origin rpy='1.5708 0 1.5708' xyz='0.032879 0 0.0105']
   ros2_control name='FrankaHardwareInterface' type='system'
     hardware [param name='version': 0.1.0, param name='robot_type': fr3, param name='prefix', plugin: franka_hardware/FrankaHardwareInterface, param name='robot_ip': 172.16.0.2, param name='arm_prefix']
     joint name='fr3_joint1'
@@ -174,9 +170,9 @@ RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
     operational_space_controller:
       ros__parameters: {}
     ros__parameters:
-      center_of_mass: [-0.00753, 0.0, 0.05325]
-      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
-      mass: 0.97
+      center_of_mass: [-0.01, 0.0, 0.03]
+      load_inertia: [0.001, 0.0, 0.0, 0.0, 0.0025, 0.0, 0.0, 0.0, 0.0017]
+      mass: 0.73
     task_space_impedance_controller:
       ros__parameters: {}
     task_space_qp_controller:
