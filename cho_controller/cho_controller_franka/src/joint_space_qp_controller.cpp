@@ -217,10 +217,15 @@ controller_interface::return_type JointSpaceQPController::update(
   // ----------------------------------------------------
   Vector7d torque_desired;
   torque_desired = M_modified * acc_arm;
-  torque_desired += state_.nle; 
+  torque_desired += state_.nle;
   torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);
 
+  // The next goal starts from the measured joints, a cancel drops the posture
+  // reference's velocity and acceleration.
+  fade_torque_switch(torque_desired, tracking, nominal_period(period));
+
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
   
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(torque_desired(i));

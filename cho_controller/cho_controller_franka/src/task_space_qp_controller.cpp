@@ -39,7 +39,6 @@ constexpr const char * kTaskPosture = "task-posture";
 constexpr const char * kTaskNullSpacePosture = "task-nullspace-posture";
 constexpr const char * kTaskDamping = "task-acceleration-damping";
 constexpr const char * kTaskBounds = "task-joint-bounds";
-constexpr double kPi = 3.14159265358979323846;
 
 }  // namespace
 
@@ -348,10 +347,6 @@ CallbackReturn TaskSpaceQPController::on_activate(
   }
 
   dq_filtered_.setZero();
-  last_torque_.setZero();
-  switch_fade_.setZero();
-  switch_fade_left_ = 0.0;
-  mode_switched_ = false;
 
   qp_->clear_tasks();
   control_mode_ = QPControlMode::UNINITIALIZED;
@@ -430,21 +425,12 @@ controller_interface::return_type TaskSpaceQPController::update(
   torque_desired += state_.nle;
   torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);
 
-  // A mode switch this period: the change it would make is put back, and fades
-  // out from here (see kSwitchFadeSec).
-  if (mode_switched_ && last_torque_.allFinite() && torque_desired.allFinite()) {
-    switch_fade_ = last_torque_ - torque_desired;
-    switch_fade_left_ = kSwitchFadeSec;
-  }
-  mode_switched_ = false;
-  if (switch_fade_left_ > 0.0) {
-    torque_desired += (0.5 - 0.5 * std::cos(kPi * switch_fade_left_ / kSwitchFadeSec)) * switch_fade_;
-    switch_fade_left_ -= dt;
-  }
+  // ACTION <-> hold changes the task set at once.
+  fade_torque_switch(torque_desired, action_ok, dt);
 
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
-  last_torque_ = torque_desired;
+  commit_torque(torque_desired);
 
   // set torque to robot
   for (int i = 0; i < num_dof_; ++i) {
@@ -465,7 +451,6 @@ void TaskSpaceQPController::switch_to_action_control(const rclcpp::Time & time)
     traj_posture_->setStartTime(time.seconds());
     traj_posture_->setGoalSample(state_.q_arm);
   }
-  mode_switched_ = control_mode_ != QPControlMode::UNINITIALIZED;
   control_mode_ = QPControlMode::ACTION;
   // Logged off the control loop (log_mode_switch()).
   pending_mode_log_.store(1 + static_cast<int>(QPControlMode::ACTION), std::memory_order_release);
@@ -480,8 +465,6 @@ void TaskSpaceQPController::switch_to_default_control(const rclcpp::Time & time)
   traj_posture_->setStartTime(time.seconds());
   traj_posture_->setGoalSample(state_.q_arm);
 
-  // Not on activation: there is no torque of this controller's to go on from.
-  mode_switched_ = control_mode_ != QPControlMode::UNINITIALIZED;
   control_mode_ = QPControlMode::DEFAULT;
   // Logged off the control loop (log_mode_switch()).
   pending_mode_log_.store(1 + static_cast<int>(QPControlMode::DEFAULT), std::memory_order_release);

@@ -80,6 +80,7 @@ add_library(${PROJECT_NAME} SHARED
     src/task_space_qp_controller.cpp
     src/vla_controller.cpp
     src/reference_stop.cpp
+    src/torque_switch_fade.cpp
     # action servers
     src/servers/gripper_action_server.cpp
     src/servers/vla_action_server.cpp
@@ -130,6 +131,10 @@ if(BUILD_TESTING)
     ament_add_gtest(test_reference_stop test/test_reference_stop.cpp src/reference_stop.cpp)
     target_include_directories(test_reference_stop PRIVATE include)
     ament_target_dependencies(test_reference_stop cho_controller_common cho_vla_core)
+    # The torque controllers' fade across a goal's start and end (TorqueSwitchFade)
+    # alone: Eigen only.
+    ament_add_gtest(test_torque_switch_fade test/test_torque_switch_fade.cpp src/torque_switch_fade.cpp)
+    target_include_directories(test_torque_switch_fade PRIVATE include ${EIGEN3_INCLUDE_DIRS})
     # The task-space QP (TaskSpaceQP) on the FR3 model, no ROS graph: links the
     # library; the URDF comes from cho_description_franka at run time.
     ament_add_gtest(test_task_space_qp_bounds test/test_task_space_qp_bounds.cpp TIMEOUT 120)

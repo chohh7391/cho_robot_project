@@ -97,7 +97,9 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
   // one that outlived a deactivation: then its trajectory is not sampled and
   // the idle branch holds.
-  if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
+  const bool tracking =
+    action_server_ && action_server_->is_running() && action_server_->compute(time, state_);
+  if (tracking) {
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
@@ -170,9 +172,12 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 
   // 6. Total torque
   Vector7d torque_desired = torque_motion + torque_null + state_.nle;
+  // A goal's end holds the pose measured then, a cancel drops v_des_world.
+  fade_torque_switch(torque_desired, tracking, nominal_period(period));
 
   // 7. Safety clipping and command write
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
   for (int i = 0; i < 7; ++i) {
     command_interfaces_[i].set_value(torque_desired(i));
   }

@@ -108,7 +108,9 @@ controller_interface::return_type OperationalSpaceController::update(
   // compute() is false when the goal ended this cycle -- canceled, aborted, or
   // one that outlived a deactivation: then its trajectory is not sampled and
   // the idle branch holds.
-  if (action_server_ && action_server_->is_running() && action_server_->compute(time, state_)) {
+  const bool tracking =
+    action_server_ && action_server_->is_running() && action_server_->compute(time, state_);
+  if (tracking) {
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.H_ee_des.translation() = trajectory_sample.pos.head<3>();
     state_.H_ee_des.rotation() = Eigen::Map<const Eigen::Matrix3d>(trajectory_sample.pos.segment<9>(3).data());
@@ -172,8 +174,12 @@ controller_interface::return_type OperationalSpaceController::update(
   torque_desired = J.transpose() * F_task + tau_null + state_.nle;
   torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
+  // A goal's end holds the pose measured then, a cancel drops twist_des_world.
+  fade_torque_switch(torque_desired, tracking, nominal_period(period));
+
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
 
   // set torque to robot
   for (int i = 0; i < num_dof_; ++i) {

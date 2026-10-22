@@ -114,6 +114,9 @@ CallbackReturn TaskSpaceVelocityController::on_activate(
     for (int i = 0; i < num_dof_; ++i) {
       command_interfaces_[i].set_value(rate(i));
     }
+    // As in JointSpaceVelocityController: the integral the real P term closes on
+    // takes in the command that goes out this period.
+    q_cmd_int_ += rate * nominal_period(rclcpp::Duration(0, 0));
     prev_cmd_speed_ = rate.cwiseAbs().maxCoeff();
   }
 

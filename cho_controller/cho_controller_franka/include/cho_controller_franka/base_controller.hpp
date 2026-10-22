@@ -35,6 +35,7 @@
 #include "cho_controller_common/math/fwd.hpp"
 #include "cho_controller_common/trajectory/motion_limits.hpp"
 #include "cho_controller_common/math/util.hpp"
+#include "cho_controller_franka/torque_switch_fade.hpp"
 
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -145,6 +146,12 @@ public:
 
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
+    // The torque controllers' fade across a goal's start, end or cancel
+    // (TorqueSwitchFade): fade_torque_switch() with the law's torque before
+    // clip_torque(), saying whether a goal is tracked this period, and
+    // commit_torque() with the command after it. Reset on every activation.
+    void fade_torque_switch(Vector7d & torque, bool tracking, double dt);
+    void commit_torque(const Vector7d & torque) {torque_fade_.commit(torque);}
 
     // Nominal seconds per update() call, for the controllers that advance a
     // trajectory clock themselves. See the definition for why this is not
@@ -291,6 +298,10 @@ protected:
 
     // Smoothed estimate of the update period; see nominal_period().
     double nominal_dt_{0.0};
+
+    // fade_torque_switch(): the fade, and whether the last period tracked a goal.
+    TorqueSwitchFade torque_fade_;
+    bool torque_tracking_{false};
 
     // varibles for controllers
     Vector7d dq_filtered_;

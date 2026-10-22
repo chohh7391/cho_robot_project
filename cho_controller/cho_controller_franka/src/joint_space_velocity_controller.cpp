@@ -110,6 +110,12 @@ CallbackReturn JointSpaceVelocityController::on_activate(
     for (int i = 0; i < num_dof_; ++i) {
       command_interfaces_[i].set_value(rate(i));
     }
+    // That command goes out this period, so the integral the real P term closes
+    // on takes it in now, as update() does its own. Left out, the first update()
+    // found the reference a period (rate * dt) ahead of it and added
+    // kp * rate * dt to the command (+0.9 mrad/s at 0.09 rad/s on the FR3),
+    // which then only decayed at kp.
+    q_cmd_int_ += rate * nominal_period(rclcpp::Duration(0, 0));
     prev_cmd_speed_ = rate.cwiseAbs().maxCoeff();
   }
 

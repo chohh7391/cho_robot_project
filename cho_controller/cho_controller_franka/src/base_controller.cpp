@@ -342,6 +342,9 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.v_arm_des.setZero();
   state_.H_ee_des = state_.H_ee;
   state_.H_ee_ref = state_.H_ee;
+  // No torque of this controller's own to carry on from (fade_torque_switch()).
+  torque_fade_.reset();
+  torque_tracking_ = false;
 
   activity_.activated();
 
@@ -622,6 +625,13 @@ void FrankaBaseController::clip_torque(Vector7d & torque)
         torque.setZero();
     }
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
+}
+
+void FrankaBaseController::fade_torque_switch(Vector7d & torque, const bool tracking, const double dt)
+{
+    // A goal starting or ending (a cancel included) changes what the law tracks.
+    torque_fade_.apply(torque, tracking != torque_tracking_, dt);
+    torque_tracking_ = tracking;
 }
 
 void FrankaBaseController::publish_ee_state()

@@ -236,15 +236,18 @@ otherwise.
   velocity bound v, v/a + a/j after the end (0.3 s from the default
   `max_joint_ref_vel`, 0.5 s from `max_task_lin_vel`), and in task space up to
   1 s more while the IK settles onto the stopped pose.
-- Franka's torque controllers, on a goal that ends short of its target with the
-  controller still pushing toward it (on the FR3, joint friction stops a small
-  move a few mm early): `task_space_qp_controller` holds the measured joints and
-  fades the push out over 0.1 s, at the end and at the next goal's start alike,
-  instead of dropping it in one period. `joint_space_impedance_controller` and
-  `joint_space_qp_controller` hold their last reference, push included, and drop
-  it in one period when the next goal starts from the measured joints;
+- Franka's torque controllers, when a goal starts, ends or is canceled: what the
+  law tracks changes at once, and the change of torque that makes fades out over
+  0.1 s instead of going out in one period. It is large when a goal ends short of
+  its target with the controller still pushing toward it (on the FR3, joint
+  friction stops a small move a few mm early) and on a cancel mid-motion, where
+  the reference velocity drops to 0. After an end, `joint_space_impedance_controller`
+  and `joint_space_qp_controller` hold their last reference, push included, which
+  then fades out when the next goal starts from the measured joints;
   `task_space_impedance_controller` and `operational_space_controller` hold the
-  pose measured at the end, which drops it there.
+  pose measured at the end and `task_space_qp_controller` the joints measured
+  then, so the push fades out at the end. For those 0.1 s a canceled motion is
+  braked more gently than its law alone would brake it.
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
 

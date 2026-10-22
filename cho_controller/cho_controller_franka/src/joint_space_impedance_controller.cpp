@@ -120,7 +120,8 @@ controller_interface::return_type JointSpaceImpedanceController::update(
   // compute() is false when there is no goal, or when it ended this cycle --
   // canceled, aborted, or one that outlived a deactivation. Only a tracking
   // cycle samples the trajectory.
-  if (action_server_->compute(time, state_)) {
+  const bool tracking = action_server_->compute(time, state_);
+  if (tracking) {
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();
     state_.q_arm_des = trajectory_sample.pos;
     state_.v_arm_des = trajectory_sample.vel;
@@ -142,8 +143,12 @@ controller_interface::return_type JointSpaceImpedanceController::update(
 
   torque_desired += state_.nle; // gravity compensation
 
+  // The next goal starts from the measured joints, a cancel drops v_arm_des.
+  fade_torque_switch(torque_desired, tracking, nominal_period(period));
+
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
   
   // set torque to robot
   for (int i = 0; i < num_dof_; ++i) {

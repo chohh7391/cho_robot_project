@@ -740,36 +740,54 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("max_joint_vel", 2.0)}}),
   [](const ::testing::TestParamInfo<Case> & info) {return std::string(info.param.name);});
 
-// The task-space QP's switches between a goal and its hold, on an arm that stays
-// put. On the real FR3, joint friction stopped a 1 cm move a few mm early; the
-// goal still succeeded, inside the effort threshold, and the hold, anchored at
-// the measured joints, dropped the push the goal had built up in one period
-// (~1 Nm, at libfranka's 1000 Nm/s torque rate limit). A hold that kept the push
-// would drop it instead when the next goal starts from the measured pose. The
-// mock joints do not move under effort at all, so here the whole move is left
-// over and the push is the controller's answer to all of it. The controller
-// fades each switch's change out over 0.1 s: the end and the next start are both
-// smooth, and the push is gone once the fade is.
+// The torque controllers' switches between a goal and its hold, on an arm that
+// stays put. On the real FR3, joint friction stopped a 1 cm task-space QP move a
+// few mm early; the goal still succeeded, inside the effort threshold, and the
+// hold, anchored at the measured joints, dropped the push the goal had built up
+// in one period (~1 Nm, at libfranka's 1000 Nm/s torque rate limit). The other
+// task-space laws hold the pose measured at the end the same way; the joint-space
+// ones keep their last reference, push included, and dropped it when the next
+// goal started from the measured joints; and every one dropped its reference
+// velocity on a cancel. The mock joints do not move under effort at all, so here
+// a goal's whole move is left over and the push is the law's answer to all of it.
+// Each switch's change now fades out over 0.1 s (TorqueSwitchFade).
 class EffortGoalEnd : public Reactivation
 {
 protected:
-  static constexpr float kDuration = 0.5f;
-
-  // 1 cm in 0.5 s, inside the effort success threshold (2 cm): with the mock
-  // joints standing still the goal succeeds with all of it left over.
-  rclcpp_action::ClientGoalHandle<TaskSpace>::SharedPtr send(
-    rclcpp_action::Client<TaskSpace>::SharedPtr client)
+  // Joint 4 by 0.02 rad, or the TCP 1 cm, times `scale`: at scale 1 inside the
+  // effort success thresholds (0.05 rad, 2 cm), so with the mock joints standing
+  // still the goal succeeds with all of its move left over.
+  template<typename Action>
+  typename rclcpp_action::ClientGoalHandle<Action>::SharedPtr send(
+    typename rclcpp_action::Client<Action>::SharedPtr client, const float duration, const double scale)
   {
-    TaskSpace::Goal goal;
-    goal.duration_sec = kDuration;
-    goal.relative = true;
-    goal.target_pose.pose.position.z = -0.01;
-    goal.target_pose.pose.orientation.w = 1.0;
+    typename Action::Goal goal;
+    goal.duration_sec = duration;
+    if constexpr (std::is_same_v<Action, JointSpace>) {
+      goal.target_joints.name = kJoints;
+      goal.target_joints.position = harness_->states(kJoints, "position");
+      goal.target_joints.position[3] += 0.02 * scale;
+    } else {
+      goal.relative = true;
+      goal.target_pose.pose.position.z = -0.01 * scale;
+      goal.target_pose.pose.orientation.w = 1.0;
+    }
     auto sent = client->async_send_goal(goal);
     if (!harness_->spin_until(sent)) {
       return nullptr;
     }
     return sent.get();
+  }
+
+  template<typename Action>
+  typename rclcpp_action::Client<Action>::SharedPtr connect()
+  {
+    const auto & c = GetParam();
+    auto client = rclcpp_action::create_client<Action>(
+      harness_->client_node(),
+      "/franka_reactivation/" + std::string(c.name) + (c.task_space ? "/task_space" : "/joint_space"));
+    EXPECT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+    return client;
   }
 
   // Cycles until `result` arrives and `after` periods more, recording the effort
@@ -798,53 +816,129 @@ protected:
     return step;
   }
 
+  template<typename Action>
+  void end_and_next_start()
+  {
+    auto client = connect<Action>();
+    harness_->cycle(50);
+    const Doubles before = harness_->states(kJoints, "effort");
+
+    constexpr float kDuration = 0.5f;
+    auto first = send<Action>(client, kDuration, 1.0);
+    ASSERT_NE(first, nullptr) << "goal rejected";
+    auto first_result = client->async_get_result(first);
+    // The result arrives some periods after the end took effect (the finisher
+    // delivers it, ~30 on the task-space QP); the motion's last periods come
+    // before both.
+    const std::size_t arrived = record_until(first_result, 300);
+    ASSERT_NE(arrived, 0u) << "the goal never ended";
+    EXPECT_EQ(first_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+    const auto settled = static_cast<std::size_t>(kDuration / ControllerManagerHarness::kPeriod) - 5;
+    ASSERT_GT(arrived, settled) << "the goal ended before its motion did";
+    const Doubles pushed = samples_[settled];
+    const double push = max_abs_difference(pushed, before);
+    ASSERT_GT(push, 0.5) << "the goal left no push, so nothing below would be tested";
+
+    // A raised cosine over 0.1 s changes by at most pi / 200 of the push in a period.
+    const double smooth = 0.03 * push;
+    const double end_step = largest_step(settled + 1, samples_.size());
+    EXPECT_LT(end_step, smooth)
+      << "the goal's end changed the torque by " << end_step << " Nm in one period, of a " << push << " Nm push";
+    // The task-space laws hold what they measured at the end, so the push fades
+    // out; the joint-space ones keep their last reference, push included.
+    if (GetParam().task_space) {
+      EXPECT_LT(max_abs_difference(samples_.back(), before), smooth) << "the push outlasted the fade";
+    } else {
+      EXPECT_LT(max_abs_difference(samples_.back(), pushed), smooth) << "the hold let go of the push";
+    }
+
+    // The next goal starts from the measured pose or joints: what the hold kept,
+    // its start drops.
+    const std::size_t second = samples_.size();
+    auto next = send<Action>(client, kDuration, 1.0);
+    ASSERT_NE(next, nullptr) << "the next goal was rejected";
+    auto next_result = client->async_get_result(next);
+    ASSERT_NE(record_until(next_result, 10), 0u) << "the next goal never ended";
+    EXPECT_EQ(next_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+    const double start_step = largest_step(second, second + 20);
+    EXPECT_LT(start_step, smooth)
+      << "the next goal's start changed the torque by " << start_step << " Nm in one period";
+  }
+
+  // Twice that move in 1 s, canceled halfway, where its reference moves fastest.
+  template<typename Action>
+  void cancel()
+  {
+    auto client = connect<Action>();
+    harness_->cycle(50);
+    auto handle = send<Action>(client, 1.0f, 2.0);
+    ASSERT_NE(handle, nullptr) << "goal rejected";
+    auto result = client->async_get_result(handle);
+    for (int k = 0; k < 500; ++k) {
+      harness_->cycle(1);
+      samples_.push_back(harness_->states(kJoints, "effort"));
+    }
+    // The cancel takes effect on the next period; the three before it are the
+    // goal's own.
+    const std::size_t before = samples_.size() - 3;
+    auto canceled = client->async_cancel_goal(handle);
+    ASSERT_TRUE(harness_->spin_until(canceled));
+    ASSERT_NE(record_until(result, 300), 0u) << "the goal never ended";
+    EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+    const double change = max_abs_difference(samples_.back(), samples_[before]);
+    ASSERT_GT(change, 0.3) << "the cancel changed nothing, so nothing below would be tested";
+    // The law's own change from one period of the motion to the next is a few
+    // percent of that (kp * dt / kd of it on the joint-space ones); a step is all
+    // of it.
+    const double step = largest_step(before, samples_.size());
+    EXPECT_LT(step, 0.1 * change)
+      << "the cancel changed the torque by " << step << " Nm in one period, of " << change << " Nm in all";
+  }
+
   std::vector<Doubles> samples_;
 };
 
 TEST_P(EffortGoalEnd, AGoalLeftShortEndsAndTheNextStartsWithoutATorqueStep)
 {
-  auto client = rclcpp_action::create_client<TaskSpace>(
-    harness_->client_node(), "/franka_reactivation/" + std::string(GetParam().name) + "/task_space");
-  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
-  harness_->cycle(50);
-  const Doubles before = harness_->states(kJoints, "effort");
+  if (GetParam().task_space) {
+    end_and_next_start<TaskSpace>();
+  } else {
+    end_and_next_start<JointSpace>();
+  }
+}
 
-  auto first = send(client);
-  ASSERT_NE(first, nullptr) << "goal rejected";
-  auto first_result = client->async_get_result(first);
-  // The result arrives some periods after the end took effect (the finisher
-  // delivers it, ~30 here); the motion's last periods come before both.
-  const std::size_t arrived = record_until(first_result, 300);
-  ASSERT_NE(arrived, 0u) << "the goal never ended";
-  EXPECT_EQ(first_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
-  const auto settled = static_cast<std::size_t>(kDuration / ControllerManagerHarness::kPeriod) - 5;
-  ASSERT_GT(arrived, settled) << "the goal ended before its motion did";
-  const double push = max_abs_difference(samples_[settled], before);
-  ASSERT_GT(push, 0.5) << "the goal left no push, so nothing below would be tested";
-
-  // A raised cosine over 0.1 s changes by at most pi / 200 of the push in a period.
-  const double smooth = 0.03 * push;
-  const double end_step = largest_step(settled + 1, samples_.size());
-  EXPECT_LT(end_step, smooth)
-    << "the goal's end changed the torque by " << end_step << " Nm in one period, of a " << push << " Nm push";
-  EXPECT_LT(max_abs_difference(samples_.back(), before), smooth) << "the push outlasted the fade";
-
-  // The next goal starts from the measured pose: what a hold kept, its start
-  // would drop.
-  const std::size_t second = samples_.size();
-  auto next = send(client);
-  ASSERT_NE(next, nullptr) << "the next goal was rejected";
-  auto next_result = client->async_get_result(next);
-  ASSERT_NE(record_until(next_result, 10), 0u) << "the next goal never ended";
-  EXPECT_EQ(next_result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
-  const double start_step = largest_step(second, second + 20);
-  EXPECT_LT(start_step, smooth) << "the next goal's start changed the torque by " << start_step << " Nm in one period";
+TEST_P(EffortGoalEnd, ACanceledGoalEndsWithoutATorqueStep)
+{
+  if (GetParam().task_space) {
+    cancel<TaskSpace>();
+  } else {
+    cancel<JointSpace>();
+  }
 }
 
 // The real bringup's gains (config/real/controllers.yaml), where the drop was
 // measured.
 INSTANTIATE_TEST_SUITE_P(
   Franka, EffortGoalEnd, ::testing::Values(
+    Case{"joint_space_impedance_controller", Mode::kEffort, false, {
+        rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 100, 100, 100}),
+        rclcpp::Parameter("kd_joint", Doubles{15, 15, 15, 15, 2, 2, 1})}},
+    Case{"joint_space_qp_controller", Mode::kEffort, false, {
+        rclcpp::Parameter("kp_joint", Doubles(7, 400.0)),
+        rclcpp::Parameter("kd_joint", Doubles(7, 40.0))}},
+    Case{"task_space_impedance_controller", Mode::kEffort, true, {
+        rclcpp::Parameter("kp_task", Doubles{300, 300, 300, 20, 20, 20}),
+        rclcpp::Parameter("kd_task", Doubles{34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719}),
+        rclcpp::Parameter("kp_null", 10.0), rclcpp::Parameter("kd_null", 6.3246),
+        rclcpp::Parameter("use_nullspace_posture", false),
+        rclcpp::Parameter("default_dof_pos",
+          Doubles{-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754})}},
+    Case{"operational_space_controller", Mode::kEffort, true, {
+        rclcpp::Parameter("kp_task", Doubles{100, 100, 100, 800, 800, 800}),
+        rclcpp::Parameter("kd_task", Doubles{20, 20, 20, 56.57, 56.57, 56.57}),
+        rclcpp::Parameter("kp_null", 10.0), rclcpp::Parameter("kd_null", 1.0),
+        rclcpp::Parameter("use_nullspace_posture", false),
+        rclcpp::Parameter("default_dof_pos", kHome)}},
     Case{"task_space_qp_controller", Mode::kEffort, true, {
         rclcpp::Parameter("kp_task", Doubles{100, 100, 100, 800, 800, 800}),
         rclcpp::Parameter("kd_task", Doubles{20, 20, 20, 56.57, 56.57, 56.57}),
@@ -959,6 +1053,7 @@ struct SwitchCase
   bool from_task_space;
   bool to_task_space;
   std::vector<rclcpp::Parameter> gains;
+  const char * bringup = "mujoco";
 };
 
 class SwitchInMotion : public ::testing::TestWithParam<SwitchCase>
@@ -981,7 +1076,7 @@ protected:
     std::vector<rclcpp::Parameter> parameters = {
       rclcpp::Parameter("robot_description", fr3_description()),
       rclcpp::Parameter("robot_type", "fr3"),
-      rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("bringup_type", c.bringup),
       rclcpp::Parameter("control_mode", interface_of(c.mode)),
       rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
     for (const auto & joint : kJoints) {
@@ -1078,7 +1173,13 @@ protected:
     harness_->cycle(800);
     EXPECT_LE(max_acceleration(before), kAcceleration * 1.02)
       << "the switch stopped the command faster than the joint acceleration limit";
-    EXPECT_LT(max_abs_difference(samples_[samples_.size() - 100], samples_.back()), 1e-9)
+    // With kp_joint 0 the command is the reference's own rate, exactly 0 at rest.
+    // The real bringup's P term compares each period's reference with the
+    // integral of the commands up to the last one, so a decelerating reference
+    // leaves it a * dt / kp behind (0.2 mrad at 2 rad/s^2), which it works off at
+    // kp once the reference stands: a tail of a few 1e-5 rad/s here.
+    const double rest = std::string(c.bringup) == "real" ? 2e-4 : 1e-9;
+    EXPECT_LT(max_abs_difference(samples_[samples_.size() - 100], samples_.back()), rest)
       << "the command is not at rest after the switch";
     ASSERT_TRUE(harness_->spin_until(outgoing));
     EXPECT_EQ(outgoing.get().code, rclcpp_action::ResultCode::ABORTED);
@@ -1118,9 +1219,20 @@ INSTANTIATE_TEST_SUITE_P(
         rclcpp::Parameter("kp_joint", Doubles(7, 0.0)), rclcpp::Parameter("max_joint_vel", 2.0)}},
     SwitchCase{"task_space_velocity_controller", "joint_space_velocity_controller", Mode::kVelocity, true, false, {
         rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
-        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)), rclcpp::Parameter("max_joint_vel", 2.0)}}),
+        rclcpp::Parameter("kp_joint", Doubles(7, 0.0)), rclcpp::Parameter("max_joint_vel", 2.0)}},
+    // The real bringup closes the velocity controllers' P term on the integral of
+    // the commands they issued (q_cmd_int_), and the incoming one left the command
+    // handed over out of it: kp * v * dt more from its first period on, 6 rad/s^2
+    // of commanded acceleration here from 0.6 rad/s at the real kp_joint.
+    SwitchCase{"joint_space_velocity_controller", "task_space_velocity_controller", Mode::kVelocity, false, true, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
+        rclcpp::Parameter("kp_joint", Doubles(7, 10.0)), rclcpp::Parameter("max_joint_vel", 2.0)}, "real"},
+    SwitchCase{"task_space_velocity_controller", "joint_space_velocity_controller", Mode::kVelocity, true, false, {
+        rclcpp::Parameter("lambda", 0.01), rclcpp::Parameter("max_delta_q", 0.0025),
+        rclcpp::Parameter("kp_joint", Doubles(7, 10.0)), rclcpp::Parameter("max_joint_vel", 2.0)}, "real"}),
   [](const ::testing::TestParamInfo<SwitchCase> & info) {
-    return std::string(info.param.from) + "_to_" + info.param.to;
+    return std::string(info.param.from) + "_to_" + info.param.to +
+           (std::string(info.param.bringup) == "real" ? "_real" : "");
   });
 
 // bringup_type says which backend compensates gravity, so which torque terms
