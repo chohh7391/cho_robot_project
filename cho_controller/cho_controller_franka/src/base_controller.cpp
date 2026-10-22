@@ -531,21 +531,27 @@ double FrankaBaseController::nominal_period(const rclcpp::Duration & period)
   // never 1.0 / get_update_rate(), a literal dt, or period.seconds() directly.
   //
   // get_update_rate() reports the controller's OWN rate, which is 0 whenever it
-  // inherits the controller_manager's - and no config in this repository sets a
-  // per-controller update_rate, so it is 0 in every bringup. The manager's rate
-  // differs per bringup (config/<env>/controllers.yaml; Isaac's equals the
-  // physics rate), so a literal dt is right only where it happens to match:
-  // 1 ms under a 250 Hz manager advances the trajectory clock at a quarter of sim
-  // time and stretches every goal fourfold. From the outside that looks like a
-  // drive too soft to hold against gravity, not like a clock bug.
+  // inherits the controller_manager's. The manager's rate differs per bringup
+  // (config/<env>/controllers.yaml; Isaac's equals the physics rate), so a
+  // literal dt is right only where it happens to match: 1 ms under a 250 Hz
+  // manager advances the trajectory clock at a quarter of sim time and stretches
+  // every goal fourfold. From the outside that looks like a drive too soft to
+  // hold against gravity, not like a clock bug.
   //
-  // The measured period is used to ESTIMATE the rate, not to advance the clock
-  // directly: it jitters by up to 2x, and parameterising a position trajectory by
-  // it makes each cycle's command step - and so the velocity the actuator infers
-  // from it - jitter in proportion; it is exactly 0 on a cycle that saw no new
-  // state, where a difference divided by it is NaN. Seeded from the first sane
-  // cycle so the estimate is right from the first goal, then smoothed; 1 ms until
-  // that cycle.
+  // With no rate of its own the measured period is used to ESTIMATE the rate,
+  // not to advance the clock directly: it jitters by up to 2x, and
+  // parameterising a position trajectory by it makes each cycle's command step -
+  // and so the velocity the actuator infers from it - jitter in proportion; it is
+  // exactly 0 on a cycle that saw no new state, where a difference divided by it
+  // is NaN. Seeded from the first sane cycle so the estimate is right from the
+  // first goal, then smoothed; 1 ms until that cycle.
+  //
+  // The smoothing still passes some of the jitter on: one 2.2 ms period moves the
+  // estimate 6 %, and the commanded rate with it in one cycle, ~18 rad/s^2 at
+  // 0.3 rad/s against libfranka's 10. The FCI's period is exact, so the real
+  // bringup gives every controller that calls this an update_rate of 1000
+  // (config/real/controllers.yaml) and the estimate is never used there. The
+  // simulations keep it: their manager rates differ and nothing rejects jitter.
   const unsigned int rate = get_update_rate();
   if (rate > 0) {
     return 1.0 / rate;

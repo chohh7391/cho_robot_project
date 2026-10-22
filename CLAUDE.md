@@ -205,7 +205,7 @@ golden test in CI) and `ci/check_copyright_headers.py`. **dds/** — the Fast DD
 Code that advances its own trajectory clock or integrates an open-loop reference takes the period from its base
 class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`,
 `cho_controller_chain::ReferenceGenerator`): never
-`1 / get_update_rate()` (0 here, no config sets a per-controller rate), a literal `dt`, or the raw `period`
+`1 / get_update_rate()` (0 unless the config sets a per-controller rate; only Franka's real one does), a literal `dt`, or the raw `period`
 (jitters, and is 0 on a cycle with no new state). Audit a new controller for all three forms (`get_update_rate`,
 a literal such as `dt = 0.001`, `period.seconds()`); a search for one misses the others. The reasons are in the
 `nominal_period()` comment of [cho_controller_franka/src/base_controller.cpp](cho_controller/cho_controller_franka/src/base_controller.cpp).
