@@ -91,7 +91,10 @@ cho_description/cho_description_franka/
     cho_controller_franka's controllers include code adapted from
     franka_example_controllers (the joint impedance example's interface
     configuration, velocity filter and torque law; the base controller's
-    state-interface handling and robot_description fetch).
+    state-interface handling and robot_description fetch). JointRateLimiter
+    is adapted from libfranka's joint rate limiting (limitRate() in
+    src/rate_limiting.cpp), https://github.com/frankarobotics/libfranka,
+    Copyright (c) 2023 Franka Robotics GmbH, License: Apache-2.0.
 
 cho_description/cho_description_openarm/
     Derived from openarm_description (URDF/xacro, meshes and configuration

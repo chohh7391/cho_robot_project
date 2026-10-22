@@ -138,6 +138,7 @@ controller_interface::return_type JointSpacePositionController::update(
 
   Vector7d q_cmd = state_.q_arm_des;
   FrankaBaseController::clip_position(q_cmd);
+  FrankaBaseController::limit_position_command(q_cmd);
 
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(q_cmd(i));

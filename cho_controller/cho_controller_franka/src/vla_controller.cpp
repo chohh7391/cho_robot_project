@@ -604,6 +604,7 @@ void VLAController::write_open_loop(
       // deliberately does not try to repair q_ref_ itself.
       state_.q_arm_ref = q_cmd;
     }
+    FrankaBaseController::limit_position_command(q_cmd);
     for (int i = 0; i < num_dof_; ++i) {
       command_interfaces_[i].set_value(q_cmd(i));
     }
@@ -632,6 +633,7 @@ void VLAController::write_open_loop(
         "Non-finite velocity command detected; commanding zero velocity.");
     dq_cmd.setZero();
   }
+  FrankaBaseController::limit_velocity_command(dq_cmd);
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(dq_cmd(i));
   }

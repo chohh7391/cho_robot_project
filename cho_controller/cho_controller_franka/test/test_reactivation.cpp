@@ -87,6 +87,8 @@ using Doubles = std::vector<double>;
 const std::vector<std::string> kJoints = {
   "fr3_joint1", "fr3_joint2", "fr3_joint3", "fr3_joint4", "fr3_joint5", "fr3_joint6", "fr3_joint7"};
 const Doubles kHome = {0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854};
+// franka_hardware's clock state, RobotState::time.
+constexpr const char * kRobotTime = "fr3/robot_time";
 
 enum class Mode {kEffort, kPosition, kVelocity};
 
@@ -110,7 +112,9 @@ double moved_threshold(const Mode mode) {return mode == Mode::kEffort ? 0.5 : 1e
 double hold_tolerance(const Mode mode) {return mode == Mode::kEffort ? 1e-2 : 1e-6;}
 
 // `dynamics`: GenericSystem integrates a velocity command into the position, so
-// a velocity controller moves the mock joints.
+// a velocity controller moves the mock joints. The arm also reports
+// franka_hardware's fr3/robot_time, which every controller claims under
+// bringup_type "real"; it reads 0 unless the harness drives it (drive_clock()).
 std::string fr3_description(const bool dynamics = false)
 {
   std::ifstream file(
@@ -124,7 +128,7 @@ std::string fr3_description(const bool dynamics = false)
   }
   return cho_controller_base::testing::with_ros2_control(
     text.str(), cho_controller_base::testing::mock_ros2_control(
-      kJoints, kHome, {"fr3_finger_joint1"}, hardware));
+      kJoints, kHome, {"fr3_finger_joint1"}, hardware, {kRobotTime}));
 }
 
 // fr3_hand_tcp in fr3_link0, from the joint origins of
@@ -3418,6 +3422,80 @@ TEST_F(VlaLateCycle, ALateCycleDoesNotStepTheCommand)
   // Sampled at the late time, one command moved by 5 % of 0.95 ms of the
   // motion: at 0.05 rad/s 2.4 urad, about 5000 rad/s^3.
   EXPECT_LT(around, 1000.0) << "the late cycle stepped the command: " << around << " rad/s^3 around it, "
+                            << before << " before it, the fastest joint at " << speed << " rad/s";
+}
+
+// A control cycle that skips a hardware state, a loop stalled past its tick: the
+// robot extrapolated the tick it missed at constant acceleration, and the next
+// command is for the tick after. On the real FR3 the clocks here step by
+// franka_hardware's robot_time (nominal_period()), so the reference moves on by
+// both ticks; by one period it fell a tick behind the robot and the command
+// stepped back by v * 1 ms. VlaLateCycle's circle under bringup_type "real",
+// the harness driving fr3/robot_time; the rate limiter runs too.
+class VlaSkippedCycle : public VlaLateCycle
+{
+protected:
+  std::vector<rclcpp::Parameter> extra_parameters() const override
+  {
+    return {rclcpp::Parameter("update_rate", 1000), rclcpp::Parameter("bringup_type", "real")};
+  }
+};
+
+TEST_F(VlaSkippedCycle, ASkippedStateDoesNotStepTheCommand)
+{
+  harness_->drive_clock(kRobotTime);
+  ASSERT_NO_FATAL_FAILURE(start());
+  harness_->cycle(20);
+  // Each period's hardware tick and the command read back on it, which is the
+  // period before's: a command's tick is the previous entry's.
+  std::vector<std::pair<std::int64_t, Doubles>> seen;
+  harness_->on_period([this, &seen] {seen.emplace_back(harness_->ticks(), commanded());});
+  for (int k = 0; k < 15; ++k) {
+    publish("task", "from_anchor", "base", "quaternion", circle_chunk(k), 1.0 / 240);
+    for (int i = 0; i < 67; ++i) {
+      if (k == 12 && i == 33) {
+        // Half-way between two chunks, with the TCP at speed.
+        harness_->skipped_cycle();
+      } else {
+        tick();
+      }
+    }
+  }
+  harness_->on_period({});
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << telemetry_.last_reject;
+  ASSERT_GE(telemetry_.chunks_accepted, 14u) << "the circle's chunks were not taken";
+
+  // The commands the robot executed, one per tick, the skipped tick its own
+  // extrapolation of the three before.
+  std::vector<Doubles> robot;
+  std::size_t skipped = 0;
+  for (std::size_t e = 2; e < seen.size(); ++e) {
+    if (seen[e - 1].first - seen[e - 2].first == 2 && robot.size() >= 3) {
+      const Doubles & a = robot[robot.size() - 1];
+      const Doubles & b = robot[robot.size() - 2];
+      const Doubles & c = robot[robot.size() - 3];
+      Doubles extrapolated(a.size());
+      for (std::size_t j = 0; j < a.size(); ++j) {
+        extrapolated[j] = a[j] + (a[j] - b[j]) + ((a[j] - b[j]) - (b[j] - c[j]));
+      }
+      skipped = robot.size();
+      robot.push_back(extrapolated);
+    }
+    robot.push_back(seen[e].second);
+  }
+  ASSERT_GT(skipped, 400u) << "no skipped tick was seen";
+  ASSERT_GT(robot.size(), skipped + 10);
+
+  double speed = 0.0;
+  for (std::size_t j = 0; j < kJoints.size(); ++j) {
+    speed = std::max(speed, std::abs(robot[skipped - 1][j] - robot[skipped - 2][j]) / kPeriod);
+  }
+  ASSERT_GT(speed, 0.03) << "the arm was not moving at the skipped tick";
+  const double before = jerk(robot, skipped - 300, skipped - 5);
+  const double around = jerk(robot, skipped - 2, skipped + 10);
+  // A tick behind, the command after it stepped back by v * 1 ms: at 0.05 rad/s
+  // 50 urad, two orders past the FCI's 5000 rad/s^3.
+  EXPECT_LT(around, 1000.0) << "the skipped state stepped the command: " << around << " rad/s^3 around it, "
                             << before << " before it, the fastest joint at " << speed << " rad/s";
 }
 

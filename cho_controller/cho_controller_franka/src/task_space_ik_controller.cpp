@@ -202,8 +202,12 @@ controller_interface::return_type TaskSpaceIKController::update(
   // IK of a smooth, jitter-free trajectory, lagged one cycle), and its per-cycle
   // change is bounded by the dq limit above. No output vel/accel limiter is used: a
   // limiter chasing a moving target rings (under-damped) and shows up as vibration.
+  // The real FR3's rate limiter (limit_position_command()) is not one: it passes
+  // every command inside the FCI's bounds unchanged and only catches a glitch.
+  Vector7d q_cmd = q_ref_;
+  FrankaBaseController::limit_position_command(q_cmd);
   for (int i = 0; i < num_dof_; ++i) {
-    command_interfaces_[i].set_value(q_ref_(i));
+    command_interfaces_[i].set_value(q_cmd(i));
   }
 
   return controller_interface::return_type::OK;

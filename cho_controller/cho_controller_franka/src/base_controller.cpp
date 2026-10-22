@@ -60,8 +60,11 @@ FrankaBaseController::state_interface_configuration() const
             config.names.push_back(robot_type_ + "_finger_joint1" + "/position");
             config.names.push_back(robot_type_ + "_finger_joint1" + "/velocity");
         }
+    } else {
+        // The FCI's own clock, which nominal_period() steps by (read_robot_time()).
+        config.names.push_back(robot_type_ + "/robot_time");
     }
-    
+
     return config;
 }
 
@@ -323,6 +326,19 @@ CallbackReturn FrankaBaseController::on_activate(
   if (!state_interfaces_in_order()) {
     return CallbackReturn::ERROR;
   }
+  // The robot's clock starts unknown, and the rate limiter without a history:
+  // nominal_period() and the first commands are this activation's own.
+  robot_time_index_ = -1;
+  for (std::size_t i = 0; i < state_interfaces_.size(); ++i) {
+    if (state_interfaces_[i].get_prefix_name() == robot_type_ &&
+        state_interfaces_[i].get_interface_name() == "robot_time")
+    {
+      robot_time_index_ = static_cast<int>(i);
+    }
+  }
+  last_robot_time_ = std::numeric_limits<double>::quiet_NaN();
+  robot_period_ = 0.0;
+  command_limiter_.reset();
   update_joint_states();
   compute_all_terms();
   state_.q_init = state_.q;
@@ -382,6 +398,7 @@ CallbackReturn FrankaBaseController::on_deactivate(
 controller_interface::return_type FrankaBaseController::update(
     const rclcpp::Time&, const rclcpp::Duration&) {
 
+    read_robot_time();
     update_joint_states();
     compute_all_terms();
 
@@ -582,6 +599,17 @@ double FrankaBaseController::nominal_period(const rclcpp::Duration & period)
   // bringup gives every controller that calls this an update_rate of 1000
   // (config/real/controllers.yaml) and the estimate is never used there. The
   // simulations keep it: their manager rates differ and nothing rejects jitter.
+  //
+  // On the real FR3 the FCI's own clock comes first: the ticks it advanced since
+  // the last cycle (read_robot_time()), one normally and two when the loop
+  // skipped a state, a tick the robot meanwhile extrapolated. Advanced by one
+  // period instead, the reference falls a tick behind the robot and the next
+  // command steps back by it: v * 1 ms, 95 urad at 0.095 rad/s, twenty times the
+  // step that tripped joint_motion_generator_acceleration_discontinuity on
+  // 2026-10-22. Franka's own example controllers time their trajectories by it.
+  if (robot_period_ > 0.0) {
+    return robot_period_;
+  }
   const unsigned int rate = get_update_rate();
   if (rate > 0) {
     return 1.0 / rate;
@@ -606,6 +634,52 @@ void FrankaBaseController::clip_position(Vector7d & position, const double eps)
                    .max(state_.q_arm_ref.array() - eps)
                    .min(state_.q_arm_ref.array() + eps);
     state_.q_arm_ref = position;
+}
+
+void FrankaBaseController::read_robot_time()
+{
+  robot_period_ = 0.0;
+  if (robot_time_index_ < 0) {
+    return;
+  }
+  const double now = state_interfaces_[static_cast<std::size_t>(robot_time_index_)].get_value();
+  const double step = now - last_robot_time_;
+  last_robot_time_ = now;
+  // Whole ticks within the limiter's clock-jump bound. The first reading (NaN),
+  // the same state twice, the robot's clock set back or a stall past 0.1 s
+  // leave nominal_period() to its own rule.
+  if (std::isfinite(step) && step > 0.0 && step <= 0.1) {
+    const double ticks = std::round(step / JointRateLimiter::kTick);
+    if (ticks >= 1.0) {
+      robot_period_ = ticks * JointRateLimiter::kTick;
+    }
+  }
+}
+
+void FrankaBaseController::limit_position_command(Vector7d & position)
+{
+  if (bringup_type_ != "real") {
+    return;
+  }
+  const int ticks = robot_period_ > 0.0 ? static_cast<int>(std::lround(robot_period_ / JointRateLimiter::kTick)) : 1;
+  if (command_limiter_.limit_position(position, ticks)) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+        "Joint rate limiter changed a position command: it passed the FR3's jerk, acceleration or "
+        "velocity bound (JointRateLimiter).");
+  }
+}
+
+void FrankaBaseController::limit_velocity_command(Vector7d & velocity)
+{
+  if (bringup_type_ != "real") {
+    return;
+  }
+  const int ticks = robot_period_ > 0.0 ? static_cast<int>(std::lround(robot_period_ / JointRateLimiter::kTick)) : 1;
+  if (command_limiter_.limit_velocity(velocity, ticks)) {
+    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+        "Joint rate limiter changed a velocity command: it passed the FR3's jerk, acceleration or "
+        "velocity bound (JointRateLimiter).");
+  }
 }
 
 void FrankaBaseController::clamp_to_joint_limits(Vector7d & q) const

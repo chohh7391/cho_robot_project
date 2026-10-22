@@ -82,6 +82,7 @@ add_library(${PROJECT_NAME} SHARED
     src/reference_stop.cpp
     src/torque_switch_fade.cpp
     src/vla_session_clock.cpp
+    src/joint_rate_limiter.cpp
     # action servers
     src/servers/gripper_action_server.cpp
     src/servers/vla_action_server.cpp
@@ -136,6 +137,9 @@ if(BUILD_TESTING)
     # alone: Eigen only.
     ament_add_gtest(test_torque_switch_fade test/test_torque_switch_fade.cpp src/torque_switch_fade.cpp)
     target_include_directories(test_torque_switch_fade PRIVATE include ${EIGEN3_INCLUDE_DIRS})
+    # The real FR3's last-stage rate limiter (JointRateLimiter) alone: Eigen only.
+    ament_add_gtest(test_joint_rate_limiter test/test_joint_rate_limiter.cpp src/joint_rate_limiter.cpp)
+    target_include_directories(test_joint_rate_limiter PRIVATE include ${EIGEN3_INCLUDE_DIRS})
     # The VLA session's clock (VLASessionClock) alone: rclcpp's Time only.
     ament_add_gtest(test_vla_session_clock test/test_vla_session_clock.cpp src/vla_session_clock.cpp)
     target_include_directories(test_vla_session_clock PRIVATE include)

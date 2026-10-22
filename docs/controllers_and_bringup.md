@@ -77,6 +77,14 @@ The simulation configs also load the stock `simulation_gripper_controller`
 (ForwardCommandController) and, in Gazebo and MuJoCo, `moveit_joint_trajectory_controller`
 (JTC).
 
+On the real FR3 two things hold for every controller above. First, each steps its own clock by
+the FCI's ticks: franka_hardware's `fr3/robot_time`, read by `nominal_period()`. Second, each joint
+position and velocity command passes `JointRateLimiter` last. That is libfranka's `limitRate()`
+rule at half the FCI's jerk and 80 % of its acceleration. franka_hardware 2.2.0 builds its own
+limiter off for both command types. Our trajectories never reach these bounds. A command the
+limiter changes logs a throttled `Joint rate limiter changed a ... command` WARN: a glitch the FCI
+would have stopped the arm for.
+
 **Chained prototype** (`cho_controller_chain`): declared in the MuJoCo config for
 `control_mode:=torque` and spawned by no bringup. Loading them by hand:
 [its README](../cho_controller/cho_controller_chain/README.md).

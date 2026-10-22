@@ -107,6 +107,8 @@ CallbackReturn JointSpaceVelocityController::on_activate(
   // send; the velocity last commanded goes there instead.
   Vector7d rate, acceleration;
   if (held_command_motion(rate, acceleration) && stop_.start_from(q_ref_, rate, acceleration)) {
+    // The first command the real rate limiter sees, seeding it.
+    FrankaBaseController::limit_velocity_command(rate);
     for (int i = 0; i < num_dof_; ++i) {
       command_interfaces_[i].set_value(rate(i));
     }
@@ -252,11 +254,12 @@ controller_interface::return_type JointSpaceVelocityController::update(
       dq_cmd(i) = std::clamp(dq_cmd(i), -max_joint_vel_, max_joint_vel_);
     }
   }
+  FrankaBaseController::limit_velocity_command(dq_cmd);
   for (int i = 0; i < num_dof_; ++i) {
     command_interfaces_[i].set_value(dq_cmd(i));
   }
-  // Integrate what actually went out (post-clamp), so a saturated cycle leaves a
-  // real deficit for the P term to work off on the next one.
+  // Integrate what actually went out (post-clamp, post-limit), so a saturated
+  // cycle leaves a real deficit for the P term to work off on the next one.
   q_cmd_int_ += dq_cmd * dt;
   prev_cmd_speed_ = dq_cmd.cwiseAbs().maxCoeff();
 

@@ -28,6 +28,7 @@
 // C++ Header
 #include <thread>
 #include <atomic>
+#include <limits>
 #include <mutex>
 
 // for robot wrapper
@@ -35,6 +36,7 @@
 #include "cho_controller_common/math/fwd.hpp"
 #include "cho_controller_common/trajectory/motion_limits.hpp"
 #include "cho_controller_common/math/util.hpp"
+#include "cho_controller_franka/joint_rate_limiter.hpp"
 #include "cho_controller_franka/torque_switch_fade.hpp"
 
 #include <controller_interface/controller_interface.hpp>
@@ -146,6 +148,13 @@ public:
 
     void clip_position(Vector7d & position, const double eps = 0.01);
     void clip_torque(Vector7d & torque);
+    // Real FR3 only: the joint rate limiter (JointRateLimiter) on a position or
+    // velocity command, right before it is written, over the FCI ticks since the
+    // last one (robot_time); elsewhere nothing. Every command a controller
+    // writes goes through one of them, its activation handover's included.
+    // Reset on every activation.
+    void limit_position_command(Vector7d & position);
+    void limit_velocity_command(Vector7d & velocity);
     // The torque controllers' fade across a goal's start, end or cancel
     // (TorqueSwitchFade): fade_torque_switch() with the law's torque before
     // clip_torque(), saying whether a goal is tracked this period, and
@@ -298,6 +307,19 @@ protected:
 
     // Smoothed estimate of the update period; see nominal_period().
     double nominal_dt_{0.0};
+
+    // The real FR3's own clock, franka_hardware's <robot_type>/robot_time
+    // (RobotState::time, whole 1 ms ticks): its index among state_interfaces_,
+    // -1 without one; its last reading; and the ticks since that, as seconds, 0
+    // while unknown. update() reads it first (read_robot_time()); nominal_period()
+    // returns robot_period_ while it is known.
+    void read_robot_time();
+    int robot_time_index_{-1};
+    double last_robot_time_{std::numeric_limits<double>::quiet_NaN()};
+    double robot_period_{0.0};
+
+    // limit_position_command() / limit_velocity_command().
+    JointRateLimiter command_limiter_;
 
     // fade_torque_switch(): the fade, and whether the last period tracked a goal.
     TorqueSwitchFade torque_fade_;

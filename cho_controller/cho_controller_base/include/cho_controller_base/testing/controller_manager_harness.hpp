@@ -58,10 +58,15 @@ namespace cho_controller_base::testing
 //     a held command and the measurement differ;
 //   {"calculate_dynamics", "true"} -- a velocity command moves the joint (the
 //     position integrates it), so a velocity controller can move the arm.
+//
+// Each `clocks` entry, "<gpio>/<interface>", adds a gpio with a command and a
+// state interface of that name: a robot's own clock, which reads 0 unless
+// ControllerManagerHarness::drive_clock() writes it.
 inline std::string mock_ros2_control(
   const std::vector<std::string> & arm, const std::vector<double> & initial,
   const std::vector<std::string> & passive = {},
-  const std::vector<std::pair<std::string, std::string>> & hardware = {})
+  const std::vector<std::pair<std::string, std::string>> & hardware = {},
+  const std::vector<std::string> & clocks = {})
 {
   std::ostringstream out;
   out << "<ros2_control name='mock_arm' type='system'><hardware>"
@@ -82,6 +87,11 @@ inline std::string mock_ros2_control(
   for (const auto & joint : passive) {
     out << "<joint name='" << joint << "'><state_interface name='position'/>"
         << "<state_interface name='velocity'/></joint>";
+  }
+  for (const auto & clock : clocks) {
+    const auto slash = clock.find('/');
+    out << "<gpio name='" << clock.substr(0, slash) << "'><command_interface name='" << clock.substr(slash + 1)
+        << "'/><state_interface name='" << clock.substr(slash + 1) << "'/></gpio>";
   }
   out << "</ros2_control>";
   return out.str();
@@ -206,6 +216,25 @@ public:
     cycle(1, spin);
   }
 
+  // One period that comes two periods after the last, as when a stalled control
+  // loop skips a hardware state: the robot clock (drive_clock()) and the
+  // manager's time both move on by two periods, and update() runs once.
+  void skipped_cycle(const bool spin = true)
+  {
+    skip_ = true;
+    cycle(1, spin);
+  }
+
+  // Writes the hardware's own clock, the periods run so far times kPeriod (two
+  // for a skipped_cycle()), into `name` before every read(): a clock gpio of
+  // mock_ros2_control(), whose state GenericSystem copies from that command, as
+  // a robot that reports its own time does (franka_hardware's robot_time).
+  void drive_clock(const std::string & name)
+  {
+    clock_interface_ = std::make_unique<hardware_interface::LoanedCommandInterface>(
+      resources_->claim_command_interface(name));
+  }
+
   // Callbacks only, no control period; true once `future` is ready.
   template<typename FutureT>
   bool spin_until(FutureT & future, const int budget_ms = 3000)
@@ -247,6 +276,10 @@ public:
   // the controllers saw on the last one. What a bridge echoing the controller's
   // clock would stamp an observation with.
   rclcpp::Time now() const {return rclcpp::Time(clock_ns_, RCL_ROS_TIME);}
+
+  // The hardware clock's periods so far (drive_clock()): one per period, two
+  // for a skipped_cycle().
+  std::int64_t ticks() const {return ticks_;}
 
 private:
   // A load or configure. Humble's controller_manager ends either by handing
@@ -313,8 +346,15 @@ private:
   void step()
   {
     stepped_ = true;
-    const auto scheduled = rclcpp::Duration::from_seconds(kPeriod);
+    // skipped_cycle(): two periods since the last one.
+    const int periods = skip_ ? 2 : 1;
+    skip_ = false;
+    const auto scheduled = rclcpp::Duration::from_seconds(periods * kPeriod);
     clock_ns_ += scheduled.nanoseconds();
+    ticks_ += periods;
+    if (clock_interface_) {
+      clock_interface_->set_value(static_cast<double>(ticks_) * kPeriod);
+    }
     // late_cycle(): this period runs late_ns_ behind its place, the one before
     // ran previous_late_ns_ behind.
     const rclcpp::Time now(clock_ns_ + late_ns_, RCL_ROS_TIME);
@@ -337,6 +377,11 @@ private:
   // late_cycle(): how late the next period runs, and how late the last one ran.
   std::int64_t late_ns_{0};
   std::int64_t previous_late_ns_{0};
+  // skipped_cycle() and drive_clock(): the next period comes two after the
+  // last; the periods run so far; the clock command written before each read().
+  bool skip_{false};
+  std::int64_t ticks_{0};
+  std::unique_ptr<hardware_interface::LoanedCommandInterface> clock_interface_;
   // update() has run: a load or configure now waits for it (list_request()).
   bool stepped_{false};
   std::function<void()> observer_;
