@@ -148,7 +148,8 @@ void release_held_command(
 //   - "position": left as it is (it is the hold the next position controller
 //     seeds from) and recorded in the HeldCommandLedger with its joint's
 //     measured position, for live_held_command().
-//   - anything else (effort): untouched.
+//   - anything else (effort): untouched (a torque controller records it with
+//     release_held_torque()).
 // Interfaces are paired with joints by prefix name, so any number of interfaces
 // per joint, in any order, is paired right (OpenArm's MIT hardware has position,
 // velocity and effort per joint); interfaces of other joints are left alone.
@@ -267,7 +268,8 @@ Eigen::VectorXd live_held_command(
 }
 
 // How long [s] after a release a controller activated in the same switch may
-// take its motion over (live_held_motion()). The controller_manager deactivates
+// take its motion over (live_held_motion()), or carry on from its torque
+// (live_held_torque()). The controller_manager deactivates
 // and activates the controllers of one switch in one call, microseconds apart;
 // a controller activated by a later switch request is at least a request and a
 // control period behind. The measured-position rule (kHeldCommandDrift) is what
@@ -388,6 +390,95 @@ bool live_held_motion(
     if (!live) {
       rate.setZero();
       acceleration.setZero();
+      return false;
+    }
+  }
+  return true;
+}
+
+// What a torque controller adds to release_on_deactivate(), which leaves an
+// "effort" command as it is: per "effort" command interface of a joint in
+// `joints`, that torque -- the one the controller commanded last, which the
+// hardware goes on commanding until the interface is next written -- recorded
+// with the joint's measured position, who released it and when, for the torque
+// controller activated in its place in the same switch (live_held_torque()).
+// Other kinds, other joints and a joint past the end of `measured` get no
+// record.
+//
+// The interfaces need get_name(), get_prefix_name(), get_interface_name() and
+// get_value().
+template<typename CommandInterfaces, typename MeasuredT>
+void release_held_torque(
+  const CommandInterfaces & command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured, const std::string & releaser)
+{
+  const auto measured_size = static_cast<std::size_t>(measured.size());
+  const std::int64_t now = steady_now_ns();
+  for (const auto & interface : command_interfaces) {
+    const std::size_t j = detail::joint_index(interface, joints);
+    if (j >= joints.size() || j >= measured_size || interface.get_interface_name() != "effort") {
+      continue;
+    }
+    HeldCommandLedger::record(
+      interface.get_name(),
+      HeldCommandLedger::Release{
+        interface.get_value(), measured(static_cast<Eigen::Index>(j)), 0.0, 0.0, releaser, now});
+  }
+}
+
+// The torque a controller let go of in this same switch, for the torque
+// controller now activating in its place (`self`) to carry on from: true, with
+// each joint's torque in joint order, when every joint in `joints` has an
+// "effort" command interface here whose release_held_torque() record is live by
+// the rules of live_held_motion() -- released by another controller, within
+// kMotionHandoverWindow of now, the interface still holding exactly the torque
+// released, the joint not moved since (kHeldCommandDrift) -- and finite.
+// Otherwise false, with `torque` zero.
+//
+// A live torque is the one the arm is still commanded: franka_hardware keeps
+// its torque session, and the value, across a switch whose incoming controller
+// claims the effort interfaces too (it zeroes the value when it starts a new
+// session), and a simulator applies the value until it is next written. The
+// rules keep out a value left by an earlier switch, which a simulator may have
+// stopped applying since, under a position or velocity controller.
+//
+// The interfaces need get_name(), get_prefix_name(), get_interface_name() and
+// get_value(). Call it in on_activate, before the first update, with the
+// measurement taken there.
+template<typename CommandInterfaces, typename MeasuredT>
+bool live_held_torque(
+  const CommandInterfaces & command_interfaces, const std::vector<std::string> & joints,
+  const Eigen::MatrixBase<MeasuredT> & measured, const std::string & self, Eigen::VectorXd & torque)
+{
+  const auto n = static_cast<Eigen::Index>(joints.size());
+  torque = Eigen::VectorXd::Zero(n);
+  if (measured.size() != n) {
+    return false;
+  }
+  const std::int64_t now = steady_now_ns();
+  const auto window_ns = static_cast<std::int64_t>(kMotionHandoverWindow * 1e9);
+  for (Eigen::Index j = 0; j < n; ++j) {
+    bool live = false;
+    for (const auto & interface : command_interfaces) {
+      if (interface.get_interface_name() != "effort" ||
+        interface.get_prefix_name() != joints[static_cast<std::size_t>(j)])
+      {
+        continue;
+      }
+      HeldCommandLedger::Release release{};
+      const double value = interface.get_value();
+      live = HeldCommandLedger::find(interface.get_name(), release) &&
+        !release.releaser.empty() && release.releaser != self &&
+        now >= release.released_at_ns && now - release.released_at_ns <= window_ns &&
+        value == release.command && std::isfinite(value) &&
+        std::abs(measured(j) - release.measured) <= kHeldCommandDrift;
+      if (live) {
+        torque(j) = value;
+      }
+      break;
+    }
+    if (!live) {
+      torque.setZero();
       return false;
     }
   }

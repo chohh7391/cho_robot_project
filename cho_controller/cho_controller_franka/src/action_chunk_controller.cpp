@@ -167,7 +167,8 @@ CallbackReturn ActionChunkController::on_activate(
     return CallbackReturn::FAILURE;
   }
   task_ik_gain_fault_ = false;
-  // The base reset the torque fade; its law starts idle, in task space.
+  // The base reset the torque fade (to start from the torque handed over, if
+  // any); its law starts idle, in task space.
   effort_tracking_ = false;
   effort_space_ = cho_action_chunk::ActionSpace::kTask;
   // Position mode: prefer what the position command interface is still holding

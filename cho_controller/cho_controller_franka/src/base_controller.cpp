@@ -358,9 +358,18 @@ CallbackReturn FrankaBaseController::on_activate(
   state_.v_arm_des.setZero();
   state_.H_ee_des = state_.H_ee;
   state_.H_ee_ref = state_.H_ee;
-  // No torque of this controller's own to carry on from (fade_torque_switch()).
+  // No torque of this controller's own to carry on from (fade_torque_switch()),
+  // but the arm is still commanded the one the torque controller it replaces in
+  // this same switch left (cho_controller_base::live_held_torque()): a torque
+  // controller's first command fades from that, as from a goal's end.
   torque_fade_.reset();
   torque_tracking_ = false;
+  Eigen::VectorXd handed;
+  if (cho_controller_base::live_held_torque(
+        command_interfaces_, arm_joints_, state_.q_arm, get_node()->get_name(), handed) &&
+      handed.size() == num_dof_) {
+    torque_fade_.carry_on_from(handed);
+  }
 
   activity_.activated();
 
@@ -374,7 +383,9 @@ CallbackReturn FrankaBaseController::on_deactivate(
   // still claimed (cho_controller_base::release_on_deactivate): a velocity
   // command goes to 0, a position command stays as the hold and is recorded with
   // where the arm is now, so the next position controller can tell a live hold
-  // from a stale one (live_held_command); an effort command is left as it is.
+  // from a stale one (live_held_command); an effort command is left as it is
+  // and recorded with who left it and when, so the torque controller activated
+  // in the same switch carries on from it (release_held_torque()).
   // A controller whose reference may be moving records its rate and
   // acceleration with it, so the controller activated in the same switch brings
   // the motion to rest (held_command_motion()) instead of stopping it in one
@@ -389,6 +400,8 @@ CallbackReturn FrankaBaseController::on_deactivate(
     } else {
       cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, state_.q_arm);
     }
+    cho_controller_base::release_held_torque(
+      command_interfaces_, arm_joints_, state_.q_arm, get_node()->get_name());
   } else {
     cho_controller_base::release_on_deactivate(command_interfaces_, arm_joints_, Eigen::VectorXd());
   }

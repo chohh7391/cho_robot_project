@@ -538,4 +538,89 @@ TEST_F(HeldMotion, APlainReleaseOrAMissingJointHandsNothingOver) {
       commands, joints_, Eigen::VectorXd::Zero(3), "incoming", rate_out_, acceleration_out_));
 }
 
+// --- release_held_torque / live_held_torque ---------------------------------
+//
+// A torque controller switched out leaves its last torque on the effort
+// interfaces, where the hardware goes on commanding it; the torque controller
+// switched in at the same time carries on from it. Only a release of this same
+// switch is carried on from.
+
+class HeldTorque : public ::testing::Test
+{
+protected:
+  void SetUp() override {HeldCommandLedger::clear();}
+  void TearDown() override {HeldCommandLedger::clear();}
+
+  const std::vector<std::string> joints_{"j1", "j2"};
+  const Eigen::Vector2d measured_{0.50, -1.00};
+  Eigen::VectorXd torque_out_;
+};
+
+TEST_F(HeldTorque, ATorqueReleasedInThisSwitchIsCarriedOnFromByAnotherController) {
+  std::vector<NamedInterface> commands{{"j1", "effort", 0.6}, {"j2", "effort", -1.2}};
+  release_on_deactivate(commands, joints_, measured_);
+  release_held_torque(commands, joints_, measured_, "outgoing");
+  // The torque stays on the interface.
+  EXPECT_DOUBLE_EQ(commands[0].value, 0.6);
+  EXPECT_DOUBLE_EQ(commands[1].value, -1.2);
+  ASSERT_TRUE(live_held_torque(commands, joints_, measured_, "incoming", torque_out_));
+  EXPECT_DOUBLE_EQ(torque_out_(0), 0.6);
+  EXPECT_DOUBLE_EQ(torque_out_(1), -1.2);
+}
+
+TEST_F(HeldTorque, AControllerNeverCarriesOnFromItsOwnRelease) {
+  std::vector<NamedInterface> commands{{"j1", "effort", 0.6}, {"j2", "effort", -1.2}};
+  release_held_torque(commands, joints_, measured_, "outgoing");
+  EXPECT_FALSE(live_held_torque(commands, joints_, measured_, "outgoing", torque_out_));
+  EXPECT_TRUE(torque_out_.isZero());
+}
+
+TEST_F(HeldTorque, ATorqueFromAnEarlierSwitchIsNotCarriedOn) {
+  // A simulator may have stopped applying it since, under a position or
+  // velocity controller; franka_hardware has zeroed it for a new session.
+  std::vector<NamedInterface> commands{{"j1", "effort", 0.6}, {"j2", "effort", -1.2}};
+  const auto earlier =
+    steady_now_ns() - static_cast<std::int64_t>(2.0 * kMotionHandoverWindow * 1e9);
+  for (std::size_t j = 0; j < 2; ++j) {
+    HeldCommandLedger::record(
+      commands[j].get_name(),
+      HeldCommandLedger::Release{commands[j].value, measured_(static_cast<Eigen::Index>(j)), 0.0, 0.0,
+        "outgoing", earlier});
+  }
+  EXPECT_FALSE(live_held_torque(commands, joints_, measured_, "incoming", torque_out_));
+}
+
+TEST_F(HeldTorque, ATorqueWrittenOrAJointMovedSinceIsNotCarriedOn) {
+  std::vector<NamedInterface> commands{{"j1", "effort", 0.6}, {"j2", "effort", -1.2}};
+  release_held_torque(commands, joints_, measured_, "outgoing");
+  // A hardware read in between moved the arm.
+  EXPECT_FALSE(live_held_torque(commands, joints_, Eigen::Vector2d(0.5001, -1.00), "incoming", torque_out_));
+  // Something wrote the interface after the release.
+  commands[1].value = 0.0;
+  EXPECT_FALSE(live_held_torque(commands, joints_, measured_, "incoming", torque_out_));
+  EXPECT_TRUE(torque_out_.isZero());
+}
+
+TEST_F(HeldTorque, OnlyAFiniteTorqueOnEveryJointsEffortInterfaceIsCarriedOn) {
+  // A plain release records no torque.
+  std::vector<NamedInterface> commands{{"j1", "effort", 0.6}, {"j2", "effort", -1.2}};
+  release_on_deactivate(commands, joints_, measured_);
+  EXPECT_FALSE(live_held_torque(commands, joints_, measured_, "incoming", torque_out_));
+  // Position and velocity interfaces have none to carry on.
+  std::vector<NamedInterface> positions{{"j1", "position", 0.51}, {"j2", "velocity", 0.1}};
+  release_held_torque(positions, joints_, measured_, "outgoing");
+  EXPECT_FALSE(live_held_torque(positions, joints_, measured_, "incoming", torque_out_));
+  // A joint without an effort interface, a measurement of the wrong size, a
+  // non-finite torque.
+  std::vector<NamedInterface> one{{"j1", "effort", 0.6}};
+  release_held_torque(one, joints_, measured_, "outgoing");
+  EXPECT_FALSE(live_held_torque(one, joints_, measured_, "incoming", torque_out_));
+  release_held_torque(commands, joints_, measured_, "outgoing");
+  EXPECT_FALSE(live_held_torque(commands, joints_, Eigen::VectorXd::Zero(3), "incoming", torque_out_));
+  std::vector<NamedInterface> nan{{"j1", "effort", 0.6}, {"j2", "effort", std::nan("")}};
+  release_held_torque(nan, joints_, measured_, "outgoing");
+  EXPECT_FALSE(live_held_torque(nan, joints_, measured_, "incoming", torque_out_));
+  EXPECT_TRUE(torque_out_.isZero());
+}
+
 }  // namespace

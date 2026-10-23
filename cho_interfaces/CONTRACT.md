@@ -266,6 +266,13 @@ otherwise.
   measured at the end, and also when a goal's chunks change action space. For
   those 30 ms a canceled motion is braked more gently than its law alone would
   brake it.
+- A switch between Franka's torque controllers (any of the above,
+  `action_chunk_controller` in effort mode and `gravity_compensation_controller`
+  among them): the controller activated in the same switch starts from the
+  torque the one switched out last commanded, which franka_hardware keeps
+  sending until then, and its own law takes over over the same 30 ms. A
+  controller activated by a later switch than the one that deactivated the last
+  starts from its own law, as franka_hardware starts a new torque session.
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
 

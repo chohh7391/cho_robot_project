@@ -13,10 +13,11 @@
 // limitations under the License.
 
 // TorqueSwitchFade, what the Franka torque controllers run when the reference
-// their law tracks changes at once (a goal's start, end or cancel), at 1 kHz. A
-// law that jumps from one torque to another goes out as the old torque on the
-// period of the switch and reaches the new one kSeconds (30 ms) later, never
-// changing by more than the raised cosine's steepest rate in a period.
+// their law tracks changes at once (a goal's start, end or cancel) or when one
+// is activated in place of another, at 1 kHz. A law that jumps from one torque
+// to another goes out as the old torque on the period of the switch and reaches
+// the new one kSeconds (30 ms) later, never changing by more than the raised
+// cosine's steepest rate in a period.
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -91,8 +92,8 @@ TEST(TorqueSwitchFade, TheChangeFadesOutOverTheFadeTimeNoFasterThanTheCosine)
 
 TEST(TorqueSwitchFade, AFirstSwitchAfterResetFadesNothing)
 {
-  // On activation the interface still holds another controller's command, or
-  // none: nothing of this controller's own to go on from.
+  // On activation without carry_on_from(): nothing of this controller's own to
+  // go on from.
   TorqueSwitchFade fade;
   fade.reset();
   EXPECT_LT((period(fade, torque(1.0), true) - torque(1.0)).cwiseAbs().maxCoeff(), 1e-12);
@@ -101,6 +102,42 @@ TEST(TorqueSwitchFade, AFirstSwitchAfterResetFadesNothing)
   period(fade, torque(1.0), false);
   fade.reset();
   EXPECT_LT((period(fade, torque(-1.0), true) - torque(-1.0)).cwiseAbs().maxCoeff(), 1e-12);
+}
+
+TEST(TorqueSwitchFade, ACarriedOnCommandFadesIntoTheFirstPeriodSwitchOrNot)
+{
+  // Activated in place of another torque controller, whose last command the
+  // arm is commanded until this one's first: the law's first torque goes out as
+  // that command and the change fades as a switch's does.
+  const Vector7d from = torque(2.0);
+  const Vector7d to = torque(-1.0);
+  const double change = (from - to).cwiseAbs().maxCoeff();
+  const double steepest = kPi / (2.0 * TorqueSwitchFade::kSeconds) * change * kDt;
+  TorqueSwitchFade fade;
+  fade.reset();
+  fade.carry_on_from(from);
+  std::vector<Vector7d> out;
+  for (int k = 0; k < 100; ++k) {
+    out.push_back(period(fade, to, false));
+  }
+  EXPECT_LT((out[0] - from).cwiseAbs().maxCoeff(), 1e-12);
+  for (std::size_t k = 1; k < out.size(); ++k) {
+    EXPECT_LE((out[k] - out[k - 1]).cwiseAbs().maxCoeff(), steepest * (1.0 + 1e-9)) << "period " << k;
+  }
+  EXPECT_LT((out.back() - to).cwiseAbs().maxCoeff(), 1e-12);
+  // Once: a later period that is no switch starts nothing.
+  EXPECT_FALSE(fade.fading());
+  EXPECT_LT((period(fade, torque(0.5), false) - torque(0.5)).cwiseAbs().maxCoeff(), 1e-12);
+}
+
+TEST(TorqueSwitchFade, AResetForgetsACarriedOnCommand)
+{
+  TorqueSwitchFade fade;
+  fade.reset();
+  fade.carry_on_from(torque(2.0));
+  fade.reset();
+  EXPECT_LT((period(fade, torque(-1.0), false) - torque(-1.0)).cwiseAbs().maxCoeff(), 1e-12);
+  EXPECT_FALSE(fade.fading());
 }
 
 TEST(TorqueSwitchFade, ASwitchDuringAFadeGoesOnFromWhereItHadGot)
@@ -142,6 +179,11 @@ TEST(TorqueSwitchFade, ANonFiniteCommandStartsNoFade)
   Vector7d law = bad;
   fade.apply(law, true, kDt);
   EXPECT_TRUE(std::isnan(law(2)));
+  EXPECT_FALSE(fade.fading());
+  // Nor from a non-finite command carried on from.
+  fade.reset();
+  fade.carry_on_from(bad);
+  EXPECT_LT((period(fade, torque(1.0), false) - torque(1.0)).cwiseAbs().maxCoeff(), 1e-12);
   EXPECT_FALSE(fade.fading());
 }
 

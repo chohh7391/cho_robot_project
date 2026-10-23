@@ -397,7 +397,9 @@ protected:
       {"operational_space_controller", "OperationalSpaceController"},
       {"task_space_qp_controller", "TaskSpaceQPController"},
       {"task_space_ik_controller", "TaskSpaceIKController"},
-      {"task_space_velocity_controller", "TaskSpaceVelocityController"}};
+      {"task_space_velocity_controller", "TaskSpaceVelocityController"},
+      {"action_chunk_controller", "ActionChunkController"},
+      {"gravity_compensation_controller", "GravityCompensationController"}};
     for (const auto & entry : types) {
       if (entry.first == name) {
         return "cho_controller_franka/" + entry.second;
@@ -1240,6 +1242,163 @@ INSTANTIATE_TEST_SUITE_P(
   [](const ::testing::TestParamInfo<SwitchCase> & info) {
     return std::string(info.param.from) + "_to_" + info.param.to +
            (std::string(info.param.bringup) == "real" ? "_real" : "");
+  });
+
+// A switch from one torque controller to another with the arm at rest.
+// franka_hardware keeps its torque session across a switch whose controllers
+// both claim the effort interfaces, and the incoming controller's law starts
+// from its own reference, seeded from the measured arm: whatever the outgoing
+// one pushed with went in one period. On the FR3, the effort action-chunk hold
+// after a circle, which joint friction had left the arm short of, pushed j2 with
+// 0.6 Nm, dropped at 577 Nm/s by the switch to the joint impedance controller.
+// The outgoing controller now records the torque it left
+// (cho_controller_base::release_held_torque()) and the incoming one fades from
+// it over 30 ms, as from a goal's end (TorqueSwitchFade::carry_on_from()). Here
+// joints 1 and 4 are moved 0.02 rad off the outgoing controller's hold, so it
+// pushes them back; every period's effort command is sampled, the switch's too.
+struct TorqueSwitchCase
+{
+  const char * from;
+  const char * to;
+  std::vector<rclcpp::Parameter> from_parameters;
+  std::vector<rclcpp::Parameter> to_parameters;
+};
+
+class TorqueSwitch : public ::testing::TestWithParam<TorqueSwitchCase>
+{
+protected:
+  struct Types : Reactivation
+  {
+    using Reactivation::type_of;
+  };
+
+  void SetUp() override
+  {
+    const auto & c = GetParam();
+    harness_ = std::make_unique<ControllerManagerHarness>(fr3_description(), "/franka_torque_switch");
+    const std::vector<rclcpp::Parameter> common = {
+      rclcpp::Parameter("robot_description", fr3_description()),
+      rclcpp::Parameter("robot_type", "fr3"),
+      rclcpp::Parameter("bringup_type", "mujoco"),
+      rclcpp::Parameter("control_mode", "effort"),
+      rclcpp::Parameter("ee_name", "fr3_hand_tcp")};
+    for (const auto & [name, own] : {std::pair{c.from, &c.from_parameters}, std::pair{c.to, &c.to_parameters}}) {
+      auto parameters = common;
+      parameters.insert(parameters.end(), own->begin(), own->end());
+      ASSERT_NE(harness_->load(name, Types::type_of(name), parameters), nullptr) << name;
+      ASSERT_TRUE(harness_->configure(name)) << name;
+    }
+    ASSERT_TRUE(harness_->switch_controllers({c.from}, {}));
+    harness_->cycle(50);
+    for (const std::string joint : {"fr3_joint1", "fr3_joint4"}) {
+      harness_->set_command(joint + "/position", harness_->state(joint + "/position") + 0.02);
+    }
+    harness_->cycle(100);
+    harness_->on_period([this]() {samples_.push_back(harness_->states(kJoints, "effort"));});
+    harness_->cycle(10);
+  }
+
+  void TearDown() override
+  {
+    if (harness_) {
+      harness_->on_period(nullptr);
+    }
+  }
+
+  // The largest change of the command in one period from sample `from` on.
+  double largest_step(const std::size_t from) const
+  {
+    double step = 0.0;
+    for (std::size_t k = std::max<std::size_t>(from, 1); k < samples_.size(); ++k) {
+      step = std::max(step, max_abs_difference(samples_[k], samples_[k - 1]));
+    }
+    return step;
+  }
+
+  std::unique_ptr<ControllerManagerHarness> harness_;
+  std::vector<Doubles> samples_;
+};
+
+TEST_P(TorqueSwitch, TheIncomingControllerFadesFromTheTorqueTheOutgoingOneLeft)
+{
+  const auto & c = GetParam();
+  const std::size_t last = samples_.size() - 1;
+  ASSERT_TRUE(harness_->switch_controllers({c.to}, {c.from}));
+  harness_->cycle(100);
+  const double change = max_abs_difference(samples_.back(), samples_[last]);
+  RecordProperty("torque_change_nm", std::to_string(change));
+  ASSERT_GT(change, 0.3) << "the incoming law asks for nearly the outgoing torque, so nothing below would be tested";
+  // A raised cosine over 30 ms changes by at most pi / 60 (5.2 %) of it in a period.
+  const double step = largest_step(last);
+  EXPECT_LT(step, 0.07 * change)
+    << "the switch changed the torque by " << step << " Nm in one period, of " << change << " Nm in all";
+}
+
+TEST_P(TorqueSwitch, ATorqueLeftByAnEarlierSwitchIsNotCarriedOn)
+{
+  // Switched out with none in its place, then the next controller by a later
+  // request: on the FR3 the torque session ended in between and a new one starts
+  // from zero, and a simulator may since have applied something else.
+  const auto & c = GetParam();
+  ASSERT_TRUE(harness_->switch_controllers({}, {c.from}));
+  std::this_thread::sleep_for(std::chrono::duration<double>(3.0 * cho_controller_base::kMotionHandoverWindow));
+  harness_->cycle(5);
+  ASSERT_TRUE(harness_->switch_controllers({c.to}, {}));
+  const std::size_t activated = samples_.size();
+  const Doubles left = samples_.back();
+  harness_->cycle(100);
+  const double change = max_abs_difference(samples_.back(), left);
+  ASSERT_GT(change, 0.3) << "the incoming law asks for nearly the torque left, so nothing below would be tested";
+  // The incoming controller's own law from its first command on: once the
+  // command leaves what the interfaces held, it is where it stays.
+  std::size_t first = activated;
+  while (first < samples_.size() && max_abs_difference(samples_[first], left) < 1e-9) {
+    ++first;
+  }
+  ASSERT_LT(first, samples_.size());
+  EXPECT_LT(max_abs_difference(samples_[first], samples_.back()), 1e-9)
+    << "the incoming controller faded from a torque left by an earlier switch";
+}
+
+// config/real/controllers.yaml's.
+const std::vector<rclcpp::Parameter> kJointImpedanceGains = {
+  rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 100, 100, 100}),
+  rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 5, 5, 4})};
+
+// config/real/controllers.yaml's action-chunk gains, with this test's topics.
+const std::vector<rclcpp::Parameter> kActionChunkEffort = {
+  rclcpp::Parameter("kp_task", Doubles{565, 565, 565, 28, 28, 28}),
+  rclcpp::Parameter("kd_task", Doubles{47.54, 47.54, 47.54, 10.58, 10.58, 10.58}),
+  rclcpp::Parameter("default_kp_task", Doubles{300, 300, 300, 20, 20, 20}),
+  rclcpp::Parameter("default_kd_task", Doubles{34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719}),
+  rclcpp::Parameter("use_nullspace_posture", false),
+  rclcpp::Parameter("default_dof_pos", kHome),
+  rclcpp::Parameter("chunk_topic", "/franka_torque_switch/chunks"),
+  rclcpp::Parameter("success_service", "/franka_torque_switch/success"),
+  rclcpp::Parameter("gripper_action", "/franka_torque_switch/gripper")};
+
+// config/real/controllers.yaml's.
+const std::vector<rclcpp::Parameter> kTaskImpedanceGains = {
+  rclcpp::Parameter("kp_task", Doubles{300, 300, 300, 20, 20, 20}),
+  rclcpp::Parameter("kd_task", Doubles{34.6410162, 34.6410162, 34.6410162, 0.89442719, 0.89442719, 0.89442719}),
+  rclcpp::Parameter("kp_null", 10.0), rclcpp::Parameter("kd_null", 6.3246),
+  rclcpp::Parameter("use_nullspace_posture", false),
+  rclcpp::Parameter("default_dof_pos", Doubles{-1.3003, -0.4015, 1.1791, -2.1493, 0.4001, 1.9425, 0.4754})};
+
+INSTANTIATE_TEST_SUITE_P(
+  Franka, TorqueSwitch, ::testing::Values(
+    TorqueSwitchCase{"action_chunk_controller", "joint_space_impedance_controller", kActionChunkEffort,
+      kJointImpedanceGains},
+    TorqueSwitchCase{"joint_space_impedance_controller", "action_chunk_controller", kJointImpedanceGains,
+      kActionChunkEffort},
+    TorqueSwitchCase{"joint_space_impedance_controller", "task_space_impedance_controller", kJointImpedanceGains,
+      kTaskImpedanceGains},
+    TorqueSwitchCase{"task_space_impedance_controller", "joint_space_impedance_controller", kTaskImpedanceGains,
+      kJointImpedanceGains},
+    TorqueSwitchCase{"joint_space_impedance_controller", "gravity_compensation_controller", kJointImpedanceGains,
+      {}}),
+  [](const ::testing::TestParamInfo<TorqueSwitchCase> & info) {
+    return std::string(info.param.from) + "_to_" + info.param.to;
   });
 
 // bringup_type says which backend compensates gravity, so which torque terms

@@ -20,7 +20,8 @@ namespace cho_controller {
 namespace franka {
 
 // Carries a torque controller's command across a change of what its law tracks
-// -- a goal starting, ending or being canceled -- instead of letting it jump.
+// -- a goal starting, ending or being canceled -- and across a switch from the
+// torque controller it replaces, instead of letting it jump.
 //
 // Each torque law computes its command from the reference it tracks, and that
 // reference changes at once when a goal starts or ends: the task-space laws hold
@@ -38,6 +39,13 @@ namespace franka {
 // braked more gently than its law alone would, which is why the fade is short:
 // over 0.1 s a joint impedance cancel at 0.83 rad/s in MuJoCo went on 36 mrad
 // where its law alone stopped it in 23.
+//
+// A controller switched in for another starts its law from its own reference,
+// seeded from the measured arm, and so drops whatever the other pushed with:
+// on the FR3, the effort action-chunk hold after a circle, which joint friction
+// had left the arm short of, pushed j2 with 0.6 Nm, gone in the one period of
+// the switch to the joint impedance controller (577 Nm/s). carry_on_from()
+// starts the same fade from that push.
 class TorqueSwitchFade
 {
 public:
@@ -50,9 +58,15 @@ public:
   // nothing.
   void reset();
 
+  // After reset(), on activation: the command the controller switched out in
+  // the same switch left on the arm, which the arm is commanded until this
+  // controller's first. The next apply() fades from it, switch or not.
+  void carry_on_from(const Vector7d & torque);
+
   // Before clip_torque(), every period: `switched` when the reference the law
   // tracks changed this period. Starts a fade from the last committed command
-  // (when both are finite) and adds what is left of the fade to `torque`.
+  // (or the one carried on from) when both are finite, and adds what is left of
+  // the fade to `torque`.
   void apply(Vector7d & torque, bool switched, double dt);
 
   // After clip_torque(): the command that goes out.
@@ -66,6 +80,7 @@ private:
   Vector7d fade_{Vector7d::Zero()};
   double left_{0.0};
   bool has_last_{false};
+  bool carried_{false};
 };
 
 }  // namespace franka

@@ -47,9 +47,14 @@ controller_interface::return_type GravityCompensationController::update(
 
   // calculate desired torque
   Vector7d torque_desired = state_.nle;
-  
+
+  // No goal of its own, but the push of the torque controller it replaced fades
+  // out instead of being dropped in one period.
+  fade_torque_switch(torque_desired, false, nominal_period(period));
+
   // clip torque
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
 
   // set torque to robot
   for (int i = 0; i < num_dof_; ++i) {

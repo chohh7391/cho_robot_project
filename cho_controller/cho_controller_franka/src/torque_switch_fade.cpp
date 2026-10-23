@@ -31,16 +31,25 @@ void TorqueSwitchFade::reset()
   fade_.setZero();
   left_ = 0.0;
   has_last_ = false;
+  carried_ = false;
+}
+
+void TorqueSwitchFade::carry_on_from(const Vector7d & torque)
+{
+  last_ = torque;
+  has_last_ = true;
+  carried_ = true;
 }
 
 void TorqueSwitchFade::apply(Vector7d & torque, const bool switched, const double dt)
 {
   // From the command that went out last, whatever is still fading included, so
   // a switch during a fade carries on from where that fade had got to.
-  if (switched && has_last_ && last_.allFinite() && torque.allFinite()) {
+  if ((switched || carried_) && has_last_ && last_.allFinite() && torque.allFinite()) {
     fade_ = last_ - torque;
     left_ = kSeconds;
   }
+  carried_ = false;
   if (left_ > 0.0) {
     // 1 on the period of the switch, 0 kSeconds later, flat at both ends.
     torque += (0.5 - 0.5 * std::cos(kPi * left_ / kSeconds)) * fade_;
