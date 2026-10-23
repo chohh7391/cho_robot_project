@@ -1,5 +1,7 @@
 # TODO
 
+- Franka FR3: tune and test every controller on the real robot, with a waypoint tour wider than the
+  checks so far: [FRANKA_GAIN_TUNING_TODO.md](FRANKA_GAIN_TUNING_TODO.md).
 - OpenArm real hardware: run the checks in
   [docs/openarm_real_bringup.md, Re-check on hardware](../docs/openarm_real_bringup.md#re-check-on-hardware),
   in particular the SAFE hold latched in motion (sag at most
