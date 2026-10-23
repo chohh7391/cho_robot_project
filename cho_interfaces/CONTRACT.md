@@ -261,8 +261,11 @@ otherwise.
   then fades out when the next goal starts from the measured joints;
   `task_space_impedance_controller` and `operational_space_controller` hold the
   pose measured at the end and `task_space_qp_controller` the joints measured
-  then, so the push fades out at the end. For those 30 ms a canceled motion is
-  braked more gently than its law alone would brake it.
+  then, so the push fades out at the end. `action_chunk_controller` in effort mode
+  fades across a chunk-stream goal's start and end the same way, holding the pose
+  measured at the end, and also when a goal's chunks change action space. For
+  those 30 ms a canceled motion is braked more gently than its law alone would
+  brake it.
 
 Feedback (`percent_complete`) is published at up to 10 Hz.
 

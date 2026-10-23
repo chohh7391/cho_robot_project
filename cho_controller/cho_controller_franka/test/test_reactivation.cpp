@@ -64,6 +64,7 @@
 #include "cho_interfaces/msg/action_chunk.hpp"
 #include "cho_interfaces/msg/chunk_stream_telemetry.hpp"
 #include "cho_interfaces/msg/pose_log.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 // The relay generation test needs stand-in franka_gripper servers, so
 // franka_msgs among this test's dependencies; without it the test is skipped.
@@ -2263,6 +2264,99 @@ TEST_F(ActionChunkEffortAnchor, ChunksPressingOnABlockedArmWindTheCommandUpByAtM
   // 5 mm until the bound stops it.
   EXPECT_LT(largest, kAnchorBound + 0.005 + 1e-3) << "the command led the blocked arm by " << largest << " m";
   EXPECT_NEAR(command_lead_x(), kAnchorBound + 0.005, 5e-4) << "the command did not settle at the bound plus a chunk";
+}
+
+// The effort law across a goal's start and end. On the real FR3 a goal aborted
+// after its stream stopped changed joint 4's torque by 1 Nm in one period, at
+// libfranka's 1000 Nm/s limit: the idle hold, re-latched on the measured TCP,
+// dropped the stretch the arm had not closed. The blocked mock arm keeps the
+// whole stretch of a +5 mm chunk; each switch must now fade it as the other
+// torque controllers do (EffortGoalEnd): a raised cosine over 30 ms changes by
+// at most pi / 60, 5.2 %, of the change in a period.
+class ActionChunkEffortFade : public ActionChunkEffortAnchor
+{
+protected:
+  // Pushing 5 mm ahead of the blocked arm, every period's effort command recorded.
+  void push_and_record()
+  {
+    ASSERT_NO_FATAL_FAILURE(start());
+    ASSERT_NO_FATAL_FAILURE(watch_ee_state());
+    push_x(0.005);
+    ASSERT_TRUE(answered(1, 0)) << "the chunk was never answered";
+    ASSERT_TRUE(cycle_until([this] {return std::abs(command_lead_x() - 0.005) < 1e-4;}))
+      << "the command never led the arm by 5 mm";
+    record_torques();
+  }
+
+  void record_torques()
+  {
+    harness_->on_period([this] {torques_.push_back(harness_->states(kJoints, "effort"));});
+    harness_->cycle(50);
+  }
+
+  // From sample `from` on: the largest change in one period against the change
+  // in all, which must be there for the comparison to mean anything.
+  void expect_faded(const std::size_t from, const double least_change, const std::string & when)
+  {
+    ASSERT_GT(torques_.size(), from + 100);
+    const double change = max_abs_difference(torques_.back(), torques_[from]);
+    double step = 0.0;
+    for (std::size_t k = from + 1; k < torques_.size(); ++k) {
+      step = std::max(step, max_abs_difference(torques_[k], torques_[k - 1]));
+    }
+    RecordProperty("torque_change_nm", std::to_string(change));
+    RecordProperty("largest_torque_step_nm", std::to_string(step));
+    ASSERT_GT(change, least_change) << when << " changed the torque by only " << change
+                                    << " Nm, so nothing below would be tested";
+    EXPECT_LT(step, 0.07 * change)
+      << when << " changed the torque by " << step << " Nm in one period, of " << change << " Nm in all";
+  }
+};
+
+TEST_F(ActionChunkEffortFade, ACanceledGoalEndsWithoutATorqueStep)
+{
+  ASSERT_NO_FATAL_FAILURE(push_and_record());
+  const std::size_t from = torques_.size();
+  auto result = client_->async_get_result(goal_);
+  auto canceled = client_->async_cancel_goal(goal_);
+  ASSERT_TRUE(harness_->spin_until(canceled));
+  ASSERT_TRUE(cycle_until([&result] {return result.wait_for(std::chrono::seconds(0)) == std::future_status::ready;}))
+    << "the goal never ended";
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::CANCELED);
+  harness_->cycle(100);
+  expect_faded(from, 0.3, "the cancel");
+}
+
+TEST_F(ActionChunkEffortFade, ASucceededGoalEndsWithoutATorqueStep)
+{
+  ASSERT_NO_FATAL_FAILURE(push_and_record());
+  const std::size_t from = torques_.size();
+  auto result = client_->async_get_result(goal_);
+  auto success = harness_->client_node()->create_client<std_srvs::srv::Trigger>("/franka_action_chunk/success");
+  ASSERT_TRUE(success->wait_for_service(std::chrono::seconds(5)));
+  auto answer = success->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+  ASSERT_TRUE(harness_->spin_until(answer));
+  ASSERT_TRUE(cycle_until([&result] {return result.wait_for(std::chrono::seconds(0)) == std::future_status::ready;}))
+    << "the goal never ended";
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+  harness_->cycle(100);
+  expect_faded(from, 0.3, "the success");
+}
+
+TEST_F(ActionChunkEffortFade, AGoalStartedOnAStretchedHoldStartsWithoutATorqueStep)
+{
+  // The idle hold sprung 0.01 rad of joint 1 (about 4 mm at the TCP) off its
+  // pose; a goal raises the task gains from default_kp_task to kp_task on it.
+  harness_->cycle(50);
+  harness_->set_command("fr3_joint1/position", harness_->state("fr3_joint1/position") + 0.01);
+  harness_->cycle(100);
+  record_torques();
+  const std::size_t from = torques_.size();
+  ASSERT_NE(send(5.0), nullptr) << "goal rejected";
+  for (int i = 0; i < 300; ++i) {
+    tick();
+  }
+  expect_faded(from, 0.1, "the goal's start");
 }
 
 // ---------------------------------------------------------------------------

@@ -117,6 +117,11 @@ public:
     // controller's stop at its end takes.
     cho_action_chunk::ActionSpace action_space() const { return active_action_space_; }
     const Vector6d & twist_des() const { return twist_des_; }
+    // Whether the last compute() ended the goal, whatever the outcome. A goal
+    // that succeeds ends on a cycle compute() returns true on, with the effort
+    // law springing on the arm where it is, so this is how the controller sees
+    // that its law changed there.
+    bool goal_ended() const { return goal_ended_; }
 
     // The reference limiter's bounds as init() configured them: they bound
     // ActionChunkController's stop when a goal ends in motion too.
@@ -270,6 +275,8 @@ private:
     Vector7d hold_joints_ {Vector7d::Zero()};
     // set_reference_settling().
     bool reference_settling_ {false};
+    // goal_ended().
+    bool goal_ended_ {false};
 };
 
 } // namespace franka

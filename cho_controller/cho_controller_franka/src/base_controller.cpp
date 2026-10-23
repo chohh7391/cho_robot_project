@@ -701,10 +701,11 @@ void FrankaBaseController::clip_torque(Vector7d & torque)
     torque = torque.array().max(-torque_limits_.array()).min(torque_limits_.array());
 }
 
-void FrankaBaseController::fade_torque_switch(Vector7d & torque, const bool tracking, const double dt)
+void FrankaBaseController::fade_torque_switch(
+    Vector7d & torque, const bool tracking, const double dt, const bool law_changed)
 {
     // A goal starting or ending (a cancel included) changes what the law tracks.
-    torque_fade_.apply(torque, tracking != torque_tracking_, dt);
+    torque_fade_.apply(torque, tracking != torque_tracking_ || law_changed, dt);
     torque_tracking_ = tracking;
 }
 

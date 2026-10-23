@@ -57,7 +57,9 @@ private:
 
     // Effort: impedance around the reference, joint or task space. The task
     // twist is world-aligned (LOCAL_WORLD_ALIGNED, like state_.J_arm_world).
-    void write_effort(cho_action_chunk::ActionSpace space, const Vector6d & twist_des);
+    // `tracking`: a goal runs and did not end this period, for the fade across a
+    // goal's start and end (fade_torque_switch()).
+    void write_effort(cho_action_chunk::ActionSpace space, const Vector6d & twist_des, bool tracking, double dt);
 
     // Position and velocity: both drive the same open-loop joint reference q_ref_
     // and differ only in the output stage.
@@ -116,6 +118,12 @@ private:
     // Effort task law: joint damping [N m s/rad] projected into the task's null
     // space (null_space_damping; 0 = off, the torque is unchanged).
     double null_space_damping_ {0.0};
+
+    // write_effort()'s last period: whether it tracked a goal and in which
+    // action space, so a goal's chunks changing space fade like its start and
+    // end. Reset on activation.
+    bool effort_tracking_ {false};
+    cho_action_chunk::ActionSpace effort_space_ {cho_action_chunk::ActionSpace::kTask};
 
     // Open-loop joint reference for the position and velocity modes. Seeded at the
     // activation pose and integrated ONLY while a chunk-stream goal is active; when idle

@@ -167,6 +167,9 @@ CallbackReturn ActionChunkController::on_activate(
     return CallbackReturn::FAILURE;
   }
   task_ik_gain_fault_ = false;
+  // The base reset the torque fade; its law starts idle, in task space.
+  effort_tracking_ = false;
+  effort_space_ = cho_action_chunk::ActionSpace::kTask;
   // Position mode: prefer what the position command interface is still holding
   // (a live hold of this arm) -- same helper/rationale as
   // task_space_ik_controller.cpp, avoids a one-cycle step at the controller
@@ -311,7 +314,9 @@ controller_interface::return_type ActionChunkController::update(
       // joint 1 by 0.27 rad, 86 Nm in one sample and a 0.22 rad swing.
       state_.q_arm_des = effort_task_joints(state_, state_.H_ee_des);
     }
-    write_effort(space, twist_des);
+    // A goal that succeeds ends on a cycle compute() is true on; from that cycle
+    // on the law no longer tracks it.
+    write_effort(space, twist_des, action_chunk_running && !action_server_->goal_ended(), dt);
   } else {
     // The task IK's error decays by (1 - task_ik_gain * dt) per cycle, so
     // K dt >= 1 overshoots and K dt >= 2 diverges. The rate is only known here
@@ -340,7 +345,7 @@ controller_interface::return_type ActionChunkController::update(
 }
 
 void ActionChunkController::write_effort(
-  const cho_action_chunk::ActionSpace space, const Vector6d & twist_des)
+  const cho_action_chunk::ActionSpace space, const Vector6d & twist_des, const bool tracking, const double dt)
 {
   // Both laws damp the error between the reference's rate and the arm's, scaled
   // by velocity_feedforward_. At 0 that is the historical law, which damps the
@@ -399,7 +404,19 @@ void ActionChunkController::write_effort(
     torque_desired = J.transpose() * task_wrench + torque_null + state_.nle;
   }
 
+  // A goal's start changes the gains and, holding in the space the last goal
+  // ran, maybe the law; its end drops the spring's stretch and the damping's
+  // feed-forward (the idle hold, or a success, springs on the arm where it is);
+  // its chunks changing action space change the law. TorqueSwitchFade carries
+  // the command across each, as the other torque controllers do: on the real
+  // FR3 a goal aborted after its stream stopped changed joint 4's torque by
+  // 1 Nm in one period, at libfranka's 1000 Nm/s limit.
+  const bool law_changed = tracking && effort_tracking_ && space != effort_space_;
+  fade_torque_switch(torque_desired, tracking, dt, law_changed);
+  effort_tracking_ = tracking;
+  effort_space_ = space;
   FrankaBaseController::clip_torque(torque_desired);
+  commit_torque(torque_desired);
   for (int i = 0; i < 7; ++i) {
     command_interfaces_[i].set_value(torque_desired(i));
   }

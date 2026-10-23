@@ -125,7 +125,7 @@ if(BUILD_TESTING)
     ament_add_gtest(test_reactivation test/test_reactivation.cpp TIMEOUT 300)
     ament_target_dependencies(test_reactivation
         ament_index_cpp cho_controller_base cho_interfaces controller_manager
-        franka_msgs hardware_interface rclcpp rclcpp_action)
+        franka_msgs hardware_interface rclcpp rclcpp_action std_srvs)
     # The gripper's result handoff alone: header-only, no ROS.
     ament_add_gtest(test_gripper_outcome test/test_gripper_outcome.cpp)
     target_include_directories(test_gripper_outcome PRIVATE include)

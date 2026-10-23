@@ -157,9 +157,11 @@ public:
     void limit_velocity_command(Vector7d & velocity);
     // The torque controllers' fade across a goal's start, end or cancel
     // (TorqueSwitchFade): fade_torque_switch() with the law's torque before
-    // clip_torque(), saying whether a goal is tracked this period, and
+    // clip_torque(), saying whether a goal is tracked this period -- and with
+    // `law_changed` when the law changes within one, as the action-chunk
+    // controller's does when its chunks change action space -- and
     // commit_torque() with the command after it. Reset on every activation.
-    void fade_torque_switch(Vector7d & torque, bool tracking, double dt);
+    void fade_torque_switch(Vector7d & torque, bool tracking, double dt, bool law_changed = false);
     void commit_torque(const Vector7d & torque) {torque_fade_.commit(torque);}
 
     // Nominal seconds per update() call, for the controllers that advance a

@@ -794,6 +794,7 @@ bool ActionChunkServer::compute(const rclcpp::Time & current_time, State & state
     // controller writes it after this call), which is one cycle stale and far
     // finer than any anchor needs.
     session_.record(now, state.H_ee_ref, state.q_arm_ref);
+    goal_ended_ = false;
 
     // Stepped only under an active action goal, so the session goal opened with
     // it starts on this cycle (class comment).
@@ -876,14 +877,16 @@ bool ActionChunkServer::compute(const rclcpp::Time & current_time, State & state
             // is at rest waits for it (set_reference_settling()). Frozen here,
             // or set to the measurement, it would stop in one cycle: v/dt,
             // 100 rad/s^2 at 0.1 rad/s and 1 ms.
+            goal_ended_ = true;
             if (step.reason == cho_action_chunk::EndReason::kSucceeded &&
                 !(is_position_mode() || is_velocity_mode()))
             {
                 // Effort: the law runs this cycle on the arm where it is, at
                 // rest, as the idle hold does from the next cycle on. What that
                 // changes is the torque, by the spring's stretch and the
-                // damping's feed-forward, a step franka_hardware's torque rate
-                // limiter bounds; the arm's own motion stays continuous.
+                // damping's feed-forward, a step the controller fades out over
+                // TorqueSwitchFade::kSeconds (goal_ended()); the arm's own
+                // motion stays continuous.
                 state.H_ee_des = state.H_ee;
                 state.q_arm_des = state.q_arm;
                 state.v_arm_des.setZero();
@@ -898,6 +901,7 @@ bool ActionChunkServer::compute(const rclcpp::Time & current_time, State & state
     }
     // An action goal with no session goal: handle_accepted() never activates
     // one, so this does not happen. Ended rather than left to hang.
+    goal_ended_ = true;
     finish_goal_rt(GoalPhase::kFinishAborted, state, "the chunk session had no goal for the action goal");
     return false;
 }
