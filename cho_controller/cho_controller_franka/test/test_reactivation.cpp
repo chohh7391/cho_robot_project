@@ -929,7 +929,7 @@ INSTANTIATE_TEST_SUITE_P(
   Franka, EffortGoalEnd, ::testing::Values(
     Case{"joint_space_impedance_controller", Mode::kEffort, false, {
         rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 100, 100, 100}),
-        rclcpp::Parameter("kd_joint", Doubles{15, 15, 15, 15, 2, 2, 1})}},
+        rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 5, 5, 4})}},
     Case{"joint_space_qp_controller", Mode::kEffort, false, {
         rclcpp::Parameter("kp_joint", Doubles(7, 400.0)),
         rclcpp::Parameter("kd_joint", Doubles(7, 40.0))}},
