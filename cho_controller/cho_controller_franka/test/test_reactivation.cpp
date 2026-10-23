@@ -930,8 +930,8 @@ TEST_P(EffortGoalEnd, ACanceledGoalEndsWithoutATorqueStep)
 INSTANTIATE_TEST_SUITE_P(
   Franka, EffortGoalEnd, ::testing::Values(
     Case{"joint_space_impedance_controller", Mode::kEffort, false, {
-        rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 100, 100, 100}),
-        rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 5, 5, 4})}},
+        rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 250, 250, 250}),
+        rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 20, 20, 20})}},
     Case{"joint_space_qp_controller", Mode::kEffort, false, {
         rclcpp::Parameter("kp_joint", Doubles(7, 400.0)),
         rclcpp::Parameter("kd_joint", Doubles(7, 40.0))}},
@@ -1362,8 +1362,8 @@ TEST_P(TorqueSwitch, ATorqueLeftByAnEarlierSwitchIsNotCarriedOn)
 
 // config/real/controllers.yaml's.
 const std::vector<rclcpp::Parameter> kJointImpedanceGains = {
-  rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 100, 100, 100}),
-  rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 5, 5, 4})};
+  rclcpp::Parameter("kp_joint", Doubles{400, 500, 500, 400, 250, 250, 250}),
+  rclcpp::Parameter("kd_joint", Doubles{30, 45, 35, 30, 20, 20, 20})};
 
 // config/real/controllers.yaml's action-chunk gains, with this test's topics.
 const std::vector<rclcpp::Parameter> kActionChunkEffort = {
