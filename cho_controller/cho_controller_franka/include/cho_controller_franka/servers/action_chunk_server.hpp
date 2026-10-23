@@ -201,11 +201,12 @@ private:
     // ---- RT side -----------------------------------------------------------
     // Hold target while a goal is active and its reference has not started yet
     // (no chunk, or a hold before the first one): the session's kWaiting.
-    // Latched from the reference the controller is already commanding rather
-    // than read live: in velocity and effort modes the *_ref fields track the
-    // MEASURED state, so holding to them directly would chase gravity sag
-    // instead of arresting it. A hold after the reference has run is the
-    // limiter's come_to_rest() instead (kStopping); see compute().
+    // Latched from what the controller is already commanding (*_des) rather
+    // than read live from the *_ref fields: in effort mode those may trail the
+    // command by up to its bound toward the measured arm
+    // (ActionChunkController::write_effort()), so holding to them would give way
+    // to a steady push instead of arresting it. A hold after the reference has
+    // run is the limiter's come_to_rest() instead (kStopping); see compute().
     void latch_hold(const State & state);
     void apply_hold(State & state);
     // The limiter's seed when a goal's chunks switch action space into

@@ -858,9 +858,9 @@ bool ActionChunkServer::compute(const rclcpp::Time & current_time, State & state
         }
         case Mode::kWaiting:
             // No reference followed yet: hold a FROZEN target rather than the
-            // live *_ref fields, which in velocity and effort modes track the
-            // MEASURED state, so the target would follow gravity sag instead of
-            // arresting it.
+            // live *_ref fields, which in effort mode may trail the command
+            // toward the measured arm, so the target would give way to a steady
+            // push instead of arresting it (latch_hold()).
             latch_hold(state);
             apply_hold(state);
             state.v_arm_des.setZero();

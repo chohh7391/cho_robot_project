@@ -63,6 +63,7 @@
 #include "cho_interfaces/action/chunk_stream.hpp"
 #include "cho_interfaces/msg/action_chunk.hpp"
 #include "cho_interfaces/msg/chunk_stream_telemetry.hpp"
+#include "cho_interfaces/msg/pose_log.hpp"
 
 // The relay generation test needs stand-in franka_gripper servers, so
 // franka_msgs among this test's dependencies; without it the test is skipped.
@@ -2176,6 +2177,89 @@ TEST_F(ActionChunkEffort, F1_TheNextGoalAfterAJointGoalStartsWhereTheElbowMovedT
     tick();
   }
   expect_no_torque_step("the next goal's start");
+}
+
+// A relative chunk's anchor in effort mode. Anchored at the measured TCP, as it
+// was, every chunk restarted the effort law's spring from where the arm stood,
+// so on the real FR3 a 5 cm relative circle drifted 99 mm sideways in 20 s, and
+// in MuJoCo, under a steady 2 N on the hand, sank 346 mm: whatever held the arm
+// off its command between two chunks became the next chunk's starting point.
+// Anchored at the command, the stream keeps its own geometry; held within
+// kAnchorBound of the measured TCP, chunks that press on an obstacle wind the
+// command up by no more than that. The mock arm does not move under torque, so
+// here it is the obstacle: every offset the command takes stays between the two.
+class ActionChunkEffortAnchor : public ActionChunkEffort
+{
+protected:
+  using PoseLog = cho_interfaces::msg::PoseLog;
+
+  // The controller's ~/ee_state, the commanded (pose_des) and measured TCP.
+  void watch_ee_state()
+  {
+    ee_state_ = harness_->client_node()->create_subscription<PoseLog>(
+      std::string("/franka_action_chunk/") + kName + "/ee_state", 10,
+      [this](const PoseLog & message) {pose_log_ = message; has_pose_log_ = true;});
+    ASSERT_TRUE(cycle_until([this] {return has_pose_log_;})) << "no ee_state";
+  }
+
+  // How far the command leads the arm along the base x axis [m].
+  double command_lead_x() const {return pose_log_.pose_des.position.x - pose_log_.pose_curr.position.x;}
+
+  // A relative task chunk: `dx` along the base x from its anchor, held for 3 s.
+  void push_x(const double dx)
+  {
+    publish("task", "from_anchor", "base", "axis_angle", std::vector<Doubles>(30, Doubles{dx, 0, 0, 0, 0, 0}), 0.1);
+  }
+
+  // ActionChunkController's kEffortAnchorMaxOffset.
+  static constexpr double kAnchorBound = 0.01;  // [m]
+  rclcpp::Subscription<PoseLog>::SharedPtr ee_state_;
+  PoseLog pose_log_;
+  bool has_pose_log_{false};
+};
+
+TEST_F(ActionChunkEffortAnchor, AZeroOffsetChunkHoldsTheCommandNotTheMeasuredTcp)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  ASSERT_NO_FATAL_FAILURE(watch_ee_state());
+  push_x(0.005);
+  ASSERT_TRUE(answered(1, 0)) << "the first chunk was never answered";
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "chunk refused: " << telemetry_.last_reject;
+  ASSERT_TRUE(cycle_until([this] {return std::abs(command_lead_x() - 0.005) < 1e-4;}))
+    << "the command never led the arm by 5 mm, it leads by " << command_lead_x();
+  // Zero offsets: stay where the command is.
+  push_x(0.0);
+  ASSERT_TRUE(answered(2, 0)) << "the second chunk was never answered";
+  double lowest = command_lead_x();
+  for (int i = 0; i < 500; ++i) {
+    tick();
+    lowest = std::min(lowest, command_lead_x());
+  }
+  RecordProperty("lowest_command_lead_m", std::to_string(lowest));
+  EXPECT_GT(lowest, 0.005 - 2e-4)
+    << "a zero-offset chunk took the command back toward the arm (to a lead of " << lowest
+    << " m): it was anchored at the measured TCP";
+}
+
+TEST_F(ActionChunkEffortAnchor, ChunksPressingOnABlockedArmWindTheCommandUpByAtMostTheBound)
+{
+  ASSERT_NO_FATAL_FAILURE(start());
+  ASSERT_NO_FATAL_FAILURE(watch_ee_state());
+  // Six chunks of +5 mm, each built on the last: 5, 10, then the bound plus 5 mm
+  // for good, against 30 mm unbounded.
+  double largest = 0.0;
+  for (std::uint64_t k = 1; k <= 6; ++k) {
+    push_x(0.005);
+    ASSERT_TRUE(answered(k, 0)) << "chunk " << k << " was never answered";
+    for (int i = 0; i < 300; ++i) {
+      tick();
+      largest = std::max(largest, command_lead_x());
+    }
+  }
+  ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "chunk refused: " << telemetry_.last_reject;
+  RecordProperty("largest_command_lead_m", std::to_string(largest));
+  EXPECT_NEAR(largest, kAnchorBound + 0.005, 3e-4)
+    << "the command led the blocked arm by " << largest << " m";
 }
 
 // ---------------------------------------------------------------------------

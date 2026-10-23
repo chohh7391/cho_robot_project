@@ -34,6 +34,47 @@ namespace {
 constexpr double kEndStopSettledStep = 1e-9;
 // The longest it waits for that step after the pose stands [s].
 constexpr double kEndStopSettleSec = 1.0;
+
+// How far an effort-mode anchor may lead the measured arm (write_effort()): a
+// relative chunk builds on the command, so a stream keeps its own geometry
+// whatever holds the arm off it, but on no point further from the arm than this,
+// so chunks pressing on an obstacle wind the command up by this much at most. At
+// the real bringup's gains that is 5.7 N (kp_task 565 N/m), 2.8 N m (28 N m/rad)
+// and 6 N m per joint (kp_joint 600 N m/rad). The free-space lag it has to cover
+// on the 50 mm/s relative circle: 4.3 mm mean, 7.2 mm at most in MuJoCo with a
+// fifth of its joint friction (and a steady 2 N on the hand). MuJoCo's full
+// friction trails by 11 mm, past it, and shrinks that circle to 37 mm.
+constexpr double kEffortAnchorMaxOffset = 0.01;        // [m]
+constexpr double kEffortAnchorMaxRotation = 0.1;       // [rad]
+constexpr double kEffortAnchorMaxJointOffset = 0.01;   // [rad]
+
+// `command` held within kEffortAnchorMaxOffset and kEffortAnchorMaxRotation of
+// `measured`, both world-aligned as the effort task law's error is; `measured`
+// where that is not finite.
+pinocchio::SE3 effort_anchor_pose(const pinocchio::SE3 & measured, const pinocchio::SE3 & command)
+{
+  Eigen::Vector3d offset = command.translation() - measured.translation();
+  const double distance = offset.norm();
+  if (distance > kEffortAnchorMaxOffset) {
+    offset *= kEffortAnchorMaxOffset / distance;
+  }
+  Eigen::Vector3d turn = pinocchio::log3(Eigen::Matrix3d(command.rotation() * measured.rotation().transpose()));
+  const double angle = turn.norm();
+  if (angle > kEffortAnchorMaxRotation) {
+    turn *= kEffortAnchorMaxRotation / angle;
+  }
+  const pinocchio::SE3 anchor(pinocchio::exp3(turn) * measured.rotation(), measured.translation() + offset);
+  return (anchor.translation().allFinite() && anchor.rotation().allFinite()) ? anchor : measured;
+}
+
+// `command` held within kEffortAnchorMaxJointOffset of `measured` per joint;
+// `measured` where that is not finite.
+Vector7d effort_anchor_joints(const Vector7d & measured, const Vector7d & command)
+{
+  const Vector7d anchor = measured + (command - measured)
+    .cwiseMax(-kEffortAnchorMaxJointOffset).cwiseMin(kEffortAnchorMaxJointOffset);
+  return anchor.allFinite() ? anchor : measured;
+}
 }  // namespace
 
 controller_interface::InterfaceConfiguration
@@ -363,11 +404,22 @@ void ActionChunkController::write_effort(
     command_interfaces_[i].set_value(torque_desired(i));
   }
 
-  // Keep the shared reference fields fresh (same contract as the open-loop
-  // modes -- ActionChunkServer::compute() seeds new goals from them). Effort mode
-  // closes the loop through the robot, so the measured state is the anchor.
-  state_.q_arm_ref = state_.q_arm;
-  state_.H_ee_ref = state_.H_ee;
+  // *_ref is the anchor history ActionChunkServer::compute() records, which the
+  // session takes to be the commanded reference (Session::record()): what this
+  // law springs toward, in both representations -- H_ee_des and q_arm_des in
+  // task space, q_arm_des and its forward kinematics in joint space, where
+  // H_ee_des is the running chunk's anchor passed through -- held within
+  // kEffortAnchorMax* of the measurement. It was the measurement, and every
+  // chunk restarted the spring from where the arm stood: a 5 cm relative circle
+  // on the real FR3 drifted 99 mm sideways in 20 s, and in MuJoCo, with a steady
+  // 2 N on the hand, sank 346 mm.
+  pinocchio::SE3 commanded_pose = state_.H_ee_des;
+  if (space == cho_action_chunk::ActionSpace::kJoint) {
+    Eigen::Matrix<double, 6, 7> jacobian;
+    arm_kinematics_world(state_.q_arm_des, commanded_pose, jacobian);
+  }
+  state_.H_ee_ref = effort_anchor_pose(state_.H_ee, commanded_pose);
+  state_.q_arm_ref = effort_anchor_joints(state_.q_arm, state_.q_arm_des);
 }
 
 ActionChunkController::Vector7d ActionChunkController::clamp_step(const Vector7d & step, const double dt) const
