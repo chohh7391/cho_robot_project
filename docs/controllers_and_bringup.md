@@ -2,7 +2,7 @@
 
 Which controller exists where, which launch file spawns it, which argument
 selects it, and a command per robot and backend. Every command assumes a built
-workspace sourced with `source ~/ros2_ws/install/setup.bash` after
+workspace sourced with `source ~/fire_ws/install/setup.bash` after
 `source /opt/ros/humble/setup.bash` — see [installation.md](installation.md).
 
 **The configuration files are the authority, not this page.** A controller

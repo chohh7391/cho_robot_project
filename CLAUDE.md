@@ -9,7 +9,7 @@ steps from a change to the robot, running the real FR3): [docs/usage_guidelines.
 
 ## Build & Test
 
-Run from workspace root (`~/ros2_ws`):
+Run from workspace root (`~/fire_ws`):
 
 ```bash
 colcon build --symlink-install

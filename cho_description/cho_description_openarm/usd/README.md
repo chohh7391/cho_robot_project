@@ -5,7 +5,7 @@ first Isaac bringup, and again whenever the URDF or `config/arm/inertials.yaml`
 changes:
 
 ```bash
-source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+source /opt/ros/humble/setup.bash && source ~/fire_ws/install/setup.bash
 SHARE=$(ros2 pkg prefix cho_description_openarm)/share/cho_description_openarm
 
 xacro "$SHARE/robots/openarm_v10/openarm_v10.urdf.xacro" \

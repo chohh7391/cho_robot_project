@@ -16,12 +16,12 @@ The helper verifies both gitlinks and refuses modified vendor sources; do not
 patch `extern/openarm_can` or `extern/openarm_ros2` to make this bringup work.
 
 ```bash
-cd ~/ros2_ws/src/cho_robot_project
+cd ~/fire_ws/src/cho_robot_project
 git submodule update --init --recursive
 sudo apt-get install libcli11-dev
 ./tools/build_openarm_vendor.sh
 
-cd ~/ros2_ws
+cd ~/fire_ws
 source install/setup.bash
 colcon build --symlink-install --packages-up-to cho_bringup_openarm
 source install/setup.bash
@@ -29,7 +29,7 @@ source install/setup.bash
 
 The vendor helper installs the pinned `OpenArmCAN` CMake package used by
 `cho_hardware_openarm_mit_real`. If CMake reports that `OpenArmCAN` is missing,
-run the helper successfully and re-source `~/ros2_ws/install/setup.bash` before
+run the helper successfully and re-source `~/fire_ws/install/setup.bash` before
 building the Cho packages.
 
 ## Before the first activation

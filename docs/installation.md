@@ -6,15 +6,15 @@ This guide assumes ROS 2 Humble on Ubuntu 22.04.
 
 ```bash
 cd ~/
-mkdir -p ros2_ws/src
-cd ros2_ws/src
+mkdir -p fire_ws/src
+cd fire_ws/src
 git clone --recursive git@github.com:chohh7391/cho_robot_project.git
 ```
 
 ## ROS Dependencies
 
 ```bash
-cd ~/ros2_ws/src/cho_robot_project
+cd ~/fire_ws/src/cho_robot_project
 bash install_dependencies.bash
 ```
 
@@ -101,7 +101,7 @@ The assets are generated and gitignored.
 ## Build
 
 ```bash
-cd ~/ros2_ws
+cd ~/fire_ws
 
 # for simulation
 MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install
@@ -114,5 +114,5 @@ MAKEFLAGS='-j2 -l2' colcon build --parallel-workers 2 --symlink-install \
 After building:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 ```

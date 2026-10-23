@@ -34,16 +34,16 @@ fastdds discovery --server-id 0 -l 0.0.0.0 -p 11811
 2. Bringup (PC1):
 
 ```bash
-source ~/ros2_ws/src/cho_robot_project/dds/dds_mode.sh server
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/src/cho_robot_project/dds/dds_mode.sh server
+source ~/fire_ws/install/setup.bash
 ros2 launch cho_bringup_franka bringup_real_robot.launch.py control_mode:=<mode> controller_name:=<controller>
 ```
 
 3. Clients / CLI (PC2, or extra PC1 terminals for introspection):
 
 ```bash
-source ~/ros2_ws/src/cho_robot_project/dds/dds_mode.sh client
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/src/cho_robot_project/dds/dds_mode.sh client
+source ~/fire_ws/install/setup.bash
 ros2 run cho_control_tools debug_action_client   # or: ros2 topic list, rqt, rviz ...
 ```
 

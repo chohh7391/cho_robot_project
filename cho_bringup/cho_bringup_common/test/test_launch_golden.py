@@ -31,7 +31,7 @@ looks up by path are empty stand-ins there (tools/ci/stub_ament_packages.sh).
 
 When a launch change is intended, regenerate and review:
 
-    cd ~/ros2_ws && colcon build --symlink-install --packages-select <changed bringup packages>
+    cd ~/fire_ws && colcon build --symlink-install --packages-select <changed bringup packages>
     source install/setup.bash
     cd src/cho_robot_project/cho_bringup/cho_bringup_common
     CHO_LAUNCH_GOLDEN_UPDATE=1 python3 -m pytest test/test_launch_golden.py

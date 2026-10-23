@@ -40,7 +40,7 @@ vcs import --recursive src < ~/<project>_ws/src/<project>/project.repos
 ```
 
 Then install the core's dependencies and build it as [installation.md](../../docs/installation.md) says, in
-`~/core_ws` instead of `~/ros2_ws`. A core workspace already built serves as well, checked out at the pin.
+`~/core_ws` instead of `~/fire_ws`. A core workspace already built serves as well, checked out at the pin.
 
 ```bash
 # The project, on top of it

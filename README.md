@@ -59,7 +59,7 @@ it, and a copy-pasteable command per robot and backend.
 ## Manual control clients
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 
 ros2 run cho_control_tools openarm_action_client    # --arm left|right|both on the torso
 ros2 run cho_control_tools fr5_action_client
@@ -105,7 +105,7 @@ The MIT tuple, session and SAFE protocol:
 FR5's verified path starts from the non-singular `home1` simulation pose.
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 
 ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py \
   controller_name:=joint_space_position_controller
@@ -114,7 +114,7 @@ ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py \
 In another terminal:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 ros2 run cho_control_tools fr5_action_client
 ```
 

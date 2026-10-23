@@ -7,7 +7,7 @@ reproducible from the URDFs, which are the source of truth.
 Regenerate them whenever `urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf` changes:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 
 DESC=$(ros2 pkg prefix cho_description_franka)/share/cho_description_franka
 ISAAC=$(ros2 pkg prefix cho_simulation_isaac)/share/cho_simulation_isaac
@@ -15,7 +15,7 @@ ISAAC=$(ros2 pkg prefix cho_simulation_isaac)/share/cho_simulation_isaac
 ~/isaacsim/python.sh $ISAAC/isaac/convert_urdf_to_usd.py \
     --urdf         $DESC/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf \
     --xacro-arg    hardware:=isaac \
-    --usd-path     ~/ros2_ws/src/cho_robot_project/cho_description/cho_description_franka/usd/fr3_with_ft_sensor \
+    --usd-path     ~/fire_ws/src/cho_robot_project/cho_description/cho_description_franka/usd/fr3_with_ft_sensor \
     --require-link fr3_hand_tcp --require-link bota_ft_sensor_wrench \
     --ros-package  cho_description_franka:$DESC
 ```

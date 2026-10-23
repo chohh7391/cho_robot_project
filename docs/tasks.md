@@ -42,7 +42,7 @@ Bring the robot up first (see [Recipes](controllers_and_bringup.md#recipes), wit
 `control_mode` the task requires), then:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
+source ~/fire_ws/install/setup.bash
 ros2 launch cho_task_manager run_task_manager.launch.py task:=<task> robot_type:=<robot> use_sim_time:=<bool>
 ```
 
