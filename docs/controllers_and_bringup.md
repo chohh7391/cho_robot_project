@@ -361,7 +361,7 @@ and the `Session` both controllers use.
   leaves the null space free (no bringup config sets `use_nullspace_posture`), so the elbow goes
   where the arm is pushed; a joint-space goal or chunk then starts from where the arm stands. A
   relative chunk builds on what the law commands, in every mode; in effort mode that command is
-  held within 1 cm, 0.1 rad and 0.01 rad per joint of the measured arm, so a stream keeps its shape
+  held within 3 cm, 0.1 rad and 0.01 rad per joint of the measured arm, so a stream keeps its shape
   while the arm trails it by less than that, and chunks pressing on an obstacle wind it up by that
   much at most.
   `task_ik_gain` [1/s] (50, > 0) is the task-space IK gain of the position and velocity laws; the

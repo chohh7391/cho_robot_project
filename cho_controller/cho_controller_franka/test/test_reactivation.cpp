@@ -2212,7 +2212,7 @@ protected:
   }
 
   // ActionChunkController's kEffortAnchorMaxOffset.
-  static constexpr double kAnchorBound = 0.01;  // [m]
+  static constexpr double kAnchorBound = 0.03;  // [m]
   rclcpp::Subscription<PoseLog>::SharedPtr ee_state_;
   PoseLog pose_log_;
   bool has_pose_log_{false};
@@ -2245,10 +2245,10 @@ TEST_F(ActionChunkEffortAnchor, ChunksPressingOnABlockedArmWindTheCommandUpByAtM
 {
   ASSERT_NO_FATAL_FAILURE(start());
   ASSERT_NO_FATAL_FAILURE(watch_ee_state());
-  // Six chunks of +5 mm, each built on the last: 5, 10, then the bound plus 5 mm
-  // for good, against 30 mm unbounded.
+  // Eight chunks of +5 mm, each built on the last: 5, 10, ... 30, then the bound
+  // plus 5 mm for good, against 40 mm unbounded.
   double largest = 0.0;
-  for (std::uint64_t k = 1; k <= 6; ++k) {
+  for (std::uint64_t k = 1; k <= 8; ++k) {
     push_x(0.005);
     ASSERT_TRUE(answered(k, 0)) << "chunk " << k << " was never answered";
     for (int i = 0; i < 300; ++i) {
@@ -2258,8 +2258,11 @@ TEST_F(ActionChunkEffortAnchor, ChunksPressingOnABlockedArmWindTheCommandUpByAtM
   }
   ASSERT_EQ(telemetry_.chunks_rejected, 0u) << "chunk refused: " << telemetry_.last_reject;
   RecordProperty("largest_command_lead_m", std::to_string(largest));
-  EXPECT_NEAR(largest, kAnchorBound + 0.005, 3e-4)
-    << "the command led the blocked arm by " << largest << " m";
+  // The reference passes a 5 mm step by 0.2-0.3 mm before it settles, and the
+  // next chunk, anchored on it, carries that on, so each adds a little over
+  // 5 mm until the bound stops it.
+  EXPECT_LT(largest, kAnchorBound + 0.005 + 1e-3) << "the command led the blocked arm by " << largest << " m";
+  EXPECT_NEAR(command_lead_x(), kAnchorBound + 0.005, 5e-4) << "the command did not settle at the bound plus a chunk";
 }
 
 // ---------------------------------------------------------------------------

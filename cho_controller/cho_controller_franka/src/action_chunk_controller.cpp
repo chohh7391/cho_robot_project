@@ -39,12 +39,12 @@ constexpr double kEndStopSettleSec = 1.0;
 // relative chunk builds on the command, so a stream keeps its own geometry
 // whatever holds the arm off it, but on no point further from the arm than this,
 // so chunks pressing on an obstacle wind the command up by this much at most. At
-// the real bringup's gains that is 5.7 N (kp_task 565 N/m), 2.8 N m (28 N m/rad)
-// and 6 N m per joint (kp_joint 600 N m/rad). The free-space lag it has to cover
-// on the 50 mm/s relative circle: 4.3 mm mean, 7.2 mm at most in MuJoCo with a
-// fifth of its joint friction (and a steady 2 N on the hand). MuJoCo's full
-// friction trails by 11 mm, past it, and shrinks that circle to 37 mm.
-constexpr double kEffortAnchorMaxOffset = 0.01;        // [m]
+// the real bringup's gains that is 17 N (kp_task 565 N/m), 2.8 N m (28 N m/rad)
+// and 6 N m per joint (kp_joint 600 N m/rad). The translation is the bound the
+// free-space lag must stay under, twice what the real FR3 trailed by on the 50
+// mm/s relative circle: 9.3 mm mean, 14.5 mm at most. Past the bound each chunk
+// loses the excess, and a 1 cm one let that circle walk 75 mm a turn.
+constexpr double kEffortAnchorMaxOffset = 0.03;        // [m]
 constexpr double kEffortAnchorMaxRotation = 0.1;       // [rad]
 constexpr double kEffortAnchorMaxJointOffset = 0.01;   // [rad]
 
