@@ -4,7 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 It holds the rules an agent works by and a map of where each fact is written down: a code fact in the
 comment beside that code, the client contract in [cho_interfaces/CONTRACT.md](cho_interfaces/CONTRACT.md),
 a package's internals in its README.md or DESIGN.md, operating procedures in [docs/](docs/). Change a fact
-there, not here.
+there, not here. How the project is meant to be used (the core and its project repositories, the
+steps from a change to the robot, running the real FR3): [docs/usage_guidelines.md](docs/usage_guidelines.md).
 
 ## Build & Test
 

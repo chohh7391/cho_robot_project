@@ -10,6 +10,12 @@ Install dependencies, simulator prerequisites, and build the workspace using
 [docs/installation.md](docs/installation.md). That guide is the authoritative
 setup reference for this repository.
 
+## Using the project
+
+[docs/usage_guidelines.md](docs/usage_guidelines.md) is where to start. It covers what belongs in
+this core repository and what goes in a project repository of its own, the steps a change takes
+from a branch to the real robot, how to run the real FR3, and which controller to pick.
+
 ## Package map
 
 ```text
