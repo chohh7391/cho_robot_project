@@ -1,6 +1,6 @@
 # Franka FR3: tune and test every controller
 
-Written 2026-10-23 on franka-real (d342068), with the real robot out of reach. Everything that
+Written 2026-10-23 at a49fb46, with the real robot out of reach. Everything that
 moves the arm needs the owner's go-ahead, stage by stage. The real-robot recordings and the scratch
 probes and analysis scripts referred to here are on the lab PC in `~/franka_gain_tuning`
 (see its README), not in the repo.
@@ -10,14 +10,14 @@ probes and analysis scripts referred to here are on the lab PC in `~/franka_gain
 | mode | controller | on the real FR3 | changed since |
 | --- | --- | --- | --- |
 | position | `joint_space_position`, `task_space_ik` | 2026-10-22, re-checked 10-23 with robot_time and the rate limiter | - |
-| velocity | `joint_space_velocity`, `task_space_velocity` | 2026-10-22 only | 90f1bd5 (robot_time, `JointRateLimiter`) |
-| torque | `joint_space_impedance` | 10-22 and 10-23 | a5aeb85, da77290 (gains), 1ed5332 (switch fade) |
-| torque | `task_space_qp` | 10-22 (holds, 1 cm move, goal-end fade) | 1ed5332 |
-| torque | `joint_space_qp`, `task_space_impedance`, `operational_space`, `gravity_compensation` | never | 1ed5332 |
-| effort | `action_chunk_controller` | 10-23 (hold, relative circle) | 2b0a2b4, fac99fa, 01593c7, 2aa7110 |
+| velocity | `joint_space_velocity`, `task_space_velocity` | 2026-10-22 only | 0434a4f (robot_time, `JointRateLimiter`) |
+| torque | `joint_space_impedance` | 10-22 and 10-23 | ffbcdb3, 0b80d51 (gains), e0eacc5 (switch fade) |
+| torque | `task_space_qp` | 10-22 (holds, 1 cm move, goal-end fade) | e0eacc5 |
+| torque | `joint_space_qp`, `task_space_impedance`, `operational_space`, `gravity_compensation` | never | e0eacc5 |
+| effort | `action_chunk_controller` | 10-23 (hold, relative circle) | 9beec94, efbbf71, 3e6de09, d88c14d |
 | - | `gripper_controller` | 10-23 (homing, chunk-driven moves) | - |
 
-All of them pass `controller_check_{position,velocity,torque}` in MuJoCo on d342068.
+All of them pass `controller_check_{position,velocity,torque}` in MuJoCo on a49fb46.
 
 ## What the robot showed
 
@@ -81,12 +81,12 @@ All of them pass `controller_check_{position,velocity,torque}` in MuJoCo on d342
 1. Check the end effector in Desk. Clear the tour volume: ±40 cm sideways, 65 cm forward, and above
    and behind the base, where the elbow passes 0.61-0.66 m up and ±17 cm fore and aft.
 2. Position (JSP, TSIK): run the tour. It is the reference for path accuracy.
-3. Velocity (JSV, TSV), the first run since 90f1bd5: hold, one segment, then the tour.
+3. Velocity (JSV, TSV), the first run since 0434a4f: hold, one segment, then the tour.
 4. Torque:
    - JSI and TSQP: the tour.
    - JSQP, TSI and OSC: hold, one segment, then the tour.
    - `gravity_compensation`: a 3 s hold.
-   - Switch at rest between each pair, which exercises the 1ed5332 fade.
+   - Switch at rest between each pair, which exercises the e0eacc5 fade.
 5. Friction: slow constant-velocity JSI moves per joint, both ways, for each joint's Coulomb and
    breakaway torque.
 6. Run `controller_check_{position,velocity,torque}` on the robot.
@@ -102,11 +102,11 @@ its report. Targets:
 - one-period torque change under 300 Nm/s outside switches;
 - command success rate of 0.99 or better, and no reflex.
 
-Make one commit per controller, with its before and after numbers, as a5aeb85 and da77290 did.
+Make one commit per controller, with its before and after numbers, as ffbcdb3 and 0b80d51 did.
 
 ### 3. Close
 
 1. With the tuned set, run `controller_check_*` and the guarded missions' switch to the hold
    controller on the robot.
 2. Update the simulator configs if decided.
-3. Merge franka-real into main (the owner's call).
+3. Merge the tuning branch into main (the owner's call).

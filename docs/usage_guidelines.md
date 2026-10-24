@@ -23,8 +23,9 @@ core version. It does not live on a branch of this repository and does not edit 
   extension point (a branch, then `main`), and move the project's pin forward. Code a second
   project needs moves into the core. Application-specific code stays in the project.
 
-Branches of this repository carry core work under validation: `franka-real` holds real-FR3 fixes
-until they are merged into `main`. Merging into `main` is the repository owner's call.
+Branches of this repository carry core work under validation, such as real-robot fixes still being
+measured on the robot, until they are merged into `main`. Merging into `main` is the repository
+owner's call.
 
 ## From a change to the robot
 
