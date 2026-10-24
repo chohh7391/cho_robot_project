@@ -5,9 +5,9 @@
 #
 # version is a core tag, the core the project's tests passed on. A branch
 # follows its tip, so the project would build on whatever main is that day.
-# main has no tag yet: replace main with the first one.
+# The url is https, so a clone needs no GitHub SSH key.
 repositories:
   cho_robot_project:
     type: git
-    url: git@github.com:chohh7391/cho_robot_project.git
-    version: main
+    url: https://github.com/chohh7391/cho_robot_project.git
+    version: v0.1.0

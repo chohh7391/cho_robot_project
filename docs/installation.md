@@ -8,7 +8,7 @@ This guide assumes ROS 2 Humble on Ubuntu 22.04.
 cd ~/
 mkdir -p fire_ws/src
 cd fire_ws/src
-git clone --recursive git@github.com:chohh7391/cho_robot_project.git
+git clone --recursive https://github.com/chohh7391/cho_robot_project.git
 ```
 
 ## ROS Dependencies
