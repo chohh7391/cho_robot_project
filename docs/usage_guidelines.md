@@ -92,8 +92,8 @@ there:
 
 | mode | controller | on the real FR3 | changed since |
 | --- | --- | --- | --- |
-| position | `joint_space_position`, `task_space_ik` | moves, with `robot_time` and the rate limiter | - |
-| velocity | `joint_space_velocity`, `task_space_velocity` | moves | 0434a4f (`robot_time`, `JointRateLimiter`) |
+| position | `joint_space_position`, `task_space_ik` | moves, with `robot_time` and the rate limiter | 9c95812 (`task_space_ik`: relative goals from the reference) |
+| velocity | `joint_space_velocity`, `task_space_velocity` | moves | 0434a4f (`robot_time`, `JointRateLimiter`), 9c95812 (`task_space_velocity`: relative goals from the reference) |
 | torque | `joint_space_impedance` | moves | ffbcdb3, 0b80d51 (gains), e0eacc5 (switch fade) |
 | torque | `task_space_qp` | holds, a 1 cm move, the goal-end fade | e0eacc5 |
 | torque | `joint_space_qp`, `task_space_impedance`, `operational_space`, `gravity_compensation` | never run | - |
