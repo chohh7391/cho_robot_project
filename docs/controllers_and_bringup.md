@@ -40,7 +40,9 @@ defaults. The tables below cover the arguments that change *what gets spawned*.
 | `hand` | OpenArm MuJoCo, real | Spawns the gripper controller separately, so a hand fault cannot take an arm down. On the real bringup the adapter then also drives an eighth Damiao motor on the arm's CAN socket. |
 | `action_chunk` | Franka | Activates the action-chunk controller. |
 | `load_gripper` | Franka, UR, FR5 | Vendor gripper on/off. |
-| `load_ft_sensor` | Franka real, MuJoCo, Gazebo | `true` when the Bota FT sensor sits between `fr3_link8` and the hand: the description carries its links and the controllers its mass (`config/payload_ft_sensor.yaml`; `payload.yaml` is the hand alone). Defaults to `false`; MuJoCo then runs `xml/fr3`, with it `xml/fr3_with_ft_sensor`. The Isaac model always carries the sensor. On the real robot, Desk's end-effector load has to match. |
+| `payload_file` | Franka | The controllers' payload parameter file; empty means `config/payload.yaml`, the hand alone on `fr3_link8`. A project that mounts more between the flange and the hand (a force-torque sensor) gives its own; on the real robot, Desk's end-effector load has to match. |
+| `ee_connection_xacro`, `special_connection` | Franka real, Gazebo | A xacro file whose `ee_connection()` macro mounts a project's parts on `fr3_link8` (`robots/common/franka_robot.xacro`), and the link the hand then hangs off. MuJoCo and Isaac take the project's whole robot instead: `xacro_file:=` (and `robot_usd:=`). |
+| `ft_link` | Franka Isaac | Publishes the load on that link's incoming joint as an unstamped `Wrench` on `/isaac/ft_raw`; empty publishes none. |
 | `mujoco_mit_prototype` | OpenArm MuJoCo | `true` switches from the legacy controller path to the MIT path. Off by default. |
 | `mit_controller_name` | OpenArm MuJoCo | Which MIT controller, when the MIT path is on. |
 | `mit_arm` | OpenArm bimanual | Arm ownership. See [`mit_arm`](#mit_arm-values) below. |

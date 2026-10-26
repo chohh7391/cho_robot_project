@@ -101,10 +101,24 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('load_moveit_controller', default_value='false'),
         DeclareLaunchArgument(
-            'load_ft_sensor', default_value='false', choices=['true', 'false'],
-            description='true puts the Bota FT sensor between fr3_link8 and the hand: the '
-                        'description carries its links and the controllers its mass '
-                        '(config/payload_ft_sensor.yaml, not payload.yaml)'),
+            'ee_connection_xacro',
+            default_value='',
+            description='A xacro file whose ee_connection() macro mounts parts between fr3_link8 '
+                        'and the hand (cho_description_franka robots/common/franka_robot.xacro); '
+                        'empty mounts nothing',
+        ),
+        DeclareLaunchArgument(
+            'special_connection',
+            default_value='',
+            description='The link the hand hangs off; empty means fr3_link8. With '
+                        'ee_connection_xacro, the link its macro ends in',
+        ),
+        DeclareLaunchArgument(
+            'payload_file',
+            default_value='',
+            description="The controllers' payload parameter file; empty means config/payload.yaml, "
+                        'the hand alone. A project that mounts more gives its own',
+        ),
     ]
 
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
@@ -173,8 +187,8 @@ def generate_launch_description():
         launch_utils.check_controller_matches_mode(requested_controller, mode, use_action_chunk)
         load_moveit_controller = as_bool(
             LaunchConfiguration('load_moveit_controller').perform(context))
-        load_ft_sensor = as_bool(
-            LaunchConfiguration('load_ft_sensor').perform(context))
+        ee_connection_xacro = LaunchConfiguration('ee_connection_xacro').perform(context)
+        special_connection = LaunchConfiguration('special_connection').perform(context)
 
         # Controller list + runtime param file: in Gazebo, controller_manager runs
         # inside the Gazebo plugin, so this file has to be injected via the URDF's
@@ -201,8 +215,8 @@ def generate_launch_description():
             controller for controller in always_active_controllers + switchable_controllers
             if controller != 'moveit_joint_trajectory_controller'
         ]
-        payload_config_path = os.path.join(
-            pkg_bringup, 'config', 'payload_ft_sensor.yaml' if load_ft_sensor else 'payload.yaml')
+        payload_config_path = (LaunchConfiguration('payload_file').perform(context)
+                               or os.path.join(pkg_bringup, 'config', 'payload.yaml'))
         runtime_param_file = launch_utils.create_runtime_param_file(
             payload_config_path=payload_config_path,
             controller_names=all_runtime_param_controllers,
@@ -230,7 +244,8 @@ def generate_launch_description():
                 'gazebo_effort': gazebo_effort_str,
                 # A composition wrapper can omit this optional adapter when its
                 # planning model is the arm plus hand only.
-                'special_connection': 'ft_sensor' if load_ft_sensor else '',
+                'special_connection': special_connection,
+                'ee_connection_xacro': ee_connection_xacro,
                 'xyz_ee': '0 0 0',
                 'runtime_param_file': runtime_param_file,
             }

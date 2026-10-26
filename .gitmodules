@@ -10,15 +10,9 @@
 	path = extern/Universal_Robots_ROS2_Driver
 	url = https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
 	branch = humble
-[submodule "extern/bota_driver_ros2"]
-	path = extern/bota_driver_ros2
-	url = https://gitlab.com/botasys/drivers/bota_driver_ros2.git
 [submodule "extern/openarm_ros2"]
 	path = extern/openarm_ros2
 	url = https://github.com/enactic/openarm_ros2.git
 [submodule "extern/openarm_can"]
 	path = extern/openarm_can
 	url = https://github.com/enactic/openarm_can.git
-[submodule "extern/bota_driver_ros2_example"]
-	path = extern/bota_driver_ros2_example
-	url = https://gitlab.com/botasys/drivers/bota_driver_ros2_example.git

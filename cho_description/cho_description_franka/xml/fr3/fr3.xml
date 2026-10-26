@@ -29,7 +29,6 @@
         </default>
       </default>
       <default class="finger">
-        <!-- As in fr3_with_ft_sensor/fr3.xml, so the hand moves the same with or without the sensor. -->
         <joint axis="0 1 0" type="slide" range="0 0.04" damping="1" armature="0.1"/>
       </default>
       <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>

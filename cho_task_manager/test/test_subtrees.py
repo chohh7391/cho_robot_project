@@ -28,12 +28,12 @@ from cho_task_manager.behaviors.service import (
     ListControllersServiceBehavior,
     SwitchControllerServiceBehavior,
 )
+from cho_task_manager.behaviors.wait import WaitBehavior
 from cho_task_manager.subtrees import (
     guarded_mission,
     home_joint_state,
     home_subtree,
     safe_abort_subtree,
-    tare_ft_children,
 )
 from cho_task_manager.subtrees import safe_abort as safe_abort_module
 from cho_task_manager.utils.controller_names import load_robot_config
@@ -303,7 +303,6 @@ def test_home_subtree_lead_children_go_in_front():
     seq = home_subtree(
         _config('franka'), target_joints=HOME,
         controller='joint_space_impedance_controller',
-        lead_children=tare_ft_children())
+        lead_children=[WaitBehavior('Prepare_Hardware', 1.0), WaitBehavior('Settle', 3.0)])
 
-    assert [child.name for child in seq.children][:2] == [
-        'Tare_FT_Sensor', 'Wait_After_Tare']
+    assert [child.name for child in seq.children][:2] == ['Prepare_Hardware', 'Settle']

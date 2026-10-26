@@ -1,0 +1,6 @@
+# A stand-in for a project's payload_file (cases.yaml): the hand with a part.
+/**:
+  ros__parameters:
+    mass: 0.9
+    center_of_mass: [-0.01, 0.0, 0.05]
+    load_inertia: [0.0015, 0.0, 0.0, 0.0, 0.003, 0.0, 0.0, 0.0, 0.0019]

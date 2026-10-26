@@ -24,9 +24,8 @@ the robot:
   Franka trees and pinned to `franka.yaml` by `test_controller_names`.
 - **Shared fragments** live in `cho_task_manager/subtrees/`, not copied per task:
   `home_subtree(robot_config)` (switch → go home → open the robot's own gripper),
-  `guarded_mission()` (the standard root, below) and `tare_ft_children()` (FT tare
-  plus its settle wait, spliced ahead of the home block by the contact-rich forge
-  tasks).
+  `guarded_mission()` (the standard root, below). `lead_children` puts a task's own
+  preparation (a sensor tare and its settle wait) ahead of the home block.
 - **Joint limits** for a replay: position limits come from the running
   `/robot_description`, read by the same Pinocchio reader as the safety monitor (a
   segment is refused until it has arrived); velocity limits from
@@ -220,7 +219,6 @@ trees already use:
 | --- | --- | --- | --- |
 | `pick_place` home | 0.0751 | 0.221 | 0.695 rad (`fr3_joint4`) |
 | `controller_check` pose B | 0.0802 | 0.221 | 0.721 rad |
-| forge default | 0.0803 | 0.138 | 0.948 rad |
 | elbow near straight | 0.0035 | 0.044 | 0.000 rad |
 
 So on this arm `min_manipulability=0.01` sits about 7× below every working pose
@@ -238,7 +236,7 @@ return guarded_mission(
     mission_sequence, robot_config, CONTROL_MODE,
     monitor=SafetyMonitorBehavior(
         name='Safety', robot_config=robot_config,
-        max_force_n=60.0, max_torque_nm=8.0,
+        max_force_n=60.0, max_torque_nm=8.0, wrench_topic='/ft_sensor/wrench',
         joint_limit_margin_rad=0.10,
         min_manipulability=0.01, min_singular_value=0.08,
         report_period_sec=2.0),
@@ -246,7 +244,8 @@ return guarded_mission(
 ```
 
 Inputs: `/joint_states`, `/robot_description` (latched, needed for the limits and
-the model) and `/bota_ft_sensor/wrench`. Subscriptions are BEST_EFFORT so they
+the model) and, for a force or torque limit, the sensor's `wrench_topic`
+(required then). Subscriptions are BEST_EFFORT so they
 match reliable and best-effort publishers alike — the publishers here disagree,
 and a monitor that receives nothing is worse than none.
 
@@ -277,9 +276,6 @@ real reading instead of being missed the moment `/clock` arrives
 | --- | --- | --- |
 | `pick_place` | home → VLA pick & place → home (joint impedance + action-chunk controller) | `control_mode:=torque action_chunk:=true` |
 | `pick_place_position` | same flow on the position controllers | `control_mode:=position action_chunk:=true` |
-| `peg_insert` | forge: approach, grasp peg, VLA insertion | `control_mode:=torque action_chunk:=true` |
-| `gear_mesh` | forge: approach, grasp gear, VLA meshing (FT tare at start) | `control_mode:=torque action_chunk:=true` |
-| `nut_thread` | forge: approach, grasp nut, VLA threading (FT tare at start) | `control_mode:=torque action_chunk:=true` |
 | `tag_reach` | home → wait for an AprilTag detection → drive to it → home | `control_mode:=torque`, plus `object_pose_config:=` and a running detector |
 | `controller_check_position` | smoke check: every position-mode controller + gripper | `control_mode:=position` |
 | `controller_check_torque` | smoke check: every torque-mode controller + gripper | `control_mode:=torque` |

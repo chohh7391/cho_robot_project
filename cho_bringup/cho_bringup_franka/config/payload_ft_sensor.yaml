@@ -1,9 +1,0 @@
-# The Bota FT sensor with the Franka Hand: the payload of a description that
-# carries the sensor (load_ft_sensor:=true; the MuJoCo and Isaac models always).
-/**:
-  ros__parameters:
-    mass: 0.97
-    center_of_mass: [-0.00753, 0.0, 0.05325]
-    load_inertia: [0.001506, 0.0, 0.0,
-                   0.0, 0.003023, 0.0,
-                   0.0, 0.0, 0.001865]

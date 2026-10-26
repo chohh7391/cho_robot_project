@@ -86,6 +86,8 @@ ALLOW_MISSING_ENV = 'CHO_GOAL_FRAMES_ALLOW_MISSING'
 #: needs them built -- only their launch files and configs.
 BRINGUP_SOURCES = Path(__file__).resolve().parents[2] / 'cho_bringup'
 GOLDENS = BRINGUP_SOURCES / 'cho_bringup_common' / 'test' / 'launch_golden' / 'expected'
+#: What the golden cases' $FAKE holds that a description reads (a mounted part's xacro).
+GOLDEN_FAKES = GOLDENS.parent / 'fake'
 
 #: Bringup package -> registry robot type.
 BRINGUPS = {
@@ -290,11 +292,12 @@ class _DeclaredArguments(dict):
 
 
 def _resolve(value):
-    """A golden's placeholders back to paths: <share:pkg> installed, <RT:...> runtime file."""
+    """A golden's placeholders back to paths: <share:pkg> installed, <FAKE> its stand-ins, <RT:...> dropped."""
     # A bringup's own file (a controllers.yaml for a Gazebo plugin tag) is
     # named, not read, by the description: its source copy is as good.
     value = re.sub(r'<share:(cho_bringup_\w+)>', lambda match: str(_bringup_source(match[1])), value)
     value = re.sub(r'<share:(\w+)>', lambda match: _share(match[1]), value)
+    value = value.replace('<FAKE>', str(GOLDEN_FAKES))
     # A runtime parameter file only reaches a plugin tag, never the kinematics.
     value = re.sub(r'<RT:[^>]*>', '', value)
     assert not re.search(r'<[A-Z]+[:>]', value), f'unresolved golden placeholder in {value!r}'
@@ -417,7 +420,7 @@ EE_PARAMETERS = ('ee_name', 'ee_frame')
 #: frame is not ee_name, so no launch argument reaches it). Under any of them a
 #: relative goal stamped '' is a different motion on the controller than on the
 #: bridge -- on every Franka description fr3_link8 is 0.1034 m short of
-#: fr3_hand_tcp (0.138 m with the FT sensor) and turned 45 degrees about z.
+#: fr3_hand_tcp and turned 45 degrees about z.
 #: cho_interfaces/CONTRACT.md says so; this pins it so it cannot grow quietly.
 FREE_FORM = 'any string'
 EE_NAME_ALTERNATIVES = {

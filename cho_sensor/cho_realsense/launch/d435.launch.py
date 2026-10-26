@@ -16,8 +16,7 @@
 
 The driver is used exactly as packaged; the only thing this package contributes
 is a parameter file, handed over with rs_launch.py's own ``config_file``
-argument. Same arrangement as ``bota_ft_sensor``: configuration over a vendored
-driver, no reimplementation of it.
+argument: configuration over a packaged driver, no reimplementation of it.
 
 No transform between the camera and any robot link is published here. The
 driver publishes the camera's own internals (``camera_link`` down to the optical

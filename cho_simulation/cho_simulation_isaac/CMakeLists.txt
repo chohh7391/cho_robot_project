@@ -26,7 +26,6 @@ install(
 
 install(PROGRAMS
   scripts/isaac_command_gate.py
-  scripts/isaac_ft_sensor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

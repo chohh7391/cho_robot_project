@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- A stand-in for a project's part between the Franka flange and the hand, for
+     the golden cases that mount one (cases.yaml, mounted): one link, 20 mm
+     above fr3_link8, that the hand then hangs off. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="ee_connection" params="arm_prefix robot_type">
+    <joint name="adapter_joint" type="fixed">
+      <parent link="${arm_prefix}${robot_type}_link8"/>
+      <child link="adapter"/>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    </joint>
+    <link name="adapter"/>
+  </xacro:macro>
+</robot>

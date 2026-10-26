@@ -43,14 +43,11 @@ defaults:
 # registered as empty stand-ins (tools/ci/stub_ament_packages.sh).
 env:
   # In the checkout but neither built nor tested, and why:
-  # - bota_ft_sensor: exec_depends on bota_driver and bota_driver_example,
-  #   submodules not checked out here and without a rosdep rule.
   # - cho_hardware_openarm_mit_mujoco: built on the extern/mujoco_ros2_control
   #   pin, not checked out here; the Humble deb is another upstream version.
   # - fairino_hardware_v3_8_0, fairino_msgs: vendored sources in extern/, which
   #   are not edited, and their ament_lint tests fail on them.
   NOT_BUILT_PACKAGES: >-
-    bota_ft_sensor
     cho_hardware_openarm_mit_mujoco
     fairino_hardware_v3_8_0
     fairino_msgs
@@ -58,7 +55,6 @@ env:
   # exec_depends on whose Humble debs are not published (franka_msgs and
   # franka_description are, and rosdep installs them).
   ROSDEP_SKIP_KEYS: >-
-    bota_ft_sensor
     cho_hardware_openarm_mit_mujoco
     fairino_hardware_v3_8_0
     fairino_msgs

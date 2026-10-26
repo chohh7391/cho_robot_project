@@ -5,8 +5,8 @@ LAUNCH cho_bringup_franka/bringup_mujoco_robot.launch.py ['controller_name:=join
   ARG load_gripper default='true' choices=None
   ARG use_sim_time default='true' choices=None
   ARG bringup_type default='mujoco' choices=None
-  ARG load_ft_sensor default='false' choices=['true', 'false']
-  ARG xacro_file default='' choices=None
+  ARG xacro_file default='<share:cho_description_franka>/urdf/fr3/fr3_franka_hand.urdf' choices=None
+  ARG payload_file default='' choices=None
   ARG controllers_file default='<share:cho_bringup_franka>/config/mujoco/controllers.yaml' choices=None
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   ARG load_moveit_controller default='false' choices=None

@@ -2,7 +2,7 @@
   "_comment": [
     "Physics profile for the Franka FR3 under Isaac Sim, consumed by run_isaac_sim.py.",
     "Joint names, home pose and the hand's command interface must match the IsaacArmSystem /",
-    "IsaacHandSystem blocks in cho_description_franka/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf."
+    "IsaacHandSystem blocks in cho_description_franka/urdf/fr3/fr3_franka_hand.urdf."
   ],
   "prim_path": "/fr3",
   "arm_joints": [
@@ -32,7 +32,7 @@
     0.04,
     0.04
   ],
-  "_armature_comment": "Rotor inertia (kg*m^2) from the MuJoCo model this project tunes against (xml/fr3_with_ft_sensor/fr3.xml). The URDF cannot express it, so the import leaves only link inertia; the wrist links are ~15x lighter than their rotor, which puts sqrt(kp/I) far above what the ROS round trip tolerates and fr3_joint7 sits in a limit cycle.",
+  "_armature_comment": "Rotor inertia (kg*m^2) from the MuJoCo model this project tunes against (xml/fr3/fr3.xml). The URDF cannot express it, so the import leaves only link inertia; the wrist links are ~15x lighter than their rotor, which puts sqrt(kp/I) far above what the ROS round trip tolerates and fr3_joint7 sits in a limit cycle.",
   "arm_armature": [
     0.195,
     0.195,
@@ -64,7 +64,7 @@
   "_hand_gain_comment": "The gripper is position-driven in every control mode, as in MuJoCo. Prismatic, so N/m and N*s/m.",
   "hand_stiffness": 300.0,
   "hand_damping": 30.0,
-  "ft_link": "bota_ft_sensor_wrench",
+  "ft_link": null,
   "joint_friction": 0.05,
   "solver_position_iterations": 32,
   "solver_velocity_iterations": 1,

@@ -22,6 +22,10 @@
   <!-- Where is the end-effector connected to, if different from the robot flange?  -->
   <xacro:arg name="special_connection" default="" />
 
+  <!-- A xacro file whose ee_connection() macro mounts parts between the flange and that
+       link (robots/common/franka_robot.xacro); empty mounts nothing. -->
+  <xacro:arg name="ee_connection_xacro" default="" />
+
   <!-- Position offset between ee and parent frame -->
   <xacro:arg name="xyz_ee" default="0 0 0" />
 
@@ -78,6 +82,7 @@
                       hand="$(arg hand)"
                       ee_id="$(arg ee_id)"
                       special_connection="$(arg special_connection)"
+                      ee_connection_xacro="$(arg ee_connection_xacro)"
                       xyz_ee="$(arg xyz_ee)"
                       rpy_ee="$(arg rpy_ee)"
                       tcp_xyz="$(arg tcp_xyz)"

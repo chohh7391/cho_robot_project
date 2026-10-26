@@ -38,9 +38,8 @@ EXCLUDED_SOURCE_PACKAGES=(
   "${REPO_ROOT}/extern/mujoco_vendor"
 )
 # The packages each extern/ submodule provides from source. `git pull` does not
-# check out a submodule added since the clone (extern/bota_driver_ros2_example
-# was), and a package that is not checked out is an unknown name to
-# `rosdep --ignore-src`: bota_driver, bota_driver_example, openarm_can and the
+# check out a submodule added since the clone, and a package that is not
+# checked out is an unknown name to `rosdep --ignore-src`: openarm_can and the
 # openarm_ros2 packages have no rosdep rule at all, and some franka_ros2 ones
 # resolve to debs that do not exist. Missing submodules are therefore checked
 # out below; one left out on purpose (SKIP_SUBMODULE_UPDATE=1) has these keys
@@ -55,8 +54,6 @@ declare -A SUBMODULE_PACKAGES=(
     mujoco_ros2_control_msgs mujoco_ros2_control_plugins mujoco_ros2_control_tests"
   [extern/Universal_Robots_ROS2_Driver]="ur ur_bringup ur_calibration ur_controllers
     ur_dashboard_msgs ur_moveit_config ur_robot_driver"
-  [extern/bota_driver_ros2]="bota_driver"
-  [extern/bota_driver_ros2_example]="bota_driver_example"
   [extern/openarm_ros2]="openarm openarm_bimanual_moveit_config openarm_bringup openarm_hardware"
   [extern/openarm_can]="openarm_can"
 )

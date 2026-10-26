@@ -62,8 +62,8 @@ from cho_task_manager.utils.controller_names import (
 # Two known-safe joint poses. Every joint-space check moves to B and then back
 # to A so the arm demonstrably tracks. A is the robot's task home, the
 # registry's poses.task_home (the pose the pick_place trees home to), read per
-# tree; B is the MuJoCo startup pose (the forge trees' FORGE_FINISH_POSITION),
-# so in MuJoCo the very first move is a benign no-op. Positions only: the
+# tree; B is the MuJoCo startup pose, so in MuJoCo the very first move is a
+# benign no-op. Positions only: the
 # joint names come from the robot config when the tree is built.
 JOINT_POSE_B = make_joint_state([0.0, -0.785, 0.0, -2.356, 0.0, 1.57, 0.785])
 

@@ -26,7 +26,7 @@ cho_bringup/          Backend-specific launch and controller configuration
 cho_simulation/       Shared simulator backends (Isaac Sim runner, conversion, ROS helper nodes)
 cho_moveit/           MoveIt configuration and launch wrappers
 cho_robot_config/     Robot/controller/action metadata registry
-cho_sensor/           Sensor stacks (Bota FT, RealSense D435, OAK-D Pro W, camera calibration)
+cho_sensor/           Sensor stacks (RealSense D435, OAK-D Pro W, camera calibration)
 cho_perception/       AprilTag detections turned into robot-frame targets (cho_object_pose)
 cho_task_manager/     py_trees behaviors, tasks, and task-manager node
 cho_control_tools/    Manual action clients, action-chunk tools, and bag plotters

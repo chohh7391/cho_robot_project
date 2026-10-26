@@ -43,8 +43,9 @@ cases:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
       action_chunk: [action_chunk:=true]
-      bare_no_rviz: [load_gripper:=false, load_ft_sensor:=false, launch_rviz:=false]
-      ft_sensor: [load_ft_sensor:=true]
+      bare_no_rviz: [load_gripper:=false, launch_rviz:=false]
+      mounted: [ee_connection_xacro:=$FAKE/ee_connection.xacro, special_connection:=adapter,
+                payload_file:=$FAKE/payload.yaml]
       no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
                           controller_name:=joint_space_position_controller]
@@ -66,7 +67,7 @@ cases:
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
                           controller_name:=joint_space_position_controller]
       moveit_controller_refused: [load_moveit_controller:=true]
-      ft_sensor: [load_ft_sensor:=true]
+      payload: [payload_file:=$FAKE/payload.yaml]
     bringup_real_robot.launch.py:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
@@ -75,13 +76,14 @@ cases:
       no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       action_chunk: [action_chunk:=true]
       mode_mismatch: [control_mode:=position]
-      ft_sensor: [load_ft_sensor:=true]
+      mounted: [ee_connection_xacro:=$FAKE/ee_connection.xacro, special_connection:=adapter,
+                payload_file:=$FAKE/payload.yaml]
     bringup_isaac_robot.launch.py:
       default_usd: []
       default: [robot_usd:=$FAKE/usd/robot/robot.usda]
       position: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=position,
                  controller_name:=joint_space_position_controller]
-      ft_headless_cuda: [robot_usd:=$FAKE/usd/robot/robot.usda, publish_ft:=true, headless:=true, device:=cuda]
+      ft_headless_cuda: [robot_usd:=$FAKE/usd/robot/robot.usda, ft_link:=fr3_link8, headless:=true, device:=cuda]
       no_gripper: [robot_usd:=$FAKE/usd/robot/robot.usda, load_gripper:=false]
       mode_mismatch: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity]
       velocity: [robot_usd:=$FAKE/usd/robot/robot.usda, control_mode:=velocity,

@@ -29,9 +29,6 @@ from cho_task_manager.tasks.franka import (
     create_franka_controller_check_position_tree,
     create_franka_controller_check_torque_tree,
     create_franka_controller_check_velocity_tree,
-    create_franka_gear_mesh_tree,
-    create_franka_nut_thread_tree,
-    create_franka_peg_insert_tree,
     create_franka_pick_place_position_tree,
     create_franka_pick_place_tree,
     create_franka_tag_reach_tree,
@@ -47,11 +44,6 @@ from cho_task_manager.tasks.ur import (
     create_ur_pick_place_tree,
     create_ur_trajectory_replay_tree,
 )
-
-# Franka forge.
-PEG_INSERT = {'franka': create_franka_peg_insert_tree}
-GEAR_MESH = {'franka': create_franka_gear_mesh_tree}
-NUT_THREAD = {'franka': create_franka_nut_thread_tree}
 
 PICK_PLACE = {'franka': create_franka_pick_place_tree, 'ur5e': create_ur_pick_place_tree}
 PICK_PLACE_POSITION = {'franka': create_franka_pick_place_position_tree}

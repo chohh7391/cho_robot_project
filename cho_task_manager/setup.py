@@ -65,10 +65,9 @@ setup(
         # (cho_task_manager/tasks/__init__.py): name = {robot_type: builder}.
         'cho_task_manager.tasks': [
             f'{name} = cho_task_manager.tasks.core:{name.upper()}' for name in (
-                'peg_insert', 'gear_mesh', 'nut_thread', 'pick_place', 'pick_place_position',
-                'tag_reach', 'tag_search', 'controller_check_position', 'controller_check_torque',
-                'controller_check_velocity', 'trajectory_replay', 'fjt_handover', 'multi_move',
-                'mit_task_tuning')
+                'pick_place', 'pick_place_position', 'tag_reach', 'tag_search',
+                'controller_check_position', 'controller_check_torque', 'controller_check_velocity',
+                'trajectory_replay', 'fjt_handover', 'multi_move', 'mit_task_tuning')
         ],
     },
 )

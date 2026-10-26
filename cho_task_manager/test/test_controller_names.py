@@ -118,7 +118,7 @@ def test_a_home_block_cannot_open_a_gripper_the_robot_lacks():
 
 def test_every_gripper_leaf_in_the_franka_trees_addresses_the_registry_gripper():
     config = load_robot_config('franka')
-    for task in ('pick_place', 'peg_insert', 'gear_mesh', 'controller_check_position'):
+    for task in ('pick_place', 'controller_check_position'):
         leaves = [node for node in build_task_tree(task, config).iterate()
                   if isinstance(node, GripperActionBehavior)]
         assert leaves, task
@@ -128,7 +128,7 @@ def test_every_gripper_leaf_in_the_franka_trees_addresses_the_registry_gripper()
 def test_the_franka_action_chunk_wait_listens_to_the_registry_action_chunk_controller():
     from cho_task_manager.behaviors.service import ChunkStreamCompletionWaiterBehavior
     config = load_robot_config('franka')
-    for task in ('pick_place', 'pick_place_position', 'peg_insert'):
+    for task in ('pick_place', 'pick_place_position'):
         waits = [node for node in build_task_tree(task, config).iterate()
                  if isinstance(node, ChunkStreamCompletionWaiterBehavior)]
         assert [wait.service_name for wait in waits] == [

@@ -14,8 +14,8 @@
 
 """The switch-home-open block every mission starts and ends with.
 
-Four trees carried a copy of this: franka/pick_place, franka/pick_place_position,
-franka/forge/common and ur/pick_place (plus a gripper-less variant in
+Several trees carried a copy of this: franka/pick_place,
+franka/pick_place_position and ur/pick_place (plus a gripper-less variant in
 ur/multi_move). They drifted -- only the UR copies passed ``robot_config``, so
 the Franka copies derived their exclusive-switch set from the historical Franka
 name list instead of the robot's own registry entry.
@@ -63,7 +63,7 @@ def home_subtree(
 
     ``suffix`` distinguishes the closing copy of the block from the opening one
     in the tree display (``_Final``). ``lead_children`` are inserted ahead of
-    the switch, for a task that must prepare hardware first (FT tare).
+    the switch, for a task that must prepare hardware first (a sensor tare).
 
     The gripper opened is ``robot_config['gripper']``, so an OpenArm arm
     profile opens its own ``left_`` / ``right_`` instance. A robot that

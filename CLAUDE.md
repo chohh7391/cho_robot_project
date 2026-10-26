@@ -129,7 +129,7 @@ the three backends: [Consumers](docs/openarm_mit_contract_v1.md#consumers))
 What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 
 **cho_description/**
-- `cho_description_franka` — FR3 xacro entry points (`robots/`), generated URDFs (`urdf/fr3`, `urdf/fr3_with_ft_sensor`),
+- `cho_description_franka` — FR3 xacro entry points (`robots/`), the generated URDF `urdf/fr3` (MuJoCo, Isaac),
   MuJoCo XML, Isaac USD (generated, [usd/README.md](cho_description/cho_description_franka/usd/README.md)).
 - `cho_description_fr5` — FR5 URDF and MuJoCo scenes from the vendor bundle, with a hardware-switching `ros2_control` block.
 - `cho_description_ur` — UR description, upstream fork ([README.md](cho_description/cho_description_ur/README.md)).
@@ -145,12 +145,12 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
   `FILES_MATCHING` (under `--symlink-install` that copies them, and the copy goes stale).
 - `cho_bringup_franka`, `cho_bringup_ur`, `cho_bringup_fr5`, `cho_bringup_openarm` — `launch/bringup_<backend>_robot`
   (and `_moveit`) files, `config/<backend>/controllers*.yaml`, `config/isaac/robot_profile*.json` (the robot's Isaac
-  physics); Franka also `config/payload.yaml` (the hand; `payload_ft_sensor.yaml` with the FT sensor,
-  `load_ft_sensor`) and `config/real/franka.config.yaml` (robot IP, gripper).
+  physics); Franka also `config/payload.yaml` (the hand; a project mounting more between the flange and the
+  hand gives `payload_file:=` and `ee_connection_xacro:=`) and `config/real/franka.config.yaml` (robot IP, gripper).
   Which backends each has: [launch matrix](docs/controllers_and_bringup.md#bringup-launch-matrix).
 
 **cho_simulation/cho_simulation_isaac/** — the Isaac runner and URDF-to-USD converter (`isaac/`, run under
-`isaacsim/python.sh`, not ROS) and the ROS-side `scripts/isaac_command_gate.py`, `scripts/isaac_ft_sensor.py`.
+`isaacsim/python.sh`, not ROS) and the ROS-side `scripts/isaac_command_gate.py`.
 
 **cho_moveit/** — `cho_moveit_common` (the MoveIt action bridge) and one planning configuration per robot
 ([README.md](cho_moveit/README.md)); the bridge's contract: [CONTRACT.md](cho_interfaces/CONTRACT.md#the-moveit-bridge).
@@ -169,7 +169,6 @@ controllers (`CHO_ROBOT_CONFIG_ADDITIONS`). Also `controller_action_name()`,
 plotters ([docs/action_clients.md](docs/action_clients.md)).
 
 **cho_sensor/** (grouping directory)
-- `bota_ft_sensor` — Bota FT launch over the Bota driver in `extern/` ([README.md](cho_sensor/bota_ft_sensor/README.md)).
 - `cho_realsense` — D435 over the stock `rs_launch.py`; no detection, no camera-to-robot transform
   ([README.md](cho_sensor/cho_realsense/README.md)).
 - `cho_oak` — OAK-D Pro W over the stock depthai launch ([README.md](cho_sensor/cho_oak/README.md)).
@@ -259,8 +258,6 @@ No package compiles with `-Ofast`: it folds `isfinite()` / `isnan()` to constant
   [CONTRACT.md, Frames](cho_interfaces/CONTRACT.md#frames) and [State topics](cho_interfaces/CONTRACT.md#state-topics).
 - `ActionChunk.relative_frame` (`base` is the model's root frame, not the arm's `arm_base_link`):
   [ActionChunk.msg](cho_interfaces/msg/ActionChunk.msg).
-- The FR3 FT sensor's mounting and its rotation to the TCP and world frames:
-  [bota_ft_sensor README, Frames](cho_sensor/bota_ft_sensor/README.md#frames).
 
 ## Multi-PC Setup
 

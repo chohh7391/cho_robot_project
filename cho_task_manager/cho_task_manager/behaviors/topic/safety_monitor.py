@@ -67,14 +67,13 @@ from cho_task_manager.utils.robot_description import (
     arm_kinematics,
 )
 
-DEFAULT_WRENCH_TOPIC = '/bota_ft_sensor/wrench'
 DEFAULT_JOINT_STATES_TOPIC = '/joint_states'
 
 # Monitor subscriptions are BEST_EFFORT on purpose, and it is not a
 # reliability preference. A BEST_EFFORT subscription matches a RELIABLE
 # publisher as well as a best-effort one, while a RELIABLE subscription does
 # not match a best-effort publisher at all. The publishers here disagree --
-# bota_driver_node and joint_state_broadcaster are reliable, ee_state_broadcaster
+# a force-torque sensor's driver and joint_state_broadcaster are reliable, ee_state_broadcaster
 # is best effort -- and a monitor that silently receives nothing is worse than
 # useless, so it asks for the weaker guarantee and matches everything. Depth 1:
 # only the newest sample can trip anything.
@@ -97,9 +96,10 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
     Guards:
 
     ``max_force_n`` / ``max_torque_nm``
-        Magnitude of the FT wrench. Magnitudes are rotation invariant, so
-        nothing has to know where the sensor is mounted -- unlike a per-axis
-        limit, which would need the R_tcp_ft transform (cho_sensor/bota_ft_sensor/README.md, Frames).
+        Magnitude of the wrench on ``wrench_topic`` (a force-torque sensor's
+        WrenchStamped, which a limit on either requires). Magnitudes are
+        rotation invariant, so nothing has to know where the sensor is mounted
+        -- unlike a per-axis limit, which would need its rotation to the TCP.
     ``joint_limit_margin_rad``
         Distance from any monitored joint to the nearer of its URDF limits.
     ``min_manipulability``
@@ -128,7 +128,7 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
         joint_limit_margin_rad: float = None,
         min_manipulability: float = None,
         min_singular_value: float = None,
-        wrench_topic: str = DEFAULT_WRENCH_TOPIC,
+        wrench_topic: str = None,
         joint_states_topic: str = DEFAULT_JOINT_STATES_TOPIC,
         robot_description_topic: str = DEFAULT_ROBOT_DESCRIPTION_TOPIC,
         max_age_sec: float = 0.5,
@@ -159,6 +159,10 @@ class SafetyMonitorBehavior(py_trees.behaviour.Behaviour):
         self.report_period_sec = report_period_sec
 
         self.needs_wrench = max_force_n is not None or max_torque_nm is not None
+        if self.needs_wrench and not wrench_topic:
+            raise ValueError(
+                f'[{name}] a force or torque limit needs wrench_topic, the WrenchStamped '
+                'topic of the force-torque sensor')
         self.needs_kinematics = any((
             joint_limit_margin_rad is not None,
             min_manipulability is not None,

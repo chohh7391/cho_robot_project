@@ -61,7 +61,8 @@ def generate_robot_nodes(context):
     use_action_chunk = LaunchConfiguration('action_chunk').perform(context)
     b_type = LaunchConfiguration('bringup_type').perform(context)
     ee_name = LaunchConfiguration('ee_name').perform(context)
-    load_ft_sensor = as_bool(LaunchConfiguration('load_ft_sensor').perform(context))
+    ee_connection_xacro = LaunchConfiguration('ee_connection_xacro').perform(context)
+    special_connection = LaunchConfiguration('special_connection').perform(context)
 
     # ------------------------------------------------------------------
     # 2. Controller preparation policy
@@ -82,8 +83,8 @@ def generate_robot_nodes(context):
     ee_name = launch_utils.resolve_ee_name(ee_name, all(hands))
 
     pkg_bringup = get_package_share_directory('cho_bringup_franka')
-    payload_config_path = os.path.join(
-        pkg_bringup, 'config', 'payload_ft_sensor.yaml' if load_ft_sensor else 'payload.yaml')
+    payload_config_path = (LaunchConfiguration('payload_file').perform(context)
+                           or os.path.join(pkg_bringup, 'config', 'payload.yaml'))
     runtime_param_file = launch_utils.create_runtime_param_file(
         payload_config_path=payload_config_path,
         controller_names=REAL_ALWAYS_ACTIVE_CONTROLLERS + switchable_controllers,
@@ -125,7 +126,8 @@ def generate_robot_nodes(context):
                 'hand':                 load_gripper_str,
                 'use_fake_hardware':    use_fake_hw_str,
                 'fake_sensor_commands': fake_sensor_cmds_str,
-                'special_connection':   'ft_sensor' if load_ft_sensor else '',
+                'special_connection':   special_connection,
+                'ee_connection_xacro':  ee_connection_xacro,
                 'xyz_ee':               '0 0 0',
             },
         ).toprettyxml(indent='  ')
@@ -275,13 +277,24 @@ def generate_launch_description():
             choices=['true', 'false', 'config'],
         ),
         DeclareLaunchArgument(
-            'load_ft_sensor',
-            default_value='false',
-            description='true when the Bota FT sensor sits between fr3_link8 and the hand: the '
-                        'description carries its links and the controllers its mass '
-                        "(config/payload_ft_sensor.yaml, not payload.yaml). Desk's "
-                        'end-effector load has to match.',
-            choices=['true', 'false'],
+            'ee_connection_xacro',
+            default_value='',
+            description='A xacro file whose ee_connection() macro mounts parts between fr3_link8 '
+                        'and the hand (cho_description_franka robots/common/franka_robot.xacro); '
+                        'empty mounts nothing',
+        ),
+        DeclareLaunchArgument(
+            'special_connection',
+            default_value='',
+            description='The link the hand hangs off; empty means fr3_link8. With '
+                        'ee_connection_xacro, the link its macro ends in',
+        ),
+        DeclareLaunchArgument(
+            'payload_file',
+            default_value='',
+            description="The controllers' payload parameter file; empty means config/payload.yaml, "
+                        'the hand alone. A project that mounts more gives its own, and '
+                        "Desk's end-effector load has to match it",
         ),
         DeclareLaunchArgument(
             'action_chunk',

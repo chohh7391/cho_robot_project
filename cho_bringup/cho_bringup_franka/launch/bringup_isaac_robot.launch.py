@@ -114,8 +114,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'xacro_file',
             default_value=os.path.join(
-                description_path, 'urdf', 'fr3_with_ft_sensor', 'fr3_franka_hand.urdf'),
-            description='Xacro/URDF used to build the Isaac robot_description'
+                description_path, 'urdf', 'fr3', 'fr3_franka_hand.urdf'),
+            description='Xacro/URDF used to build the Isaac robot_description, the one robot_usd '
+                        'was built from'
         ),
         DeclareLaunchArgument(
             'controllers_file',
@@ -134,7 +135,7 @@ def generate_launch_description():
             # Layout is the URDF importer's own convention: it derives both the
             # subdirectory and the .usda filename from the URDF basename.
             default_value=os.path.join(
-                description_path, 'usd', 'fr3_with_ft_sensor',
+                description_path, 'usd', 'fr3',
                 'fr3_franka_hand', 'fr3_franka_hand.usda'),
             description=(
                 'USD asset for Isaac. Build it once with '
@@ -168,9 +169,17 @@ def generate_launch_description():
             choices=['cpu', 'cuda'],
         ),
         DeclareLaunchArgument(
-            'publish_ft',
-            default_value='false',
-            description='Publish an emulated Bota FT wrench and serve /bota_ft_sensor/tare'
+            'payload_file',
+            default_value='',
+            description="The controllers' payload parameter file; empty means config/payload.yaml, "
+                        'the hand alone. A project that mounts more gives its own',
+        ),
+        DeclareLaunchArgument(
+            'ft_link',
+            default_value='',
+            description='Publish the load on this link\'s incoming joint as an unstamped '
+                        'geometry_msgs/Wrench on /isaac/ft_raw, for a force-torque sensor of '
+                        'the robot_usd; empty publishes none',
         ),
         gate_failure_argument(),
     ]
@@ -188,9 +197,6 @@ def generate_launch_description():
         )
     }
 
-    # The Isaac asset is built from fr3_with_ft_sensor, so the controllers'
-    # payload carries the Bota FT sensor too.
-    payload_config_file = os.path.join(bringup_path, 'config', 'payload_ft_sensor.yaml')
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
 
     mock_gripper = Node(
@@ -229,7 +235,9 @@ def generate_launch_description():
         physics_rate = LaunchConfiguration('physics_rate').perform(context)
         headless = LaunchConfiguration('headless').perform(context)
         device = LaunchConfiguration('device').perform(context)
-        publish_ft = LaunchConfiguration('publish_ft').perform(context)
+        ft_link = LaunchConfiguration('ft_link').perform(context)
+        payload_config_file = (LaunchConfiguration('payload_file').perform(context)
+                               or os.path.join(bringup_path, 'config', 'payload.yaml'))
 
         launch_utils.check_controller_matches_mode(ctrl_name, mode, use_action_chunk)
         always_active_controllers = launch_utils.always_active_controllers(load_gripper)
@@ -269,8 +277,8 @@ def generate_launch_description():
             isaac_python, robot_usd,
             os.path.join(bringup_path, 'config', 'isaac', 'robot_profile.json'),
             mode, physics_rate, device, headless=headless.lower() == 'true')
-        if publish_ft.lower() == 'true':
-            isaac_cmd.append('--publish-ft')
+        if ft_link:
+            isaac_cmd += ['--publish-ft', '--ft-link', ft_link]
         isaac_sim = isaac_sim_process(isaac_cmd)
 
         runtime_param_file = launch_utils.create_runtime_param_file(
@@ -295,16 +303,6 @@ def generate_launch_description():
             on_exit=Shutdown(),
         )
 
-        # Turns Isaac's raw geometry_msgs/Wrench into the Bota driver's stamped
-        # topic and serves /bota_ft_sensor/tare, which the forge task trees call.
-        isaac_ft_sensor = Node(
-            package='cho_simulation_isaac',
-            executable='isaac_ft_sensor.py',
-            output='screen',
-            parameters=[use_sim_time],
-            condition=IfCondition(LaunchConfiguration('publish_ft')),
-        )
-
         # Spawners once Isaac is stepping; the command gate once the requested
         # controller is active (see isaac_controller_startup for both reasons).
         event_handlers = isaac_controller_startup(
@@ -312,7 +310,7 @@ def generate_launch_description():
             shutdown_on_failure=shutdown_on_failure)
         event_handlers.append(runtime_param_cleanup(runtime_param_file))
 
-        return [isaac_sim, node_ros2_control, isaac_ft_sensor] + event_handlers
+        return [isaac_sim, node_ros2_control] + event_handlers
 
     return LaunchDescription(
         declared_arguments + [

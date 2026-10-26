@@ -28,7 +28,6 @@ import pytest
 from rclpy.time import Time
 
 from cho_task_manager.behaviors.wait import WaitBehavior
-from cho_task_manager.subtrees import tare_ft_children
 
 RUNNING = py_trees.common.Status.RUNNING
 SUCCESS = py_trees.common.Status.SUCCESS
@@ -114,12 +113,6 @@ def test_each_entry_waits_the_full_duration_again():
 def test_a_meaningless_duration_is_refused(value):
     with pytest.raises(ValueError, match='duration_sec'):
         WaitBehavior('Settle', value)
-
-
-def test_the_ft_settle_is_a_node_clock_wait():
-    tare, settle = tare_ft_children(settle_sec=3.0)
-    assert isinstance(settle, WaitBehavior)
-    assert (settle.name, settle.duration_sec) == ('Wait_After_Tare', 3.0)
 
 
 def test_no_tree_waits_on_the_wall_clock():

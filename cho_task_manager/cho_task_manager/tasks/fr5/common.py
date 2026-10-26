@@ -14,9 +14,8 @@
 
 """Fragments shared by the FR5 task trees.
 
-The same split ``tasks/franka/forge/common.py`` makes: what more than one FR5
-tree needs is here, so the second tree to need it does not get to pick a
-different home pose than the first one did.
+What more than one FR5 tree needs is here, so the second tree to need it does
+not get to pick a different home pose than the first one did.
 """
 
 # The robot's task home, the registry's poses.task_home -- for the FR5 home 1,

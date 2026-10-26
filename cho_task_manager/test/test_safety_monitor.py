@@ -124,8 +124,14 @@ def _config(robot_type='ur5e', profile='single'):
         pytest.skip(f'robot registry unavailable for {robot_type}: {exc}')
 
 
+#: The wrench topic the force and torque guards are given in these tests.
+WRENCH_TOPIC = '/ft_sensor/wrench'
+
+
 def _monitor(**kwargs):
     kwargs.setdefault('name', 'Monitor')
+    if 'max_force_n' in kwargs or 'max_torque_nm' in kwargs:
+        kwargs.setdefault('wrench_topic', WRENCH_TOPIC)
     monitor = SafetyMonitorBehavior(robot_config=_config(), **kwargs)
     monitor.node = MagicMock()
     monitor.clock = FakeClock()
@@ -198,6 +204,11 @@ def test_only_the_needed_inputs_are_required():
 # FT overload
 # ---------------------------------------------------------------------------
 
+def test_a_force_limit_without_a_wrench_topic_is_refused():
+    with pytest.raises(ValueError, match='wrench_topic'):
+        SafetyMonitorBehavior(name='Monitor', robot_config=_config(), max_force_n=50.0)
+
+
 def test_force_within_the_limit_keeps_running():
     monitor = _arm(_monitor(max_force_n=50.0), force=(10.0, 0.0, 20.0))
 
@@ -206,7 +217,7 @@ def test_force_within_the_limit_keeps_running():
 
 def test_force_magnitude_trips_regardless_of_direction():
     """Magnitudes are rotation invariant, which is why no frame transform is
-    needed here -- a per-axis limit would need R_tcp_ft (cho_sensor/bota_ft_sensor/README.md, Frames).
+    needed here -- a per-axis limit would need the sensor's rotation to the TCP.
     """
     for direction in ((60.0, 0.0, 0.0), (0.0, -60.0, 0.0), (36.0, 36.0, 36.0)):
         monitor = _arm(_monitor(max_force_n=50.0), force=direction)
@@ -244,7 +255,7 @@ def test_it_waits_for_its_first_sample_then_gives_up():
     assert monitor.update() == RUNNING
     monitor.clock.advance(0.2)
     assert monitor.update() == FAILURE
-    assert '/bota_ft_sensor/wrench' in _last_error(monitor)
+    assert WRENCH_TOPIC in _last_error(monitor)
 
 
 # ---------------------------------------------------------------------------

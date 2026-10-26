@@ -66,8 +66,8 @@ C++. Python-side rclpy is NOT usable in this configuration:
 So the gate is read from a ROS2SubscribeJointState node's output attribute, and
 the emulated force/torque reading is published by a generic ROS2Publisher node.
 Anything needing real ROS Python - stamping the wrench into a WrenchStamped,
-serving the tare service - lives in a normal node on the ROS side
-(scripts/isaac_ft_sensor.py).
+serving a tare service like a real sensor's driver - belongs in a normal node
+on the ROS side, which the project whose robot carries the sensor runs.
 """
 
 import argparse
@@ -159,14 +159,14 @@ def parse_args(argv=None):
                    help="Override the profile's PhysX joint friction COEFFICIENT (not a torque)")
     p.add_argument("--publish-ft", action="store_true",
                    help="Publish the emulated FT reading as an unstamped geometry_msgs/Wrench; "
-                        "scripts/isaac_ft_sensor.py turns it into the Bota topic and tare service")
+                        "a ROS-side node stamps it and serves the sensor's topics")
     p.add_argument("--ft-raw-topic", default="isaac/ft_raw")
     p.add_argument("--ft-link", default=None,
                    help="Override the profile's FT measurement link")
     p.add_argument("--ft-sign", type=float, default=-1.0,
                    help="Sign applied to the measured joint reaction. -1 reports the load applied "
                         "to the tool, matching mujoco_ros2_control's FT convention. Validate "
-                        "against the real Bota before trusting the sign.")
+                        "against the real sensor before trusting the sign.")
     p.add_argument("--physics-engine", default="physx", choices=["physx", "newton"],
                    help="Physics backend. 'newton' boots Kit with the "
                         "isaacsim.exp.full.newton experience, which registers Newton "
@@ -580,8 +580,8 @@ if args.publish_ft:
     # Generic publisher: an unstamped geometry_msgs/Wrench, so the only dynamic
     # attributes are force/torque xyz. Emitting a WrenchStamped from here would
     # mean filling a header (and its stamp) through dynamic attributes; instead
-    # scripts/isaac_ft_sensor.py stamps it, applies the tare offset and
-    # republishes on the Bota topic the real driver uses.
+    # a ROS-side node stamps it, applies a tare offset and republishes it on the
+    # topic the real sensor's driver uses.
     graph_nodes.append(("PublishFT", "isaacsim.ros2.bridge.ROS2Publisher"))
     graph_connections.append(("OnPhysicsStep.outputs:step", "PublishFT.inputs:execIn"))
     graph_connections.append(("Context.outputs:context", "PublishFT.inputs:context"))
@@ -796,8 +796,8 @@ def publish_ft():
     """Write this step's joint reaction into the generic publisher's inputs.
 
     get_link_incoming_joint_force gives the 6D load carried by a link's incoming
-    joint. bota_ft_sensor_wrench is the link the real sensor measures at, so its
-    incoming joint force is the sensor reading, already in the sensor frame.
+    joint. For the link a real sensor measures at (its wrench frame), that is the
+    sensor reading, already in the sensor frame.
     """
     forces, torques = robot.get_link_incoming_joint_force(link_indices=[ft_link_index])
     wrench = args.ft_sign * np.concatenate(

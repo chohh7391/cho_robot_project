@@ -13,7 +13,9 @@ LAUNCH cho_bringup_franka/bringup_gz_robot.launch.py ['load_gripper:=false', 'ee
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   ARG launch_rviz default='true' choices=None
   ARG load_moveit_controller default='false' choices=None
-  ARG load_ft_sensor default='false' choices=['true', 'false']
+  ARG ee_connection_xacro default='' choices=None
+  ARG special_connection default='' choices=None
+  ARG payload_file default='' choices=None
   ENV-APPEND IGN_GAZEBO_SYSTEM_PLUGIN_PATH value='<prefix:franka_ign_ros2_control>/lib' prepend=True sep=':'
   ENV-APPEND GZ_SIM_SYSTEM_PLUGIN_PATH value='<prefix:franka_ign_ros2_control>/lib' prepend=True sep=':'
   ENV-APPEND GZ_SIM_RESOURCE_PATH value='<prefix:cho_description_franka>/share' prepend=True sep=':'

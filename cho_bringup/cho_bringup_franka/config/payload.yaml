@@ -1,6 +1,6 @@
-# The Franka Hand alone: the end-effector payload of a description without the
-# FT sensor, the real bringup's default. payload_ft_sensor.yaml is the hand with
-# the Bota FT sensor.
+# The Franka Hand alone, on fr3_link8: the end-effector payload every Franka
+# bringup gives its controllers unless payload_file:= names another, as a
+# project that mounts more between the flange and the hand does.
 /**:
   ros__parameters:
     mass: 0.73

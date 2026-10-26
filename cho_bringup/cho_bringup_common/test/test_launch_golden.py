@@ -44,6 +44,7 @@ look at one case without the test: python3 -m cho_bringup_common.launch_golden -
 
 import difflib
 import os
+import shutil
 import subprocess
 import sys
 
@@ -92,12 +93,15 @@ def skip_unless_installed(package):
 
 @pytest.fixture(scope='module')
 def fake_dir(tmp_path_factory):
-    """A stub Isaac interpreter (never run) and an empty USD, as $FAKE."""
+    """Stand-ins as $FAKE: a stub Isaac interpreter (never run), an empty USD, and launch_golden/fake/."""
     root = tmp_path_factory.mktemp('launch_golden_fake')
     (root / 'isaacsim').mkdir()
     (root / 'isaacsim' / 'python.sh').write_text('#!/bin/sh\nexit 1\n')
     (root / 'usd' / 'robot').mkdir(parents=True)
     (root / 'usd' / 'robot' / 'robot.usda').write_text('')
+    # What a project mounting a part between the Franka flange and the hand
+    # gives; test_goal_frames reads these files from here too.
+    shutil.copytree(os.path.join(HERE, 'fake'), root, dirs_exist_ok=True)
     return str(root)
 
 

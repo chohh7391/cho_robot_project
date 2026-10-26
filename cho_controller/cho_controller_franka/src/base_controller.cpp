@@ -510,8 +510,8 @@ void FrankaBaseController::compute_arm_kinematics(
 Vector7d FrankaBaseController::compute_hand_gravity()
 {
     // The joint torque that holds the payload ("mass" at "center_of_mass" in the
-    // EE frame; config/payload.yaml, 0.73 kg for the hand, or payload_ft_sensor.yaml,
-    // 0.97 kg with the FT sensor) against
+    // EE frame; config/payload.yaml, 0.73 kg for the hand, or a bringup's payload_file:=)
+    // against
     // gravity. compute_all_terms() adds it in the "gazebo" branch only, at
     // gazebo_payload_gravity m/s^2 (default 1.0), not at 9.81:
     //
@@ -520,12 +520,12 @@ Vector7d FrankaBaseController::compute_hand_gravity()
     //   command the KDL gravity torque, at 9.8 m/s^2, of the chain from the URDF
     //   root to the leaf link findTipLink() picks. For the FR3 descriptions here
     //   that leaf is fr3_hand_tcp, so the chain carries link0-link7, fr3_hand
-    //   (0.654 kg) and, with load_ft_sensor, the Bota sensor links: the hand body
+    //   (0.654 kg) and any links ee_connection_xacro:= mounts under it: the hand body
     //   is compensated already. Only the two fingers (0.029 kg each), off that
     //   chain, are not.
     // - 1.0 m/s^2 is an empirical value with no recorded derivation or
-    //   measurement; it is not the fingers' weight either (0.97 N with the FT
-    //   sensor's payload, Gazebo's default, against 0.57 N for the fingers). It stays the default so behaviour is unchanged;
+    //   measurement; it is not the fingers' weight either (0.73 N with the hand's
+    //   payload against 0.57 N for the fingers). It stays the default so behaviour is unchanged;
     //   the parameter lets a measurement replace it, or 0 drop the term.
     const double gravity =
         (bringup_type_ == "gazebo") ? gazebo_payload_gravity_ : 9.81;

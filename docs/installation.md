@@ -35,10 +35,9 @@ present, so rosdep can install `ros-humble-mujoco-vendor` for the vendored
 
 It first checks out any `extern/` submodule that is not checked out yet, and
 only those (an initialized submodule is never moved). `git pull` does not do
-that for a submodule added since your clone - `extern/bota_driver_ros2_example`
-was added that way - and a package that is not checked out is an unknown key to
-`rosdep --ignore-src`: `bota_driver`, `bota_driver_example`, `openarm_can` and
-the `openarm_ros2` packages have no rosdep rule at all. To do it by hand after
+that for a submodule added since your clone, and a package that is not checked
+out is an unknown key to `rosdep --ignore-src`: `openarm_can` and the
+`openarm_ros2` packages have no rosdep rule at all. To do it by hand after
 a pull:
 
 ```bash

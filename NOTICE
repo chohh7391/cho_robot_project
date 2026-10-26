@@ -20,8 +20,8 @@ by ament_copyright and, for CMakeLists.txt, tools/ci/check_copyright_headers.py:
     "Derived from ... see NOTICE" line (the TSID files in cho_controller_common
     are the pattern), plus an entry below;
   - extern/ is never edited. To build on a vendor's package, add it there as a
-    submodule and include or reference it (as bota_ft_sensor does with
-    bota_driver_example) rather than copying its files.
+    submodule and include or reference it (as cho_realsense does with
+    realsense2_camera's rs_launch.py) rather than copying its files.
 A package whose files carry more than one license lists each in package.xml.
 
 
@@ -51,16 +51,6 @@ cho_description/cho_description_fr5/meshes/ag95/
     https://github.com/ian-chuang/dh_ag95_gripper_ros2
     Copyright (c) 2024 Ian Chuang
     License: MIT  ->  cho_description/cho_description_fr5/meshes/ag95/LICENSE
-
-cho_description/cho_description_franka/meshes/accessories/ft_sensor/mounting.stl
-cho_description/cho_description_franka/xml/fr3_with_ft_sensor/assets/mounting.stl
-    Bota Systems SensONE mounting mesh, unmodified, from bota_driver_ros2
-    (meshes/BFT_SENS_M8/mounting.STL; extern/bota_driver_ros2 v1.1.14)
-    https://gitlab.com/botasys/drivers/bota_driver_ros2
-    Copyright (c) 2025, Bota Systems AG
-    License: BSD-3-Clause with Attribution Requirement
-      ->  cho_description/cho_description_franka/meshes/accessories/ft_sensor/LICENSE
-    Attribution: Bota Systems AG, https://www.botasys.com
 
 cho_description/cho_description_franka/xml/
     MuJoCo models adapted from MuJoCo Menagerie franka_fr3 (itself derived
@@ -164,12 +154,6 @@ own licenses in their own repositories:
     extern/franka_ros2                    Franka Robotics GmbH, Apache-2.0
     extern/Universal_Robots_ROS2_Driver   Universal Robots A/S, BSD-3-Clause
     extern/mujoco_ros2_control            ros-controls, Apache-2.0
-    extern/bota_driver_ros2               Bota Systems AG,
-                                          BSD-3-Clause with Attribution
-    extern/bota_driver_ros2_example       Bota Systems AG,
-                                          BSD-3-Clause with Attribution
-                                          (cho_sensor/bota_ft_sensor launches
-                                          on top of it)
     extern/openarm_can                    Enactic, Inc., Apache-2.0
     extern/openarm_ros2                   Enactic, Inc., Apache-2.0
 

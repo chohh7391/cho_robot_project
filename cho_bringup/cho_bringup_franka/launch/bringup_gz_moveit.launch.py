@@ -32,7 +32,7 @@ def generate_launch_description():
             'franka_hand': 'franka_hand', 'ee_name': metadata['ee_link'],
             'control_mode': 'position',
             'controller_name': metadata['hold_controller'],
-            'load_moveit_controller': 'true', 'load_ft_sensor': 'false',
+            'load_moveit_controller': 'true',
             'use_sim_time': 'true', 'launch_rviz': 'false',
             'world': LaunchConfiguration('world'),
         }.items())

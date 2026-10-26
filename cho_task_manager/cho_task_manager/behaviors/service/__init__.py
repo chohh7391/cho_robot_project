@@ -15,5 +15,4 @@
 from .list_controllers import ListControllersServiceBehavior
 from .switch_controller import SwitchControllerServiceBehavior
 from .chunk_stream_completion_waiter import ChunkStreamCompletionWaiterBehavior
-from .tare_ft_sensor import TareFTSensorServiceBehavior
 from .mit_task_diagnostics import MitTaskDiagnosticsServiceBehavior

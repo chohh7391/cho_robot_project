@@ -36,9 +36,6 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.
 
 #: This package's tasks and the robots each is built for.
 CORE = {
-    'peg_insert': {'franka'},
-    'gear_mesh': {'franka'},
-    'nut_thread': {'franka'},
     'pick_place': {'franka', 'ur5e'},
     'pick_place_position': {'franka'},
     'tag_reach': {'franka'},

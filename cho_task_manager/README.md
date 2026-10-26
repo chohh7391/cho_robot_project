@@ -6,7 +6,7 @@ registry entry and ticks it. Running a task, every task this package ships and h
 add its own.
 
 - `behaviors/` — the leaves: action clients, controller switches, waits, topic latches, the safety monitor.
-- `subtrees/` — shared fragments: `home_subtree()`, `guarded_mission()`, `tare_ft_children()`.
+- `subtrees/` — shared fragments: `home_subtree()`, `guarded_mission()`.
 - `tasks/<robot>/` — this package's trees; `tasks/core.py` registers them.
 - `testing.py` — the checks a task's tests run ([Testing a task](#testing-a-task)).
 - `utils/` — the registry's names and roles (`controller_names.py`), blackboard, clock, `task_params.py`.

@@ -131,7 +131,7 @@ bringup was launched with. Every bringup defaults `ee_name` to the registry's
 relative goal a different motion on the two: on the FR3, `ee_name:=fr3_link8`
 (real bringup; the simulated ones offer `fr3_link7`) puts the controllers' EE
 frame 45 deg about z from `fr3_hand_tcp` and 0.1034 m behind it along the
-hand's z (0.138 m with the FT sensor, `load_ft_sensor:=true`), so a "+x by 5 cm" goal moves
+hand's z (more with parts mounted between, `ee_connection_xacro:=`), so a "+x by 5 cm" goal moves
 the TCP along a different line and a rotation pivots about a different point.
 FR5 and UR accept any `ee_name`. `cho_task_manager/test/test_goal_frames.py`
 checks the defaults agree. A client that needs one meaning on both stamps the

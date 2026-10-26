@@ -64,7 +64,7 @@ GRIPPER_ROBOTS = {'franka', 'fr5', 'openarm'}
 
 #: The description each robot's MuJoCo bringup expands, and its xacro mappings.
 DESCRIPTIONS = {
-    'franka': ('cho_description_franka', 'urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf',
+    'franka': ('cho_description_franka', 'urdf/fr3/fr3_franka_hand.urdf',
                {'control_mode': 'position'}),
     'ur5e': ('cho_description_ur', 'urdf/ur5e.urdf', {'hardware': 'mujoco'}),
     'fr5': ('cho_description_fr5', 'urdf/fr5.urdf.xacro', {'hardware': 'mujoco'}),
