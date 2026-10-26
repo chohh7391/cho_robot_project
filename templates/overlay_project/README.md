@@ -101,3 +101,29 @@ ament_prepend_unique_value CHO_ROBOT_CONFIG_ADDITIONS "$AMENT_CURRENT_PREFIX/sha
 ```
 
 A terminal that sourced the project's workspace then switches the project's controllers like the core's.
+
+## A world and scene data of the project's own
+
+In MuJoCo (the Franka bringup, `bringup_mujoco_robot.launch.py`), a project brings the scene its robot works in and
+reads what happens in it, without touching the core's models:
+
+- `mujoco_world:=<file>`: an MJCF file of the project's world, anywhere on disk, with its assets beside it -- a floor,
+  a bench, the objects, cameras, lights. The bringup composes it with the robot's model at launch
+  ([mujoco_scene.py](../../cho_bringup/cho_bringup_common/cho_bringup_common/mujoco_scene.py)); the world replaces the
+  robot's own floor, its names stay as written, and it sets no `<option>` (physics stays the robot model's). The
+  robot stands at the world's origin, so a pose in the world is a pose in its root link (`fr3_link0`).
+- `mujoco_plugins:=<file>`: `mujoco_ros2_control` plugins to load into the simulation, each handed the MuJoCo model
+  and data every step. The core's `cho_simulation_mujoco/BodyPosePublisher` publishes bodies' poses as
+  `PoseStamped`, which a task latches with `PoseTargetBehavior`; a project writes its own plugin for anything else
+  ([cho_simulation_mujoco README](../../cho_simulation/cho_simulation_mujoco/README.md)).
+
+```yaml
+# <bringup package>/config/mujoco/plugins.yaml
+/**:
+  ros__parameters:
+    mujoco_plugins:
+      body_poses:
+        type: cho_simulation_mujoco/BodyPosePublisher
+        bodies: [box]
+        frame_id: fr3_link0
+```

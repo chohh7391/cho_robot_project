@@ -489,10 +489,10 @@ def _bridge_ee_links(node):
 
 
 def _runtime_files(golden):
-    """The runtime parameter files *golden* prints, parsed."""
+    """The runtime parameter files *golden* prints, parsed; not a composed MuJoCo scene, which is XML."""
     files = []
     for index, line in enumerate(golden.lines):
-        if not line.startswith('RUNTIME_FILE '):
+        if not line.startswith('RUNTIME_FILE ') or line.endswith(' xml'):
             continue
         body = []
         for following in golden.lines[index + 1:]:

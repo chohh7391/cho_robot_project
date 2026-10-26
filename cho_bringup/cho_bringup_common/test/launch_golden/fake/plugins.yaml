@@ -1,0 +1,7 @@
+# A stand-in for a project's mujoco_plugins:= file (cases.yaml).
+/**:
+  ros__parameters:
+    mujoco_plugins:
+      body_poses:
+        type: cho_simulation_mujoco/BodyPosePublisher
+        bodies: [box]

@@ -23,6 +23,10 @@ core version. It does not live on a branch of this repository and does not edit 
   `FR5BaseController`, ...) and is added to the registry through `CHO_ROBOT_CONFIG_ADDITIONS`, so
   every exclusive switch takes it down:
   [templates README, An arm controller of the project's own](../templates/overlay_project/README.md#an-arm-controller-of-the-projects-own).
+- A project's simulated world and what it reads from it stay in the project too: the Franka MuJoCo
+  bringup takes `mujoco_world:=` (an MJCF world, composed with the robot at launch) and
+  `mujoco_plugins:=` (simulation plugins, such as the core's body-pose publisher):
+  [templates README, A world and scene data of the project's own](../templates/overlay_project/README.md#a-world-and-scene-data-of-the-projects-own).
 - When a project needs something the core does not offer, add it to the core as a general
   extension point (a branch, then `main`), and move the project's pin forward. Code a second
   project needs moves into the core. Application-specific code stays in the project.

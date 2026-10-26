@@ -1,0 +1,10 @@
+<library path="cho_simulation_mujoco">
+  <class name="cho_simulation_mujoco/BodyPosePublisher"
+         type="cho_simulation_mujoco::BodyPosePublisher"
+         base_class_type="mujoco_ros2_control_plugins::MuJoCoROS2ControlPluginBase">
+    <description>
+      Publishes the poses of chosen MuJoCo bodies (by default every free body) as
+      geometry_msgs/PoseStamped on topic_prefix + body name, and optionally on /tf.
+    </description>
+  </class>
+</library>

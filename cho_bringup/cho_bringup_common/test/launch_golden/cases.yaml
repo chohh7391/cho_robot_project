@@ -68,6 +68,9 @@ cases:
                           controller_name:=joint_space_position_controller]
       moveit_controller_refused: [load_moveit_controller:=true]
       payload: [payload_file:=$FAKE/payload.yaml]
+      world: [mujoco_world:=$FAKE/world.xml, control_mode:=position,
+              controller_name:=joint_space_position_controller]
+      plugins: [mujoco_plugins:=$FAKE/plugins.yaml]
     bringup_real_robot.launch.py:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]

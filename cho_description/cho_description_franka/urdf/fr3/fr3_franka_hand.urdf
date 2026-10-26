@@ -13,6 +13,9 @@
 
   <xacro:arg name="control_mode" default="torque" />
   <xacro:arg name="hardware" default="mujoco" />
+  <!-- The MuJoCo model to load; empty is the robot's own scene for control_mode. A bringup sets it
+       to a scene it composes (cho_bringup_common/mujoco_scene.py). -->
+  <xacro:arg name="mujoco_model" default="" />
 
   <link name="base">
       </link>
@@ -749,15 +752,18 @@
         <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
         <!-- Select MuJoCo actuators automatically based on control_mode:
                position -> position servos, velocity -> velocity servos, torque -> direct motors. -->
-        <xacro:if value="${'$(arg control_mode)' == 'position'}">
+        <xacro:unless value="${'$(arg mujoco_model)' == ''}">
+          <param name="mujoco_model">$(arg mujoco_model)</param>
+        </xacro:unless>
+        <xacro:if value="${'$(arg mujoco_model)' == '' and '$(arg control_mode)' == 'position'}">
           <param name="mujoco_model">$(find cho_description_franka)/xml/fr3/scene_position.xml</param>
         </xacro:if>
-        <xacro:if value="${'$(arg control_mode)' == 'velocity'}">
+        <xacro:if value="${'$(arg mujoco_model)' == '' and '$(arg control_mode)' == 'velocity'}">
           <param name="mujoco_model">$(find cho_description_franka)/xml/fr3/scene_velocity.xml</param>
         </xacro:if>
-        <xacro:unless value="${'$(arg control_mode)' == 'position' or '$(arg control_mode)' == 'velocity'}">
+        <xacro:if value="${'$(arg mujoco_model)' == '' and '$(arg control_mode)' not in ('position', 'velocity')}">
           <param name="mujoco_model">$(find cho_description_franka)/xml/fr3/scene_torque.xml</param>
-        </xacro:unless>
+        </xacro:if>
       </hardware>
 
       <joint name="fr3_joint1">

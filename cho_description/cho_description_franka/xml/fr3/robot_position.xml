@@ -1,0 +1,6 @@
+<mujoco model="fr3 (position)">
+  <!-- The robot and its position actuators, without a world: what a bringup attaches
+       next to a project world (mujoco_world:=, cho_bringup_common/mujoco_scene.py). -->
+  <include file="fr3.xml"/>
+  <include file="actuators_position.xml"/>
+</mujoco>

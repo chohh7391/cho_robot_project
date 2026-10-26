@@ -1,0 +1,11 @@
+<mujoco model="golden world">
+  <!-- A stand-in for a project's world (cases.yaml, mujoco_world:=): a floor and a free box. -->
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane"/>
+    <body name="box" pos="0.5 0 0.025">
+      <freejoint/>
+      <geom type="box" size="0.025 0.025 0.025"/>
+    </body>
+  </worldbody>
+</mujoco>

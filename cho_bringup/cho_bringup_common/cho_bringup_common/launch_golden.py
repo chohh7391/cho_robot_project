@@ -37,8 +37,9 @@ What it does:
     would start;
   * prints the runtime parameter files the launch writes (into a private
     ROS_HOME that is deleted afterwards), with what every controller shares
-    printed once. A static parameter file (a controllers.yaml) is printed by
-    path only: its values are configuration, not launch behaviour;
+    printed once, and a MuJoCo scene it composes there as its text. A
+    static parameter file (a controllers.yaml) is printed by path only: its
+    values are configuration, not launch behaviour;
   * replaces robot_description (and SRDF) strings with a summary - the joints
     with their origin, axis and limits, and every element but links and
     materials (<ros2_control>, <gazebo>, SRDF groups, ...) - printed once per
@@ -88,6 +89,8 @@ _INLINE_WIDTH = 200
 
 # mkstemp's random part plus '.yaml'.
 _MKSTEMP_SUFFIX_LEN = 8 + len('.yaml')
+# A composed MuJoCo scene (mujoco_scene.write_mujoco_scene), mkstemp's 8 characters too.
+_MKSTEMP_XML_SUFFIX_LEN = 8 + len('.xml')
 
 
 # A cho_bringup_* or cho_moveit_* package's own launch file: the includes the
@@ -232,7 +235,12 @@ class Walker:
     def rt_label(self, path):
         if path not in self.rt_names:
             base = os.path.basename(path)
-            prefix = base[:-_MKSTEMP_SUFFIX_LEN] if base.endswith('.yaml') else base
+            if base.endswith('.yaml'):
+                prefix = base[:-_MKSTEMP_SUFFIX_LEN]
+            elif base.endswith('.xml'):
+                prefix = base[:-_MKSTEMP_XML_SUFFIX_LEN]
+            else:
+                prefix = base
             count = sum(1 for label in self.rt_names.values() if label.startswith(f'<RT:{prefix}#'))
             self.rt_names[path] = f'<RT:{prefix}#{count}>'
         return self.rt_names[path]
@@ -686,6 +694,12 @@ class Walker:
         for full in sorted(files, key=lambda f: self.rt_label(f)):
             with open(full) as stream:
                 raw = stream.read()
+            if full.endswith('.xml'):
+                # A composed MuJoCo scene: its text, paths made machine-independent.
+                self.emit(0, f'RUNTIME_FILE {self.rt_label(full)} xml')
+                for line in raw.splitlines():
+                    self.emit(1, self.norm(line))
+                continue
             aliases = bool(re.search(r'[&*]id\d+', raw))
             self.emit(0, f'RUNTIME_FILE {self.rt_label(full)} aliases={aliases}')
             # Paths become tokens BEFORE the dump: the dump wraps long lines,

@@ -149,8 +149,11 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
   hand gives `payload_file:=` and `ee_connection_xacro:=`) and `config/real/franka.config.yaml` (robot IP, gripper).
   Which backends each has: [launch matrix](docs/controllers_and_bringup.md#bringup-launch-matrix).
 
-**cho_simulation/cho_simulation_isaac/** — the Isaac runner and URDF-to-USD converter (`isaac/`, run under
-`isaacsim/python.sh`, not ROS) and the ROS-side `scripts/isaac_command_gate.py`.
+**cho_simulation/** — `cho_simulation_isaac`: the Isaac runner and URDF-to-USD converter (`isaac/`, run under
+`isaacsim/python.sh`, not ROS) and the ROS-side `scripts/isaac_command_gate.py`. `cho_simulation_mujoco`:
+`mujoco_ros2_control` plugins that read a scene, `BodyPosePublisher` (bodies' poses)
+([README.md](cho_simulation/cho_simulation_mujoco/README.md)); a project's world and plugins reach the MuJoCo bringup
+as `mujoco_world:=` and `mujoco_plugins:=` (`cho_bringup_common/mujoco_scene.py` composes the world).
 
 **cho_moveit/** — `cho_moveit_common` (the MoveIt action bridge) and one planning configuration per robot
 ([README.md](cho_moveit/README.md)); the bridge's contract: [CONTRACT.md](cho_interfaces/CONTRACT.md#the-moveit-bridge).

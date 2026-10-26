@@ -28,6 +28,7 @@ from cho_bringup_common import (
     create_controller_spawners,
     load_package_utils,
     runtime_param_cleanup,
+    world_scene_for,
 )
 
 launch_utils = load_package_utils('cho_bringup_franka')
@@ -83,6 +84,21 @@ def generate_launch_description():
                         'the hand alone. A project that mounts more gives its own',
         ),
         DeclareLaunchArgument(
+            'mujoco_world',
+            default_value='',
+            description="A project's world, an MJCF file anywhere (floor, objects, cameras, lights; its "
+                        "assets beside it), loaded with the robot instead of the robot's own floor: the "
+                        'two are composed at launch (cho_bringup_common mujoco_scene.py) and keep their '
+                        'names. Physics options stay the robot model\'s. Empty loads the robot\'s scene'
+        ),
+        DeclareLaunchArgument(
+            'mujoco_plugins',
+            default_value='',
+            description='A parameter file of mujoco_ros2_control plugins (mujoco_plugins: {<name>: {type: '
+                        '<pluginlib class>, ...}}), loaded into the simulation, each handed the MuJoCo '
+                        'model and data every step: a project reads or drives the scene with its own'
+        ),
+        DeclareLaunchArgument(
             'controllers_file',
             default_value=os.path.join(bringup_path, 'config', 'mujoco', 'controllers.yaml'),
             description='Controller YAML file loaded by mujoco_ros2_control'
@@ -120,11 +136,19 @@ def generate_launch_description():
         xacro_file = LaunchConfiguration('xacro_file').perform(context)
         payload_config_file = (LaunchConfiguration('payload_file').perform(context)
                                or os.path.join(bringup_path, 'config', 'payload.yaml'))
+        mujoco_world = LaunchConfiguration('mujoco_world').perform(context)
+        mujoco_plugins = LaunchConfiguration('mujoco_plugins').perform(context)
+        # The description names its MuJoCo model; a world is composed with the
+        # robot model beside that scene, and the description told to load it.
+        xacro_args = ['xacro ', xacro_file, ' control_mode:=', LaunchConfiguration('control_mode')]
+        scene_file = None
+        if mujoco_world:
+            scene_file = world_scene_for(
+                xacro_file, {'control_mode': LaunchConfiguration('control_mode').perform(context)},
+                mujoco_world)
+            xacro_args += [' mujoco_model:=', scene_file]
         robot_description = {
-            'robot_description': ParameterValue(
-                Command(['xacro ', xacro_file, ' control_mode:=', LaunchConfiguration('control_mode')]),
-                value_type=str
-            )
+            'robot_description': ParameterValue(Command(xacro_args), value_type=str)
         }
         node_robot_state_publisher = Node(
             package='robot_state_publisher',
@@ -186,7 +210,7 @@ def generate_launch_description():
                 robot_description,
                 LaunchConfiguration('controllers_file'),
                 runtime_param_file,
-            ],
+            ] + ([mujoco_plugins] if mujoco_plugins else []),
             remappings=[('~/robot_description', '/robot_description')],
             on_exit=Shutdown(),
         )
@@ -200,6 +224,8 @@ def generate_launch_description():
             ),
             runtime_param_cleanup(runtime_param_file),
         ]
+        if scene_file:
+            event_handlers.append(runtime_param_cleanup(scene_file))
 
         return [node_robot_state_publisher, node_mujoco_ros2_control] + event_handlers
 

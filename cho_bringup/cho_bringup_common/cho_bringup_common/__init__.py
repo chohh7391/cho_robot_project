@@ -32,6 +32,7 @@ from .isaac import (
     isaac_sim_process,
     shutdown_on_gate_failure,
 )
+from .mujoco_scene import compose_mujoco_scene, robot_model_beside, world_scene_for, write_mujoco_scene
 from .runtime_params import (
     bringup_params,
     create_runtime_param_cleanup,
@@ -53,6 +54,7 @@ __all__ = [
     'as_bool',
     'bringup_params',
     'chain_spawners',
+    'compose_mujoco_scene',
     'check_isaac_install',
     'create_controller_spawners',
     'create_runtime_param_cleanup',
@@ -67,6 +69,7 @@ __all__ = [
     'load_yaml',
     'make_spawner_node',
     'prepend_to_search_paths',
+    'robot_model_beside',
     'runtime_control_mode',
     'runtime_param_cleanup',
     'runtime_param_dir',
@@ -74,6 +77,8 @@ __all__ = [
     'start_on_output',
     'top_level_spawner',
     'unique_names',
+    'world_scene_for',
+    'write_mujoco_scene',
     'write_position_arm_param_file',
     'write_runtime_param_file',
 ]
