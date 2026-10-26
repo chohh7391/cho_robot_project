@@ -1,0 +1,47 @@
+# Object table for the fr5 `tag_search` task, and for cho_object_pose's fake
+# scene (cho_object_pose/config/fake_scene.yaml), whose two tags it names.
+#
+# Task knowledge, as tag_reach.yaml explains: which tag marks what, and where
+# the pose is put relative to it. run_task_manager.launch.py forwards it to
+# cho_object_pose with object_pose_config:=.
+#
+# Each tag stands on a stalk beside its vessel rather than on it, so the vessel
+# cannot hide its own tag. The offset is in the tag's frame, which for these
+# flat, unrotated tags has the base frame's axes: -x back to the vessel, +z up
+# to 150 mm over the bench plane. fake_scene.yaml lists where that puts each
+# vessel; test_tag_search.py checks the two files agree.
+#
+# `topic` is spelled out because tasks/fr5/tag_search.py builds it from the
+# object's name.
+objects:
+  - name: beaker
+    tag_id: 0
+    tag_size: 0.039
+    topic: /perception/object_pose/beaker
+    grasp_offset:
+      position: [-0.070, 0.0, 0.150]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    # The vessel in rviz: a 135 mm cylinder standing on the bench plane, its
+    # centre 82.5 mm under the published pose.
+    shape:
+      type: cylinder
+      size: [0.050, 0.050, 0.135]
+      origin: [0.0, 0.0, -0.0825]
+      color: [0.2, 0.7, 1.0, 0.65]
+
+  - name: flask
+    tag_id: 1
+    tag_size: 0.039
+    topic: /perception/object_pose/flask
+    grasp_offset:
+      position: [-0.090, 0.0, 0.150]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    top_down_yaw: true
+    yaw_axis: [1.0, 0.0, 0.0]
+    shape:
+      type: cylinder
+      size: [0.070, 0.070, 0.120]
+      origin: [0.0, 0.0, -0.090]
+      color: [1.0, 0.6, 0.2, 0.65]

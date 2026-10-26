@@ -244,8 +244,9 @@ and only for those:
     priority: 0
 ```
 
-The case it exists for is a recovery sweep (the task that runs one is on the
-`auto_chem` branch). A close-up view and a metre-away
+The case it exists for is a recovery sweep: the arm's camera goes to look at what
+the standing ones do not see well (cho_task_manager's fr5 `tag_search` task is
+one). A close-up view and a metre-away
 view are not two measurements of one quantity: median them and the result is a
 pose neither camera saw, or the spread gate refuses them both during exactly
 the sweep that was meant to fix things.
@@ -298,8 +299,9 @@ which is set for "good enough to publish". A consumer that wants a genuinely
 better view holds out for a number; this node keeps no opinion about what any
 task needs.
 
-The occlusion recovery task that reads it, `OcclusionSweepBehavior`, is on the
-`auto_chem` branch; here `marker_memory` (the display) reads it.
+cho_task_manager's `ObjectVisibilityBehavior` waits on it for one camera, or any, to
+report an object OK with a margin of its own; the fr5 `tag_search` task decides
+with it when a viewpoint has seen enough. Here `marker_memory` (the display) reads it.
 
 ## Seeing it
 
@@ -331,9 +333,7 @@ A mesh is held to the same contract as a primitive — `size` is the body's
 bounding box and `origin` is where its centre goes — so the file has to be
 normalised to a unit box centred on itself, because the alternative is a per-file
 scale factor derived from whatever units its author used, which is a number nobody
-can check by looking. A missing mesh draws nothing and logs only in rviz. The
-glassware meshes, their USD-to-STL converter and the test that every resource in
-the bench table resolves to an installed file are on the `auto_chem` branch.
+can check by looking. A missing mesh draws nothing and logs only in rviz.
 
 ### The cameras are drawn too
 
@@ -414,12 +414,15 @@ ros2 launch cho_bringup_fr5 bringup_mujoco_robot.launch.py
 ros2 launch cho_bringup_fr5 camera_extrinsics.launch.py
 ros2 run cho_object_pose fake_detections --ros-args -p use_sim_time:=true -p blind:="['side_1:0']"
 ros2 launch cho_object_pose object_pose.launch.py use_sim_time:=true robot_type:=fr5 \
-    objects_config:=<the bench's object table, on the auto_chem branch> \
+    objects_config:=$(ros2 pkg prefix --share cho_task_manager)/config/perception/tag_search.yaml \
     cameras_config:=$(ros2 pkg prefix --share cho_object_pose)/config/cameras.yaml
 ```
 
 `blind` makes a camera miss a tag, standing in for an occlusion by the bench furniture the
-arm model does not contain — which is how the `auto_chem` branch's FR5 recovery sweep is exercised end to end.
+arm model does not contain. The object table is the fr5 `tag_search` task's, which names this
+scene's two tags; with `side_1` blind to the beaker, that task's wrist-camera search runs end to
+end against it ([tag_search.py](../../cho_task_manager/cho_task_manager/tasks/fr5/tag_search.py)
+has the run, and what each of its viewpoints sees).
 
 **`use_sim_time` has to match everywhere.** Every age on the visibility topic is this node's
 clock minus an image stamp, so a node on wall time against drivers on `/clock` reports every

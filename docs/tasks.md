@@ -313,9 +313,19 @@ a rebuild or before real experiments.
 | --- | --- | --- |
 | `fjt_handover` | homes, hands the arm to the trajectory controller for an external executor, supervises, takes it back | `controller_name:=joint_trajectory_controller` |
 | `trajectory_replay` | replays a recording ([Trajectory replay](#trajectory-replay)) | the FR5 bringup (the trajectory controller is always loaded); `home_via:=direct` unless MoveIt runs. MuJoCo: `gripper:=ag95` for the example's gripper events |
+| `tag_search` | home → is the object seen well? → if not, move the wrist camera through viewpoints until it is → latch its pose → home | any FR5 bringup, plus `object_pose_config:=` and a detector (MuJoCo: `fake_detections`) |
 
 Every FR5 bringup is `control_mode:=position`, which is also the only mode
 `fr5.yaml` declares a hold controller for.
+
+`tag_search` is the example of an occlusion recovery: it reads
+`/perception/object_visibility` and waits, at home and then at each viewpoint, for a
+camera to report the object OK with a decode margin of at least `min_decision_margin`
+(55). Its default viewpoints are written for `cho_object_pose`'s fake scene: the
+first does not have the tag in frame, the second sees it at margin 50.6 (a pose is
+published, but not good enough), the third at 62.8. `task_params:=` sets the object,
+the camera, the margin, the waits and the viewpoints; the run in MuJoCo is in the
+docstring of [tag_search.py](../cho_task_manager/cho_task_manager/tasks/fr5/tag_search.py).
 
 ## OpenArm tasks
 

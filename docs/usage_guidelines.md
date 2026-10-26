@@ -60,7 +60,8 @@ on the robot" until it has been.
 
 Before a session:
 - In Desk: joints unlocked and FCI on, and the end-effector setting (mass, CoM, TCP) matches what
-  is mounted. Every torque law rides on the robot's own gravity model.
+  is mounted. Every torque law rides on the robot's own gravity model, and a changed setting moves
+  the FCI's `O_T_EE` off the model's `fr3_hand_tcp` (35 mm along the tool axis has been seen).
 - Before each motion, show its target poses and how far the TCP will travel, and clear that volume
   (for wide moves, also above and behind the base, where the elbow passes). Keep the e-stop in hand.
 
@@ -78,8 +79,21 @@ During a session:
 - To stop, deactivate the arm controller first, so the robot goes idle without an error. Then
   Ctrl-C the launch, and check that no `ros2_control_node` is left.
 
-Which controllers have run on the robot, what the robot showed, and the plan for the rest:
-[todo/FRANKA_GAIN_TUNING_TODO.md](../todo/FRANKA_GAIN_TUNING_TODO.md).
+What each controller has done on the real FR3, and the commits that changed it after its last run
+there:
+
+| mode | controller | on the real FR3 | changed since |
+| --- | --- | --- | --- |
+| position | `joint_space_position`, `task_space_ik` | moves, with `robot_time` and the rate limiter | - |
+| velocity | `joint_space_velocity`, `task_space_velocity` | moves | 0434a4f (`robot_time`, `JointRateLimiter`) |
+| torque | `joint_space_impedance` | moves | ffbcdb3, 0b80d51 (gains), e0eacc5 (switch fade) |
+| torque | `task_space_qp` | holds, a 1 cm move, the goal-end fade | e0eacc5 |
+| torque | `joint_space_qp`, `task_space_impedance`, `operational_space`, `gravity_compensation` | never run | - |
+| effort | `action_chunk_controller` | a hold, a relative circle | 9beec94, efbbf71, 3e6de09, d88c14d |
+| - | `gripper_controller` | homing, chunk-driven moves | - |
+
+The recordings behind the numbers on this page are on the lab PC in `~/franka_gain_tuning` (its
+README), not in the repo.
 
 ## Choosing a Franka controller
 
@@ -91,13 +105,23 @@ Which controllers have run on the robot, what the robot showed, and the plan for
 - **Torque** (`joint_space_impedance`, `joint_space_qp`, `task_space_qp`,
   `task_space_impedance`, `operational_space`): compliant, for contact. Joint friction limits how
   well they track:
-  - they lag by friction / kp;
-  - a lightly damped joint sticks and slips;
-  - j2 and j4 ripple slightly in motion.
+  - they lag by friction / kp: 2-3 mrad on j1-j4, up to 12 mrad on the wrist at kp 100. The MJCF's
+    `frictionloss` gives MuJoCo the same lag.
+  - a lightly damped joint sticks and slips: the wrist ticks at up to 58 mrad/s at kp 100 / kd 5.
+    Damping holds a slip back more than stiffness does: wrist kp 250 / kd 20 cut the wrist's
+    3-20 Hz motion by a quarter to a half, and j7 still slips at 34-42 mrad/s.
+  - j2 and j4 ripple through every move at about 40 cycles/rad, a disturbance of the joints
+    themselves. A damping ratio of about 0.7 cuts it by 40 %; what is left is the TCP's 3-20 Hz
+    vibration in motion, 0.04 mm rms with peaks of 0.2-0.7 mm, as in position mode. Holds stay
+    within 0.013 mm.
+  - kd multiplies velocity noise into the command: at kd 20-45 `joint_space_impedance` changes its
+    command by up to 175 Nm/s per period at rest, and the arm does not respond. Its D term takes
+    `dq_filtered_` with alpha 0.99, which is the measurement.
 
   The real gains in `config/real/controllers.yaml` carry comments with the measurements behind them.
   `task_space_impedance`, `operational_space` and the effort action-chunk law leave the arm's null
-  space free (`use_nullspace_posture: false`), so the elbow can drift over long moves.
+  space free (`use_nullspace_posture: false`), so the elbow can drift over long moves: j1 and j3
+  moved 0.19 rad over one effort circle.
 - **`gravity_compensation_controller`**: commands no torque of its own, and the arm floats on the
   robot's gravity model.
 - **`action_chunk_controller`**: runs policy output (`cho_interfaces/ActionChunk`) in the bringup's

@@ -22,6 +22,7 @@ config and returns the tree's root.
 
 from cho_task_manager.tasks.fr5 import (
     create_fr5_fjt_handover_tree,
+    create_fr5_tag_search_tree,
     create_fr5_trajectory_replay_tree,
 )
 from cho_task_manager.tasks.franka import (
@@ -57,6 +58,9 @@ PICK_PLACE_POSITION = {'franka': create_franka_pick_place_position_tree}
 
 # Perception-driven: the target comes from an AprilTag at run time.
 TAG_REACH = {'franka': create_franka_tag_reach_tree}
+# The wrist camera searches for a tag the standing cameras do not see well
+# (tasks/fr5/tag_search.py).
+TAG_SEARCH = {'fr5': create_fr5_tag_search_tree}
 
 # Controller smoke checks, one per bringup control_mode.
 CONTROLLER_CHECK_POSITION = {'franka': create_franka_controller_check_position_tree}

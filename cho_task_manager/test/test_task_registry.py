@@ -42,6 +42,7 @@ CORE = {
     'pick_place': {'franka', 'ur5e'},
     'pick_place_position': {'franka'},
     'tag_reach': {'franka'},
+    'tag_search': {'fr5'},
     'controller_check_position': {'franka'},
     'controller_check_torque': {'franka', 'openarm'},
     'controller_check_velocity': {'franka'},

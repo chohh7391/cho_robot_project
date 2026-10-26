@@ -162,8 +162,7 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 **cho_task_manager/** — the py_trees task manager: `behaviors/`, `subtrees/`, `tasks/<robot>/` (registered in
 `tasks/core.py`), `testing.py` (a task's goal checks), recordings in `config/replay/<robot>/`
 ([README.md](cho_task_manager/config/replay/README.md)). How a package registers a task and hands it `task_params:=`:
-[README.md](cho_task_manager/README.md). Reference: [docs/tasks.md](docs/tasks.md). The chemistry-bench application
-is on the `auto_chem` branch.
+[README.md](cho_task_manager/README.md). Reference: [docs/tasks.md](docs/tasks.md).
 
 **cho_control_tools/** — interactive action clients, action-chunk tools (`action_chunk_client`, `action_chunk_mit_probe`) and bag
 plotters ([docs/action_clients.md](docs/action_clients.md)).

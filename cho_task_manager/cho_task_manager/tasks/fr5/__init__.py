@@ -13,9 +13,11 @@
 # limitations under the License.
 
 from .fjt_handover import create_fr5_fjt_handover_tree
+from .tag_search import create_fr5_tag_search_tree
 from .trajectory_replay import create_fr5_trajectory_replay_tree
 
 __all__ = [
     'create_fr5_fjt_handover_tree',
+    'create_fr5_tag_search_tree',
     'create_fr5_trajectory_replay_tree',
 ]

@@ -148,8 +148,7 @@ ros2 launch cho_task_manager run_task_manager.launch.py \
 
 See [docs/tasks.md](docs/tasks.md) for task requirements, including
 [`task:=trajectory_replay`](docs/tasks.md#trajectory-replay) on every arm, and
-[docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup. The chemistry-bench
-application is on the `auto_chem` branch.
+[docs/multi_pc.md](docs/multi_pc.md) for multi-PC DDS setup.
 
 Policy bridges send `cho_interfaces/ActionChunk` to `action_chunk_controller` (Franka) or
 `action_chunk_mit_controller` (OpenArm): [docs/controllers_and_bringup.md](docs/controllers_and_bringup.md#action-chunks).

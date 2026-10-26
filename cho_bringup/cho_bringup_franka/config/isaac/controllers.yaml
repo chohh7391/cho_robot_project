@@ -190,7 +190,7 @@
       # gain alone and lowering translation with it were measured: neither removes
       # the wrist limit cycle (fr3_joint5/6 bang-bang at their 12 Nm limit
       # regardless), and the softer task only adds steady-state offset. The
-      # residual is a transport delay problem, not a stiffness one - see SESSION_LOG.
+      # residual is a transport delay problem, not a stiffness one.
       kp_task: [800.0, 800.0, 800.0, 400.0, 400.0, 400.0]
       kd_task: [56.57, 56.57, 56.57, 40.0, 40.0, 40.0]
       kp_joint: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0]

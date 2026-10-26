@@ -1222,6 +1222,8 @@ TEST_F(Fixture, FrictionSourceDecidesWhichVelocitySignIsUsed)
   // silent there and the mode would test nothing. This is why the source is
   // selectable rather than fixed.
   using Access = cho_controller_openarm_mit::TaskSpaceImpedanceControllerTestAccess;
+  // Once failed on CI here, not ready after 900 cycles; it passes locally, also
+  // under CPU load. If it fails again, wait with a longer bound.
   for (int i = 0; i < 900 && !Access::ready(*controller_); ++i) cycle(1);
   ASSERT_TRUE(Access::ready(*controller_));
   stop_control_loop();

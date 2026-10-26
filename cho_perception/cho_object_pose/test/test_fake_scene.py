@@ -57,7 +57,7 @@ def _scene(**overrides):
 def test_a_tag_shrinks_with_range_the_way_the_gate_reads_it():
     # This is the number cho_object_pose's min_edge_px gates on, so it has to
     # be the real relation and not a fudge: 39 mm at 447 px focal is about
-    # 39 px at 0.45 m, the range the fr5_bench raster (auto_chem branch) works at.
+    # 39 px at 0.45 m.
     assert fake_scene.apparent_edge_px(0.039, 447.0, 0.45) == pytest.approx(38.7, abs=0.2)
     assert fake_scene.apparent_edge_px(0.039, 447.0, 0.62) == pytest.approx(28.1, abs=0.2)
     far = fake_scene.apparent_edge_px(0.039, 447.0, 1.0)
@@ -214,24 +214,24 @@ def test_the_shipped_scene_matches_the_camera_table_it_stands_in_for():
         assert camera.frame_prefix == real[camera.name].frame_prefix
 
 
-def test_the_shipped_scene_walks_the_fr5_raster_without_satisfying_it_at_once():
-    # What margin_per_px is FOR. The fr5_bench sweep raster (auto_chem branch)
-    # asks for a decode margin of 55; the harness has to FAIL the far row
-    # (about 0.59 m to the tag) and PASS in the middle one (about 0.55 m), or
-    # the sweep either succeeds on its first waypoint and the raster is never
-    # exercised, or never succeeds at all and only the failure path is.
+def test_the_shipped_scene_makes_a_search_come_closer_before_it_is_satisfied():
+    # What margin_per_px is FOR. cho_task_manager's fr5 tag_search asks for a
+    # decode margin of 55 and looks at the beaker's tag from 0.62 m, then from
+    # 0.50 m. The harness has to FAIL the first and PASS the second, or the
+    # search either succeeds at its first look and coming closer is never
+    # exercised, or never succeeds and only the failure path is.
     scene = _shipped()
 
     def margin(range_m):
         return fake_scene.apparent_edge_px(
             scene.tag_size_m, scene.focal_px, range_m) * scene.margin_per_px
 
-    assert margin(0.59) < 55.0
-    assert margin(0.55) >= 55.0
-    # And the far row still clears cho_object_pose's own min_edge_px of 25, so
-    # 'too far to decode at all' and 'not good enough yet' stay distinguishable
-    # -- they are a sweep aimed wrong and a sweep that has to come closer.
-    assert fake_scene.apparent_edge_px(scene.tag_size_m, scene.focal_px, 0.59) > 25.0
+    assert margin(0.62) < 55.0
+    assert margin(0.50) >= 55.0
+    # And the first look still clears cho_object_pose's own min_edge_px of 25,
+    # so 'too far to decode at all' and 'not good enough yet' stay
+    # distinguishable -- a search aimed wrong and a search that has to come closer.
+    assert fake_scene.apparent_edge_px(scene.tag_size_m, scene.focal_px, 0.62) > 25.0
 
 
 def test_the_harness_cone_is_the_cameras_shorter_angle():

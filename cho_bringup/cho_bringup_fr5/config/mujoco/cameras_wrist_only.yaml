@@ -8,8 +8,7 @@
 #
 # At the home pose the tags are about 50 degrees off the wrist's optical axis,
 # against a guaranteed half-cone of 29, so nothing is in frame and nothing is
-# published until the arm moves. The occlusion recovery that relies on that is
-# on the auto_chem branch, with its object table (mujoco_sdl_cell.yaml).
+# published until the arm moves.
 #
 #   ros2 launch cho_object_pose detectors.launch.py cameras_config:=<this file> \
 #       objects_config:=<the cell's object table>

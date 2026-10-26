@@ -65,8 +65,7 @@
                 <site name="attachment_site" pos="0 0 0.1"/>
 
                 <!-- Wrist camera, emulated: the close view for when the
-                     standing camera loses a vessel behind the arm (the
-                     occlusion recovery is on the auto_chem branch).
+                     standing camera loses a vessel behind the arm.
 
                      POSE AND AIM ARE THE MEASURED MOUNT, converted rather than
                      re-invented: cho_bringup_fr5/config/real/camera_extrinsics.yaml
