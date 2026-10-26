@@ -149,11 +149,15 @@
   operational_space_controller:
     ros__parameters:
       robot_type: "fr3"
-      # Rotation cut from the MuJoCo 7200 to 1600 by the same sqrt(kp) < 40 rule
-      # used for joint_space_qp_controller (sqrt(7200) = 85 is well past what the
-      # ~10 ms Isaac round trip tolerates); translation's 900 -> 30 already fits.
-      kp_task: [900.0, 900.0, 900.0, 1600.0, 1600.0, 1600.0]
-      kd_task: [60.0, 60.0, 60.0, 80.0, 80.0, 80.0]
+      # 20 rad/s, critically damped, on the asset's rotor inertia (robot_profile.json
+      # arm_armature) instead of inertia_scale's stand-in. At 900/1600 (30/40 rad/s)
+      # the ~10 ms Isaac round trip grew a 5 Hz oscillation during a 2 cm move that
+      # saturated j2/j4 at 87 Nm and never stopped; here three 2 cm out-and-back
+      # moves settle within 0.2 mm and every hold within 0.1 mm.
+      rotor_inertia: [0.195, 0.195, 0.195, 0.195, 0.074, 0.074, 0.074]
+      inertia_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      kp_task: [400.0, 400.0, 400.0, 400.0, 400.0, 400.0]
+      kd_task: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
       kp_null: 10.0
       kd_null: 2.0
       # null-space posture toward default_dof_pos (verified in MuJoCo)

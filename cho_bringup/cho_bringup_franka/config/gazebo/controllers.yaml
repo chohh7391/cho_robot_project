@@ -129,8 +129,10 @@
   task_space_impedance_controller:
     ros__parameters:
       robot_type: "fr3"
-      kp_task: [100.0, 100.0, 100.0, 20.0, 20.0, 20.0]  # [300.0, 300.0, 300.0, 20.0, 20.0, 20.0]
-      kd_task: [20.0, 20.0, 20.0, 5.0, 5.0, 5.0]  # [3.46410162, 3.46410162, 3.46410162, 0.89442719, 0.89442719, 0.89442719]
+      # The MuJoCo gains. At 100 N/m the URDF's 0.2 N m joint friction stopped a
+      # 2 cm move 10.5 mm short; here it ends 0.65 mm off and holds there.
+      kp_task: [1500.0, 1500.0, 1500.0, 40.0, 40.0, 40.0]
+      kd_task: [60.0, 60.0, 60.0, 5.0, 5.0, 5.0]
       kp_null: 10.0
       kd_null: 6.3246
       # see mujoco config; default off here

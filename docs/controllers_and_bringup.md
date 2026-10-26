@@ -89,16 +89,6 @@ limiter off for both command types. Our trajectories never reach these bounds. A
 limiter changes logs a throttled `Joint rate limiter changed a ... command` WARN: a glitch the FCI
 would have stopped the arm for.
 
-**Chained prototype** (`cho_controller_chain`): declared in the MuJoCo config for
-`control_mode:=torque` and spawned by no bringup. Loading them by hand:
-[its README](../cho_controller/cho_controller_chain/README.md).
-
-| Instance | Plugin | What it does |
-| --- | --- | --- |
-| `chain_impedance_law` | `cho_controller_chain/JointImpedanceLaw` | Chainable joint impedance law; exports per-joint position, velocity and acceleration references |
-| `chain_joint_space_generator` | `cho_controller_chain/JointSpaceGenerator` | `~/joint_space` goals as the law's references (Ruckig) |
-| `chain_task_space_generator` | `cho_controller_chain/TaskSpaceGenerator` | `~/task_space` goals as the law's references (DLS IK) |
-
 ### UR5e — `cho_controller_ur`
 
 | Instance | Plugin | Backends |

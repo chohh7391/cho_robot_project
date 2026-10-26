@@ -64,6 +64,9 @@
       safety_profile_file: ''
       stiffness: 10.0
       damping: 0.5
+      # g(q) as tau_ff: on the stiffness alone gravity sagged joint 4 by 0.06 rad,
+      # three times the goal tolerance.
+      gravity_feedforward: true
       constraints:
         path_tolerance: 0.2
         goal_tolerance: 0.02

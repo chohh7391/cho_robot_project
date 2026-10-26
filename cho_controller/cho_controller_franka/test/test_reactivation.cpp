@@ -853,9 +853,11 @@ protected:
     const double end_step = largest_step(settled + 1, samples_.size());
     EXPECT_LT(end_step, smooth)
       << "the goal's end changed the torque by " << end_step << " Nm in one period, of a " << push << " Nm push";
-    // The task-space laws hold what they measured at the end, so the push fades
-    // out; the joint-space ones keep their last reference, push included.
-    if (GetParam().task_space) {
+    // The task-space QP holds the joints it measured at the end, so the push
+    // fades out; the joint-space laws keep their last reference and the
+    // impedance and OSC laws the goal (TaskSpaceServer, on success), push
+    // included.
+    if (std::string(GetParam().name) == "task_space_qp_controller") {
       EXPECT_LT(max_abs_difference(samples_.back(), before), smooth) << "the push outlasted the fade";
     } else {
       EXPECT_LT(max_abs_difference(samples_.back(), pushed), smooth) << "the hold let go of the push";

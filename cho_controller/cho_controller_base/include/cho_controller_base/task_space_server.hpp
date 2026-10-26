@@ -88,11 +88,12 @@ inline bool task_goal_frame_allowed(
 // controllers read, all pinocchio::SE3.
 //
 // Success: a second past the trajectory's duration with both errors under the
-// thresholds. Abort: 2 s past it, the planner rejecting the goal, or the
-// controller calling abort_active_goal(). Every one of these endings, and a
-// cancel, leaves H_ee_init at the measured pose H_ee, which is what the
-// controllers hold when idle -- otherwise a cancel would step the arm back to
-// where this goal started. An ending by deactivation leaves the state alone; the
+// thresholds; it leaves H_ee_init, what the controllers hold when idle, at the
+// goal H_ee_ref, where the trajectory ended, so a law still lagging there keeps
+// pulling the arm in. Abort: 2 s past it, the planner rejecting the goal, or the
+// controller calling abort_active_goal(). These and a cancel leave H_ee_init at
+// the measured pose H_ee -- otherwise a cancel would step the arm back to where
+// this goal started. An ending by deactivation leaves the state alone; the
 // controller latches H_ee_init again in on_activate. compute() returns true
 // while the goal supplies a reference this cycle.
 template<typename StateT, typename TrajectoryT>
@@ -189,7 +190,7 @@ public:
     if (elapsed > duration + 1.0 && translation_error < threshold_.translation &&
       rotation_error < threshold_.rotation)
     {
-      state.H_ee_init = state.H_ee;
+      state.H_ee_init = state.H_ee_ref;
       this->finish_from_rt(GoalPhase::kFinishSucceeded);
       return true;
     }
@@ -222,6 +223,21 @@ public:
   bool abort_active_goal(StateT & state, const std::string & reason)
   {
     return abort_active_goal(state, reason.c_str());
+  }
+
+  // For a controller that plays the goal from a reference of its own (an
+  // open-loop joint reference, which the arm droops from under load), on the
+  // control thread in the goal's first cycle, after compute(): starts the
+  // trajectory at `reference` instead of the measured pose and composes a
+  // relative goal onto it, so the droop does not move the target and goals in
+  // a row do not add it up.
+  void start_from_reference(StateT & state, const pinocchio::SE3 & reference)
+  {
+    this->trajectory_->setInitSample(reference);
+    if (relative_) {
+      state.H_ee_ref = reference * goal_;
+      this->trajectory_->setGoalSample(state.H_ee_ref);
+    }
   }
 
 protected:

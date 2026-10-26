@@ -82,7 +82,7 @@ controllers is forbidden.
 The standard `joint_trajectory_controller` claims position only, so it cannot be the MIT producer.
 MoveIt instead targets a Cho-owned `FollowJointTrajectory` controller that preserves the standard
 action API but claims/writes the complete MIT protocol. Its profile supplies explicit position gains,
-interpolated `q_des/dq_des`, and normally zero `tau_ff`. Thus MoveIt changes only its configured
+interpolated `q_des/dq_des`, and `tau_ff` zero or, with `gravity_feedforward`, the model's gravity torque. Thus MoveIt changes only its configured
 controller name and still sends an ordinary joint trajectory. There is no hidden hardware default
 gain. Direct Cho controllers use the same shared producer helper. Legacy standard JTC is forbidden
 on a v1 arm resource. Left/right direct producers stay outside the MoveIt controller map.
@@ -114,16 +114,20 @@ outgoing producer's leftover commit is discarded. So a producer switch does not 
 gravity support for a cycle, and a rejected or discarded commit's `tau_ff` never becomes a seed.
 The producer waits for the matching ack before ramping.
 
-The FollowJointTrajectory producers carry `tau_ff=0` and `hold_torque=NaN` throughout, by design:
-they have no dynamics model, their seed is the measured SAFE-gain hold, and between goals they hold
-where they began -- the seed or the last trajectory point -- not the latest measurement. Activated after a producer that
-was supporting the arm, the seed therefore drops the hold's gravity torque onto the safe-gain spring
-(a sag of about `tau_g / safe_hold_stiffness`), and trajectories carry gravity on their explicit
-stiffness alone. That is accepted for the MuJoCo prototype, where these producers run; a constant
-feed-forward taken at activation is wrong anywhere but the seed pose (twice the error of zero once
-gravity changes sign along a trajectory). The real bringup does not offer the FollowJointTrajectory
-producers (`cho_bringup_openarm/utils/launch_utils.py`); before it may, they need a gravity term of
-their own (a model, or the effort state they do not claim yet).
+The FollowJointTrajectory producers' seed is the measured SAFE-gain hold, and between goals they hold
+where they began -- the seed or the last trajectory point -- not the latest measurement. Their
+`tau_ff` depends on `gravity_feedforward`, which the MuJoCo configs set:
+- **On**: `tau_ff = g(q)` from Pinocchio on `robot_description` at the measured `q`, clamped to
+  `tau_ff_magnitude` and slewed at `tau_ff_slew_per_s`; the seed carries what the effort command
+  interfaces hold, so a switch keeps the arm's gravity support, and the slew takes it to `g(q)`.
+  `hold_torque = g(q)`, clamped, unslewed.
+- **Off** (the default): `tau_ff=0` and `hold_torque=NaN` throughout. Activated after a producer that
+  was supporting the arm, the seed drops the hold's gravity torque onto the safe-gain spring (a sag
+  of about `tau_g / safe_hold_stiffness`), and trajectories carry gravity on their explicit
+  stiffness alone: at the MuJoCo stiffness of 10 N m/rad, 0.06 rad on joint 4.
+
+The real bringup does not offer the FollowJointTrajectory producers
+(`cho_bringup_openarm/utils/launch_utils.py`).
 
 `mit_session_id` is allocated when the hardware is **activated**: every activation starts a new
 session, with ack, SAFE generation and SAFE ack back at zero, seeded from the state read then, so a
@@ -235,8 +239,8 @@ loader parses. The real profiles' threshold is `0.1 rad/s`; it must stay above t
 - Writers: `TaskSpaceImpedanceController` and `ActionChunkController` write
   `gravity_scale * gravity_joint_scale[i] * g_i(q)`; `JointImpedanceActionController` writes `g_i(q)`
   (`g` from Pinocchio on the controller's model at the measured `q`, clamped to `tau_ff_magnitude`,
-  no Coriolis, friction, spring or slew); the raw-topic producers and the `FollowJointTrajectory`
-  pair write NaN. Written on every commit before the generation
+  no Coriolis, friction, spring or slew), and so does the `FollowJointTrajectory` pair with
+  `gravity_feedforward`; the raw-topic producers, and the pair without it, write NaN. Written on every commit before the generation
   ([producers](../cho_controller/cho_controller_openarm_mit/DESIGN.md#hold-torque)).
 - The name does not end in `/effort`: the MuJoCo adapter forwards claims ending in `/effort` to its
   base, and this one is the wrapper's own.
@@ -308,7 +312,7 @@ transport or hardware FAULT disables at once, without a ramp.
 |---|---|---|
 | Action | `control_msgs/action/FollowJointTrajectory` | identical type and goal/cancel/result semantics |
 | Joint list | configured group | exact 7 or 14 names; partial/duplicate goals rejected |
-| Interpolation | trajectory positions/velocities | same inputs; explicit profile gains and normally zero `tau_ff` |
+| Interpolation | trajectory positions/velocities | same inputs; explicit profile gains; `tau_ff` 0 or, with `gravity_feedforward`, g(q) |
 | Claims | standard JTC is position-only | all five fields plus protocol handles |
 | Map | controller action per group | only one 14-axis `bimanual_follow_joint_trajectory_mit_controller`; direct left/right stay outside MoveIt |
 

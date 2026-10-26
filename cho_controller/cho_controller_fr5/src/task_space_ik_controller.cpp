@@ -164,6 +164,14 @@ controller_interface::return_type TaskSpaceIKController::update(
             }
             return controller_interface::return_type::OK;
         }
+        if (!prev_running_) {
+            // Goal just started: seed the trajectory at the REFERENCE pose FK(q_ref_),
+            // not the measured pose (which the action server used), and compose a
+            // relative goal onto it, before the guard below reads the goal. The
+            // command continues from where q_ref_ already is -> no first-cycle step,
+            // and the servo droop is not added to the target.
+            action_server_->start_from_reference(state_, H_ref);
+        }
 
         // This is a deliberately simple workspace-plane guard, not full mesh or
         // self-collision checking. Check all three relevant poses before sampling
@@ -247,13 +255,6 @@ controller_interface::return_type TaskSpaceIKController::update(
                 }
                 return controller_interface::return_type::OK;
             }
-        }
-
-        if (!prev_running_) {
-            // Goal just started: seed the trajectory at the REFERENCE pose FK(q_ref_),
-            // not the measured pose (which the action server used). The command
-            // continues from where q_ref_ already is -> no first-cycle step.
-            action_server_->trajectory_->setInitSample(H_ref);
         }
 
         const auto & sample = action_server_->trajectory_->computeNext();

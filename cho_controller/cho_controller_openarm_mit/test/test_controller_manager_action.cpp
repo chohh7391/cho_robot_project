@@ -529,3 +529,45 @@ TEST_F(Fixture, PluginActivatesRejectsOldHeaderAndCompletesMeasuredGoal) {
             std::future_status::ready);
   EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
 }
+
+TEST_F(Fixture, AFirstPointAtTimeZeroIsWhereTheTrajectoryStarts) {
+  // MoveIt's trajectories begin with the start state at time_from_start 0.
+  cycle(5);
+  auto client = rclcpp_action::create_client<Action>(
+      client_node,
+      "/mit_e2e/both_arms_mit_trajectory_controller/follow_joint_trajectory");
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
+  const auto send = [&](const Action::Goal &goal) {
+    auto future = client->async_send_goal(goal);
+    for (int i = 0; i < 20 && future.wait_for(std::chrono::milliseconds(0)) !=
+                                  std::future_status::ready;
+         ++i)
+      cycle();
+    EXPECT_EQ(future.wait_for(std::chrono::milliseconds(0)),
+              std::future_status::ready);
+    return future.get();
+  };
+  // Away from the arm, it would be commanded at once: rejected.
+  Action::Goal away = make_goal(0.0, 100);
+  away.trajectory.points.insert(away.trajectory.points.begin(),
+                                away.trajectory.points.front());
+  away.trajectory.points.front().positions.assign(14, 0.1);
+  away.trajectory.points.front().time_from_start = builtin_interfaces::msg::Duration{};
+  EXPECT_FALSE(send(away));
+
+  // At the arm (the fake mirrors q_des, so it stands at 0): accepted, played.
+  Action::Goal start = make_goal(0.01, 100);
+  trajectory_msgs::msg::JointTrajectoryPoint here;
+  here.positions.assign(14, 0.0);
+  start.trajectory.points.insert(start.trajectory.points.begin(), here);
+  auto handle = send(start);
+  ASSERT_TRUE(handle);
+  auto result = client->async_get_result(handle);
+  for (int i = 0; i < 500 && result.wait_for(std::chrono::milliseconds(0)) !=
+                                 std::future_status::ready;
+       ++i)
+    cycle();
+  ASSERT_EQ(result.wait_for(std::chrono::milliseconds(0)),
+            std::future_status::ready);
+  EXPECT_EQ(result.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+}

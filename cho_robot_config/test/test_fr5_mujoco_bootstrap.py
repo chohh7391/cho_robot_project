@@ -270,6 +270,13 @@ def test_fr5_mujoco_scene_variants_share_one_arm():
         ag95.actuator_biasprm[:arm], abs=1e-12)
     assert plain.body_pos[:plain.nbody] == pytest.approx(
         ag95.body_pos[:plain.nbody], abs=1e-12)
+    # Every robot body is gravity-compensated, as the FR5's own servo loop does:
+    # on the position servos alone the shoulder sat 10 mrad low.
+    for model in (plain, ag95):
+        robot = [i for i in range(1, model.nbody)
+                 if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i).endswith('_link')]
+        assert len(robot) >= len(arm_joints)
+        assert model.body_gravcomp[robot] == pytest.approx(1.0)
 
     # Only the gripper variant carries tool geometry, and it is drawn: an
     # invisible tool is what let the scene disagree with the robot model

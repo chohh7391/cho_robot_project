@@ -142,7 +142,7 @@ controller_interface::return_type TaskSpaceIKController::update(
   // (hold the last reference). Re-solving toward a measured-derived hold pose would
   // (a) feed encoder noise into the command and (b) jump at the goal start/end
   // transitions (the action server sets H_ee_init to the measured pose at a goal's
-  // start and at every ending but a deactivation). A goal that ends with q_ref_
+  // start and at every ending but a success and a deactivation). A goal that ends with q_ref_
   // moving first brings it to rest (stop_), and a goal accepted meanwhile starts
   // once it is at rest.
   bool running = !stop_.stopping() && action_server_ && action_server_->is_running();
@@ -168,10 +168,12 @@ controller_interface::return_type TaskSpaceIKController::update(
 
     if (!prev_running_) {
       // Goal just started: seed the trajectory at the REFERENCE pose FK(q_ref_), not
-      // the measured pose (which the action server uses). The command continues from
-      // where q_ref_ already is, so the holding tracking droop (measured != q_ref_)
-      // is NOT injected as a first-cycle command step -> no discontinuity reflex.
-      action_server_->trajectory_->setInitSample(H_ref);
+      // the measured pose (which the action server uses), and compose a relative
+      // goal onto it. The command continues from where q_ref_ already is, so the
+      // holding tracking droop (measured != q_ref_) is NOT injected as a first-cycle
+      // command step -> no discontinuity reflex, and relative goals in a row do not
+      // add it up.
+      action_server_->start_from_reference(state_, H_ref);
     }
 
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();

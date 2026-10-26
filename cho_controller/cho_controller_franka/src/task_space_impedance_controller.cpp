@@ -172,7 +172,8 @@ controller_interface::return_type TaskSpaceImpedanceController::update(
 
   // 6. Total torque
   Vector7d torque_desired = torque_motion + torque_null + state_.nle;
-  // A goal's end holds the pose measured then, a cancel drops v_des_world.
+  // A success holds the goal, any other end the pose measured then; a cancel
+  // drops v_des_world.
   fade_torque_switch(torque_desired, tracking, nominal_period(period));
 
   // 7. Safety clipping and command write

@@ -62,7 +62,11 @@ expects. Running a robot under a namespace therefore needs the registry entry
   (`left_`/`right_` prefixed on a bimanual build), so a target meant for one
   arm is rejected by the other arm's server instead of driving it.
 - **TaskSpace**: `target_pose` is a `PoseStamped`. A relative goal is the EE's
-  displacement from its pose when the goal starts, expressed in the EE frame.
+  displacement from its pose when the goal starts, expressed in the EE frame:
+  the pose it commands on the position and velocity controllers
+  (`task_space_ik_controller`, `task_space_velocity_controller`), whose arm
+  droops from that under load, so relative goals in a row do not add up the
+  droop; the measured pose on the torque laws.
   Nothing that serves this action transforms frames: a goal stamped in any
   frame other than the ones below is rejected. See [Frames](#frames).
 - **duration_sec** [s] is a minimum. The controller plans the fastest motion
@@ -120,8 +124,8 @@ An **absolute** TaskSpace goal is the EE pose in the server's base frame.
   one stamped goal means the same pose to the bridge and to the controllers.
 
 A **relative** goal's `frame_id` must be empty or the EE frame: the
-controller's `ee_name` (`ee_frame` on the OpenArm MIT controllers and on
-`cho_controller_chain`'s TaskSpace generator), the bridge's `ee_link`.
+controller's `ee_name` (`ee_frame` on the OpenArm MIT controllers), the
+bridge's `ee_link`.
 
 An empty relative frame means *each server's own* EE frame, and those are
 not one setting: the bridge composes in its `ee_link`, which its launch takes
@@ -260,8 +264,9 @@ otherwise.
   and `joint_space_qp_controller` hold their last reference, push included, which
   then fades out when the next goal starts from the measured joints;
   `task_space_impedance_controller` and `operational_space_controller` hold the
-  pose measured at the end and `task_space_qp_controller` the joints measured
-  then, so the push fades out at the end. `action_chunk_controller` in effort mode
+  goal's pose after a success, so a move that ended short of it is pulled in,
+  and the pose measured at any other end; `task_space_qp_controller` holds the
+  joints measured at the end, so the push fades out then. `action_chunk_controller` in effort mode
   fades across a chunk-stream goal's start and end the same way, holding the pose
   measured at the end, and also when a goal's chunks change action space. For
   those 30 ms a canceled motion is braked more gently than its law alone would
@@ -294,13 +299,6 @@ The arm controllers built on a robot base class -- `FrankaBaseController`,
 | `~/ee_state` | `cho_interfaces/PoseLog` | reference / desired / current EE pose, stamped with the model's root frame |
 
 `ee_state_broadcaster` and the gripper controllers publish neither.
-
-The chained prototype (`cho_controller_chain`,
-[README](../cho_controller/cho_controller_chain/README.md)): its generators
-(`chain_joint_space_generator`, `chain_task_space_generator`) serve `~/joint_space` and
-`~/task_space` under this contract and publish no state topic; its law
-(`chain_impedance_law`) serves no action and publishes `~/controller_state` alone
-(reference = what it tracks, feedback = measured, `output.effort` = its torque).
 
 The OpenArm MIT controllers (`cho_controller_openarm_mit`: `joint_*_mit_controller`,
 `task_space_impedance_mit_controller`, `action_chunk_mit_controller` and the

@@ -52,7 +52,9 @@ acknowledgements before accepting a goal. It uses cubic Hermite position/velocit
 endpoint velocities are supplied (and linear interpolation otherwise), and writes all tuple
 fields before the paired commit generation, refreshes the bounded lease, reports feedback, and uses
 measured position/velocity for path and goal convergence. Header stamps, per-goal tolerances and goal
-time tolerance are honored.
+time tolerance are honored. A first point at `time_from_start` 0, the start state MoveIt sends, is where
+the trajectory starts: it is commanded at once, so a goal whose first such point is more than
+`constraints.goal_tolerance` from the measured position is rejected.
 
 Cancel and replacement-goal preemption enter `SAFE_REQUESTED` without blocking a ROS or lifecycle
 callback. It writes a common newer `mit_safe_request_generation` last to both arms, so hardware owns
@@ -68,10 +70,14 @@ controller-switch rule
 never wait or request a retry. Explicit safe-request transitions used for cancel/preempt are
 recoverable in the same session; a transport fault requires the hardware to be reactivated.
 
-The FollowJointTrajectory producers carry `tau_ff = 0` and `hold_torque = NaN` by design (no model;
-see the contract's producer section): switched in after a producer that supported the arm, their
-seed drops the hold's gravity torque onto the safe-gain spring. They run in the MuJoCo prototype
-only; the real bringup does not offer them.
+With `gravity_feedforward` (set by the MuJoCo configs) the FollowJointTrajectory producers build a
+Pinocchio model of their joints from `robot_description` at configure, and every commit carries
+`tau_ff = g(q)` at the measured `q`, clamped to `tau_ff_magnitude` and slewed at `tau_ff_slew_per_s`
+from the last commit's (`update_gravity()`), and `hold_torque = g(q)`. The seed carries what the
+effort command interfaces hold, unslewed. Without it they carry `tau_ff = 0` and `hold_torque = NaN`:
+switched in after a producer that supported the arm, their seed drops the hold's gravity torque onto
+the safe-gain spring (the contract's producer section). They run in the MuJoCo prototype only; the
+real bringup does not offer them.
 
 ## Single-arm TaskSpace MIT impedance
 
@@ -199,7 +205,7 @@ moves.
 | `TaskSpaceImpedanceController`, `ActionChunkController` (task and joint chunks) | `gravity_scale * gravity_joint_scale[i] * g_i(q)` |
 | `JointImpedanceActionController` | `g_i(q)` |
 | raw-topic producers (`JointPosition` ... `CompensatedTorque`) | NaN |
-| `BimanualFollowJointTrajectoryController`, `SingleArmFollowJointTrajectoryController` | NaN |
+| `BimanualFollowJointTrajectoryController`, `SingleArmFollowJointTrajectoryController` | `g_i(q)` with `gravity_feedforward`, else NaN |
 
 `g` is `pinocchio::computeGeneralizedGravity` on the controller's `robot_description` model at the
 measured `q` of the cycle, clamped per joint to the profile's `tau_ff_magnitude` (the joint's hold

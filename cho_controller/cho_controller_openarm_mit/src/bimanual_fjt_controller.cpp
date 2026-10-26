@@ -17,11 +17,15 @@
 #include "cho_controller_openarm_mit/safety_backend.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <set>
 #include <unordered_map>
+#include <pinocchio/algorithm/rnea.hpp>
+#include <pinocchio/parsers/urdf.hpp>
 #include <pluginlib/class_list_macros.hpp>
+#include <rclcpp/parameter_client.hpp>
 
 namespace cho_controller_openarm_mit
 {
@@ -34,6 +38,9 @@ constexpr std::size_t kPairTokenIndex = 2 * kArmCommandWidth;
 static_assert(PairedArmOwnership::command_count == kPairTokenIndex + 1, "the pair token is last");
 constexpr std::size_t kSession = 0, kAck = 1, kSafeGeneration = 2, kSafeAck = 3, kStatus = 4;
 double seconds(const builtin_interfaces::msg::Duration & d) {return d.sec + 1e-9 * d.nanosec;}
+// The feed-forward slew's step, the gripper's rule: the measured period capped
+// at 0.1 s, and 0 for a zero, negative or non-finite one.
+double bounded_dt(const double dt) {return (std::isfinite(dt) && dt > 0.0) ? std::min(dt, 0.1) : 0.0;}
 }  // namespace
 
 std::vector<std::string> BimanualFollowJointTrajectoryController::canonical_joint_names() const
@@ -111,6 +118,11 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
   auto_declare<double>("constraints.path_tolerance", 0.2);
   auto_declare<double>("constraints.goal_tolerance", 0.02);
   auto_declare<double>("constraints.goal_time", 0.5);
+  // tau_ff = g(q) from robot_description, slewed (update_gravity()). Off, the
+  // trajectories carry gravity on their stiffness alone.
+  auto_declare<bool>("gravity_feedforward", false);
+  // Empty: taken from robot_state_publisher, as the direct producers do.
+  auto_declare<std::string>("robot_description", "");
   return CallbackReturn::SUCCESS;
 }
 
@@ -155,6 +167,13 @@ controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::on
     !std::isfinite(goal_time_tolerance_) || goal_time_tolerance_ < 0.0 || max_handshake_cycles_ <= 0) {
     return CallbackReturn::ERROR;
   }
+  for (std::size_t i = 0; i < dof(); ++i) {
+    feedforward_limit_[i] = window_for(i).tau_ff_max[i % kJointsPerArm];
+    feedforward_slew_[i] = window_for(i).tau_ff_slew[i % kJointsPerArm];
+  }
+  model_.reset(); model_data_.reset();
+  if (get_node()->get_parameter("gravity_feedforward").as_bool() &&
+    configure_gravity_model() != CallbackReturn::SUCCESS) return CallbackReturn::ERROR;
   action_server_ = rclcpp_action::create_server<Action>(get_node(), "~/follow_joint_trajectory",
     std::bind(&BimanualFollowJointTrajectoryController::goal, this, std::placeholders::_1, std::placeholders::_2),
     std::bind(&BimanualFollowJointTrajectoryController::cancel, this, std::placeholders::_1),
@@ -260,6 +279,77 @@ bool BimanualFollowJointTrajectoryController::protocol_ok() const
   return true;
 }
 
+controller_interface::CallbackReturn BimanualFollowJointTrajectoryController::configure_gravity_model()
+{
+  std::string description = get_node()->get_parameter("robot_description").as_string();
+  if (description.empty()) {
+    auto client = std::make_shared<rclcpp::AsyncParametersClient>(get_node(), "robot_state_publisher");
+    if (!client->wait_for_service(std::chrono::seconds(5))) {
+      RCLCPP_ERROR(get_node()->get_logger(), "gravity_feedforward: robot_state_publisher not available");
+      return CallbackReturn::ERROR;
+    }
+    const auto result = client->get_parameters({"robot_description"}).get();
+    if (result.empty() || result.front().value_to_string().empty()) {
+      RCLCPP_ERROR(get_node()->get_logger(), "gravity_feedforward: no robot_description");
+      return CallbackReturn::ERROR;
+    }
+    description = result.front().value_to_string();
+  }
+  try {
+    model_ = std::make_unique<pinocchio::Model>();
+    pinocchio::urdf::buildModelFromXML(description, *model_, false);
+    const auto names = canonical_joint_names();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      const auto id = model_->getJointId(names[i]);
+      // One q, dq and tau_ff per actuator: a joint of another kind would get
+      // an incomplete model torque.
+      if (id == 0U || id >= model_->joints.size() ||
+        model_->joints[id].nq() != 1 || model_->joints[id].nv() != 1) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+          "gravity_feedforward: joint '%s' is not a 1-DoF joint of robot_description", names[i].c_str());
+        model_.reset();
+        return CallbackReturn::ERROR;
+      }
+      model_q_index_[i] = static_cast<int>(model_->joints[id].idx_q());
+      model_v_index_[i] = static_cast<int>(model_->joints[id].idx_v());
+    }
+    model_data_ = std::make_unique<pinocchio::Data>(*model_);
+    model_q_ = Eigen::VectorXd::Zero(model_->nq);
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(get_node()->get_logger(), "gravity_feedforward: robot_description rejected: %s", error.what());
+    model_.reset(); model_data_.reset();
+    return CallbackReturn::ERROR;
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+void BimanualFollowJointTrajectoryController::update_gravity(const double dt)
+{
+  hold_torque_.fill(kNoHoldTorque);
+  if (!model_ || !model_data_) {feedforward_.fill(0.0); return;}
+  const auto q = measured_position();
+  for (std::size_t i = 0; i < dof(); ++i) {
+    if (!std::isfinite(q[i])) return;  // the last tau_ff, no hold estimate
+    model_q_[model_q_index_[i]] = q[i];
+  }
+  try {
+    const Eigen::VectorXd & gravity = pinocchio::computeGeneralizedGravity(*model_, *model_data_, model_q_);
+    for (std::size_t i = 0; i < dof(); ++i) {
+      const double g = gravity[model_v_index_[i]];
+      if (!std::isfinite(g)) continue;
+      hold_torque_[i] = std::clamp(g, -feedforward_limit_[i], feedforward_limit_[i]);
+      double tau = hold_torque_[i];
+      if (feedforward_slew_[i] > 0.0) {
+        const double step = feedforward_slew_[i] * dt;
+        tau = std::clamp(tau, feedforward_[i] - step, feedforward_[i] + step);
+      }
+      feedforward_[i] = tau;
+    }
+  } catch (const std::exception &) {
+    hold_torque_.fill(kNoHoldTorque);
+  }
+}
+
 void BimanualFollowJointTrajectoryController::write_pair(
   const std::array<double, 14> & q, const std::array<double, 14> & dq, double kp, double kd)
 {
@@ -284,6 +374,7 @@ void BimanualFollowJointTrajectoryController::write_pair(
   const std::array<double, 14> & q, const std::array<double, 14> & dq,
   const std::array<double, 14> & kp, const std::array<double, 14> & kd)
 {
+  update_gravity(cycle_dt_);
   ++generation_;
   for (std::size_t arm = 0; arm < arm_count(); ++arm) {
     const auto base = arm * kArmCommandWidth;
@@ -291,11 +382,11 @@ void BimanualFollowJointTrajectoryController::write_pair(
       const auto out = base + 5 * j, in = 7 * arm + j;
       command_interfaces_[out].set_value(q[in]); command_interfaces_[out + 1].set_value(dq[in]);
       command_interfaces_[out + 2].set_value(kp[in]); command_interfaces_[out + 3].set_value(kd[in]);
-      command_interfaces_[out + 4].set_value(0.0);
-      // No model, so no gravity estimate: the consumer holds at the measured
-      // torque. Written on every commit, so nothing a previous producer left
-      // in the interface is carried.
-      command_interfaces_[base + kHoldTorqueOffset + j].set_value(kNoHoldTorque);
+      command_interfaces_[out + 4].set_value(feedforward_[in]);
+      // Without a model, no gravity estimate (NaN): the consumer holds at the
+      // measured torque. Written on every commit, so nothing a previous
+      // producer left in the interface is carried.
+      command_interfaces_[base + kHoldTorqueOffset + j].set_value(hold_torque_[in]);
     }
     command_interfaces_[base + 35].set_value(static_cast<double>(session_));
     command_interfaces_[base + 36].set_value(lease_cycles_);
@@ -448,9 +539,10 @@ void BimanualFollowJointTrajectoryController::finish_stop()
 }
 
 controller_interface::return_type BimanualFollowJointTrajectoryController::update(
-  const rclcpp::Time & time, const rclcpp::Duration &)
+  const rclcpp::Time & time, const rclcpp::Duration & period)
 {
   if (!active_.load()) return controller_interface::return_type::OK;
+  cycle_dt_ = bounded_dt(period.seconds());
   publish_measured_snapshot();
   struct StatePublish {
     RunState & state; std::atomic<std::uint8_t> & out; std::atomic<std::uint64_t> & cycle;
@@ -502,7 +594,22 @@ controller_interface::return_type BimanualFollowJointTrajectoryController::updat
     if (++handshake_cycles_ > static_cast<std::size_t>(max_handshake_cycles_)) {
       run_state_ = RunState::FAULTED; return controller_interface::return_type::ERROR;
     }
-    if (!seed_written_) {write_safe_hold(measured_position()); seed_written_ = true;}
+    if (!seed_written_) {
+      // The seed's tau_ff is what the effort command interfaces hold, the
+      // hardware's hold torque (at activation, and after the SAFE a preempted
+      // goal ends in), so the arm keeps its gravity support; update_gravity()
+      // slews from it. Without a model it is 0.
+      feedforward_.fill(0.0);
+      if (model_) {
+        for (std::size_t i = 0; i < dof(); ++i) {
+          const double held =
+            command_interfaces_[(i / kJointsPerArm) * kArmCommandWidth + 5 * (i % kJointsPerArm) + 4].get_value();
+          feedforward_[i] = std::isfinite(held) ? std::clamp(held, -feedforward_limit_[i], feedforward_limit_[i]) : 0.0;
+        }
+      }
+      cycle_dt_ = 0.0;  // the seed carries it unchanged
+      write_safe_hold(measured_position()); seed_written_ = true;
+    }
     return controller_interface::return_type::OK;
   }
   if (run_state_ == RunState::STOPPING) {
@@ -632,10 +739,22 @@ rclcpp_action::GoalResponse BimanualFollowJointTrajectoryController::goal(
     const auto & point = canonical.points[p];
     const double t1 = seconds(point.time_from_start);
     const double dt = t1 - t0;
-    if (!(dt > 0.0)) return rclcpp_action::GoalResponse::REJECT;
+    // A first point at time 0 is where the trajectory starts, as MoveIt sends
+    // its start state: sample() commands it at once, so it must be where the
+    // arm is, within the goal tolerance (MoveIt's start check, 0.02 rad, too).
+    const bool start_point = p == 0 && dt == 0.0;
+    if (start_point) {
+      for (std::size_t i = 0; i < dof(); ++i) {
+        if (!(std::abs(point.positions[i] - q0[i]) <= default_goal_tolerance_)) {
+          return rclcpp_action::GoalResponse::REJECT;
+        }
+      }
+    } else if (!(dt > 0.0)) {
+      return rclcpp_action::GoalResponse::REJECT;
+    }
     const bool hermite = (p == 0) ? !point.velocities.empty() :
       (previous_has_velocity && !point.velocities.empty());
-    for (std::size_t i = 0; i < dof(); ++i) {
+    for (std::size_t i = 0; i < dof() && !start_point; ++i) {
       const auto & window = window_for(i);
       const double limit = window.command_velocity[i % kJointsPerArm];
       if (!hermite) {

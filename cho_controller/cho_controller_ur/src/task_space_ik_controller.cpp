@@ -103,8 +103,9 @@ controller_interface::return_type TaskSpaceIKController::update(
 
         if (!prev_running_) {
             // Goal start: the server seeded the trajectory at the measured pose;
-            // start it at the reference pose instead, where the command already is.
-            action_server_->trajectory_->setInitSample(H_ref);
+            // start it, and compose a relative goal, at the reference pose
+            // instead, where the command already is.
+            action_server_->start_from_reference(state_, H_ref);
         }
         const auto & sample = action_server_->trajectory_->computeNext();
         state_.H_ee_des.translation() = sample.pos.head<3>();

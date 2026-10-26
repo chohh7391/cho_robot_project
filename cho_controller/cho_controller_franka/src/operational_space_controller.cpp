@@ -174,7 +174,8 @@ controller_interface::return_type OperationalSpaceController::update(
   torque_desired = J.transpose() * F_task + tau_null + state_.nle;
   torque_desired -= joint_damping_.cwiseProduct(dq_filtered_);  // Damping term for stability
 
-  // A goal's end holds the pose measured then, a cancel drops twist_des_world.
+  // A success holds the goal, any other end the pose measured then; a cancel
+  // drops twist_des_world.
   fade_torque_switch(torque_desired, tracking, nominal_period(period));
 
   // clip torque

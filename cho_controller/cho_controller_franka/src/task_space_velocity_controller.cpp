@@ -213,9 +213,10 @@ controller_interface::return_type TaskSpaceVelocityController::update(
     FrankaBaseController::compute_arm_kinematics(q_scratch_, H_ref, J);
 
     if (!prev_running_) {
-      // Goal start: seed the trajectory at FK(q_ref_) so the holding droop is
-      // not injected as a first-cycle command step.
-      action_server_->trajectory_->setInitSample(H_ref);
+      // Goal start: seed the trajectory at FK(q_ref_), and a relative goal on
+      // it, so the holding droop is not injected as a first-cycle command step
+      // nor added to the target.
+      action_server_->start_from_reference(state_, H_ref);
     }
 
     const auto & trajectory_sample = action_server_->trajectory_->computeNext();

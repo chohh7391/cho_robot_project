@@ -292,6 +292,43 @@ TEST_F(TaskServerTest, ARelativeGoalComposesOnThePoseAtItsStart) {
   EXPECT_TRUE(state_.H_ee_ref.translation().isApprox(Eigen::Vector3d(0.6, 0.0, 0.3)));
 }
 
+TEST_F(TaskServerTest, ARelativeGoalStartedFromAReferenceComposesOnIt) {
+  // An open-loop controller's arm droops from its reference; composed on the
+  // measured pose, every relative goal would add the droop to the target.
+  state_.H_ee = pinocchio::SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.5, 0.0, 0.29));
+  const pinocchio::SE3 reference(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.5, 0.0, 0.3));
+  auto handle = send(task_goal(0.1, true));
+  ASSERT_NE(handle, nullptr);
+  step(0.0);
+  server_->start_from_reference(state_, reference);
+  EXPECT_TRUE(state_.H_ee_ref.translation().isApprox(Eigen::Vector3d(0.6, 0.0, 0.3)));
+  EXPECT_TRUE(server_->abort_active_goal(state_, "done"));
+  result_of(handle);
+
+  // An absolute goal is where it says, whatever the reference.
+  handle = send(task_goal(0.1, false));
+  ASSERT_NE(handle, nullptr);
+  step(1.0);
+  server_->start_from_reference(state_, reference);
+  EXPECT_TRUE(state_.H_ee_ref.translation().isApprox(Eigen::Vector3d(0.1, 0.0, 0.0)));
+}
+
+TEST_F(TaskServerTest, SuccessLeavesTheHoldAtTheGoal) {
+  // The torque laws hold H_ee_init when idle. Latched to the measured pose at
+  // success, a law still lagging the trajectory's end stopped short of the goal.
+  state_.H_ee = pinocchio::SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.5, 0.0, 0.3));
+  auto handle = send(task_goal(0.02, true));
+  ASSERT_NE(handle, nullptr);
+  step(0.0);
+  const pinocchio::SE3 goal = state_.H_ee_ref;
+  state_.H_ee = pinocchio::SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(0.515, 0.0, 0.3));
+  EXPECT_TRUE(step(2.5));  // 5 mm off, within the threshold, a second past the motion
+  const auto result = result_of(handle);
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::SUCCEEDED);
+  EXPECT_TRUE(state_.H_ee_init.isApprox(goal));
+  EXPECT_FALSE(state_.H_ee_init.isApprox(state_.H_ee));
+}
+
 TEST_F(TaskServerTest, CancelLeavesTheHoldAtTheArmNotAtTheGoalStart) {
   // The impedance/OSC controllers hold H_ee_init when idle. It is the goal's
   // start pose while the goal runs; a cancel that left it there stepped the arm

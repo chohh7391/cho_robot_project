@@ -21,12 +21,15 @@
 #include <unordered_map>
 #include <optional>
 
+#include <Eigen/Core>
 #include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
 #include <realtime_tools/lock_free_queue.hpp>
+#include <pinocchio/multibody/data.hpp>
+#include <pinocchio/multibody/model.hpp>
 
 #include "cho_openarm_mit_core/mit_protocol.hpp"
 
@@ -92,8 +95,9 @@ private:
   void write_pair(
     const std::array<double, 14> & position, const std::array<double, 14> & velocity,
     double stiffness, double damping);
-  // Every commit: the tuple with tau_ff = 0 and hold_torque NaN (no model, so
-  // no gravity estimate), session and lease, then the generation last.
+  // Every commit: the tuple with tau_ff and hold_torque from update_gravity()
+  // (0 and NaN without gravity_feedforward), session and lease, then the
+  // generation last.
   void write_pair(
     const std::array<double, 14> & position, const std::array<double, 14> & velocity,
     const std::array<double, 14> & stiffness, const std::array<double, 14> & damping);
@@ -101,6 +105,15 @@ private:
   // joint's safe-hold gains from the safety profile. It used kp = 0, which left
   // only damping against gravity: the arm sagged while seeding and holding.
   void write_safe_hold(const std::array<double, 14> & position);
+  // gravity_feedforward: builds model_ from robot_description (the parameter,
+  // else robot_state_publisher's) for the canonical joints.
+  CallbackReturn configure_gravity_model();
+  // This commit's tau_ff and hold torque at the measured q: g(q) clamped to the
+  // profile's tau_ff_magnitude; tau_ff also slewed from the last commit's at
+  // tau_ff_slew_per_s over dt (0 holds it, as for the seed). Without a model:
+  // tau_ff 0 and hold NaN; for a non-finite q or result, the last tau_ff and
+  // hold NaN.
+  void update_gravity(double dt);
   void request_stop(StopReason reason);
   void finish_stop();
   bool queue_terminal(TerminalKind kind, int32_t code, std::uint8_t message);
@@ -164,6 +177,15 @@ private:
   std::uint64_t safe_request_generation_{0};
   std::size_t handshake_cycles_{0};
   bool seed_written_{false};
+  // g(q) for the canonical joints, sized at configure; null without
+  // gravity_feedforward.
+  std::unique_ptr<pinocchio::Model> model_;
+  std::unique_ptr<pinocchio::Data> model_data_;
+  Eigen::VectorXd model_q_;
+  std::array<int, 14> model_q_index_{}, model_v_index_{};
+  std::array<double, 14> feedforward_limit_{}, feedforward_slew_{};
+  std::array<double, 14> feedforward_{}, hold_torque_{};
+  double cycle_dt_{0.0};
   double stiffness_{10.0};
   double damping_{0.5};
   double lease_cycles_{5.0};

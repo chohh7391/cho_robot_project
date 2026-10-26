@@ -106,9 +106,6 @@ project needs from the core goes in as a general extension point, and code a sec
 - `cho_controller_openarm_mit` — every OpenArm arm controller plugin, two families: `cho_controller::openarm` (joint-space
   controllers, `ee_state_broadcaster`) and `cho_controller_openarm_mit` (the MIT drive-protocol producers)
   ([DESIGN.md, Package layout](cho_controller/cho_controller_openarm_mit/DESIGN.md#package-layout)).
-- `cho_controller_chain` — chained-control prototype: a robot-independent chainable joint impedance law and the
-  JointSpace / TaskSpace reference generators in front of it; Franka MuJoCo torque, loaded by hand
-  ([README.md](cho_controller/cho_controller_chain/README.md)).
 - `utils/cho_action_chunk` — the action-chunk pipeline, free of ROS, hosted by Franka's `action_chunk_controller` (through
   its `ActionChunkServer`) and OpenArm's `ActionChunkController` ([DESIGN.md](cho_controller/utils/cho_action_chunk/DESIGN.md)).
   Both hosts use `cho_action_chunk::Session` (chunk ingest, the per-cycle reference, the goal's lifetime, the telemetry
@@ -216,8 +213,7 @@ repository's starting point, one package registering one task and the `.repos` p
 ## Control period
 
 Code that advances its own trajectory clock or integrates an open-loop reference takes the period from its base
-class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`,
-`cho_controller_chain::ReferenceGenerator`): never
+class's `nominal_period(period)` (`FrankaBaseController`, `FR5BaseController`, `OpenArmBaseController`): never
 `1 / get_update_rate()` (0 unless the config sets a per-controller rate; only Franka's real one does), a literal `dt`, or the raw `period`
 (jitters, and is 0 on a cycle with no new state). Audit a new controller for all three forms (`get_update_rate`,
 a literal such as `dt = 0.001`, `period.seconds()`); a search for one misses the others. The reasons are in the

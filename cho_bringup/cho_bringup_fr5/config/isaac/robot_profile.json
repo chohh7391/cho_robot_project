@@ -72,5 +72,7 @@
   "ft_link": null,
   "solver_position_iterations": 32,
   "solver_velocity_iterations": 1,
-  "enable_self_collisions": false
+  "enable_self_collisions": false,
+  "_gravity_comment": "The FR5's servo loop compensates gravity; on the drives alone (3000 N m/rad) the shoulder sat 10 mrad low, which relative task-space goals added up. MuJoCo's model sets gravcomp on the same bodies.",
+  "gravity_compensation": true
 }

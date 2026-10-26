@@ -20,8 +20,10 @@
 //    g from the producer's own model at the measured q, clamped to the profile's
 //    tau_ff_max (not to the controller's torque_limit); no slew.
 //  - JointImpedanceAction: h = g(q), clamped to tau_ff_max.
-//  - the raw-topic producers and the FollowJointTrajectory pair: NaN ("no
-//    estimate") on every commit.
+//  - the FollowJointTrajectory pair with gravity_feedforward: h = g(q), clamped
+//    to tau_ff_max, and tau_ff slewed onto the same value.
+//  - the raw-topic producers and the pair without it: NaN ("no estimate") on
+//    every commit.
 //
 // And the claim widths: 46 per arm, 93 for the pair (token at index 92).
 //
@@ -593,9 +595,52 @@ std::string pair_urdf()
   return x.str();
 }
 
+// Two seven-joint chains named like the torso's arms, light enough that g(q)
+// stays inside tau_ff_magnitude: about 9.6 N m on joint 1 at q = 0.
+std::string pair_model_urdf()
+{
+  std::ostringstream x;
+  x << "<robot name='mit_pair_model'><link name='base'/>";
+  for (const auto & side : {std::string("left"), std::string("right")}) {
+    for (int i = 1; i <= 7; ++i) {
+      const std::string link = side + std::to_string(i);
+      x << "<link name='" << link << "'><inertial><origin xyz='0.10 0 0'/>"
+        << "<mass value='0.2'/><inertia ixx='0.001' ixy='0' ixz='0' iyy='0.001' "
+        << "iyz='0' izz='0.001'/></inertial></link><joint name='openarm_" << side << "_joint" << i
+        << "' type='revolute'><parent link='"
+        << (i == 1 ? std::string("base") : side + std::to_string(i - 1))
+        << "'/><child link='" << link << "'/><origin xyz='0.20 0 0'/>"
+        << "<axis xyz='0 1 0'/><limit lower='-3.14' upper='3.14' effort='20' velocity='5'/></joint>";
+    }
+  }
+  return x.str() + "</robot>";
+}
+
+// g(0) of pair_model_urdf(), left arm then right, from Pinocchio here.
+std::array<double, 14> pair_gravity_at_zero()
+{
+  pinocchio::Model model;
+  pinocchio::urdf::buildModelFromXML(pair_model_urdf(), model);
+  pinocchio::Data data(model);
+  const Eigen::VectorXd g =
+    pinocchio::computeGeneralizedGravity(model, data, Eigen::VectorXd::Zero(model.nq));
+  std::array<double, 14> out{};
+  std::size_t i = 0;
+  for (const auto & side : {std::string("left"), std::string("right")}) {
+    for (int j = 1; j <= 7; ++j, ++i) {
+      const auto id = model.getJointId("openarm_" + side + "_joint" + std::to_string(j));
+      out[i] = g[model.joints[id].idx_v()];
+    }
+  }
+  return out;
+}
+
 class PairFixture : public ::testing::Test
 {
 protected:
+  // Before configure: what a derived fixture adds to the controller's parameters.
+  virtual void set_parameters() {}
+
   static void SetUpTestSuite()
   {
     if (!rclcpp::ok()) {int argc = 0; rclcpp::init(argc, nullptr);}
@@ -615,6 +660,7 @@ protected:
         rclcpp::Parameter("safety_profile_file", OPENARM_SAFETY_PROFILE_SOURCE)).successful);
     ASSERT_TRUE(controller_->get_node()->set_parameter(
         rclcpp::Parameter("safety_profile_name", "mujoco_sim_safe")).successful);
+    set_parameters();
     ASSERT_EQ(manager_->configure_controller("both_arms_mit_trajectory_controller"), return_type::OK);
     client_ = std::make_shared<rclcpp::Node>("hold_pair_client");
     executor_->add_node(client_);
@@ -712,5 +758,36 @@ TEST_F(PairFixture, AC1_AC4_ThePairClaims93InterfacesWithTheTokenLastAndWritesNa
     EXPECT_TRUE(std::isnan(Access::command(*controller_, kHoldIndex + joint))) << "left joint " << joint + 1;
     EXPECT_TRUE(std::isnan(Access::command(*controller_, 46 + kHoldIndex + joint)))
       << "right joint " << joint + 1;
+  }
+}
+
+namespace
+{
+class PairGravityFixture : public PairFixture
+{
+protected:
+  void set_parameters() override
+  {
+    ASSERT_TRUE(controller_->get_node()->set_parameter(
+        rclcpp::Parameter("gravity_feedforward", true)).successful);
+    ASSERT_TRUE(controller_->get_node()->set_parameter(
+        rclcpp::Parameter("robot_description", pair_model_urdf())).successful);
+  }
+};
+}  // namespace
+
+TEST_F(PairGravityFixture, WithGravityFeedforwardThePairCommandsAndHoldsGOfQ)
+{
+  // The fake mirrors the accepted q_des, so the arms stay at the seed, q = 0.
+  // 400 cycles of 1 ms: the slowest slew (17.5 N m/s on joints 5-7) has long
+  // brought tau_ff from the held 0 onto g.
+  using Access = cho_controller_openarm_mit::BimanualFjtTestAccess;
+  cycle(400);
+  const auto g = pair_gravity_at_zero();
+  ASSERT_GT(std::abs(g[0]), 5.0);  // a gravity load worth carrying
+  for (std::size_t i = 0; i < g.size(); ++i) {
+    const std::size_t base = (i / 7) * 46, joint = i % 7;
+    EXPECT_NEAR(Access::command(*controller_, base + kHoldIndex + joint), g[i], 1e-9) << "hold, joint " << i;
+    EXPECT_NEAR(Access::command(*controller_, base + 5 * joint + 4), g[i], 1e-9) << "tau_ff, joint " << i;
   }
 }

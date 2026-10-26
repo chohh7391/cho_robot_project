@@ -100,6 +100,11 @@ PROFILE_DEFAULTS = {
     "hand_stiffness": 0.0,
     "hand_damping": 0.0,
     "joint_friction": 0.0,
+    # True turns gravity off on every rigid body under prim_path (PhysX
+    # physxRigidBody:disableGravity), for an arm whose own servo loop
+    # compensates gravity, as MuJoCo's body gravcomp does. Only a position-
+    # controlled robot may set it: a torque law feeds gravity forward itself.
+    "gravity_compensation": False,
     # PhysX articulation solver settings. The URDF importer writes none, so the
     # articulation would otherwise run on PhysX's (low) defaults and the solver
     # cannot resolve the joint torques these controllers command. 32/1/False are
@@ -194,6 +199,10 @@ HAND_DAMPING = PROFILE["hand_damping"]
 SOLVER_POSITION_ITERATIONS = PROFILE["solver_position_iterations"]
 SOLVER_VELOCITY_ITERATIONS = PROFILE["solver_velocity_iterations"]
 ENABLE_SELF_COLLISIONS = PROFILE["enable_self_collisions"]
+GRAVITY_COMPENSATION = PROFILE["gravity_compensation"]
+if GRAVITY_COMPENSATION and args.control_mode != "position":
+    raise SystemExit(f"{args.robot_profile}: gravity_compensation is for position control only; "
+                     f"a {args.control_mode} law compensates gravity itself")
 
 ARM_TORQUE_DAMPING = (args.arm_torque_damping if args.arm_torque_damping is not None
                       else PROFILE["arm_torque_damping"])
@@ -423,6 +432,18 @@ def _author_armatures():
     log(f"armature + jointFriction={JOINT_FRICTION:g} authored on {len(found)} joints")
 
 
+def _author_gravity_compensation():
+    """Write physxRigidBody:disableGravity onto the robot's rigid bodies (before play)."""
+    stage = stage_utils.get_current_stage(backend="usd")
+    root = stage.GetPrimAtPath(ROBOT_PRIM_PATH)
+    bodies = [prim for prim in Usd.PrimRange(root) if prim.HasAPI(UsdPhysics.RigidBodyAPI)]
+    if not bodies:
+        raise RuntimeError(f"no rigid body under {ROBOT_PRIM_PATH} for gravity_compensation")
+    for prim in bodies:
+        PhysxSchema.PhysxRigidBodyAPI.Apply(prim).CreateDisableGravityAttr().Set(True)
+    log(f"gravity compensation: gravity disabled on {len(bodies)} rigid bodies")
+
+
 def _author_drive_gains(stiffness_rad, damping_rad):
     """damping_rad may be a scalar or a per-arm-joint sequence."""
     """Write the arm and finger drive gains onto the USD joint prims.
@@ -477,6 +498,11 @@ if not NEWTON:
     # PhysX-only: PhysxArticulationAPI solver counts and physxJoint:armature.
     _author_articulation_solver()
     _author_armatures()
+    if GRAVITY_COMPENSATION:
+        _author_gravity_compensation()
+elif GRAVITY_COMPENSATION:
+    log("newton: profile gravity_compensation NOT applied - physxRigidBody:disableGravity "
+        "is a PhysX attribute.")
 
 # UsdPhysics.DriveAPI is engine-neutral, and both backends need it authored
 # before play. For Newton it is not just the gain values: the importer decides
