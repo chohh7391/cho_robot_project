@@ -44,6 +44,7 @@ cases:
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]
       action_chunk: [action_chunk:=true]
       bare_no_rviz: [load_gripper:=false, load_ft_sensor:=false, launch_rviz:=false]
+      ft_sensor: [load_ft_sensor:=true]
       no_hand_tcp_refused: [load_gripper:=false, ee_name:=fr3_hand_tcp]
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
                           controller_name:=joint_space_position_controller]
@@ -65,6 +66,7 @@ cases:
       moveit_controller: [load_moveit_controller:=true, control_mode:=position,
                           controller_name:=joint_space_position_controller]
       moveit_controller_refused: [load_moveit_controller:=true]
+      ft_sensor: [load_ft_sensor:=true]
     bringup_real_robot.launch.py:
       default: []
       position_ik: [control_mode:=position, controller_name:=task_space_ik_controller]

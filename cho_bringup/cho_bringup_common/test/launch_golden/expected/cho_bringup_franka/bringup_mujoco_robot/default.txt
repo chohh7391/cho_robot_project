@@ -5,7 +5,8 @@ LAUNCH cho_bringup_franka/bringup_mujoco_robot.launch.py []
   ARG load_gripper default='true' choices=None
   ARG use_sim_time default='true' choices=None
   ARG bringup_type default='mujoco' choices=None
-  ARG xacro_file default='<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf' choices=None
+  ARG load_ft_sensor default='false' choices=['true', 'false']
+  ARG xacro_file default='' choices=None
   ARG controllers_file default='<share:cho_bringup_franka>/config/mujoco/controllers.yaml' choices=None
   ARG ee_name default='' choices=['', 'fr3_link7', 'fr3_link8', 'fr3_hand', 'fr3_hand_tcp']
   ARG load_moveit_controller default='false' choices=None
@@ -15,14 +16,14 @@ LAUNCH cho_bringup_franka/bringup_mujoco_robot.launch.py []
     param {use_sim_time: True}
     param {command_mode: 'position'}
     output='log' on_exit=NoneType
-  NODE robot_state_publisher/robot_state_publisher
-    COMMAND ['xacro', '<share:cho_description_franka>/urdf/fr3_with_ft_sensor/fr3_franka_hand.urdf', 'control_mode:=torque']
-    name=None namespace=None
-    args=[]
-    param {use_sim_time: True}
-    param {robot_description: <description #1 fr3>}
-    output='screen' on_exit=NoneType
   OPAQUE setup_control_environment
+    NODE robot_state_publisher/robot_state_publisher
+      COMMAND ['xacro', '<share:cho_description_franka>/urdf/fr3/fr3_franka_hand.urdf', 'control_mode:=torque']
+      name=None namespace=None
+      args=[]
+      param {use_sim_time: True}
+      param {robot_description: <description #1 fr3>}
+      output='screen' on_exit=NoneType
     NODE mujoco_ros2_control/ros2_control_node
       name=None namespace=None
       args=[]
@@ -75,20 +76,15 @@ DESCRIPTION #1
   joint fr3_link6_sc_joint fixed fr3_link6 -> fr3_link6_sc [origin rpy='0 0 0']
   joint fr3_joint6 revolute fr3_link5 -> fr3_link6 [origin rpy='1.570796326794897 0 0' xyz='0 0 0', axis xyz='0 0 1', limit effort='12.0' lower='0.4398' upper='4.6216' velocity='4.18', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='0.4398' soft_upper_limit='4.6216', position_based_velocity_limits deceleration_limit='5.5' velocity_offset='0.4885', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
   joint fr3_link7_sc_joint fixed fr3_link7 -> fr3_link7_sc [origin rpy='0 0 0.7853981633974483']
-  joint fr3_joint7 revolute fr3_link6 -> fr3_link7 [origin rpy='1.570796326794897 0 0' xyz='0.088 0 0', axis xyz='0 0 1', limit effort='12.0' lower='-3.0508' upper='3.0508' velocity='5.26']
+  joint fr3_joint7 revolute fr3_link6 -> fr3_link7 [origin rpy='1.570796326794897 0 0' xyz='0.088 0 0', axis xyz='0 0 1', limit effort='12.0' lower='-3.0508' upper='3.0508' velocity='5.26', safety_controller k_position='100.0' k_velocity='40.0' soft_lower_limit='-3.0508' soft_upper_limit='3.0508', position_based_velocity_limits deceleration_limit='17.0' velocity_offset='0.4592', dynamics D='1' K='7000' damping='0.003' friction='0.2' mu_coulomb='0' mu_viscous='16']
   joint fr3_joint8 fixed fr3_link7 -> fr3_link8 [origin rpy='0 0 0' xyz='0 0 0.107']
-  joint robot_mounting_link_to_bota_ft_sensor fixed fr3_link8 -> bota_ft_sensor_mounting [origin rpy='0 0 0' xyz='0 0 0']
-  joint bota_ft_sensor_mounting_to_wrench fixed bota_ft_sensor_mounting -> bota_ft_sensor_wrench [origin rpy='0 0 0' xyz='0 0 0.035']
-  joint bota_ft_sensor_mounting_to_mech1 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech1 [origin rpy='1.5625 0 -1.5708' xyz='-0.032879 0 0.0105']
-  joint bota_ft_sensor_mounting_to_mech2 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech2 [origin rpy='1.5708 0 0' xyz='0 -0.032879 0.0105']
-  joint bota_ft_sensor_mounting_to_mech3 fixed bota_ft_sensor_mounting -> bota_ft_sensor_mech3 [origin rpy='1.5708 0 1.5708' xyz='0.032879 0 0.0105']
-  joint fr3_hand_joint fixed bota_ft_sensor_wrench -> fr3_hand [origin rpy='0 0 -0.7853981633974483' xyz='0 0 0']
+  joint fr3_hand_joint fixed fr3_link8 -> fr3_hand [origin rpy='0 0 -0.7853981633974483' xyz='0 0 0']
   joint fr3_hand_sc_joint fixed fr3_hand -> fr3_hand_sc [origin rpy='0 0 0']
   joint fr3_hand_tcp_joint fixed fr3_hand -> fr3_hand_tcp [origin rpy='0 0 0' xyz='0 0 0.1034']
   joint fr3_finger_joint1 prismatic fr3_hand -> fr3_leftfinger [origin rpy='0 0 0' xyz='0 0 0.0584', axis xyz='0 1 0', limit effort='100' lower='0.0' upper='0.04' velocity='0.2', dynamics damping='0.3']
   joint fr3_finger_joint2 prismatic fr3_hand -> fr3_rightfinger [origin rpy='0 0 3.141592653589793' xyz='0 0 0.0584', axis xyz='0 1 0', limit effort='100' lower='0.0' upper='0.04' velocity='0.2', mimic joint='fr3_finger_joint1', dynamics damping='0.3']
   ros2_control name='MujocoSystem' type='system'
-    hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_franka>/xml/fr3_with_ft_sensor/scene_torque.xml]
+    hardware [plugin: mujoco_ros2_control/MujocoSystemInterface, param name='mujoco_model': <share:cho_description_franka>/xml/fr3/scene_torque.xml]
     joint name='fr3_joint1' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
     joint name='fr3_joint2' [command_interface name='effort', state_interface name='position' [param name='initial_value': -0.785], state_interface name='velocity', state_interface name='effort']
     joint name='fr3_joint3' [command_interface name='effort', state_interface name='position' [param name='initial_value': 0.0], state_interface name='velocity', state_interface name='effort']
@@ -120,9 +116,9 @@ RUNTIME_FILE <RT:cho_runtime_params_#0> aliases=False
     operational_space_controller:
       ros__parameters: {}
     ros__parameters:
-      center_of_mass: [-0.00753, 0.0, 0.05325]
-      load_inertia: [0.001506, 0.0, 0.0, 0.0, 0.003023, 0.0, 0.0, 0.0, 0.001865]
-      mass: 0.97
+      center_of_mass: [-0.01, 0.0, 0.03]
+      load_inertia: [0.001, 0.0, 0.0, 0.0, 0.0025, 0.0, 0.0, 0.0, 0.0017]
+      mass: 0.73
     simulation_gripper_controller:
       ros__parameters: {}
     task_space_impedance_controller:

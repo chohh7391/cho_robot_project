@@ -100,7 +100,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         DeclareLaunchArgument('load_moveit_controller', default_value='false'),
-        DeclareLaunchArgument('load_ft_sensor', default_value='true'),
+        DeclareLaunchArgument(
+            'load_ft_sensor', default_value='false', choices=['true', 'false'],
+            description='true puts the Bota FT sensor between fr3_link8 and the hand: the '
+                        'description carries its links and the controllers its mass '
+                        '(config/payload_ft_sensor.yaml, not payload.yaml)'),
     ]
 
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
