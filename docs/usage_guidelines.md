@@ -19,6 +19,10 @@ core version. It does not live on a branch of this repository and does not edit 
 - A project registers its tasks through the `cho_task_manager.tasks` entry point and takes their
   parameters from `task_params:=<yaml>`. How a task is found, takes parameters and is tested:
   [cho_task_manager README](../cho_task_manager/README.md).
+- A project's own arm controller derives from the robot's base class (`FrankaBaseController`,
+  `FR5BaseController`, ...) and is added to the registry through `CHO_ROBOT_CONFIG_ADDITIONS`, so
+  every exclusive switch takes it down:
+  [templates README, An arm controller of the project's own](../templates/overlay_project/README.md#an-arm-controller-of-the-projects-own).
 - When a project needs something the core does not offer, add it to the core as a general
   extension point (a branch, then `main`), and move the project's pin forward. Code a second
   project needs moves into the core. Application-specific code stays in the project.

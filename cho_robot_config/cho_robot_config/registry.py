@@ -40,6 +40,21 @@ One registry document per robot, ``config/<robot_type>.yaml``; the schema is
   ``arms`` (default: its own name) are the arms it drives: every non-null
   role, per-mode hold, ``additional_arm`` and ``compatibility`` name in it
   must start with ``<arm>_`` for one of them.
+
+A project that loads arm controllers of its own adds them to
+``additional_arm`` without a copy of the registry: ``CHO_ROBOT_CONFIG_ADDITIONS``
+lists additions files (``os.pathsep``-separated, as an environment hook
+prepends them), each read by :func:`load_robot_config` after the core's file
+and the profile::
+
+    <robot_type>:
+      additional_arm: [<controller>, ...]      # the robot's 'single' profile
+      profiles:                                # optional, any other profile
+        <profile>:
+          additional_arm: [<controller>, ...]
+
+A file that names a robot or profile the registry has not, or a controller the
+entry already names or another file adds, is refused.
 """
 
 from copy import deepcopy
@@ -51,6 +66,10 @@ import yaml
 
 
 _cache = {}
+
+#: The environment variable that lists a project's registry additions.
+ADDITIONS_ENV = 'CHO_ROBOT_CONFIG_ADDITIONS'
+
 _required_controller_roles = {
     'hold', 'direct_joint', 'direct_task', 'moveit_trajectory', 'gripper', 'action_chunk'
 }
@@ -619,11 +638,83 @@ def available_profiles(robot_type):
     return ['single'] + sorted(profiles)
 
 
+def _addition_paths():
+    """The additions files ``CHO_ROBOT_CONFIG_ADDITIONS`` lists, in its order."""
+    value = os.environ.get(ADDITIONS_ENV, '')
+    return tuple(Path(entry).resolve() for entry in value.split(os.pathsep) if entry)
+
+
+def _additional_arm_list(value, label):
+    if (not isinstance(value, list) or not value
+            or not all(isinstance(name, str) and name for name in value)
+            or len(value) != len(set(value))):
+        raise ValueError(f'{label} must be a non-empty, unique list of controller names')
+    return value
+
+
+def _read_additions(path):
+    """One additions file, its shape checked: {robot_type: {additional_arm, profiles}}."""
+    if not path.is_file():
+        raise ValueError(f'{ADDITIONS_ENV} names {path}, which is not a file')
+    with path.open(encoding='utf-8') as stream:
+        document = _mapping(yaml.safe_load(stream) or {}, str(path))
+    unknown = sorted(set(document) - set(available_robot_types()))
+    if unknown:
+        raise ValueError(
+            f'{path} adds to robot types the registry has not: {unknown}; '
+            f'it has {available_robot_types()}')
+    for robot_type, entry in document.items():
+        label = f'{path}: {robot_type}'
+        entry = _mapping(entry, label)
+        keys = set(entry)
+        if not keys or keys - {'additional_arm', 'profiles'}:
+            raise ValueError(f'{label} takes additional_arm and profiles, got {sorted(keys)}')
+        if 'additional_arm' in entry:
+            _additional_arm_list(entry['additional_arm'], f'{label}.additional_arm')
+        for name, overlay in _mapping(entry.get('profiles', {}), f'{label}.profiles').items():
+            overlay = _mapping(overlay, f'{label}.profiles.{name}')
+            if set(overlay) != {'additional_arm'}:
+                raise ValueError(f'{label}.profiles.{name} takes additional_arm only')
+            _additional_arm_list(overlay['additional_arm'], f'{label}.profiles.{name}.additional_arm')
+    return document
+
+
+def _add_project_arm_controllers(config, robot_type, profile, profiles, paths):
+    """Append what *paths* add for this robot and profile to controllers.additional_arm."""
+    named = {name for _key, name in _profile_controller_names(
+        config['controllers'], config.get('compatibility'))}
+    added = []
+    for path in paths:
+        entry = _read_additions(path).get(robot_type) or {}
+        unknown = sorted(set(entry.get('profiles') or {}) - set(profiles))
+        if unknown:
+            raise ValueError(
+                f'{path}: {robot_type} has no profiles {unknown}; it has {sorted(profiles)}')
+        if profile != 'single':
+            entry = (entry.get('profiles') or {}).get(profile) or {}
+        for name in entry.get('additional_arm') or []:
+            if name in named:
+                raise ValueError(
+                    f'{path}: {robot_type} ({profile}) already names {name} in the registry; '
+                    'add only controllers it does not know')
+            if name in added:
+                raise ValueError(f'{path}: {name} is added to {robot_type} ({profile}) twice')
+            added.append(name)
+    if added:
+        controllers = config['controllers']
+        controllers['additional_arm'] = list(controllers.get('additional_arm') or []) + added
+
+
 def load_robot_config(robot_type, profile=None):
-    """Load a validated robot configuration by its stable robot_type key."""
+    """Load a validated robot configuration by its stable robot_type key.
+
+    With ``CHO_ROBOT_CONFIG_ADDITIONS`` set, the project controllers its files
+    add come last in ``controllers.additional_arm`` (the module docstring).
+    """
     config_dir = _config_dir().resolve()
     profile = profile or 'single'
-    cache_key = (str(config_dir), robot_type, profile)
+    additions = _addition_paths()
+    cache_key = (str(config_dir), robot_type, profile, additions)
     if cache_key in _cache:
         return deepcopy(_cache[cache_key])
     path = config_dir / f'{robot_type}.yaml'
@@ -672,6 +763,7 @@ def load_robot_config(robot_type, profile=None):
     else:
         config['profile'] = 'single'
         config['supports_task'] = True
+    _add_project_arm_controllers(config, robot_type, profile, profiles, additions)
     validate_robot_config(config, robot_type)
     _cache[cache_key] = config
     return deepcopy(config)

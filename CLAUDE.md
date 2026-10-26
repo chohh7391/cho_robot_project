@@ -156,7 +156,8 @@ What a client may rely on: [CONTRACT.md](cho_interfaces/CONTRACT.md).
 ([README.md](cho_moveit/README.md)); the bridge's contract: [CONTRACT.md](cho_interfaces/CONTRACT.md#the-moveit-bridge).
 
 **cho_robot_config/** — the per-robot registry, `config/<robot>.yaml`; its schema is the docstring of
-[registry.py](cho_robot_config/cho_robot_config/registry.py). Also `controller_action_name()`,
+[registry.py](cho_robot_config/cho_robot_config/registry.py), which also says how a project adds its own arm
+controllers (`CHO_ROBOT_CONFIG_ADDITIONS`). Also `controller_action_name()`,
 `task_goal_frame()`, `motion_limit_parameters()`.
 
 **cho_task_manager/** — the py_trees task manager: `behaviors/`, `subtrees/`, `tasks/<robot>/` (registered in

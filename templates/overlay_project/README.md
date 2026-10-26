@@ -68,3 +68,36 @@ ros2 launch cho_task_manager run_task_manager.launch.py robot_type:=franka task:
 
 It switches to the position hold controller, goes to the registry's task home, turns joint 7 out by 0.15 rad and back
 twice, and comes home. Without `task_params:=` it takes its defaults (`DEFAULTS` in `joint_wave.py`).
+
+## An arm controller of the project's own
+
+A project controller that claims the arm's command interfaces must be taken down by every exclusive switch, the one
+`guarded_mission()` aborts to the hold controller with included. The switch finds the arm's controllers in the
+registry's `controllers.additional_arm`, and a project adds its own there without copying the registry: it lists
+them in a file of its own,
+
+```yaml
+# <bringup package>/config/robot_config_additions.yaml
+franka:
+  additional_arm: [<controller>]
+```
+
+and the package that installs the file adds it to `CHO_ROBOT_CONFIG_ADDITIONS` with an environment hook. Every
+registry load reads the files listed there; the format and what is refused: the docstring of
+[registry.py](../../cho_robot_config/cho_robot_config/registry.py). In an ament_cmake package:
+
+```cmake
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+ament_environment_hooks(
+  "${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/robot_config_additions.dsv.in"
+  "${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/robot_config_additions.sh.in")
+```
+
+```text
+# env-hooks/robot_config_additions.dsv.in
+prepend-non-duplicate;CHO_ROBOT_CONFIG_ADDITIONS;share/@PROJECT_NAME@/config/robot_config_additions.yaml
+# env-hooks/robot_config_additions.sh.in
+ament_prepend_unique_value CHO_ROBOT_CONFIG_ADDITIONS "$AMENT_CURRENT_PREFIX/share/@PROJECT_NAME@/config/robot_config_additions.yaml"
+```
+
+A terminal that sourced the project's workspace then switches the project's controllers like the core's.
