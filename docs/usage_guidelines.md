@@ -16,6 +16,10 @@ core version. It does not live on a branch of this repository and does not edit 
 - Start one from [templates/overlay_project](../templates/overlay_project/README.md). Copy it,
   rename the package (no `cho_` prefix) and the task (prefixed with the project's name), and pin the
   core in `project.repos`.
+- [demo_project](https://github.com/chohh7391/demo_project) is a complete project on the core that
+  uses each extension point below once: its own Franka controller, a bringup wrapping the core's
+  MuJoCo one, its own world and scene data, and two tasks. A project that needs more than tasks
+  starts from a copy of it; its README is the build-and-run walk-through.
 - A project registers its tasks through the `cho_task_manager.tasks` entry point and takes their
   parameters from `task_params:=<yaml>`. How a task is found, takes parameters and is tested:
   [cho_task_manager README](../cho_task_manager/README.md).

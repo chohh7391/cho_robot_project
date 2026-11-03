@@ -16,6 +16,13 @@ setup reference for this repository.
 this core repository and what goes in a project repository of its own, the steps a change takes
 from a branch to the real robot, how to run the real FR3, and which controller to pick.
 
+A research project builds on this core from a repository of its own, an overlay workspace on a
+pinned core tag. [demo_project](https://github.com/chohh7391/demo_project) is a worked example: the
+Franka FR3 in MuJoCo with the project's own controller, a bringup that wraps the core's, its own
+world and the poses read from it, and tasks the core's task manager runs. Its README walks through
+building it on the core and running it. Start a project from a copy of it, or from
+[templates/overlay_project](templates/overlay_project/README.md) when the project only adds tasks.
+
 ## Package map
 
 ```text
