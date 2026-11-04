@@ -204,8 +204,8 @@ repository's starting point, one package registering one task and the `.repos` p
   ([trajectory_euclidian.hpp](cho_controller/cho_controller_common/include/cho_controller_common/trajectory/trajectory_euclidian.hpp)).
 - Which chunks OpenArm's `ActionChunkController` accepts, and the parameters it requires at configure time:
   its class comment ([action_chunk_controller.hpp](cho_controller/cho_controller_openarm_mit/include/cho_controller_openarm_mit/action_chunk_controller.hpp)).
-- New or reworked controller parameters are declared with `generate_parameter_library` (the pattern:
-  [task_space_ik_controller_parameters.yaml](cho_controller/cho_controller_fr5/src/task_space_ik_controller_parameters.yaml)):
+- New or reworked controller parameters are declared with `generate_parameter_library`, in the package's `params/`
+  (the pattern: [task_space_ik_controller_parameters.yaml](cho_controller/cho_controller_fr5/params/task_space_ik_controller_parameters.yaml)):
   per-parameter ranges in the YAML, checks that relate parameters in code. Under Humble `ros2 param describe` shows
   no constraints (the controller_manager declares the overrides first), but every set is still validated. The other
   controllers declare by hand; convert them when they are next reworked.

@@ -46,7 +46,7 @@ find_package(cho_interfaces REQUIRED)
 find_package(generate_parameter_library REQUIRED)
 
 generate_parameter_library(fr5_task_space_ik_controller_parameters
-    src/task_space_ik_controller_parameters.yaml)
+    params/task_space_ik_controller_parameters.yaml)
 
 add_library(${PROJECT_NAME} SHARED
     src/base_controller.cpp

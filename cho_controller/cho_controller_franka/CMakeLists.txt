@@ -57,11 +57,11 @@ find_package(generate_parameter_library REQUIRED)
 # The controllers whose parameters are declared from YAML (CLAUDE.md,
 # "Controllers"); the others still declare theirs by hand.
 generate_parameter_library(franka_task_space_qp_controller_parameters
-    src/task_space_qp_controller_parameters.yaml)
+    params/task_space_qp_controller_parameters.yaml)
 generate_parameter_library(franka_joint_space_qp_controller_parameters
-    src/joint_space_qp_controller_parameters.yaml)
+    params/joint_space_qp_controller_parameters.yaml)
 generate_parameter_library(franka_operational_space_controller_parameters
-    src/operational_space_controller_parameters.yaml)
+    params/operational_space_controller_parameters.yaml)
 
 add_library(${PROJECT_NAME} SHARED
     # controllers
