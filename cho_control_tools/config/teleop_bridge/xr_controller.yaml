@@ -1,0 +1,64 @@
+# teleop_bridge with --input xr_controller: every setting and its default.
+# A project's teleop_config file names only what it changes, under the same
+# top-level key; it is merged over this file key by key, and an unknown key is
+# refused (cho_control_tools/teleop_bridge/config.py).
+teleop_bridge:
+  # Chunks per second, per arm. Each chunk's waypoints are 1 / rate_hz apart.
+  rate_hz: 60.0
+  input:
+    # Isaac Capture teleop_ros2 (mode:=controller_raw), std_msgs/ByteMultiArray.
+    topic: /xr_teleop/controller_data
+    # Older input than this (by receive time) is no input: the clutches let go.
+    timeout_sec: 0.2
+    # The controller pose that drives the arm: grip (the handle) or aim (the ray).
+    pose_source: grip
+    # A click value at or above this is a pressed button.
+    button_threshold: 0.5
+  buttons:
+    # <side>_<primary_click|secondary_click|thumbstick_click|menu_click>.
+    # On a Quest, right primary is A and right secondary is B.
+    run_toggle: right_primary_click
+    kill: right_secondary_click
+  # Input missing this long while running stops the bridge (goals canceled).
+  stop_after_input_lost_sec: 2.0
+  stream:
+    # ChunkStream goal's stream_timeout: quiet time before the controller holds.
+    stream_timeout_sec: 0.2
+    # Waypoints per chunk, all at the current target, so each chunk outlasts
+    # the next one's arrival and the controller never runs dry between them.
+    horizon_steps: 3
+  mapping:
+    # Rows of the rotation from the XR world frame (OpenXR stage: x right, y up,
+    # z towards the operator) to the arm's absolute goal frame, for an operator
+    # who faces +x of that frame: XR forward (-z) -> +x, XR left (-x) -> +y,
+    # XR up (+y) -> +z.
+    xr_to_base: [[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    # The operator's heading about the goal frame's z, applied after xr_to_base:
+    # 180 for an operator who faces the robot from in front of it.
+    operator_yaw_deg: 0.0
+    # Hand motion to arm motion; rotation is always 1:1.
+    position_scale: 1.0
+    # false: the arm keeps the orientation it had when the clutch engaged.
+    follow_rotation: true
+  clutch:
+    # Squeeze (grip button) value that engages, and the value it must fall
+    # below to release.
+    engage_threshold: 0.6
+    release_threshold: 0.4
+    # A hand that moves further than this in one input frame lets the clutch
+    # go (a tracking glitch): [m] and [rad].
+    max_input_step: 0.1
+    max_input_rotation_step: 0.5
+  gripper:
+    # Send the trigger to each arm's gripper controller as ~/width_command:
+    # 0 -> width_at_open, 1 -> width_at_closed (the controller's parameters).
+    # An arm whose gripper controller is missing or has no such parameters
+    # streams without a gripper.
+    enabled: true
+  # The hand that drives each arm, by the arm's registry profile, and an
+  # optional box [m] in the arm's absolute goal frame that clamps its target:
+  #   left: {hand: left, workspace: {min: [x, y, z], max: [x, y, z]}}
+  arms:
+    single: {hand: right}
+    left: {hand: left}
+    right: {hand: right}

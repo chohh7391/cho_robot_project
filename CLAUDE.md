@@ -166,7 +166,8 @@ controllers (`CHO_ROBOT_CONFIG_ADDITIONS`). Also `controller_action_name()`,
 [README.md](cho_task_manager/README.md). Reference: [docs/tasks.md](docs/tasks.md).
 
 **cho_control_tools/** — interactive action clients, action-chunk tools (`action_chunk_client`, `action_chunk_mit_probe`) and bag
-plotters ([docs/action_clients.md](docs/action_clients.md)).
+plotters ([docs/action_clients.md](docs/action_clients.md)); `teleop_bridge`, a teleoperation device (Isaac Capture's
+XR controllers) streamed to the registry's action-chunk controllers ([docs/teleop_bridge.md](docs/teleop_bridge.md)).
 
 **cho_sensor/** (grouping directory)
 - `cho_realsense` — D435 over the stock `rs_launch.py`; no detection, no camera-to-robot transform

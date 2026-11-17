@@ -31,6 +31,11 @@
   <exec_depend>pinocchio</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-scipy</exec_depend>
+  <!-- teleop_bridge: Isaac Capture's controller_data is msgpack; the arms' poses come from TF. -->
+  <exec_depend>python3-msgpack</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_flake8</test_depend>
   <test_depend>python3-pytest</test_depend>
