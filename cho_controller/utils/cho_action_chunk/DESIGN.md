@@ -242,7 +242,7 @@ sampler draws most of every reference: everything between two waypoints.
 Straight segments remove the staircase in position but leave one in velocity:
 the rate steps at every waypoint. In MuJoCo (Franka, 15 Hz waypoints, a path
 that curves between them) that was ±30 rad/s² of desired acceleration at every
-step. `chunk_interpolation` selects one of three samplers:
+step. `chunk_interpolation` selects one of four samplers:
 
 - `spline` (default) — the cubic spline through the chunk's waypoints with
   not-a-knot ends, built as scipy's `CubicSpline` builds it: continuous in
@@ -252,9 +252,48 @@ step. `chunk_interpolation` selects one of three samplers:
   interior rule of scipy's `PchipInterpolator`): continuous in velocity only,
   never past a neighbouring waypoint, and each slope depends only on its two
   neighbours, so a noisy waypoint stays local.
+- `polyfit` — VLA-RAIL's intra-chunk stage (arXiv 2512.24673): one
+  least-squares polynomial in time per chunk, of degree `chunk_poly_degree`
+  (3 by default), per axis.
 - `linear` — the historical sampler.
 
-Both cubics pass through every waypoint at its own time and add no lag.
+`spline` and `pchip` pass through every waypoint at its own time and add no
+lag. So they also pass on whatever noise the waypoints carry: a flow-matching
+or diffusion policy samples each chunk, and step-to-step noise of a few
+millimetres at 20 Hz becomes metres per second squared of reference
+acceleration. `polyfit` does not pass through the waypoints. It fits what the
+chunk has left to play (from the segment origin retained at the splice), and
+the sampler draws it with the cubic Hermite segments from the polynomial's
+values and slopes at each waypoint, which is exact up to degree 3. A path the
+polynomial can follow is kept; one it cannot, such as a chunk that reaches and
+turns back within its horizon at a low degree, is cut short. A chunk with no
+more waypoints than `chunk_poly_degree + 1` has nothing to average and is drawn
+by `spline`. Rotation is fitted as rotation vectors about the chunk's first
+waypoint; the gripper is not fitted.
+
+Measured on GR00T N1.7 chunks (16 steps at 20 Hz, 40 trajectories, positions,
+played end to end and sampled at 200 Hz without the limiter), as RMS reference
+acceleration and mean distance from the policy's waypoints:
+
+| Sampling noise | Blend | `spline` | `polyfit` |
+|---|---|---|---|
+| ×1 | 0.1 s | 10.9 m/s², 0.5 mm | 3.8 m/s², 3.8 mm |
+| ×1 | 0.25 s | 10.1 m/s², 2.0 mm | 0.95 m/s², 5.2 mm |
+| 0 | 0.1 s | 3.7 m/s², 0.4 mm | 3.4 m/s², 0.8 mm |
+| 0 | 0.25 s | 1.9 m/s², 1.6 mm | 0.76 m/s², 2.1 mm |
+
+The 0.25 s rows include the carry-on of [Chunk combination](#chunk-combination).
+
+Closed loop the difference is smaller, and the longer blend no longer pays. On
+the Franka `action_chunk_controller` in MuJoCo (torque, limiter on), with 8 of
+those trajectories at half scale, the arm's RMS acceleration at full sampling
+noise was 0.31 m/s² under `spline` and 0.20 under `polyfit`, both at a 0.1 s
+blend. The mean distance from the waypoints rose from 11.6 to 13.1 mm. At zero
+noise the acceleration was 0.19 and 0.17 m/s², and the distance 12.3 and
+12.6 mm. A 0.25 s blend gave the arm more acceleration than 0.1 s under both
+samplers; replayed through the limiter offline, `polyfit` at 0.25 s was no
+smoother than at 0.1 s either (0.49 against 0.43 m/s² at zero noise).
+
 Slopes are written per waypoint when a chunk is spliced, from that chunk's own
 waypoints only: a spline is a property of a whole chunk, and a later chunk must
 not reshape the curve still playing from an earlier one. Rotation is a cubic in
@@ -456,6 +495,21 @@ still running there:
   This used to hand over the waypoints underneath, so the window restarted
   from the pre-blend trajectory: a position step of `(1 − w(T/τ))` of the gap
   between chunks, 21% at τ = 0.1 s and 79% at τ = 0.2 s.
+
+In either case the outgoing trajectory can end inside the window: a chunk
+arrives as the previous one runs out, as with a bridge that plays every step of
+a chunk before asking for the next. Past its last waypoint the outgoing
+trajectory holds it at zero rate, so the reference stalls at the boundary:
+chunks at a constant 0.05 m/s played end to end stop there, a 10 m/s² step at
+200 Hz and 3.4 mm behind at τ = 0.25 s. Under `polyfit` it carries on at the
+rate it reached that waypoint with instead, when the splice came no later than
+that waypoint (within 1 µs), and the same chunks are followed exactly. The
+interpolating samplers keep the hold. Their end rate is the curve's least
+reliable one: a not-a-knot end slope extrapolates the last waypoints' noise.
+Carried on at full sampling noise (`spline`, τ = 0.25 s), it raised the error
+to the next chunk's first waypoints from 15 to 29–35 mm. A chunk arriving after
+the reference already stands at the hold blends from that hold under every
+sampler.
 
 The blend's velocities are its derivative: the weighted rates plus the weight's
 own rate times the gap between the two trajectories, the term the limiter needs

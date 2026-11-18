@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -545,7 +546,9 @@ TEST(ActionBuffer, InterpolationParsesFailClosed) {
   EXPECT_EQ(parsed, Interpolation::kPchip);
   EXPECT_TRUE(parse_interpolation("spline", parsed));
   EXPECT_EQ(parsed, Interpolation::kSpline);
-  for (const std::string bad : {"", "cubic", "Spline", "akima"}) {
+  EXPECT_TRUE(parse_interpolation("polyfit", parsed));
+  EXPECT_EQ(parsed, Interpolation::kPolyFit);
+  for (const std::string bad : {"", "cubic", "Spline", "akima", "poly", "PolyFit"}) {
     EXPECT_FALSE(parse_interpolation(bad, parsed)) << '"' << bad << '"';
   }
 }
@@ -888,7 +891,7 @@ TEST(ActionBuffer, ALaterChunkDoesNotReshapeTheOneBeforeIt) {
 // tau = 0.1 s and 0.7901 at tau = 0.2 s (review 20261007-212552, S5).
 
 constexpr Interpolation kEveryInterpolation[] = {
-  Interpolation::kLinear, Interpolation::kPchip, Interpolation::kSpline};
+  Interpolation::kLinear, Interpolation::kPchip, Interpolation::kSpline, Interpolation::kPolyFit};
 
 std::string interpolation_name(const Interpolation mode)
 {
@@ -899,6 +902,8 @@ std::string interpolation_name(const Interpolation mode)
       return "pchip";
     case Interpolation::kSpline:
       return "spline";
+    case Interpolation::kPolyFit:
+      return "polyfit";
   }
   return "unknown";
 }
@@ -1327,5 +1332,297 @@ TEST(ActionBuffer, AC6_PruningDoesNotChangeTheReferenceFromNowOn) {
       }
     }
   }
+}
+
+// ----------------------------------------------------------------- polyfit --
+
+ActionBuffer polyfit_buffer(const int degree = 3, const double blend = 0.0)
+{
+  ActionBuffer::Params params;
+  params.interpolation = Interpolation::kPolyFit;
+  params.poly_degree = degree;
+  params.blend_duration = blend;
+  return ActionBuffer(params);
+}
+
+TEST(ActionBuffer, PolyFitReproducesACubicExactly) {
+  // A cubic is its own least-squares cubic, and the cubic sampler drawn from its
+  // values and slopes at the waypoints is exact for it, on any knot spacing.
+  const auto cubic = [](const double t) {
+      const double x = t - 1.0;
+      return 0.3 - 1.2 * x + 4.0 * x * x - 7.0 * x * x * x;
+    };
+  const auto cubic_rate = [](const double t) {
+      const double x = t - 1.0;
+      return -1.2 + 8.0 * x - 21.0 * x * x;
+    };
+  std::vector<Waypoint> waypoints;
+  for (const double t : {1.0, 1.04, 1.1, 1.13, 1.2, 1.27, 1.3}) {
+    Waypoint waypoint;
+    waypoint.t = t;
+    waypoint.joints.setConstant(cubic(t));
+    waypoints.push_back(waypoint);
+  }
+  ActionBuffer buffer = polyfit_buffer();
+  buffer.splice(waypoints, ActionSpace::kJoint, 0.9, 0.04);
+  for (double t = 1.0005; t < 1.3; t += 0.0037) {
+    EXPECT_NEAR(sampled_joint(buffer, t), cubic(t), 1e-9) << "t=" << t;
+    EXPECT_NEAR(sampled_joint_rate(buffer, t), cubic_rate(t), 1e-7) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, PolyFitAveragesStepToStepNoiseWhereTheSplinePassesItOn) {
+  // A sampled policy's chunk: a 0.2 rad/s ramp at 20 Hz with 4 mrad of noise
+  // flipping sign every step, the worst case for an interpolating spline. The
+  // spline goes through every noisy waypoint, so its rate swings by 0.69 rad/s;
+  // the cubic fit stays within half the noise of the ramp (its largest error is
+  // at the chunk's ends, 0.48 of the noise) and within 0.03 rad/s of its rate.
+  constexpr double kNoise = 0.004;
+  constexpr double kSlope = 0.01;   // per 0.05 s step
+  std::vector<double> values;
+  for (int step = 0; step < 16; ++step) {
+    values.push_back(kSlope * step + (step % 2 == 0 ? kNoise : -kNoise));
+  }
+  ActionBuffer fit = polyfit_buffer();
+  fit.splice(joint_series(1.0, 0.05, values), ActionSpace::kJoint, 0.9, 0.05);
+  ActionBuffer spline;
+  spline.splice(joint_series(1.0, 0.05, values), ActionSpace::kJoint, 0.9, 0.05);
+
+  double fit_error = 0.0;
+  double fit_rate_error = 0.0;
+  double spline_rate_error = 0.0;
+  for (double t = 1.0005; t < 1.749; t += 0.001) {
+    const double ramp = kSlope * (t - 1.0) / 0.05;
+    fit_error = std::max(fit_error, std::abs(sampled_joint(fit, t) - ramp));
+    fit_rate_error = std::max(fit_rate_error, std::abs(sampled_joint_rate(fit, t) - 0.2));
+    spline_rate_error = std::max(spline_rate_error, std::abs(sampled_joint_rate(spline, t) - 0.2));
+  }
+  EXPECT_LT(fit_error, 0.5 * kNoise);
+  EXPECT_LT(fit_rate_error, 0.03);
+  EXPECT_GT(spline_rate_error, 0.5);
+  EXPECT_NEAR(sampled_joint(spline, 1.05), values[1], 1e-12);
+}
+
+TEST(ActionBuffer, PolyFitDegreeIsAParameter) {
+  // Degree 1 draws a parabola's chunk as its least-squares line: one rate
+  // throughout. Degree 2 reproduces it.
+  std::vector<double> values;
+  for (int step = 0; step < 8; ++step) {values.push_back(0.01 * step * step);}
+  ActionBuffer line = polyfit_buffer(1);
+  line.splice(joint_series(1.0, 0.1, values), ActionSpace::kJoint, 0.9, 0.1);
+  ActionBuffer parabola = polyfit_buffer(2);
+  parabola.splice(joint_series(1.0, 0.1, values), ActionSpace::kJoint, 0.9, 0.1);
+  for (double t = 1.0005; t < 1.7; t += 0.013) {
+    EXPECT_NEAR(sampled_joint_rate(line, t), sampled_joint_rate(line, 1.35), 1e-9) << "t=" << t;
+    const double step = (t - 1.0) / 0.1;
+    EXPECT_NEAR(sampled_joint(parabola, t), 0.01 * step * step, 1e-9) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, APolyFitChunkWithNothingToAverageIsInterpolatedByTheSpline) {
+  // Four waypoints are a cubic's four coefficients: nothing is left to average,
+  // so the chunk is interpolated as kSpline draws it, through every waypoint.
+  const std::vector<double> values {0.0, 0.3, 1.1, 0.9};
+  ActionBuffer fit = polyfit_buffer();
+  fit.splice(joint_series(1.0, 0.1, values), ActionSpace::kJoint, 0.9, 0.1);
+  ActionBuffer spline;
+  spline.splice(joint_series(1.0, 0.1, values), ActionSpace::kJoint, 0.9, 0.1);
+  for (std::size_t step = 0; step < values.size(); ++step) {
+    EXPECT_NEAR(sampled_joint(fit, 1.0 + 0.1 * static_cast<double>(step)), values[step], 1e-12);
+  }
+  for (double t = 1.0; t < 1.3; t += 0.007) {
+    EXPECT_NEAR(sampled_joint(fit, t), sampled_joint(spline, t), 1e-12) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, PolyFitTwistIsTheDerivativeOfItsPose) {
+  // Rotation is fitted as rotation vectors about the chunk's first waypoint;
+  // the twist the sampler reports must still be the derivative of the pose it
+  // reports, world-aligned, as for the interpolating cubics.
+  const auto waypoints = curving_task_path(1.0, 0.1, 7);
+  ActionBuffer buffer = polyfit_buffer();
+  buffer.splice(waypoints, ActionSpace::kTask, 0.9, 0.1);
+  constexpr double kDelta = 1e-6;
+  for (double t = 1.013; t < 1.59; t += 0.037) {
+    Reference here;
+    Reference ahead;
+    Reference behind;
+    ASSERT_TRUE(buffer.sample(t, here));
+    ASSERT_TRUE(buffer.sample(t + kDelta, ahead));
+    ASSERT_TRUE(buffer.sample(t - kDelta, behind));
+    const Eigen::Vector3d linear =
+      (ahead.pose.translation() - behind.pose.translation()) / (2.0 * kDelta);
+    const Eigen::Vector3d angular = pinocchio::log3(Eigen::Matrix3d(
+      ahead.pose.rotation() * behind.pose.rotation().transpose())) / (2.0 * kDelta);
+    EXPECT_NEAR((here.twist.head<3>() - linear).norm(), 0.0, 1e-6) << "t=" << t;
+    EXPECT_NEAR((here.twist.tail<3>() - angular).norm(), 0.0, 1e-6) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, PolyFitAveragesRotationNoiseToo) {
+  // A constant 0.5 rad/s turn about z at 20 Hz, its angle off by +-5 mrad on
+  // alternate steps: the fitted rotation keeps to the noiseless turn within
+  // half the noise, and its angular rate to 0.5 rad/s within 0.05.
+  constexpr double kRate = 0.5;
+  constexpr double kNoise = 0.005;
+  std::vector<Waypoint> waypoints;
+  for (int step = 0; step < 16; ++step) {
+    const double angle = kRate * 0.05 * step + (step % 2 == 0 ? kNoise : -kNoise);
+    Waypoint waypoint;
+    waypoint.t = 1.0 + 0.05 * step;
+    waypoint.pose = SE3(
+      Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitZ()).toRotationMatrix(),
+      Eigen::Vector3d(0.4, 0.0, 0.3));
+    waypoints.push_back(waypoint);
+  }
+  ActionBuffer buffer = polyfit_buffer();
+  buffer.splice(waypoints, ActionSpace::kTask, 0.9, 0.05);
+  for (double t = 1.0005; t < 1.749; t += 0.001) {
+    Reference reference;
+    ASSERT_TRUE(buffer.sample(t, reference));
+    const Eigen::Matrix3d noiseless =
+      Eigen::AngleAxisd(kRate * (t - 1.0), Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    EXPECT_LT(rotation_distance(noiseless, reference.pose.rotation()), 0.5 * kNoise) << "t=" << t;
+    EXPECT_NEAR(reference.twist(5), kRate, 0.05) << "t=" << t;
+    EXPECT_NEAR(reference.twist.head<5>().norm(), 0.0, 1e-9) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, PolyFitLeavesTheGripperAsTheChunkSentIt) {
+  std::vector<Waypoint> waypoints = joint_series(1.0, 0.1, {0.0, 0.1, 0.2, 0.3, 0.4, 0.5});
+  for (std::size_t step = 0; step < waypoints.size(); ++step) {
+    waypoints[step].has_gripper = true;
+    waypoints[step].gripper = step < 3 ? 0.0 : 1.0;
+  }
+  ActionBuffer buffer = polyfit_buffer();
+  buffer.splice(waypoints, ActionSpace::kJoint, 0.9, 0.1);
+  Reference reference;
+  ASSERT_TRUE(buffer.sample(1.2, reference));
+  EXPECT_NEAR(reference.gripper, 0.0, 1e-9);
+  ASSERT_TRUE(buffer.sample(1.3, reference));
+  EXPECT_NEAR(reference.gripper, 1.0, 1e-9);
+}
+
+// -------------------------------------------- blend at the end of a horizon --
+
+// Chunk c of a constant-rate joint path played end to end, as a bridge that runs
+// every step of a chunk before the next one does: waypoints at c*T + k*dt for k
+// = 1..16 (chunk 0 also has k = 0), spliced at c*T, the instant the previous
+// chunk's last waypoint is due.
+std::vector<Waypoint> end_to_end_chunk(const int chunk, const double rate)
+{
+  constexpr double kDt = 0.05;
+  constexpr int kSteps = 16;
+  std::vector<Waypoint> out;
+  for (int k = (chunk == 0 ? 0 : 1); k <= kSteps; ++k) {
+    Waypoint waypoint;
+    waypoint.t = (chunk * kSteps + k) * kDt;
+    waypoint.joints.setConstant(rate * waypoint.t);
+    waypoint.pose = SE3(Eigen::Matrix3d::Identity(), Eigen::Vector3d(rate * waypoint.t, 0.0, 0.0));
+    out.push_back(waypoint);
+  }
+  return out;
+}
+
+// Plays four end_to_end_chunk()s at 1 kHz, splicing chunk c at c * 0.8 s, and
+// returns the largest error to the path and to its rate before the last chunk's
+// own end (the hold).
+std::pair<double, double> play_end_to_end(
+  const Interpolation mode, const double blend, const double rate)
+{
+  ActionBuffer::Params params;
+  params.interpolation = mode;
+  params.blend_duration = blend;
+  ActionBuffer buffer(params);
+  double position_error = 0.0;
+  double rate_error = 0.0;
+  int next = 0;
+  for (int tick = 1; tick < 3200; ++tick) {
+    const double now = 1e-3 * tick;
+    while (next < 4 && next * 0.8 <= now + 1e-12) {
+      buffer.splice(end_to_end_chunk(next, rate), ActionSpace::kJoint, next * 0.8, 0.05);
+      ++next;
+    }
+    Reference reference;
+    EXPECT_TRUE(buffer.sample(now, reference)) << "t=" << now;
+    position_error = std::max(position_error, std::abs(reference.joints(0) - rate * now));
+    rate_error = std::max(rate_error, std::abs(reference.joint_velocity(0) - rate));
+  }
+  return {position_error, rate_error};
+}
+
+TEST(ActionBuffer, APolyFitChunkArrivingAsTheLastRunsOutBlendsWithoutStalling) {
+  // The outgoing trajectory's last waypoint is due at the splice, so the whole
+  // window lies past it. Carried on at its end rate, the blend of two collinear
+  // paths is the path itself.
+  constexpr double kRate = 0.05;
+  for (const double blend : {0.1, 0.25}) {
+    const auto [position_error, rate_error] =
+      play_end_to_end(Interpolation::kPolyFit, blend, kRate);
+    EXPECT_LT(position_error, 1e-9) << "blend " << blend;
+    EXPECT_LT(rate_error, 1e-9) << "blend " << blend;
+  }
+}
+
+TEST(ActionBuffer, InterpolatingSamplersStillBlendFromTheHoldWhenAHorizonRunsOut) {
+  // The interpolating samplers keep the hold, and with it the stall: their end
+  // rate is the noisiest a sampled policy's chunk gives (set_carry_on() in
+  // action_buffer.cpp). Pinned so that changing it is a decision: here the rate
+  // falls to zero at every boundary and the reference ends up behind the path.
+  constexpr double kRate = 0.05;
+  for (const Interpolation mode :
+    {Interpolation::kLinear, Interpolation::kPchip, Interpolation::kSpline})
+  {
+    const auto [position_error, rate_error] = play_end_to_end(mode, 0.25, kRate);
+    EXPECT_NEAR(rate_error, kRate, 1e-6) << interpolation_name(mode);
+    EXPECT_GT(position_error, 3e-3) << interpolation_name(mode);
+  }
+}
+
+TEST(ActionBuffer, APolyFitChunkArrivingAsTheLastRunsOutCarriesTheTwistOnToo) {
+  constexpr double kRate = 0.05;
+  ActionBuffer buffer = polyfit_buffer(3, 0.25);
+  buffer.splice(end_to_end_chunk(0, kRate), ActionSpace::kTask, 0.0, 0.05);
+  buffer.splice(end_to_end_chunk(1, kRate), ActionSpace::kTask, 0.8, 0.05);
+  EXPECT_TRUE(buffer.timeline().previous_carries_on);
+  for (double t = 0.8; t < 1.1; t += 0.001) {
+    Reference reference;
+    ASSERT_TRUE(buffer.sample(t, reference));
+    EXPECT_NEAR(reference.pose.translation().x(), kRate * t, 1e-9) << "t=" << t;
+    EXPECT_NEAR(reference.twist(0), kRate, 1e-9) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, APolyFitHorizonEndingInsideTheWindowKeepsTheRateContinuous) {
+  // The next chunk arrives 0.05 s before the outgoing one ends, inside a 0.2 s
+  // blend: the outgoing trajectory runs out mid-window. Held, its rate stepped
+  // to zero there, a step of (1 - w) of the rate in the blended reference.
+  constexpr double kRate = 0.3;
+  ActionBuffer buffer = polyfit_buffer(3, 0.2);
+  buffer.splice(
+    joint_ramp(1.0, 0.05, 11, kRate * 1.0, kRate * 0.05), ActionSpace::kJoint, 1.0, 0.05);
+  // The outgoing chunk ends at 1.5; the new one, on the same path, starts at 1.45.
+  buffer.splice(
+    joint_ramp(1.45, 0.05, 11, kRate * 1.45, kRate * 0.05), ActionSpace::kJoint, 1.45, 0.05);
+  constexpr double kEpsilon = 1e-7;
+  EXPECT_NEAR(
+    sampled_joint_rate(buffer, 1.5 - kEpsilon), sampled_joint_rate(buffer, 1.5 + kEpsilon), 1e-6);
+  for (double t = 1.45; t < 1.7; t += 0.001) {
+    EXPECT_NEAR(sampled_joint(buffer, t), kRate * t, 1e-9) << "t=" << t;
+  }
+}
+
+TEST(ActionBuffer, APolyFitChunkArrivingAfterTheHoldBlendsFromTheHold) {
+  // The horizon ran out at 1.5 and the reference has stood there since, at zero
+  // rate. A chunk arriving at 1.6 blends from that hold: carrying the old end
+  // rate on would start the reference moving by itself at the splice.
+  ActionBuffer buffer = polyfit_buffer(3, 0.2);
+  buffer.splice(joint_ramp(1.0, 0.05, 11, 0.0, 0.015), ActionSpace::kJoint, 1.0, 0.05);
+  EXPECT_DOUBLE_EQ(sampled_joint_rate(buffer, 1.6), 0.0);
+  EXPECT_EQ(
+    splice_and_measure_step(
+      buffer, joint_ramp(1.6, 0.05, 11, 0.4, 0.015), ActionSpace::kJoint, 1.6, 0.05), "");
+  EXPECT_FALSE(buffer.timeline().previous_carries_on);
+  EXPECT_NEAR(sampled_joint(buffer, 1.6), 0.15, 1e-12);
 }
 }  // namespace

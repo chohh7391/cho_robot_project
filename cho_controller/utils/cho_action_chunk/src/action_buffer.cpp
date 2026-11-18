@@ -35,6 +35,10 @@ bool parse_interpolation(const std::string & text, Interpolation & out)
     out = Interpolation::kSpline;
     return true;
   }
+  if (text == "polyfit") {
+    out = Interpolation::kPolyFit;
+    return true;
+  }
   return false;
 }
 
@@ -246,6 +250,97 @@ void assign_tangents(std::vector<Waypoint> & chunk, const Interpolation interpol
   }
 }
 
+// Replace `chunk`'s positions with the least-squares polynomial of `degree` in
+// time through them, per axis, and its slopes with that polynomial's
+// derivative: VLA-RAIL's intra-chunk fit. Joints and translation are fitted as
+// they are; rotation as rotation vectors about the chunk's first waypoint, as
+// the spline does. The gripper is left alone (it is edge-detected downstream).
+// False, with `chunk` untouched, when there are no more waypoints than
+// coefficients (nothing to average: the caller interpolates instead), when the
+// times are not strictly increasing, or when the fit is not finite. Allocates:
+// splice time only.
+bool fit_polynomial(std::vector<Waypoint> & chunk, const int degree)
+{
+  const auto count = static_cast<Eigen::Index>(chunk.size());
+  const Eigen::Index terms = degree + 1;
+  if (degree < 1 || count <= terms) {return false;}
+  for (std::size_t i = 0; i + 1 < chunk.size(); ++i) {
+    if (!(chunk[i + 1].t > chunk[i].t)) {return false;}
+  }
+
+  // Time scaled to [0, 1] over the chunk: a Vandermonde matrix in ROS-time
+  // seconds would be singular in double precision.
+  const double start = chunk.front().t;
+  const double span = chunk.back().t - start;
+  Eigen::MatrixXd basis(count, terms);
+  Eigen::MatrixXd rate_basis = Eigen::MatrixXd::Zero(count, terms);
+  for (Eigen::Index i = 0; i < count; ++i) {
+    const double s = (chunk[static_cast<std::size_t>(i)].t - start) / span;
+    double power = 1.0;
+    for (Eigen::Index j = 0; j < terms; ++j) {
+      basis(i, j) = power;
+      if (j + 1 < terms) {rate_basis(i, j + 1) = static_cast<double>(j + 1) * power / span;}
+      power *= s;
+    }
+  }
+
+  const Eigen::Matrix3d origin = chunk.front().pose.rotation();
+  Eigen::MatrixXd values(count, 13);
+  for (Eigen::Index i = 0; i < count; ++i) {
+    const Waypoint & waypoint = chunk[static_cast<std::size_t>(i)];
+    values.row(i).head<7>() = waypoint.joints.transpose();
+    values.row(i).segment<3>(7) = waypoint.pose.translation().transpose();
+    values.row(i).tail<3>() = pinocchio::log3(
+      Eigen::Matrix3d(origin.transpose() * waypoint.pose.rotation())).transpose();
+  }
+  const Eigen::MatrixXd coefficients = basis.colPivHouseholderQr().solve(values);
+  const Eigen::MatrixXd fitted = basis * coefficients;
+  const Eigen::MatrixXd rates = rate_basis * coefficients;
+  if (!fitted.allFinite() || !rates.allFinite()) {return false;}
+
+  for (Eigen::Index i = 0; i < count; ++i) {
+    Waypoint & waypoint = chunk[static_cast<std::size_t>(i)];
+    const Eigen::Vector3d rotation_vector = fitted.row(i).tail<3>().transpose();
+    const Eigen::Matrix3d rotation = origin * pinocchio::exp3(rotation_vector);
+    waypoint.joints = fitted.row(i).head<7>().transpose();
+    waypoint.pose = SE3(rotation, Eigen::Vector3d(fitted.row(i).segment<3>(7).transpose()));
+    waypoint.joint_tangent = rates.row(i).head<7>().transpose();
+    waypoint.linear_tangent = rates.row(i).segment<3>(7).transpose();
+    // d/dt [origin exp(r)] has body rate Jr(r) r_dot; world-aligned by R.
+    Eigen::Matrix3d exp_jacobian;
+    pinocchio::Jexp3(rotation_vector, exp_jacobian);
+    waypoint.angular_tangent = rotation * (exp_jacobian * rates.row(i).tail<3>().transpose());
+  }
+  return true;
+}
+
+// The rate `series` reaches its last waypoint with: the end of its last
+// segment, as the sampler draws it. False when it has no segment to take a rate
+// from. Defined below, beside the samplers it uses.
+bool end_rate(
+  const std::vector<Waypoint> & series, Interpolation interpolation, Vector7 & joint_rate,
+  Vector6 & twist);
+
+// Whether, and at what rate, the blend's outgoing trajectory carries on past
+// its last waypoint for a splice at `now`. `outgoing` is that trajectory before
+// any pruning, so the last segment is still there when `now` is on (or a
+// rounding error past) its last waypoint.
+//
+// Only under kPolyFit, whose end rate is the fitted polynomial's. An
+// interpolating curve through a sampled policy's waypoints ends at its least
+// reliable rate -- a not-a-knot spline's end slope extrapolates the last
+// waypoints' noise -- and carrying that on for the window drove the reference
+// off the path: on GR00T chunks at full sampling noise (spline, 0.25 s blend)
+// the error to the next chunk's first waypoints rose from 15 to 29-35 mm.
+void set_carry_on(Timeline & timeline, const std::vector<Waypoint> & outgoing, const double now)
+{
+  timeline.previous_carries_on =
+    timeline.interpolation == Interpolation::kPolyFit && !outgoing.empty() &&
+    now <= outgoing.back().t + ActionBuffer::kCarryOnTolerance &&
+    end_rate(
+    outgoing, timeline.interpolation, timeline.previous_joint_rate, timeline.previous_twist);
+}
+
 // First waypoint of `series` (ascending in t) that is not before `now`.
 std::vector<Waypoint>::const_iterator first_due(
   const std::vector<Waypoint> & series, const double now)
@@ -401,6 +496,7 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
     timeline_.waypoints.clear();
     timeline_.previous.clear();
     timeline_.blend_end = 0.0;
+    timeline_.previous_carries_on = false;
     result.space_reset = true;
   }
   timeline_.space = space;
@@ -425,7 +521,16 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
     }
   }
 
-  assign_tangents(admitted, params_.interpolation);
+  // polyfit fits what the chunk has left to play, from the retained segment
+  // origin on (VLA-RAIL fits the chunk after dropping the steps inference
+  // latency overran); a chunk too short to fit is interpolated by the spline.
+  if (params_.interpolation != Interpolation::kPolyFit ||
+    !fit_polynomial(admitted, params_.poly_degree))
+  {
+    assign_tangents(
+      admitted, params_.interpolation == Interpolation::kPolyFit ?
+      Interpolation::kSpline : params_.interpolation);
+  }
 
   // Everything the new chunk covers is replaced by it; the old tail beyond that
   // is discarded (LeRobot's ActionQueue does the same on an RTC merge). Buffered
@@ -442,8 +547,10 @@ ActionBuffer::SpliceResult ActionBuffer::splice(
     // Built from the timeline as it stands, before any of it is replaced.
     if (now < timeline_.blend_end && !timeline_.previous.empty()) {
       timeline_.previous = emitted_outgoing(timeline_, now, params_.blend_duration);
+      set_carry_on(timeline_, timeline_.previous, now);
     } else {
       timeline_.previous = timeline_.waypoints;
+      set_carry_on(timeline_, timeline_.waypoints, now);
       drop_played(timeline_.previous, now);
     }
     timeline_.blend_start = now;
@@ -670,6 +777,48 @@ Reference mix(const Reference & from, const Reference & to, const double ratio, 
   }
   return out;
 }
+
+// The outgoing trajectory `now - last.t` past its last waypoint, carried on at
+// the stored rates (rotation about the world-aligned angular rate). The gripper
+// stays as sampled: held at the last waypoint.
+void carry_on(const Timeline & timeline, const double now, Reference & out)
+{
+  const Waypoint & last = timeline.previous.back();
+  const double elapsed = now - last.t;
+  out.joints = last.joints + elapsed * timeline.previous_joint_rate;
+  out.joint_velocity = timeline.previous_joint_rate;
+  const Eigen::Vector3d linear = timeline.previous_twist.head<3>();
+  const Eigen::Vector3d angular = timeline.previous_twist.tail<3>();
+  out.pose = SE3(
+    pinocchio::exp3(Eigen::Vector3d(elapsed * angular)) * last.pose.rotation(),
+    last.pose.translation() + elapsed * linear);
+  out.twist = timeline.previous_twist;
+}
+}  // namespace
+
+namespace
+{
+bool end_rate(
+  const std::vector<Waypoint> & series, const Interpolation interpolation, Vector7 & joint_rate,
+  Vector6 & twist)
+{
+  if (series.size() < 2) {return false;}
+  const std::size_t last = series.size() - 1;
+  const Waypoint & start = series[last - 1];
+  const Waypoint & end = series[last];
+  if (!(end.t > start.t)) {return false;}
+  Reference rate;
+  if (interpolation != Interpolation::kLinear) {
+    sample_cubic(series, last - 1, end.t, rate);
+  } else {
+    sample_linear(start, end, end.t, rate);
+  }
+  // A rate the chunk supplied outranks the curve's, as in sample_series().
+  joint_rate = (start.has_joint_velocity && end.has_joint_velocity) ?
+    end.joint_velocity : rate.joint_velocity;
+  twist = rate.twist;
+  return joint_rate.allFinite() && twist.allFinite();
+}
 }  // namespace
 
 bool sample_timeline(const Timeline & timeline, const double now, Reference & out)
@@ -686,6 +835,9 @@ bool sample_timeline(const Timeline & timeline, const double now, Reference & ou
     if (sample_series(
         timeline.previous, timeline.space, timeline.interpolation, now, outgoing))
     {
+      if (timeline.previous_carries_on && now >= timeline.previous.back().t) {
+        carry_on(timeline, now, outgoing);
+      }
       const double span = timeline.blend_end - timeline.blend_start;
       const double progress = (span > 0.0) ? (now - timeline.blend_start) / span : 1.0;
       const double rate = (span > 0.0) ? min_jerk_rate(progress) / span : 0.0;

@@ -42,16 +42,27 @@ namespace cho_action_chunk
 //             velocity AND acceleration, and the closest of the three to a
 //             smooth policy's own path (it reproduces any cubic exactly).
 //             Between waypoints it may swing past them, as any C2 spline does.
+//   kPolyFit - VLA-RAIL's intra-chunk stage (arXiv 2512.24673): one
+//             least-squares polynomial in time per chunk (Params::poly_degree,
+//             3 by default), per axis. It does NOT pass through the waypoints,
+//             so step-to-step noise in a sampled policy's chunk (flow matching,
+//             diffusion) is averaged out instead of turned into acceleration;
+//             a path the polynomial can follow is kept as it is, and one it
+//             cannot (a chunk that reaches and turns back within its horizon,
+//             for a low degree) is cut short. Drawn with the cubic sampler from
+//             the polynomial's values and slopes at each waypoint, which
+//             reproduces a polynomial of degree 3 or less exactly. A chunk with
+//             no more waypoints than poly_degree + 1 falls back to kSpline.
 //
-// Both cubics pass through every waypoint at its own time and add no lag.
-// Rotation is a cubic in the tangent space of each segment's start with the
-// same kind of slopes (for kSpline, from a spline of the chunk's rotation
-// vectors about its first waypoint), matched exactly in world angular rate at
-// every knot.
-enum class Interpolation : std::uint8_t {kLinear, kPchip, kSpline};
+// The interpolating cubics pass through every waypoint at its own time and add
+// no lag. Rotation is a cubic in the tangent space of each segment's start with
+// the same kind of slopes (for kSpline and kPolyFit, from a spline or a fit of
+// the chunk's rotation vectors about its first waypoint), matched exactly in
+// world angular rate at every knot.
+enum class Interpolation : std::uint8_t {kLinear, kPchip, kSpline, kPolyFit};
 
-// Fail-closed like the other parse_* functions: "linear", "pchip" or "spline",
-// nothing else.
+// Fail-closed like the other parse_* functions: "linear", "pchip", "spline" or
+// "polyfit", nothing else.
 bool parse_interpolation(const std::string & text, Interpolation & out);
 
 // Time-indexed action buffer and its sampler.
@@ -87,6 +98,16 @@ struct Timeline
   std::vector<Waypoint> previous;
   double blend_start {0.0};
   double blend_end {0.0};
+  // The outgoing trajectory carries on past its last waypoint, inside the blend
+  // window, at the rate it reached that waypoint with, instead of holding it.
+  // Set under kPolyFit when the splice came no later than that waypoint (within
+  // ActionBuffer::kCarryOnTolerance), i.e. while the outgoing trajectory was
+  // still moving; a splice after it blends from the hold the reference already
+  // stands at. See ActionBuffer::Params::blend_duration.
+  bool previous_carries_on {false};
+  Vector7 previous_joint_rate {Vector7::Zero()};
+  // Linear then angular, world-aligned, like Reference::twist.
+  Vector6 previous_twist {Vector6::Zero()};
   ActionSpace space {ActionSpace::kTask};
   // Carried in the snapshot because sample_timeline() sees nothing else.
   Interpolation interpolation {Interpolation::kSpline};
@@ -135,10 +156,25 @@ public:
     //     blend it stands in for. Before this, the window restarted from the
     //     pre-blend trajectory, a position step of (1 - w(T/duration)) of the
     //     gap: 21% at 0.1 s and 79% at 0.2 s for 15 Hz chunks.
+    //
+    // Where the outgoing trajectory's last waypoint falls inside the window --
+    // a chunk that arrives as the previous one runs out, as with a bridge that
+    // plays every step of a chunk before the next -- the trajectory holds that
+    // waypoint, its rate dropping to zero there, and the reference stalls:
+    // constant 0.05 m/s chunks played end to end stopped at every chunk
+    // boundary, a 10 m/s^2 step at 200 Hz and 3.4 mm behind at 0.25 s. Under
+    // kPolyFit it carries on at the rate it reached that waypoint with instead
+    // (Timeline::previous_carries_on); under the interpolating samplers that
+    // rate is the curve's noisiest, and carrying it on cost more than the stall
+    // (set_carry_on() in action_buffer.cpp has the measurement).
     double blend_duration {0.0};
 
     // Between-waypoint interpolation; see Interpolation.
     Interpolation interpolation {Interpolation::kSpline};
+
+    // Degree of the least-squares polynomial under kPolyFit, in
+    // [1, kMaxPolyDegree]; 3 is VLA-RAIL's. Read by no other interpolation.
+    int poly_degree {3};
 
     // Slot-match tolerance for aggregation, as a fraction of control_dt. Chunks
     // from different observation times sit on different grids, so exact equality
@@ -161,6 +197,15 @@ public:
     // reaches the reference. See ReferenceLimiter.
     bool space_reset {false};
   };
+
+  // Highest Params::poly_degree a host may set. The fit's normal equations are
+  // solved by QR on times scaled to [0, 1], well conditioned this far.
+  static constexpr int kMaxPolyDegree = 7;
+
+  // How far past the outgoing trajectory's last waypoint a splice may come and
+  // still count as arriving while it moves: far below any control period, above
+  // a double's resolution at ROS-time magnitudes (2.4e-7 s at 1.8e9 s).
+  static constexpr double kCarryOnTolerance = 1e-6;
 
   ActionBuffer() = default;
   explicit ActionBuffer(const Params & params) : params_(params)

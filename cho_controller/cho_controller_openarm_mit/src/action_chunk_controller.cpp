@@ -74,6 +74,7 @@ controller_interface::CallbackReturn ActionChunkController::on_init()
   auto_declare<double>("chunk_aggregate_weight", 1.0);
   auto_declare<double>("chunk_blend_duration", 0.1);
   auto_declare<std::string>("chunk_interpolation", "spline");
+  auto_declare<int>("chunk_poly_degree", 3);
   auto_declare<double>("chunk_max_control_dt", 1.0);
   auto_declare<double>("chunk_max_observation_age", 1.0);
   auto_declare<double>("chunk_max_future_skew", 0.05);
@@ -203,16 +204,27 @@ controller_interface::CallbackReturn ActionChunkController::on_configure(
   buffer.aggregate_weight = get_node()->get_parameter("chunk_aggregate_weight").as_double();
   buffer.blend_duration = get_node()->get_parameter("chunk_blend_duration").as_double();
   // How the reference moves between the policy's waypoints: "spline" (C2),
-  // "pchip" (C1, never past a waypoint) or "linear" (the historical sampler,
-  // whose velocity steps at every waypoint -- one acceleration impulse per
-  // action step on this torque-controlled arm). See cho_action_chunk::Interpolation.
+  // "pchip" (C1, never past a waypoint), "polyfit" (one least-squares polynomial
+  // per chunk: filters a sampled policy's step-to-step noise, does not pass
+  // through the waypoints) or "linear" (the historical sampler, whose velocity
+  // steps at every waypoint -- one acceleration impulse per action step on this
+  // torque-controlled arm). See cho_action_chunk::Interpolation.
   const auto interpolation = get_node()->get_parameter("chunk_interpolation").as_string();
   if (!cho_action_chunk::parse_interpolation(interpolation, buffer.interpolation)) {
     RCLCPP_ERROR(get_node()->get_logger(),
-      "chunk_interpolation must be 'spline', 'pchip' or 'linear' (got '%s')",
+      "chunk_interpolation must be 'spline', 'pchip', 'polyfit' or 'linear' (got '%s')",
       interpolation.c_str());
     return CallbackReturn::ERROR;
   }
+  // The polynomial's degree under "polyfit"; 3 is VLA-RAIL's cubic.
+  const auto poly_degree = get_node()->get_parameter("chunk_poly_degree").as_int();
+  if (poly_degree < 1 || poly_degree > cho_action_chunk::ActionBuffer::kMaxPolyDegree) {
+    RCLCPP_ERROR(get_node()->get_logger(),
+      "chunk_poly_degree must be in [1, %d] (got %ld)",
+      cho_action_chunk::ActionBuffer::kMaxPolyDegree, static_cast<long>(poly_degree));
+    return CallbackReturn::ERROR;
+  }
+  buffer.poly_degree = static_cast<int>(poly_degree);
 
   cho_action_chunk::StreamWatchdog::Params & watchdog = params.watchdog;
   watchdog.stream_timeout = stream_timeout_sec;

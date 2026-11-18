@@ -186,7 +186,9 @@ void ActionChunkServer::init()
     // A min-jerk crossfade into each new chunk rather than a hard splice.
     buffer.blend_duration = declare_or_get_double("chunk_blend_duration", 0.1);
     // How the reference moves between the policy's waypoints: "spline" (C2,
-    // closest to a smooth policy's path), "pchip" (C1, never past a waypoint) or
+    // closest to a smooth policy's path), "pchip" (C1, never past a waypoint),
+    // "polyfit" (one least-squares polynomial per chunk: filters a sampled
+    // policy's step-to-step noise, does not pass through the waypoints) or
     // "linear" (the historical sampler: its velocity steps at every waypoint).
     // See cho_action_chunk::Interpolation.
     if (!node_->has_parameter("chunk_interpolation")) {
@@ -197,8 +199,22 @@ void ActionChunkServer::init()
     // when it refuses the string.
     if (!cho_action_chunk::parse_interpolation(interpolation, buffer.interpolation)) {
         RCLCPP_ERROR(node_->get_logger(),
-            "chunk_interpolation '%s' is not 'spline', 'pchip' or 'linear'; using 'spline'.",
+            "chunk_interpolation '%s' is not 'spline', 'pchip', 'polyfit' or 'linear'; "
+            "using 'spline'.",
             interpolation.c_str());
+    }
+    // The polynomial's degree under "polyfit"; 3 is VLA-RAIL's cubic. Read by no
+    // other interpolation.
+    if (!node_->has_parameter("chunk_poly_degree")) {
+        node_->declare_parameter<int64_t>("chunk_poly_degree", buffer.poly_degree);
+    }
+    const int64_t poly_degree = node_->get_parameter("chunk_poly_degree").as_int();
+    if (poly_degree >= 1 && poly_degree <= cho_action_chunk::ActionBuffer::kMaxPolyDegree) {
+        buffer.poly_degree = static_cast<int>(poly_degree);
+    } else {
+        RCLCPP_ERROR(node_->get_logger(),
+            "chunk_poly_degree %ld is outside [1, %d]; using %d.", static_cast<long>(poly_degree),
+            cho_action_chunk::ActionBuffer::kMaxPolyDegree, buffer.poly_degree);
     }
 
     // See StreamWatchdog::Params::resume_on_chunk: with this off, one gap longer
